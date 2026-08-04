@@ -85,21 +85,21 @@ server:
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
       key_file: "/run/secrets/fluxmq_server_key"
-      ca_file: "/run/secrets/atom_client_ca"
+      ca_file: "/run/secrets/local_client_ca"
       client_auth: "require"
       min_version: "TLS1.2"
 
 auth:
   local_principals:
-    - name: "atom-audit-publisher"
-      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+    - name: "audit-publisher"
+      certificate_uri_san: "spiffe://example.org/audit-publisher"
       role: "publisher"
-      current_secret_file: "/run/secrets/atom_audit_secret_current"
-      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      current_secret_file: "/run/secrets/audit_secret_current"
+      previous_secret_file: "/run/secrets/audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom.events"
+            routing_key: "audit.events"
         subscribe: []
 ```
 
@@ -274,7 +274,7 @@ therefore carry wildcards:
         subscribe:
           - m.*.events    # one level:      m.acme.events, not m.acme.eu.events
           - audit.#       # zero or more:   audit, audit.write, audit.write.raw
-          - atom.events   # exact
+          - audit.events   # exact
 ```
 
 Levels are separated by `.`, `#` is the multi-level wildcard, and `*` and `+`
@@ -286,7 +286,7 @@ protocol it speaks rather than what it is asking for, so `m.*.events` and
 Only `.` separates levels. A queue name is a name rather than an address, and
 nothing constrains the characters in one, so `/` and a leading `$` are ordinary
 characters: a queue may legitimately be called `a/b` or `$internal`, and an entry
-names it literally. An entry written `atom/+` is therefore a malformed
+names it literally. An entry written `audit/+` is therefore a malformed
 single-level name rather than a pattern, and is rejected as one. Only the
 `$queue/` address prefix is refused, because an entry beginning with it names no
 queue and would grant nothing.
@@ -305,7 +305,7 @@ written as one, a subscribe pattern states exactly what it grants.
 
 Patterns join the permissions fingerprint in their own right, so an exact entry
 and a pattern that happens to match the same queue today are different grants:
-replacing `atom.#` with `atom.events` revokes the sessions authenticated under
+replacing `audit.#` with `audit.events` revokes the sessions authenticated under
 the wider one, as narrowing any ACL does. Respelling `*` as `+` is not a change
 and revokes nothing.
 

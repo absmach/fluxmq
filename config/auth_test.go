@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	testPrincipalName = "atom-audit-publisher"
-	testPrincipalSAN  = "spiffe://absmach/atom/audit-publisher"
-	testAuditQueue    = "atom.events"
+	testPrincipalName = "audit-publisher"
+	testPrincipalSAN  = "spiffe://example.org/audit-publisher"
+	testAuditQueue    = "audit.events"
 	testInternalAddr  = ":5683"
 	testServiceAddr   = ":5684"
 	testServerCert    = "server.crt"
@@ -50,7 +50,7 @@ auth:
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom.events
+            routing_key: audit.events
         subscribe: []
 `, testPrincipalName, testPrincipalSAN, current, previous)
 	if err := os.WriteFile(filename, []byte(contents), 0o600); err != nil {
@@ -157,10 +157,10 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			name: "duplicate name",
 			principals: func() []LocalPrincipalConfig {
 				first, second := valid(), valid()
-				second.CertificateURISAN = "spiffe://absmach/atom/other"
+				second.CertificateURISAN = "spiffe://example.org/other"
 				return []LocalPrincipalConfig{first, second}
 			},
-			wantError: ".name \"atom-audit-publisher\" is duplicated",
+			wantError: ".name \"audit-publisher\" is duplicated",
 		},
 		{
 			name: "duplicate URI SAN",
@@ -169,7 +169,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 				second.Name = "other"
 				return []LocalPrincipalConfig{first, second}
 			},
-			wantError: ".certificate_uri_san \"spiffe://absmach/atom/audit-publisher\" is duplicated",
+			wantError: ".certificate_uri_san \"spiffe://example.org/audit-publisher\" is duplicated",
 		},
 		{
 			name: "missing current secret path",
@@ -229,7 +229,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			name: "publish wildcard",
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
-				principal.Permissions.Publish[0].RoutingKey = "atom-*"
+				principal.Permissions.Publish[0].RoutingKey = "audit-*"
 				return []LocalPrincipalConfig{principal}
 			},
 			wantError: "routing_key must be an exact value without wildcards",
@@ -332,7 +332,7 @@ func TestValidateLocalPrincipals(t *testing.T) {
 			principals: func() []LocalPrincipalConfig {
 				principal := valid()
 				principal.Role = LocalRoleService
-				principal.Permissions.Subscribe = []string{"atom/+"}
+				principal.Permissions.Subscribe = []string{"audit/+"}
 				return []LocalPrincipalConfig{principal}
 			},
 			wantError: testBadPattern,
@@ -731,7 +731,7 @@ func TestLoadAcceptsPublishPermissionFields(t *testing.T) {
 		name       string
 		permission string
 	}{
-		{name: "exact routing key", permission: "routing_key: \"atom.events\""},
+		{name: "exact routing key", permission: "routing_key: \"audit.events\""},
 		{name: "routing key prefix", permission: "routing_key_prefix: \"m.\""},
 	}
 

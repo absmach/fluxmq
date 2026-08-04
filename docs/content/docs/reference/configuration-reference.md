@@ -722,15 +722,15 @@ auth:
     identity_cache_ttl: "1h"
 
   local_principals:
-    - name: "atom-audit-publisher"
-      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+    - name: "audit-publisher"
+      certificate_uri_san: "spiffe://example.org/audit-publisher"
       role: "publisher"
-      current_secret_file: "/run/secrets/atom_audit_secret_current"
-      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      current_secret_file: "/run/secrets/audit_secret_current"
+      previous_secret_file: "/run/secrets/audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom.events"
+            routing_key: "audit.events"
         subscribe: []
 ```
 

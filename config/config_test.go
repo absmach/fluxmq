@@ -487,12 +487,12 @@ func TestExampleConfigsValid(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read example %s: %v", f, err)
 			}
-			if strings.Contains(string(contents), "/run/secrets/atom_audit_secret_") {
+			if strings.Contains(string(contents), "/run/secrets/audit_secret_") {
 				dir := t.TempDir()
 				current := writeSecret(t, dir, "current", strings.Repeat("a", 32))
 				previous := writeSecret(t, dir, "previous", strings.Repeat("b", 32))
-				rewritten := strings.ReplaceAll(string(contents), "/run/secrets/atom_audit_secret_current", current)
-				rewritten = strings.ReplaceAll(rewritten, "/run/secrets/atom_audit_secret_previous", previous)
+				rewritten := strings.ReplaceAll(string(contents), "/run/secrets/audit_secret_current", current)
+				rewritten = strings.ReplaceAll(rewritten, "/run/secrets/audit_secret_previous", previous)
 				loadPath = filepath.Join(dir, filepath.Base(f))
 				if err := os.WriteFile(loadPath, []byte(rewritten), 0o600); err != nil {
 					t.Fatalf("write rewritten example: %v", err)

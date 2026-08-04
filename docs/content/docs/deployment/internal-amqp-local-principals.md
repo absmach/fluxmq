@@ -8,9 +8,14 @@ description: Implemented production design for a dedicated mTLS AMQP 0.9.1 liste
 **Status:** implemented
 **Last Updated:** 2026-08-01
 
-This document describes the implementation and acceptance contract for publishing
-Atom domain events to FluxMQ without sending those publications through Atom's
-own external authorization callout.
+This document describes the implementation and acceptance contract for letting a
+first-party service publish its domain events to FluxMQ without sending those
+publications through FluxMQ's external authorization callout.
+
+The worked example throughout is an audit event publisher, because the case that
+motivates the feature is a service FluxMQ's own authorization path depends on:
+routing its publications through that callout would make the broker depend on the
+service it is authorizing.
 
 ## What this feature is for
 
@@ -29,7 +34,7 @@ It is deliberately not a general client authentication mechanism:
   a configuration and secret-provisioning change, not an API call;
 - each publish ACL entry grants either one exact routing key or one plain
   routing-key prefix on the default exchange, without AMQP wildcards;
-- the Atom principal has an explicit `publisher` role and writes into a
+- the publisher principal has an explicit `publisher` role and writes into a
   pre-provisioned protected stream, so it
   cannot consume, discover topology, or create anything;
 - it scales to a handful of principals, not to a client population. Remote
@@ -47,7 +52,7 @@ Run two independent AMQP 0.9.1 authentication paths in one FluxMQ process:
 
 ```text
 remote clients -> remote AMQP listener -> auth.external -> shared queues/storage
-Atom publisher -> local AMQP :5683 -> auth.local_principals -> shared queues/storage
+audit publisher -> local AMQP :5683 -> auth.local_principals -> shared queues/storage
 ```
 
 The remote listener never reads the local-principal store. The local
@@ -100,7 +105,7 @@ server:
       max_connections: 32
       cert_file: "/run/secrets/fluxmq_server_cert"
       key_file: "/run/secrets/fluxmq_server_key"
-      ca_file: "/run/secrets/atom_client_ca"
+      ca_file: "/run/secrets/local_client_ca"
       client_auth: "require"
       min_version: "TLS1.2"
 
@@ -122,15 +127,15 @@ auth:
     identity_cache_ttl: "1h"
 
   local_principals:
-    - name: "atom-audit-publisher"
-      certificate_uri_san: "spiffe://absmach/atom/audit-publisher"
+    - name: "audit-publisher"
+      certificate_uri_san: "spiffe://example.org/audit-publisher"
       role: "publisher"
-      current_secret_file: "/run/secrets/atom_audit_secret_current"
-      previous_secret_file: "/run/secrets/atom_audit_secret_previous"
+      current_secret_file: "/run/secrets/audit_secret_current"
+      previous_secret_file: "/run/secrets/audit_secret_previous"
       permissions:
         publish:
           - exchange: ""
-            routing_key: "atom.events"
+            routing_key: "audit.events"
         subscribe: []
 ```
 
@@ -142,7 +147,7 @@ terminal newline, stores only a digest in memory, and uses a constant-time
 comparison. Principal names and certificate URI SANs must be unique. Publish
 ACLs support only the default exchange (`exchange: ""`); each entry sets
 exactly one of an exact `routing_key` or a plain `routing_key_prefix`.
-Other exchanges and AMQP wildcards are invalid. Atom must use the exact form
+Other exchanges and AMQP wildcards are invalid. The audit publisher must use the exact form
 shown above because its target is a crash-durable stream.
 
 The remote listener requires the separately deployed external auth service;
@@ -160,15 +165,15 @@ match the same principal:
 - the SASL secret;
 - the URI SAN in a client certificate verified by the configured CA.
 
-## Atom event stream policy
+## Audit event stream policy
 
 Provision the stream before starting the publisher:
 
 ```yaml
 queues:
-  - name: "atom.events"
+  - name: "audit.events"
     topics:
-      - "$queue/atom.events/#"
+      - "$queue/audit.events/#"
     reserved: true
     type: "stream"
     retention:
@@ -221,13 +226,13 @@ publication is appended and synced on the receiving node only and is never
 forwarded. FluxMQ rejects any local-principal listener combined with
 `cluster.enabled` when a principal holds an exact target. Prefix-only
 principals remain valid in a cluster because those publications use ordinary
-topic routing and no queue durability barrier. Atom uses the exact form, and
+topic routing and no queue durability barrier. The audit publisher uses the exact form, and
 `cluster.enabled` defaults to true, so its deployment must set it to false
 explicitly, as the shipped `config-local-principal.yaml` does.
 
-The `atom-audit-publisher` may open connections and channels, enable publisher
+The `audit-publisher` may open connections and channels, enable publisher
 confirms, and publish only to the default exchange with the exact routing key
-`atom.events`. It cannot consume, get, declare or modify queues or exchanges,
+`audit.events`. It cannot consume, get, declare or modify queues or exchanges,
 bind topology, purge, delete, or use transactions. A denied channel operation
 returns AMQP `403 Access Refused`.
 
@@ -284,8 +289,8 @@ than retry into a stream whose storage has not recovered. The
 `publish_timeouts` and `publish_rejections` counters report how often each
 happened; sustained growth means storage, not the publisher, is the fault.
 
-Delivery is at least once. Atom may retry after a NACK or an ambiguous
-disconnect, so the same event can be appended more than once. Atom must keep a
+Delivery is at least once. The publisher may retry after a NACK or an ambiguous
+disconnect, so the same event can be appended more than once. It must keep a
 stable event ID across retries, and every consumer must deduplicate by that
 event ID.
 
@@ -306,7 +311,7 @@ Use the optional previous secret for a no-downtime rotation:
 
 1. Set the new secret as `current_secret_file` and the old one as
    `previous_secret_file`, then send `SIGHUP`.
-2. Reconnect Atom with the new secret and verify a confirmed publication.
+2. Reconnect the publisher with the new secret and verify a confirmed publication.
 3. Remove `previous_secret_file` and send `SIGHUP` again.
 4. FluxMQ disconnects sessions authenticated with the removed secret.
 
@@ -344,7 +349,7 @@ Unit and component tests plus the real-process smoke test prove:
   those services are unavailable;
 - valid mTLS, URI SAN, username, and current/previous secret combinations work;
 - invalid CA, SAN, username, or secret combinations fail closed;
-- only the exact `atom.events` publication succeeds;
+- only the exact `audit.events` publication succeeds;
 - consumption and every topology-changing operation are denied;
 - secret reload is atomic and removed credentials disconnect active sessions;
 - the stream accepts publication without a queue declaration;
@@ -367,7 +372,7 @@ and verifies stream replay. This smoke test passed on 2026-08-01.
 ### Manual rabtap deployment smoke
 
 Run this smoke after deploying the Compose overlay, and before enabling the
-Atom event publisher. It complements `make smoke-local-auth` by proving that an
+audit event publisher. It complements `make smoke-local-auth` by proving that an
 independent AMQP 0.9.1 client can publish, receive a durable confirmation, and
 replay the event through the externally authorized listener.
 
@@ -384,23 +389,23 @@ Before running the commands, verify all of the following:
   `compose.local-principal.yaml` and `config-local-principal.yaml`.
 - The FluxMQ server certificate is valid for the hostname used in the AMQP
   URI, normally `fluxmq` inside the Compose network.
-- The Atom client certificate is signed by `ATOM_CLIENT_CA_FILE`, has the
+- The publisher's client certificate is signed by `LOCAL_CLIENT_CA_FILE`, has the
   client-auth extended key usage, and contains the URI SAN
-  `spiffe://absmach/atom/audit-publisher`.
+  `spiffe://example.org/audit-publisher`.
 - The local secret is printable, at least 32 characters, and URI-safe. Hex is
   recommended. Use a short-lived smoke credential because AMQP URI credentials
   can be visible to local process inspection and may appear in client errors.
-- A remote reader accepted by `auth.external` may subscribe to `atom.events`.
+- A remote reader accepted by `auth.external` may subscribe to `audit.events`.
   The local principal is deliberately unable to perform the replay.
 
 The CA passed to `rabtap --tls-ca-file` verifies the FluxMQ **server**
-certificate. It is the opposite trust direction from `ATOM_CLIENT_CA_FILE`,
-which FluxMQ uses to verify the Atom client certificate. They may be the same
+certificate. It is the opposite trust direction from `LOCAL_CLIENT_CA_FILE`,
+which FluxMQ uses to verify the publisher's client certificate. They may be the same
 CA in a test deployment, but production does not require that.
 
-Port `5683` is not published to the host. Run the publish commands from Atom or
+Port `5683` is not published to the host. Run the publish commands from the publisher or
 a short-lived diagnostics container attached only to the private
-`atom-internal` network. A temporary `127.0.0.1` port mapping is acceptable for
+`local-internal` network. A temporary `127.0.0.1` port mapping is acceptable for
 a developer smoke, but must never be carried into the production overlay.
 
 Export a unique event ID and read the mounted secret without its terminal
@@ -408,8 +413,8 @@ newline:
 
 ```bash
 export AUDIT_EVENT_ID="rabtap-smoke-1"
-export AUDIT_SECRET="$(tr -d '\r\n' </secure/atom/audit-secret-current)"
-export LOCAL_AMQP_URI="amqps://atom-audit-publisher:${AUDIT_SECRET}@fluxmq:5683/"
+export AUDIT_SECRET="$(tr -d '\r\n' </secure/local/audit-secret-current)"
+export LOCAL_AMQP_URI="amqps://audit-publisher:${AUDIT_SECRET}@fluxmq:5683/"
 ```
 
 Publish through the default exchange to the one permitted routing key:
@@ -419,15 +424,15 @@ printf '{"id":"%s","action":"entity.create"}\n' "${AUDIT_EVENT_ID}" |
   rabtap pub \
     --uri="${LOCAL_AMQP_URI}" \
     --exchange='' \
-    --routingkey='atom.events' \
+    --routingkey='audit.events' \
     --confirms \
     --mandatory \
     --property='ContentType=application/json' \
     --property='DeliveryMode=persistent' \
     --property="MessageId=${AUDIT_EVENT_ID}" \
     --tls-ca-file=/secure/fluxmq/server-ca.crt \
-    --tls-cert-file=/secure/atom/audit-publisher.crt \
-    --tls-key-file=/secure/atom/audit-publisher.key
+    --tls-cert-file=/secure/local/audit-publisher.crt \
+    --tls-key-file=/secure/local/audit-publisher.key
 ```
 
 The command must exit with status zero. `--confirms` waits for FluxMQ's broker
@@ -448,19 +453,19 @@ printf 'denied\n' |
   rabtap pub \
     --uri="${LOCAL_AMQP_URI}" \
     --exchange='' \
-    --routingkey='not-atom.events' \
+    --routingkey='not-audit.events' \
     --confirms \
     --tls-ca-file=/secure/fluxmq/server-ca.crt \
-    --tls-cert-file=/secure/atom/audit-publisher.crt \
-    --tls-key-file=/secure/atom/audit-publisher.key
+    --tls-cert-file=/secure/local/audit-publisher.crt \
+    --tls-key-file=/secure/local/audit-publisher.key
 
-rabtap sub atom.events \
+rabtap sub audit.events \
   --uri="${LOCAL_AMQP_URI}" \
   --limit=1 \
   --idle-timeout=3s \
   --tls-ca-file=/secure/fluxmq/server-ca.crt \
-  --tls-cert-file=/secure/atom/audit-publisher.crt \
-  --tls-key-file=/secure/atom/audit-publisher.key
+  --tls-cert-file=/secure/local/audit-publisher.crt \
+  --tls-key-file=/secure/local/audit-publisher.key
 ```
 
 An optional topology guard check must also fail with AMQP `403`:
@@ -469,8 +474,8 @@ An optional topology guard check must also fail with AMQP `403`:
 rabtap queue create forbidden \
   --uri="${LOCAL_AMQP_URI}" \
   --tls-ca-file=/secure/fluxmq/server-ca.crt \
-  --tls-cert-file=/secure/atom/audit-publisher.crt \
-  --tls-key-file=/secure/atom/audit-publisher.key
+  --tls-cert-file=/secure/local/audit-publisher.crt \
+  --tls-key-file=/secure/local/audit-publisher.key
 ```
 
 Restart FluxMQ gracefully, wait for readiness, then replay through remote AMQP
@@ -485,7 +490,7 @@ docker compose \
 
 curl --fail http://127.0.0.1:8081/health
 
-rabtap sub atom.events \
+rabtap sub audit.events \
   --uri='amqps://remote-reader:REMOTE_SECRET@fluxmq:5682/' \
   --offset=first \
   --args='x-consumer-group=rabtap-smoke-unique' \
@@ -522,8 +527,8 @@ Roll out in this order:
 1. Deploy the breaking nested auth configuration with the local listener
    disabled and verify the remote path.
 2. Mount the CA, server certificate, current local secret, and pre-provision
-   `atom.events`.
-3. Enable port `5683` only on a private network shared with Atom.
+   `audit.events`.
+3. Enable port `5683` only on a private network shared with the publisher.
 4. Run `make smoke-local-auth` against the release source.
 5. As deployment-specific rollout gates, validate the rendered Compose or
    orchestrator configuration, start the deployed container, and verify its
@@ -531,7 +536,7 @@ Roll out in this order:
 6. As a deployment-specific performance gate, load test both paths and set an
    acceptable remote-auth latency budget for that environment. FluxMQ must not
    add a local-principal lookup or callout to the remote path.
-7. Enable the Atom event publisher in a separate deployment change.
+7. Enable the audit event publisher in a separate deployment change.
 
 The feature is implemented and covered by the real-process acceptance smoke.
 A particular production deployment is ready only after its container startup,

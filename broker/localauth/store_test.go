@@ -17,14 +17,14 @@ import (
 )
 
 const (
-	principalName  = "atom-audit-publisher"
-	principalSAN   = "spiffe://absmach/atom/audit-publisher"
+	principalName  = "audit-publisher"
+	principalSAN   = "spiffe://example.org/audit-publisher"
 	currentSecret  = "0123456789abcdef0123456789abcdef"
 	previousSecret = "abcdef0123456789abcdef0123456789"
 	nextSecret     = "fedcba9876543210fedcba9876543210"
-	auditQueue     = "atom.events"
-	auditQueueRoot = "atom"
-	auditQueueDeep = "atom.events.raw"
+	auditQueue     = "audit.events"
+	auditQueueRoot = "audit"
+	auditQueueDeep = "audit.events.raw"
 	otherQueue     = "other.events"
 )
 
@@ -61,17 +61,17 @@ func TestAuthenticateAndAuthorize(t *testing.T) {
 	if _, ok := store.Authenticate("unknown", currentSecret, principalSAN); ok {
 		t.Fatal("unknown principal was accepted")
 	}
-	if _, ok := store.Authenticate(principalName, currentSecret, "spiffe://absmach/atom/other"); ok {
+	if _, ok := store.Authenticate(principalName, currentSecret, "spiffe://example.org/other"); ok {
 		t.Fatal("wrong certificate URI SAN was accepted")
 	}
 
-	if !store.AuthorizePublish(authentication, "", "atom.events").Allowed() {
+	if !store.AuthorizePublish(authentication, "", "audit.events").Allowed() {
 		t.Fatal("configured publish target was denied")
 	}
-	if store.AuthorizePublish(authentication, "events", "atom.events").Allowed() {
+	if store.AuthorizePublish(authentication, "events", "audit.events").Allowed() {
 		t.Fatal("wrong exchange was allowed")
 	}
-	if store.AuthorizePublish(authentication, "", "atom.events.other").Allowed() {
+	if store.AuthorizePublish(authentication, "", "audit.events.other").Allowed() {
 		t.Fatal("prefix routing key was allowed")
 	}
 }
@@ -140,7 +140,7 @@ func TestReloadIsAtomicAndRevokesRemovedCredentials(t *testing.T) {
 	if store.IsActive(oldAuthentication) {
 		t.Fatal("removed previous credential remains active")
 	}
-	if store.AuthorizePublish(oldAuthentication, "", "atom.events").Allowed() {
+	if store.AuthorizePublish(oldAuthentication, "", "audit.events").Allowed() {
 		t.Fatal("session authenticated before reload can still publish with a retired credential")
 	}
 	if !store.IsActive(newAuthentication) {
@@ -168,7 +168,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 		t.Fatal("initial authentication failed")
 	}
 
-	principal.Permissions.Publish[0].RoutingKey = "atom.events.v2"
+	principal.Permissions.Publish[0].RoutingKey = "audit.events.v2"
 	changed, err := store.Reload([]config.LocalPrincipalConfig{principal})
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
@@ -179,7 +179,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if store.IsActive(authentication) {
 		t.Fatal("session authenticated against the replaced publish ACL remains active")
 	}
-	if store.AuthorizePublish(authentication, "", "atom.events.v2").Allowed() {
+	if store.AuthorizePublish(authentication, "", "audit.events.v2").Allowed() {
 		t.Fatal("session authenticated against the old ACL used the replacement ACL")
 	}
 
@@ -187,7 +187,7 @@ func TestReloadRevokesChangedPublishPermissions(t *testing.T) {
 	if !ok {
 		t.Fatal("authentication against the replacement ACL failed")
 	}
-	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "atom.events.v2").Allowed() {
+	if !store.IsActive(reauthenticated) || !store.AuthorizePublish(reauthenticated, "", "audit.events.v2").Allowed() {
 		t.Fatal("session authenticated against the replacement ACL is not active")
 	}
 }
@@ -207,10 +207,10 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			name: "duplicate principal",
 			configs: func() []config.LocalPrincipalConfig {
 				first, second := principalConfig(current, ""), principalConfig(current, "")
-				second.CertificateURISAN = "spiffe://absmach/atom/other"
+				second.CertificateURISAN = "spiffe://example.org/other"
 				return []config.LocalPrincipalConfig{first, second}
 			},
-			wantError: "name \"atom-audit-publisher\" is duplicated",
+			wantError: "name \"audit-publisher\" is duplicated",
 		},
 		{
 			name: "duplicate URI SAN",
@@ -219,7 +219,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 				second.Name = "other"
 				return []config.LocalPrincipalConfig{first, second}
 			},
-			wantError: "certificate_uri_san \"spiffe://absmach/atom/audit-publisher\" is duplicated",
+			wantError: "certificate_uri_san \"spiffe://example.org/audit-publisher\" is duplicated",
 		},
 		{
 			name: "weak secret",
@@ -246,7 +246,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 			name: "wildcard publish ACL",
 			configs: func() []config.LocalPrincipalConfig {
 				principal := principalConfig(current, "")
-				principal.Permissions.Publish[0].RoutingKey = "atom.#"
+				principal.Permissions.Publish[0].RoutingKey = "audit.#"
 				return []config.LocalPrincipalConfig{principal}
 			},
 			wantError: "without wildcards",
@@ -309,7 +309,7 @@ func TestConcurrentAuthenticationAndReload(t *testing.T) {
 			for range 500 {
 				authentication, ok := store.Authenticate(principalName, currentSecret, principalSAN)
 				if ok {
-					_ = store.AuthorizePublish(authentication, "", "atom.events")
+					_ = store.AuthorizePublish(authentication, "", "audit.events")
 				}
 			}
 		}()
@@ -429,13 +429,13 @@ func TestSubscribeACLWildcards(t *testing.T) {
 		{
 			name:    "single level AMQP wildcard",
 			entry:   auditQueueRoot + ".*",
-			allowed: []string{auditQueue, "atom.audit"},
+			allowed: []string{auditQueue, "audit.alerts"},
 			refused: []string{auditQueueRoot, auditQueueDeep, otherQueue},
 		},
 		{
 			name:    "single level MQTT wildcard",
 			entry:   auditQueueRoot + ".+",
-			allowed: []string{auditQueue, "atom.audit"},
+			allowed: []string{auditQueue, "audit.alerts"},
 			refused: []string{auditQueueRoot, auditQueueDeep, otherQueue},
 		},
 		{
@@ -454,7 +454,7 @@ func TestSubscribeACLWildcards(t *testing.T) {
 			name:    "exact entry still grants only itself",
 			entry:   auditQueue,
 			allowed: []string{auditQueue},
-			refused: []string{auditQueueRoot, "atom.other", auditQueueDeep},
+			refused: []string{auditQueueRoot, "audit.other", auditQueueDeep},
 		},
 	}
 

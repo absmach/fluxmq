@@ -159,7 +159,7 @@ type LocalPermissionsConfig struct {
 //
 // Separators are deliberately left alone. A queue name is a name, not an
 // address: nothing constrains the characters in one, so a queue may legitimately
-// be called "atom.events" or "a/b" or "$internal". Translating "." to "/" would
+// be called "audit.events" or "a/b" or "$internal". Translating "." to "/" would
 // make "a.b" and "a/b" the same key and let a grant on one authorize the other.
 //
 // The consequence is that "*", "+" and "#" cannot appear literally in a queue
@@ -184,7 +184,7 @@ func LocalSubscribeEntryIsPattern(normalized string) bool {
 // a queue.
 //
 // Levels are separated by "."; "+" matches exactly one level and "#" matches
-// zero or more trailing levels, so "atom.#" grants "atom" itself. The queue name
+// zero or more trailing levels, so "audit.#" grants "audit" itself. The queue name
 // is matched literally, so a "/" or "$" in it is an ordinary character rather
 // than structure.
 func MatchLocalSubscribeQueue(normalizedPattern, queue string) bool {

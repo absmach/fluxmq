@@ -116,13 +116,13 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 
 	path := writeConfig(t, dir, fmt.Sprintf(`auth:
   local_principals:
-    - name: atom-audit-publisher
-      certificate_uri_san: spiffe://absmach/atom/audit-publisher
+    - name: audit-publisher
+      certificate_uri_san: spiffe://example.org/audit-publisher
       current_secret_file: %q
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom.events
+            routing_key: audit.events
         subscribe: []
 `, secretPath))
 	initial, err := config.Load(path)
@@ -147,7 +147,7 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 		t.Fatalf("no-op reload changed state: result=%+v version=%d generation=%d", noChange, m.Version(), store.Generation())
 	}
 
-	oldAuthentication, ok := store.Authenticate("atom-audit-publisher", initialSecret, "spiffe://absmach/atom/audit-publisher")
+	oldAuthentication, ok := store.Authenticate("audit-publisher", initialSecret, "spiffe://example.org/audit-publisher")
 	if !ok {
 		t.Fatal("initial local authentication failed")
 	}
@@ -168,7 +168,7 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 	if store.IsActive(oldAuthentication) {
 		t.Fatal("retired local credential remains active")
 	}
-	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+	if _, ok := store.Authenticate("audit-publisher", nextSecret, "spiffe://example.org/audit-publisher"); !ok {
 		t.Fatal("reloaded local credential was rejected")
 	}
 
@@ -184,7 +184,7 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 	if m.Version() != 2 || store.Generation() != 2 {
 		t.Fatalf("failed reload changed state: version=%d generation=%d", m.Version(), store.Generation())
 	}
-	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+	if _, ok := store.Authenticate("audit-publisher", nextSecret, "spiffe://example.org/audit-publisher"); !ok {
 		t.Fatal("failed reload replaced the last valid local-principal snapshot")
 	}
 }
@@ -205,13 +205,13 @@ func TestReloadLocalPrincipalsRegisterRollback(t *testing.T) {
 	}
 	path := writeConfig(t, dir, fmt.Sprintf(`auth:
   local_principals:
-    - name: atom-audit-publisher
-      certificate_uri_san: spiffe://absmach/atom/audit-publisher
+    - name: audit-publisher
+      certificate_uri_san: spiffe://example.org/audit-publisher
       current_secret_file: %q
       permissions:
         publish:
           - exchange: ""
-            routing_key: atom.events
+            routing_key: audit.events
         subscribe: []
 `, secretPath))
 	initial, err := config.Load(path)
@@ -241,7 +241,7 @@ func TestReloadLocalPrincipalsRegisterRollback(t *testing.T) {
 	if len(errs) != 0 || len(applied) == 0 {
 		t.Fatalf("applyRuntimeChanges() applied=%v errs=%v, want the swap to succeed", applied, errs)
 	}
-	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+	if _, ok := store.Authenticate("audit-publisher", nextSecret, "spiffe://example.org/audit-publisher"); !ok {
 		t.Fatal("reloaded credential was not activated")
 	}
 
@@ -255,10 +255,10 @@ func TestReloadLocalPrincipalsRegisterRollback(t *testing.T) {
 	}
 	rollbacks[0]()
 
-	if _, ok := store.Authenticate("atom-audit-publisher", initialSecret, "spiffe://absmach/atom/audit-publisher"); !ok {
+	if _, ok := store.Authenticate("audit-publisher", initialSecret, "spiffe://example.org/audit-publisher"); !ok {
 		t.Fatal("rollback did not restore the previous local-principal snapshot")
 	}
-	if _, ok := store.Authenticate("atom-audit-publisher", nextSecret, "spiffe://absmach/atom/audit-publisher"); ok {
+	if _, ok := store.Authenticate("audit-publisher", nextSecret, "spiffe://example.org/audit-publisher"); ok {
 		t.Fatal("rollback left the rolled-back credential active")
 	}
 }

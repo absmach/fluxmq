@@ -29,12 +29,12 @@ import (
 )
 
 const (
-	testLocalPrincipal = "atom-audit-publisher"
+	testLocalPrincipal = "audit-publisher"
 	testCredentialFP   = "credential-fingerprint"
 	testPermissionsFP  = "permissions-fingerprint"
-	testCertificateURI = "spiffe://absmach/atom/audit-publisher"
+	testCertificateURI = "spiffe://example.org/audit-publisher"
 	testConnectionID   = "test-conn"
-	testAuditQueue     = "atom.events"
+	testAuditQueue     = "audit.events"
 	testServiceQueue   = "$queue/m"
 	testConsumerTag    = "reader"
 	testSiblingTag     = "sibling-reader"
@@ -212,7 +212,7 @@ func TestLocalAuthenticationBindsVerifiedIdentity(t *testing.T) {
 	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
 	globalExternal := &externalAuthenticatorStub{}
 	conn.broker.SetAuthEngine(corebroker.NewAuthEngine(globalExternal, nil))
-	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00audit-publisher\x00secret"}
 	if err := conn.authenticate(start); err != nil {
 		t.Fatalf("authenticate failed: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestLocalAuthenticationRejectsUnverifiedSelectedURI(t *testing.T) {
 	}
 	authz := &localAuthorizerStub{}
 	conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(authn, authz, authz, 0))
-	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00audit-publisher\x00secret"}
 	if err := conn.authenticate(start); err == nil {
 		t.Fatal("expected authentication rejection")
 	}
@@ -489,7 +489,7 @@ func TestLocalPublishPathFollowsGrantKind(t *testing.T) {
 // a queue. Two routing keys would otherwise carry it there: one under a
 // "$queue/"-shaped prefix, and one that happens to name a configured stream.
 func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
-	const streamQueue = "atom.events"
+	const streamQueue = "audit.events"
 
 	tests := []struct {
 		name       string
@@ -498,7 +498,7 @@ func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
 	}{
 		{
 			name:       "routing key naming a configured stream",
-			prefix:     "atom.",
+			prefix:     "audit.",
 			routingKey: streamQueue,
 		},
 		{
@@ -541,7 +541,7 @@ func TestLocalPrefixGrantNeverReachesAQueue(t *testing.T) {
 // pre-provisioned rather than declared on its own channel, so the lookup has to
 // reach global queue state.
 func TestPassiveDeclareResolvesProvisionedQueue(t *testing.T) {
-	const provisioned = "atom.events"
+	const provisioned = "audit.events"
 
 	authz := &localAuthorizerStub{allowQueue: provisioned}
 	conn, buf := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
@@ -860,7 +860,7 @@ func TestLocalPolicyBypassesBrokerGlobalHooks(t *testing.T) {
 	if qm.publishCalls != 0 {
 		t.Fatalf("general queue publish calls = %d, want 0", qm.publishCalls)
 	}
-	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/atom.events" {
+	if qm.exactPublishCalls != 1 || qm.exactStreamName != testAuditQueue || qm.exactPublish.Topic != "$queue/audit.events" {
 		t.Fatalf("unexpected exact stream publish: calls=%d queue=%q request=%+v", qm.exactPublishCalls, qm.exactStreamName, qm.exactPublish)
 	}
 }
@@ -1245,7 +1245,7 @@ func TestLocalCredentialRetiredBeforeRegistrationIsUnregistered(t *testing.T) {
 	conn.conn = transport
 	conn.writer = bufio.NewWriter(transport)
 	conn.closeCh = make(chan struct{})
-	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00atom-audit-publisher\x00old-secret"}
+	start := &codec.ConnectionStartOk{Mechanism: saslMechanismPlain, Response: "\x00audit-publisher\x00old-secret"}
 	if err := conn.authenticate(start); err != nil {
 		t.Fatalf("authenticate before reload: %v", err)
 	}

@@ -33,9 +33,9 @@ var (
 
 const (
 	node1                = "node-1"
-	testAuditQueueName   = "atom.events"
-	testAuditQueueTopic  = "$queue/atom.events"
-	testAuditQueueFilter = "$queue/atom.events/#"
+	testAuditQueueName   = "audit.events"
+	testAuditQueueTopic  = "$queue/audit.events"
+	testAuditQueueFilter = "$queue/audit.events/#"
 	testCapturedTopic    = "m/domain/c/channel/tst"
 	testCaptureQueue     = "messages"
 	testCapturePublisher = "mqtt-publisher"
@@ -780,8 +780,8 @@ func TestNarrowProtectedQueueContractsDoesNotReadStorage(t *testing.T) {
 	base := memlog.New()
 	audit := protectedAuditQueueConfig()
 	security := protectedAuditQueueConfig()
-	security.Name = "atom-security"
-	security.Topics = []string{"$queue/atom-security/#"}
+	security.Name = "audit-security"
+	security.Topics = []string{"$queue/audit-security/#"}
 	for _, contract := range []types.QueueConfig{audit, security} {
 		if err := base.CreateQueue(ctx, contract); err != nil {
 			t.Fatalf("create queue %q: %v", contract.Name, err)
@@ -875,12 +875,12 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 	}); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
 	}
-	if operations := store.Operations(); fmt.Sprint(operations) != "[append:atom.events sync:atom.events]" {
-		t.Fatalf("operations = %v, want append then sync for atom.events", operations)
+	if operations := store.Operations(); fmt.Sprint(operations) != "[append:audit.events sync:audit.events]" {
+		t.Fatalf("operations = %v, want append then sync for audit.events", operations)
 	}
 	auditTail, err := base.Tail(ctx, testAuditQueueName)
 	if err != nil || auditTail != 1 {
-		t.Fatalf("atom.events tail = %d, error = %v, want 1", auditTail, err)
+		t.Fatalf("audit.events tail = %d, error = %v, want 1", auditTail, err)
 	}
 	overlapTail, err := base.Tail(ctx, "overlap")
 	if err != nil || overlapTail != 0 {
@@ -949,8 +949,8 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 		wantErr        error
 		wantOperations string
 	}{
-		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:atom.events]"},
-		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:atom.events sync:atom.events]"},
+		{name: "append", appendErr: errTestAppend, wantErr: errTestAppend, wantOperations: "[append:audit.events]"},
+		{name: "sync", syncErr: errTestSync, wantErr: errTestSync, wantOperations: "[append:audit.events sync:audit.events]"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

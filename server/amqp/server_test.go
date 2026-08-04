@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	testLocalCertificateURI = "spiffe://absmach/atom/audit-publisher"
+	testLocalCertificateURI = "spiffe://example.org/audit-publisher"
 	testServerName          = "localhost"
 )
 
@@ -39,7 +39,7 @@ type reloadRaceLocalPolicy struct {
 func (p *reloadRaceLocalPolicy) AuthenticateLocal(_ context.Context, _, _, _ string, _ amqpbroker.VerifiedPeerIdentity) (amqpbroker.LocalAuthentication, bool, error) {
 	close(p.authenticated)
 	return amqpbroker.LocalAuthentication{
-		PrincipalID:            "atom-audit-publisher",
+		PrincipalID:            "audit-publisher",
 		CredentialFingerprint:  "old-credential-fingerprint",
 		PermissionsFingerprint: "old-permissions-fingerprint",
 		CertificateURI:         testLocalCertificateURI,
@@ -234,7 +234,7 @@ func TestRetiredLocalCredentialDuringHandshakeReleasesConnectionSlot(t *testing.
 	readAMQPMethod[*codec.ConnectionStart](t, tlsClient)
 	writeAMQPMethod(t, tlsClient, &codec.ConnectionStartOk{
 		Mechanism: "PLAIN",
-		Response:  "\x00atom-audit-publisher\x00old-secret",
+		Response:  "\x00audit-publisher\x00old-secret",
 		Locale:    "en_US",
 	})
 
@@ -360,7 +360,7 @@ func testMutualTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
 	}
 	clientCertificate := issueTestCertificate(t, caCertificate, caKey, &x509.Certificate{
 		SerialNumber: big.NewInt(3),
-		Subject:      pkix.Name{CommonName: "atom-audit-publisher"},
+		Subject:      pkix.Name{CommonName: "audit-publisher"},
 		URIs:         []*url.URL{certificateURI},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(time.Hour),
