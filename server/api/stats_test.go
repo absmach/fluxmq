@@ -226,13 +226,15 @@ func TestStatsRejectsPost(t *testing.T) {
 	}
 }
 
-// appendFailingQueueStore stands in for a queue whose storage is unavailable.
-type appendFailingQueueStore struct {
+// unreadableQueueStore matches a queue in the topic index but cannot return its
+// configuration, so the capture is lost during resolution — before any append is
+// dispatched, and therefore counted on the publishing goroutine.
+type unreadableQueueStore struct {
 	qstorage.QueueStore
 }
 
-func (s *appendFailingQueueStore) Append(_ context.Context, _ string, _ *qtypes.Message) (uint64, error) {
-	return 0, errors.New("storage unavailable")
+func (s *unreadableQueueStore) GetQueue(_ context.Context, _ string) (*qtypes.QueueConfig, error) {
+	return nil, errors.New("configuration unreadable")
 }
 
 // A queue silently dropping the traffic its topic pattern binds is the failure
@@ -241,7 +243,7 @@ func (s *appendFailingQueueStore) Append(_ context.Context, _ string, _ *qtypes.
 func TestStatsReportsQueueMetrics(t *testing.T) {
 	store := memory.New()
 	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
-	logStore := &appendFailingQueueStore{QueueStore: memlog.New()}
+	logStore := &unreadableQueueStore{QueueStore: memlog.New()}
 	manager := queue.NewManager(logStore, nil, nil, queue.DefaultConfig(), slog.Default(), nil)
 	srv := New(Config{}, b, nil, nil, manager, nil, nil, slog.Default())
 
@@ -249,11 +251,13 @@ func TestStatsReportsQueueMetrics(t *testing.T) {
 	if err := manager.CreateQueue(ctx, qtypes.DefaultQueueConfig("messages", "m/#")); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
+	// Resolution runs on the publishing goroutine, so this loss is counted
+	// before anything is dispatched and the endpoint can be read straight after.
 	if err := manager.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
 		Topic:   "m/acme/temp",
 		Payload: []byte("payload"),
-	}); err == nil {
-		t.Fatal("expected the capture to fail")
+	}); err != nil {
+		t.Fatalf("capture must not fail the publish: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)

@@ -113,6 +113,9 @@ type Manager struct {
 
 	delivery *DeliveryEngine
 
+	// capture writes topic captures off the publish path.
+	capture *captureDispatcher
+
 	// Metrics
 	metrics *consumer.Metrics
 }
@@ -145,6 +148,13 @@ type Config struct {
 
 	// Retention configuration
 	RetentionCheckInterval time.Duration
+
+	// Capture dispatcher configuration. Topic capture runs off the publish
+	// path so a stalled queue store cannot delay subscribers; these bound how
+	// much unwritten capture is held and how long shutdown waits for it.
+	CaptureWorkers      int
+	CaptureQueueDepth   int
+	CaptureDrainTimeout time.Duration
 
 	// Replication/distribution configuration
 	WritePolicy      WritePolicy
@@ -183,6 +193,9 @@ func DefaultConfig() Config {
 		RetentionCheckInterval: 5 * time.Minute,
 		WritePolicy:            WritePolicyLocal,
 		DistributionMode:       DistributionForward,
+		CaptureWorkers:         defaultCaptureWorkers,
+		CaptureQueueDepth:      defaultCaptureQueueDepth,
+		CaptureDrainTimeout:    defaultCaptureDrainTimeout,
 	}
 }
 
@@ -277,7 +290,37 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		metrics:                 metrics,
 	}
 
+	mgr.capture = newCaptureDispatcher(
+		config.CaptureWorkers,
+		config.CaptureQueueDepth,
+		config.CaptureDrainTimeout,
+		metrics,
+		logger,
+		mgr.applyCaptureJob,
+	)
+
 	return mgr
+}
+
+// applyCaptureJob performs one dispatched capture off the publish path. A job
+// with no target is the per-publish cluster forward.
+func (m *Manager) applyCaptureJob(ctx context.Context, job captureJob) {
+	if job.target == nil {
+		if m.cluster != nil {
+			m.forwardToRemoteNodes(ctx, job.publish)
+		}
+		return
+	}
+
+	// Capture is best effort: one target failing must not affect the others,
+	// and they are separate jobs precisely so it cannot.
+	if err := m.writeToTargets(ctx, job.publish, []queuePublishTarget{*job.target}, fanoutBestEffort); err != nil {
+		m.metrics.RecordCaptureFailure()
+		m.logger.Warn("capture append failed",
+			slog.String("queue", job.target.name),
+			slog.String("topic", job.publish.Topic),
+			slog.String("error", err.Error()))
+	}
 }
 
 // Start starts background workers.
@@ -308,6 +351,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Start delivery engine
 	m.delivery.Start(ctx)
+
+	// Start capture workers. Uses a context detached from the caller's so a
+	// cancelled start context cannot silently stop capture in a running broker;
+	// Stop is what ends them.
+	m.capture.Start(context.WithoutCancel(ctx))
 
 	// Start work stealing if enabled
 	if m.config.StealEnabled {
@@ -382,6 +430,11 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 // Stop stops the manager and all workers.
 func (m *Manager) Stop() error {
 	m.delivery.Stop()
+
+	// Drain queued capture before the stores go away. The dispatcher bounds its
+	// own wait and counts whatever it could not write, so a stalled store
+	// delays shutdown by at most that bound instead of indefinitely.
+	m.capture.Stop()
 
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
@@ -830,27 +883,37 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 // PublishToMatchingQueues captures an ordinary pub/sub publish in existing
 // queues whose configured topic patterns match it. Unlike Publish, it never
 // auto-creates a queue when no pattern matches.
+//
+// It resolves the matching queues on the caller's goroutine — that is an
+// in-memory index lookup — and then hands the storage work to the capture
+// dispatcher. Enqueueing never blocks, so a queue whose store stalls can no
+// longer delay the subscribers of a matching topic or the publisher's
+// acknowledgement.
+//
+// The returned error therefore reports only what is known before the append is
+// attempted: that the matching queues could not be resolved. An append that
+// fails or is dropped afterwards is reported through queues.capture_failures
+// and queues.capture_dropped, which is the only signal capture has.
 func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error {
-	// Every way this can lose a message counts, not only a failed append:
-	// failing to resolve targets, or dropping one whose configuration cannot be
-	// read, loses exactly as much as an append error does.
-	//
-	// The counter is per publish, not per queue, so the increment is decided
-	// once at the end however many targets were affected.
+	// A target dropped during resolution loses a message as surely as a failed
+	// append, and each lost queue counts. A resolution error is the one coarse
+	// case: the set of queues that would have matched is unknown, so it counts
+	// once.
 	targets, unresolved, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
 	if err != nil {
 		m.metrics.RecordCaptureFailure()
 		return err
 	}
+	for range unresolved {
+		m.metrics.RecordCaptureFailure()
+	}
 	if len(targets) == 0 {
-		if unresolved > 0 {
-			m.metrics.RecordCaptureFailure()
-		}
 		return nil
 	}
 
-	// Protocol brokers release or reuse their message buffers after this call.
-	// Take ownership of independent data before appending or forwarding it.
+	// Protocol brokers release or reuse their message buffers after this call,
+	// and the dispatcher reads the publish long after it returns, so ownership
+	// has to be taken before it is queued.
 	//
 	// The map is cloned whenever it exists rather than only when it holds
 	// entries: an empty non-nil map is still the caller's, and
@@ -860,13 +923,16 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 	publish.Properties = maps.Clone(publish.Properties)
 	publish = normalizePublishRequest(publish)
 
-	// Callers must not fail the publish over this, so the counter is the only
-	// durable signal that a queue is dropping the traffic bound to it.
-	err = m.publishToTargets(ctx, publish, targets, fanoutBestEffort)
-	if unresolved > 0 || err != nil {
-		m.metrics.RecordCaptureFailure()
+	// One job per target, so each queue is ordered by its own lane and a
+	// stalled queue cannot hold up captures into the others.
+	for i := range targets {
+		m.capture.enqueue(captureJob{publish: publish, target: &targets[i]})
 	}
-	return err
+	if m.cluster != nil {
+		m.capture.enqueue(captureJob{publish: publish})
+	}
+
+	return nil
 }
 
 // fanoutPolicy decides what a failing target means for the targets beside it.
@@ -888,8 +954,9 @@ const (
 	fanoutBestEffort
 )
 
-// publishToTargets routes one publish to every queue whose pattern matched it.
-func (m *Manager) publishToTargets(
+// writeToTargets routes one publish to every queue whose pattern matched it,
+// without any cluster forwarding.
+func (m *Manager) writeToTargets(
 	ctx context.Context,
 	publish types.PublishRequest,
 	targets []queuePublishTarget,
@@ -958,12 +1025,27 @@ func (m *Manager) publishToTargets(
 		}
 	}
 
+	return errors.Join(errs...)
+}
+
+// publishToTargets writes the targets and then forwards the publish to nodes
+// holding queues this node does not know. The two halves are separable because
+// the forward is per publish rather than per target: capture dispatches them as
+// independent jobs so a queue can be ordered by name.
+func (m *Manager) publishToTargets(
+	ctx context.Context,
+	publish types.PublishRequest,
+	targets []queuePublishTarget,
+	policy fanoutPolicy,
+) error {
+	err := m.writeToTargets(ctx, publish, targets, policy)
+
 	// Preserve legacy forwarding for queues known only by remote nodes.
 	if m.cluster != nil {
 		m.forwardToRemoteNodes(ctx, publish)
 	}
 
-	return errors.Join(errs...)
+	return err
 }
 
 // PublishToDurableStream appends to exactly queueName and establishes a

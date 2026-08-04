@@ -741,13 +741,22 @@ components:
           type: integer
           format: int64
           description: |
-            Pub/sub publishes that did not reach every queue whose `topics`
-            pattern matched them, whether the append failed, a matched queue's
-            configuration could not be read, or the matching queues could not be
-            resolved. Counted once per publish however many queues were affected,
-            so it measures how often capture is lossy rather than how many records
-            were lost. Capture never fails the publish, so this is the only signal
-            that a queue is dropping the traffic its pattern binds.
+            Matching queues a captured publish failed to reach, because the
+            append failed or the queue's configuration could not be read. The
+            unit is the queue, so a publish missing two of its matching queues
+            counts twice. A resolution failure, where the matching set is
+            unknown, counts once.
+          example: 0
+        capture_dropped:
+          type: integer
+          format: int64
+          description: |
+            Capture jobs discarded before any append was attempted, because the
+            capture backlog was full or shutdown drained past its deadline.
+            Distinct from `capture_failures`, where the append was tried and did
+            not succeed: a rising `capture_dropped` means capture cannot keep up
+            with the publish rate. Capture runs off the publish path and never
+            fails the publish, so these two counters are its only signal.
           example: 0
         claims:
           $ref: "#/components/schemas/QueueAttemptStats"
