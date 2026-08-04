@@ -304,10 +304,19 @@ queues:
 | Field           | Description                                                                |
 | --------------- | -------------------------------------------------------------------------- |
 | `name`          | Unique queue name.                                                         |
-| `topics`        | Topic filters routed into this queue (must be non-empty).                  |
+| `topics`        | Topic filters routed into this queue (must be non-empty). MQTT wildcards: `+` matches one level, `#` matches zero or more and must be the final level. A `#` placed anywhere else is not a valid filter and matches nothing — see the note below. Patterns are matched against every publish, not only `$queue/` addresses. |
 | `reserved`      | Marks system-managed/builtin queue definitions.                            |
 | `type`          | Queue mode: `classic` or `stream`. Empty value falls back to default mode. |
 | `primary_group` | For stream queues: consumer group used for status reporting.               |
+
+Queue patterns are not validated when the configuration loads, so a malformed
+filter is accepted and simply never matches. Check a `#` is the last level: a
+binding such as `#/events` matches nothing at all.
+
+Earlier releases matched such a pattern against *every* topic, because the matcher
+returned a match on seeing `#` regardless of position. A queue bound that way was
+capturing all traffic on the broker. If a queue appears to have stopped receiving
+after upgrading, that binding is where to look.
 
 ### `queues[].retention`
 
