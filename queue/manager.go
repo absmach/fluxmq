@@ -2388,10 +2388,15 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 		messageID = queueName + ":" + strconv.FormatInt(msg.Sequence, 10)
 	}
 
+	// Stamped after the user properties are copied in, matching the local
+	// delivery path: a publisher cannot forge queue-owned metadata.
 	props[types.PropMessageID] = messageID
 	props[types.PropGroupID] = msg.GroupID
 	props[types.PropQueueName] = queueName
 	props[types.PropOffset] = strconv.FormatInt(msg.Sequence, 10)
+	if msg.SourceTopic != "" {
+		props[types.PropSourceTopic] = msg.SourceTopic
+	}
 
 	if msg.Stream {
 		props[types.PropStreamOffset] = strconv.FormatInt(msg.StreamOffset, 10)

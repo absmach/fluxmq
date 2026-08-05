@@ -615,10 +615,13 @@ func createRouteProperties(msg *types.Message, groupID, queueName string) map[st
 	for k, v := range msg.Properties {
 		props[k] = v
 	}
+	// Stamped after the publisher's own properties are copied in, so a
+	// publisher cannot forge the origin of its own message.
 	props[types.PropMessageID] = queueName + ":" + strconv.FormatUint(msg.Sequence, 10)
 	props[types.PropGroupID] = groupID
 	props[types.PropQueueName] = queueName
 	props[types.PropOffset] = strconv.FormatUint(msg.Sequence, 10)
+	props[types.PropSourceTopic] = msg.Topic
 
 	return props
 }
@@ -634,6 +637,7 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 		QueueName:      queueName,
 		GroupID:        groupID,
 		Topic:          queueDeliveryTopic(queueName, msg.Topic),
+		SourceTopic:    msg.Topic,
 		Payload:        msg.StablePayload(),
 		Sequence:       int64(msg.Sequence),
 		UserProperties: userProps,
@@ -661,6 +665,14 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 // already canonical. Ordinary pub/sub captures retain their original path
 // after the queue root, so a capture of m/domain/... in queue m is delivered as
 // $queue/m/domain/....
+//
+// The address identifies the queue and nothing more. It is deliberately not
+// injective: a capture of m/acme/temp into queue m, a capture of acme/temp into
+// queue m, and an explicit publish to $queue/m/acme/temp all deliver as
+// $queue/m/acme/temp, because the leading level is absorbed when it already
+// equals the queue name. Consumers must not parse a source topic back out of
+// it; the v1 contract carries the origin in the types.PropSourceTopic property,
+// which the broker stamps and a publisher cannot forge.
 func queueDeliveryTopic(queueName, topic string) string {
 	queueName = strings.Trim(strings.TrimSpace(queueName), "/")
 	topic = strings.TrimPrefix(strings.TrimSpace(topic), "/")

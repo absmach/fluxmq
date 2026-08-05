@@ -1327,6 +1327,9 @@ func encodeRouteQueueMessage(clientID, queueName string, msg *QueueMessage) *clu
 		properties[queueTypes.PropQueueName] = queueName
 	}
 	properties[queueTypes.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
+	if msg.SourceTopic != "" {
+		properties[queueTypes.PropSourceTopic] = msg.SourceTopic
+	}
 	if msg.Stream {
 		properties[queueTypes.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
 		if msg.StreamTimestamp != 0 {
@@ -1380,6 +1383,9 @@ func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) *QueueMes
 	}
 	if offset, ok := parseInt64Property(rawProps, queueTypes.PropOffset); ok {
 		msg.Sequence = offset
+	}
+	if sourceTopic := rawProps[queueTypes.PropSourceTopic]; sourceTopic != "" {
+		msg.SourceTopic = sourceTopic
 	}
 	if streamOffset, ok := parseInt64Property(rawProps, queueTypes.PropStreamOffset); ok {
 		msg.Stream = true
