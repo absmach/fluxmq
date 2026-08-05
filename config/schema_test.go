@@ -188,17 +188,11 @@ func TestShippedConfigsDecodeStrictly(t *testing.T) {
 			data, err := os.ReadFile(file)
 			require.NoError(t, err)
 
-			_, err = parse(data)
-			if err == nil {
-				return
+			// Validation names secret files but never opens them, so this
+			// holds on a workstation with no /run/secrets.
+			if _, err = parse(data); err != nil {
+				t.Fatalf("shipped config must decode strictly: %v", err)
 			}
-			// production.yaml references secret files that only exist on a
-			// deployed host. Unknown-key and bind-conflict failures are still
-			// real, so only the secret-file read is tolerated.
-			if strings.Contains(err.Error(), "failed to read secret file") {
-				t.Skipf("requires deployed secret material: %v", err)
-			}
-			t.Fatalf("shipped config must decode strictly: %v", err)
 		})
 	}
 }

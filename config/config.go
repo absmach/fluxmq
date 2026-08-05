@@ -2013,10 +2013,16 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 }
 
 // ValidateLocalPrincipals checks the declarative rules for local principals:
-// unique non-blank names and absolute URI SANs, readable high-entropy secret
-// files, roles, and exact-or-prefix publish permissions. It is the single
-// definition of those rules, shared with the runtime store that loads the same
-// section, so startup validation and a SIGHUP reload cannot drift apart.
+// unique non-blank names and absolute URI SANs, roles, named secret files, and
+// exact-or-prefix publish permissions. It is the single definition of those
+// rules, shared with the runtime store that loads the same section, so startup
+// validation and a SIGHUP reload cannot drift apart.
+//
+// It deliberately does not open the secret files. Their contents are checked
+// where the credential material is actually loaded, in broker/localauth, which
+// runs at startup and on every reload. Keeping the filesystem out of this
+// function is what lets `fluxmq config validate` check a production file on a
+// workstation that has no /run/secrets.
 func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 	names := make(map[string]struct{}, len(principals))
 	uriSANs := make(map[string]struct{}, len(principals))
@@ -2058,11 +2064,11 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 		}
 		uriSANs[uriSAN] = struct{}{}
 
-		if err := validateLocalSecretFile(prefix+".current_secret_file", principal.CurrentSecretFile, true); err != nil {
-			return err
+		if strings.TrimSpace(principal.CurrentSecretFile) == "" {
+			return fmt.Errorf("%s.current_secret_file cannot be empty", prefix)
 		}
-		if err := validateLocalSecretFile(prefix+".previous_secret_file", principal.PreviousSecretFile, false); err != nil {
-			return err
+		if principal.PreviousSecretFile != "" && strings.TrimSpace(principal.PreviousSecretFile) == "" {
+			return fmt.Errorf("%s.previous_secret_file cannot be empty", prefix)
 		}
 
 		publishTargets := make(map[LocalPublishPermission]struct{}, len(principal.Permissions.Publish))
@@ -2131,46 +2137,6 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 	}
 
 	return nil
-}
-
-func validateLocalSecretFile(field, filename string, required bool) error {
-	if strings.TrimSpace(filename) == "" {
-		if required || filename != "" {
-			return fmt.Errorf("%s cannot be empty", field)
-		}
-		return nil
-	}
-
-	secret, err := readLocalSecretFile(filename)
-	if err != nil {
-		return fmt.Errorf("%s: %w", field, err)
-	}
-	defer clear(secret)
-	if len(secret) < 32 {
-		return fmt.Errorf("%s must contain at least 32 bytes", field)
-	}
-	return nil
-}
-
-func readLocalSecretFile(filename string) ([]byte, error) {
-	secret, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read secret file: %w", err)
-	}
-	if len(secret) > 0 && secret[len(secret)-1] == '\n' {
-		secret = secret[:len(secret)-1]
-		if len(secret) > 0 && secret[len(secret)-1] == '\r' {
-			secret = secret[:len(secret)-1]
-		}
-	}
-	if bytes.ContainsAny(secret, "\r\n") {
-		return nil, fmt.Errorf("secret file may contain only one terminal newline")
-	}
-	if bytes.IndexByte(secret, 0) >= 0 {
-		clear(secret)
-		return nil, fmt.Errorf("secret file must not contain NUL bytes")
-	}
-	return secret, nil
 }
 
 func containsWildcard(value string) bool {
