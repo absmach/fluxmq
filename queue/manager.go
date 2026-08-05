@@ -752,6 +752,13 @@ func (m *Manager) GroupStore() storage.ConsumerGroupStore {
 
 // CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
+	// Checked here rather than only at configuration load, because this is the
+	// path an admin-API creation takes. A filter that can never match would bind
+	// the queue to nothing and leave it silently receiving no traffic.
+	if err := types.ValidateTopicFilters(config.Topics); err != nil {
+		return err
+	}
+
 	m.protectedQueuesMu.RLock()
 	defer m.protectedQueuesMu.RUnlock()
 	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
@@ -790,6 +797,12 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue.
 func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	// An update can introduce a filter that never matches just as a creation
+	// can, silently unbinding a queue that was working.
+	if err := types.ValidateTopicFilters(config.Topics); err != nil {
+		return err
+	}
+
 	m.protectedQueuesMu.RLock()
 	defer m.protectedQueuesMu.RUnlock()
 	if err := m.validateProtectedQueueMutationLocked(config); err != nil {

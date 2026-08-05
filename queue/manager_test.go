@@ -3754,3 +3754,33 @@ func flushCapture(t *testing.T, mgr *Manager, fn func()) {
 	fn()
 	mgr.capture.Stop()
 }
+
+// Configuration load is not the only way a queue is created: the admin API goes
+// through the manager, and production runs on the disk-backed store rather than
+// the in-memory one whose CreateQueue happened to validate. A filter that can
+// never match has to be refused here, or a queue is created bound to nothing and
+// silently receives no traffic.
+func TestCreateQueueRejectsFiltersThatCannotMatch(t *testing.T) {
+	mgr := NewManager(memlog.New(), newMockGroupStore(), nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	ctx := context.Background()
+
+	malformed := types.DefaultQueueConfig("black-holed", "#/events")
+	err := mgr.CreateQueue(ctx, malformed)
+	if err == nil {
+		t.Fatal("CreateQueue accepted a filter that can never match")
+	}
+	if !errors.Is(err, types.ErrInvalidConfig) {
+		t.Fatalf("CreateQueue error = %v, want it to wrap ErrInvalidConfig", err)
+	}
+	if _, getErr := mgr.GetQueue(ctx, "black-holed"); getErr == nil {
+		t.Fatal("the refused queue was created anyway")
+	}
+
+	// An update must not be able to unbind a working queue either.
+	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("working", "m/#")); err != nil {
+		t.Fatalf("CreateQueue failed: %v", err)
+	}
+	if err := mgr.UpdateQueue(ctx, types.DefaultQueueConfig("working", "m/#/events")); err == nil {
+		t.Fatal("UpdateQueue accepted a filter that can never match")
+	}
+}

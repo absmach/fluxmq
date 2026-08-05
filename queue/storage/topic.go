@@ -6,8 +6,6 @@ package storage
 import (
 	"slices"
 	"sync"
-
-	"github.com/absmach/fluxmq/topics"
 )
 
 // TopicIndex provides efficient topic-to-queue matching.
@@ -31,24 +29,25 @@ type TopicIndex struct {
 	// addressed through "$queue/" would test every one of them on every
 	// ordinary publish and never match.
 	//
-	// Each entry maps pattern -> queue names that use it.
-	dollarPatterns map[string][]string
-	plainPatterns  map[string][]string
+	// Each half is a trie keyed on topic levels, so matching costs the depth of
+	// the topic rather than the number of patterns registered.
+	dollarPatterns *patternTrie
+	plainPatterns  *patternTrie
 }
 
 // NewTopicIndex creates a new topic index.
 func NewTopicIndex() *TopicIndex {
 	return &TopicIndex{
 		queues:         make(map[string][]string),
-		dollarPatterns: make(map[string][]string),
-		plainPatterns:  make(map[string][]string),
+		dollarPatterns: newPatternTrie(),
+		plainPatterns:  newPatternTrie(),
 	}
 }
 
 // patternsFor returns the half of the index that can match topics shaped like
 // the given value. It is used for both lookup and bookkeeping, so a pattern is
 // always filed where a matching topic will look for it.
-func (idx *TopicIndex) patternsFor(patternOrTopic string) map[string][]string {
+func (idx *TopicIndex) patternsFor(patternOrTopic string) *patternTrie {
 	if patternOrTopic != "" && patternOrTopic[0] == '$' {
 		return idx.dollarPatterns
 	}
@@ -67,8 +66,7 @@ func (idx *TopicIndex) AddQueue(queueName string, topicPatterns []string) {
 	idx.queues[queueName] = topicPatterns
 
 	for _, pattern := range topicPatterns {
-		patterns := idx.patternsFor(pattern)
-		patterns[pattern] = append(patterns[pattern], queueName)
+		idx.patternsFor(pattern).add(pattern, queueName)
 	}
 }
 
@@ -88,30 +86,19 @@ func (idx *TopicIndex) removeQueueLocked(queueName string) {
 
 	// Remove queue from pattern index
 	for _, pattern := range topicPatterns {
-		patterns := idx.patternsFor(pattern)
-		queues := patterns[pattern]
-		newQueues := make([]string, 0, len(queues))
-		for _, q := range queues {
-			if q != queueName {
-				newQueues = append(newQueues, q)
-			}
-		}
-		if len(newQueues) == 0 {
-			delete(patterns, pattern)
-		} else {
-			patterns[pattern] = newQueues
-		}
+		idx.patternsFor(pattern).remove(pattern, queueName)
 	}
 
 	delete(idx.queues, queueName)
 }
 
 // FindMatching returns all queue names whose topic patterns match the given topic.
-// Uses MQTT-style topic matching via topics.TopicMatch.
+// Wildcard semantics follow MQTT, matching topics.TopicMatch.
 //
 // This runs on the publish path of every protocol, so the no-match case
 // allocates nothing: only the half of the index that can match the topic is
-// scanned, and the result slice is built lazily.
+// consulted, the trie is walked without splitting the topic, and the result
+// slice is built lazily.
 func (idx *TopicIndex) FindMatching(topic string) []string {
 	if topic == "" {
 		return nil
@@ -121,14 +108,7 @@ func (idx *TopicIndex) FindMatching(topic string) []string {
 	defer idx.mu.RUnlock()
 
 	var matched matchedQueues
-	for pattern, queues := range idx.patternsFor(topic) {
-		if !topics.TopicMatch(pattern, topic) {
-			continue
-		}
-		for _, queueName := range queues {
-			matched.add(queueName)
-		}
-	}
+	idx.patternsFor(topic).match(topic, &matched)
 
 	return matched.names
 }

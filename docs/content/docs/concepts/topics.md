@@ -29,8 +29,13 @@ For AMQP 0.9.1 pub/sub (default exchange path), filters and routing keys are tra
 
 MQTT wildcard rules apply:
 
-- `+` matches a single level (`sensors/+`)
-- `#` matches multiple levels (`sensors/#`)
+- `+` matches exactly one level (`sensors/+`)
+- `#` matches zero or more remaining levels and **must be the final level**
+  (`sensors/#`). Because it matches zero levels, `sensors/#` also matches
+  `sensors` itself.
+
+A `#` anywhere but the end — `sensors/#/temp` — is not a valid filter and matches
+nothing.
 
 These same patterns are used by queue topic bindings as well.
 

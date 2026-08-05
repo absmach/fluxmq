@@ -55,13 +55,14 @@ func BenchmarkTopicIndexFindMatching(b *testing.B) {
 	}
 }
 
-// Scaling "$queue/" patterns measures the partition, which short-circuits them
-// to no work at all, so it flatters the matcher. The sensitive dimension is the
-// number of *ordinary* patterns: those are the half an ordinary publish actually
-// scans, and the scan is linear in them under a shared read lock.
+// Scaling "$queue/" patterns measures the partition, which short-circuits them to
+// no work at all, so it says nothing about the matcher. The dimension that used
+// to cost is the number of *ordinary* patterns: that half is what an ordinary
+// publish consults.
 //
-// This is the benchmark to beat with an indexed matcher, and the case a
-// deployment binding many queues to ordinary topics pays on every publish.
+// Matching is a trie descent, so this asserts the property that replaced the old
+// linear scan — lookup independent of how many patterns are registered. A result
+// that grows with the pattern count means the index has regressed to a scan.
 func BenchmarkTopicIndexFindMatchingOrdinaryPatternScale(b *testing.B) {
 	// A handful of queue-addressed queues alongside them, so the partition is
 	// present but is not the variable under test.
@@ -85,8 +86,8 @@ func BenchmarkTopicIndexFindMatchingOrdinaryPatternScale(b *testing.B) {
 			topic string
 		}{
 			{name: "no_match", topic: benchOrdinaryTopic},
-			// Matching one pattern still scans all of them, so the two cases
-			// differ only by the result allocation.
+			// Both cases descend the same trie; they differ only by the
+			// allocation the result slice makes when something matches.
 			{name: "one_match", topic: "t3/acme/events/temp"},
 		} {
 			b.Run(fmt.Sprintf("%s/%d_ordinary_patterns", tc.name, patterns), func(b *testing.B) {
@@ -97,5 +98,31 @@ func BenchmarkTopicIndexFindMatchingOrdinaryPatternScale(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// Publishes addressed to a queue once cost the same scan, growing with the number
+// of configured queues rather than with traffic. They are indexed by the same
+// trie, and this holds that: it is the dimension a broker with many queues
+// actually grows along.
+func BenchmarkTopicIndexFindMatchingQueueAddressScale(b *testing.B) {
+	newIndex := func(queues int) *TopicIndex {
+		index := NewTopicIndex()
+		for i := range queues {
+			name := fmt.Sprintf("queue-%d", i)
+			index.AddQueue(name, []string{"$queue/" + name + "/#"})
+		}
+		return index
+	}
+
+	for _, queues := range []int{8, 512, 8192} {
+		index := newIndex(queues)
+		b.Run(fmt.Sprintf("one_match/%d_queues", queues), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				index.FindMatching("$queue/queue-7/items")
+			}
+		})
 	}
 }

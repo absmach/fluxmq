@@ -6,6 +6,7 @@ package logstorage
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -70,15 +71,36 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 		topicIndex: storage.NewTopicIndex(),
 	}
 
-	// Rebuild topic index from existing queues
+	// Rebuild topic index from existing queues.
+	//
+	// A queue persisted before filters were validated may carry one that can
+	// never match. Startup is not the place to refuse it — the data is already
+	// on disk and an operator cannot edit it from here — but it must not be
+	// bound silently either, because the queue will simply receive nothing.
+	// Report it and carry on; the index ignores such a filter regardless.
 	queues, err := queueStore.List()
 	if err == nil {
 		for _, cfg := range queues {
+			for _, filter := range cfg.Topics {
+				if err := types.ValidateTopicFilters([]string{filter}); err != nil {
+					reportMalformedFilter(config.RecoveryLogger, cfg.Name, filter, err)
+				}
+			}
 			adapter.topicIndex.AddQueue(cfg.Name, cfg.Topics)
 		}
 	}
 
 	return adapter, nil
+}
+
+// reportMalformedFilter surfaces a persisted binding that can never match. The
+// queue keeps working for its other filters; this one contributes nothing.
+func reportMalformedFilter(logger func(string, ...any), queueName, filter string, err error) {
+	if logger == nil {
+		logger = func(msg string, args ...any) { slog.Warn(msg, args...) }
+	}
+	logger("queue topic filter can never match; queue will not receive traffic through it",
+		"queue", queueName, "filter", filter, "error", err)
 }
 
 // Close closes the adapter and underlying store.
@@ -125,6 +147,13 @@ func (a *Adapter) OffsetBySize(ctx context.Context, queueName string, retentionB
 // missing metadata rather than reporting the queue as already created, so a
 // torn creation cannot strand records that were acknowledged as durable.
 func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) error {
+	// Defence in depth: the queue manager checks this too, but the adapter is
+	// this package's public write path and must not persist a binding that can
+	// never match.
+	if err := types.ValidateTopicFilters(config.Topics); err != nil {
+		return err
+	}
+
 	if err := a.store.CreateQueue(config.Name); err != nil {
 		if !errors.Is(err, ErrAlreadyExists) {
 			return err
@@ -146,6 +175,10 @@ func (a *Adapter) CreateQueue(ctx context.Context, config types.QueueConfig) err
 
 // UpdateQueue updates an existing queue's configuration.
 func (a *Adapter) UpdateQueue(ctx context.Context, config types.QueueConfig) error {
+	if err := types.ValidateTopicFilters(config.Topics); err != nil {
+		return err
+	}
+
 	if err := a.queueStore.Save(config); err != nil {
 		return err
 	}

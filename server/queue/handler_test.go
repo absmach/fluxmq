@@ -5,6 +5,8 @@ package queue
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -537,5 +539,105 @@ func TestSeekToTimestamp(t *testing.T) {
 	}))
 	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
 		t.Fatalf("unexpected code for missing timestamp: got %s want %s", got, connect.CodeInvalidArgument)
+	}
+}
+
+// A filter the broker will not accept is the caller's mistake. It has to reach
+// the client as InvalidArgument: AlreadyExists says the name is taken and
+// Internal says the server broke, and a client acting on either would retry or
+// rename instead of fixing the filter it sent.
+func TestQueueMutationsReportInvalidFiltersAsInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := memlog.New()
+	groupStore := noopGroupStore{}
+	manager := queuepkg.NewManager(store, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+	h := NewHandler(manager, store, groupStore, nil)
+
+	t.Run("create", func(t *testing.T) {
+		_, err := h.CreateQueue(ctx, connect.NewRequest(&queuev1.CreateQueueRequest{
+			Name:   "black-holed",
+			Topics: []string{"#/events"},
+		}))
+		if err == nil {
+			t.Fatal("CreateQueue accepted a filter that can never match")
+		}
+		if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+			t.Fatalf("CreateQueue code = %v, want %v", got, connect.CodeInvalidArgument)
+		}
+	})
+
+	t.Run("create with a name already taken still reports AlreadyExists", func(t *testing.T) {
+		req := &queuev1.CreateQueueRequest{Name: "taken", Topics: []string{"$queue/taken/#"}}
+		if _, err := h.CreateQueue(ctx, connect.NewRequest(req)); err != nil {
+			t.Fatalf("CreateQueue failed: %v", err)
+		}
+		_, err := h.CreateQueue(ctx, connect.NewRequest(req))
+		if err == nil {
+			t.Fatal("CreateQueue accepted a duplicate name")
+		}
+		if got := connect.CodeOf(err); got != connect.CodeAlreadyExists {
+			t.Fatalf("CreateQueue code = %v, want %v", got, connect.CodeAlreadyExists)
+		}
+	})
+}
+
+// The update path cannot be driven to an invalid filter through the API, because
+// the proto carries no topics on update: they are settable only at creation. Its
+// mapping is still reachable — a queue persisted with a bad filter before
+// validation existed fails when updated — so the two mappings are covered
+// directly, which also pins every branch rather than the one an integration test
+// happens to reach.
+func TestQueueMutationErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		wantCreate connect.Code
+		wantUpdate connect.Code
+	}{
+		{
+			name:       "invalid configuration is the caller's mistake",
+			err:        fmt.Errorf("wrapped: %w", types.ErrInvalidConfig),
+			wantCreate: connect.CodeInvalidArgument,
+			wantUpdate: connect.CodeInvalidArgument,
+		},
+		{
+			name:       "protected queue mutation is a precondition",
+			err:        queuepkg.ErrProtectedQueueMutation,
+			wantCreate: connect.CodeFailedPrecondition,
+			wantUpdate: connect.CodeFailedPrecondition,
+		},
+		{
+			name:       "name already taken",
+			err:        qstorage.ErrQueueAlreadyExists,
+			wantCreate: connect.CodeAlreadyExists,
+			wantUpdate: connect.CodeInternal,
+		},
+		{
+			name:       "queue missing",
+			err:        qstorage.ErrQueueNotFound,
+			wantCreate: connect.CodeInternal,
+			wantUpdate: connect.CodeNotFound,
+		},
+		{
+			name:       "anything else is a server fault",
+			err:        errors.New("disk on fire"),
+			wantCreate: connect.CodeInternal,
+			wantUpdate: connect.CodeInternal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := createQueueErrorCode(tt.err); got != tt.wantCreate {
+				t.Fatalf("createQueueErrorCode = %v, want %v", got, tt.wantCreate)
+			}
+			if got := updateQueueErrorCode(tt.err); got != tt.wantUpdate {
+				t.Fatalf("updateQueueErrorCode = %v, want %v", got, tt.wantUpdate)
+			}
+		})
 	}
 }

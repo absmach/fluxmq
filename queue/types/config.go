@@ -5,8 +5,11 @@ package types
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/absmach/fluxmq/topics"
 )
 
 // ErrInvalidConfig indicates an invalid queue configuration.
@@ -262,8 +265,28 @@ func FromInput(input QueueConfigInput) QueueConfig {
 	return cfg
 }
 
+// ValidateTopicFilters reports whether every filter can actually match a topic.
+//
+// A malformed filter is not a harmless typo. It matches nothing, so the queue is
+// bound to a pattern that can never fire and receives no traffic at all, which
+// looks exactly like a queue nobody publishes to. It has to be refused wherever a
+// queue is created, not only where configuration is loaded, because a queue can
+// equally be created through the admin API.
+func ValidateTopicFilters(filters []string) error {
+	for _, filter := range filters {
+		if err := topics.ValidateTopicFilter(filter); err != nil {
+			return fmt.Errorf("%w: topic filter %q: %w", ErrInvalidConfig, filter, err)
+		}
+	}
+	return nil
+}
+
 // Validate validates queue configuration.
 func (c *QueueConfig) Validate() error {
+	if err := ValidateTopicFilters(c.Topics); err != nil {
+		return err
+	}
+
 	switch {
 	case c.Name == "":
 		return ErrInvalidConfig

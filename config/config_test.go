@@ -583,3 +583,37 @@ func TestValidateQueueManagerCaptureBounds(t *testing.T) {
 		})
 	}
 }
+
+// A queue bound to a filter that can never match receives nothing, and nothing
+// about a silent queue says why. The configuration is refused at load instead.
+func TestValidateRejectsMalformedQueueTopicFilters(t *testing.T) {
+	tests := []struct {
+		name      string
+		topics    []string
+		wantError string
+	}{
+		{name: "valid queue address", topics: []string{"$queue/orders/#"}},
+		{name: "valid ordinary pattern", topics: []string{"m/+/events"}},
+		{name: "multi level wildcard not final", topics: []string{"#/events"}, wantError: `queues[0].topics[0] "#/events" is not a valid topic filter`},
+		{name: "second filter malformed", topics: []string{"m/#", "a/#/b"}, wantError: `queues[0].topics[1] "a/#/b" is not a valid topic filter`},
+		{name: "empty filter", topics: []string{""}, wantError: `queues[0].topics[0] "" is not a valid topic filter`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Queues = []QueueConfig{{Name: "q", Topics: tt.topics}}
+
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantError)
+			}
+		})
+	}
+}
