@@ -202,6 +202,27 @@ func TestRejectedPlainTakeoverPreservesCertificateSession(t *testing.T) {
 	require.Equal(t, 1, certificateAuth.authorizeCalls)
 }
 
+func TestAuthenticatedPlainTakeoverIsRejectedAndPreservesCertificateSession(t *testing.T) {
+	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
+	}}
+	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "attacker"}}
+	engine := NewAuthEngine(authn, nil, WithCertificateAuthentication(certificateAuth))
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
+	require.NoError(t, err)
+	_, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
+
+	ok, _, err := engine.Authenticate(testCertificateClientID, "attacker", "valid")
+	require.False(t, ok)
+	require.ErrorIs(t, err, ErrCertificateClientIdentityConflict)
+	require.Equal(t, 1, engine.CertificateSessionCount())
+	require.Equal(t, certificateAuth.identity.EntityID, engine.ExternalID(testCertificateClientID))
+	require.True(t, engine.CanPublish(testCertificateClientID, testCertificateGlobalTopic))
+}
+
 func TestAuthEngineSerializesConcurrentCertificateAuthentication(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
 		EntityID:     testCertificateEntityID,

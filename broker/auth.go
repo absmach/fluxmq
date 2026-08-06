@@ -162,14 +162,13 @@ func (e *AuthEngine) AuthenticateWithPeer(ctx context.Context, clientID, usernam
 		return true, identity.EntityID, nil
 	}
 
-	if current, pending := e.certificateState(clientID); current || pending {
-		if pending && !current {
-			return false, "", ErrCertificateAuthenticationPending
-		}
-		return false, "", ErrCertificateClientIdentityConflict
-	}
-
 	if e.auth == nil {
+		if current, pending := e.certificateState(clientID); current || pending {
+			if pending && !current {
+				return false, "", ErrCertificateAuthenticationPending
+			}
+			return false, "", ErrCertificateClientIdentityConflict
+		}
 		e.identities.Delete(clientID)
 		return true, "", nil
 	}
