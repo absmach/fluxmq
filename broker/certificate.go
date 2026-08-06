@@ -40,6 +40,16 @@ type PeerCertificateSource interface {
 	PeerIssuerCertificateDER() []byte
 }
 
+// CertificateAuthenticationSource is implemented by transports that are
+// explicitly configured to authenticate verified peer certificates through
+// Atom. A TLS listener can request or verify client certificates for purposes
+// unrelated to MQTT authentication, so the presence of a verified leaf alone
+// must never select the certificate-authentication path.
+type CertificateAuthenticationSource interface {
+	PeerCertificateSource
+	CertificateAuthenticationEnabled() bool
+}
+
 // CertificateMetrics is a label-free snapshot suitable for the admin API.
 // Identity values are intentionally never exposed as metric labels.
 type CertificateMetrics struct {
