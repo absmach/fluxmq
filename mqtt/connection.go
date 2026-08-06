@@ -92,16 +92,17 @@ type connection struct {
 
 	mu sync.RWMutex
 
-	sendMu           sync.Mutex
-	controlCh        chan sendItem
-	dataCh           chan sendItem
-	closeCh          chan struct{}
-	closeOnce        sync.Once
-	sendWg           sync.WaitGroup
-	writeTimeout     time.Duration // 0 = no write deadline
-	maxPacketSize    int           // 0 = unlimited
-	disconnectOnFull bool
-	closed           atomic.Bool
+	sendMu                    sync.Mutex
+	controlCh                 chan sendItem
+	dataCh                    chan sendItem
+	closeCh                   chan struct{}
+	closeOnce                 sync.Once
+	sendWg                    sync.WaitGroup
+	writeTimeout              time.Duration // 0 = no write deadline
+	maxPacketSize             int           // 0 = unlimited
+	disconnectOnFull          bool
+	certificateAuthentication bool
+	closed                    atomic.Bool
 
 	lastActivity atomic.Int64 // UnixNano timestamp; updated lock-free by Touch()
 
@@ -130,6 +131,14 @@ func WithWriteTimeout(d time.Duration) ConnOption {
 		if d > 0 {
 			c.writeTimeout = d
 		}
+	}
+}
+
+// WithCertificateAuthentication marks a connection as belonging to a listener
+// that explicitly authenticates verified peer certificates through Atom.
+func WithCertificateAuthentication(enabled bool) ConnOption {
+	return func(c *connection) {
+		c.certificateAuthentication = enabled
 	}
 }
 
@@ -211,6 +220,12 @@ func (c *connection) PeerIssuerCertificateDER() []byte {
 		return nil
 	}
 	return append([]byte(nil), state.VerifiedChains[0][1].Raw...)
+}
+
+// CertificateAuthenticationEnabled reports whether this connection belongs to
+// the explicitly configured certificate-authentication listener.
+func (c *connection) CertificateAuthenticationEnabled() bool {
+	return c.certificateAuthentication
 }
 
 // ReadPacket reads the next MQTT packet from the connection.
