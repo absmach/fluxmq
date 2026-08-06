@@ -57,6 +57,7 @@ const (
 	authProtocolsField         = "protocols"
 	authIdentityCacheSizeField = "identity_cache_size"
 	authIdentityCacheTTLField  = "identity_cache_ttl"
+	authTLSField               = "tls"
 	clientAuthRequire          = "require"
 )
 
@@ -102,6 +103,12 @@ type ExternalAuthConfig struct {
 	// IdentityCacheTTL bounds how long a cached identity may live without re-auth.
 	// Zero or negative disables TTL eviction.
 	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
+
+	// TLS configures the outbound connection to the auth service. Setting
+	// cert_file/key_file makes it mutual, which is how a callout endpoint that
+	// checks no bearer token authenticates FluxMQ. Omit for the default
+	// transport.
+	TLS *mqtttls.ClientConfig `yaml:"tls,omitempty"`
 }
 
 // Local principal roles. A role is the capability a principal carries on every
@@ -298,6 +305,7 @@ func validateAuthYAML(node *yaml.Node) error {
 				authProtocolsField:         nil,
 				authIdentityCacheSizeField: nil,
 				authIdentityCacheTTLField:  nil,
+				authTLSField:               nil,
 			})
 		},
 		"local_principals": func(principals *yaml.Node) error {
@@ -1295,6 +1303,24 @@ func Load(filename string) (*Config, error) {
 	return cfg, nil
 }
 
+// validateCalloutTLS rejects a TLS block that cannot do what it looks like it
+// does. The pairing that matters is TLS material against an http:// URL: the
+// connection would be cleartext while the config advertises a client
+// certificate, so the operator would believe the callout is mutually
+// authenticated when nothing about it is authenticated at all.
+func validateCalloutTLS(path, rawURL string, tlsConfig *mqtttls.ClientConfig) error {
+	if tlsConfig == nil || !tlsConfig.Configured() {
+		return nil
+	}
+	if err := tlsConfig.Validate(); err != nil {
+		return fmt.Errorf("%s.tls: %w", path, err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(rawURL), "http://") {
+		return fmt.Errorf("%s.tls is set but %s.url is http://; use https:// or remove the tls block", path, path)
+	}
+	return nil
+}
+
 var legacyAuthKeys = map[string]string{
 	authURLField:               "auth.external.url",
 	authTransportField:         "auth.external.transport",
@@ -1580,6 +1606,9 @@ func (c *Config) Validate() error {
 		if !knownAuthProtocols[proto] {
 			return fmt.Errorf("auth.external.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
+	}
+	if err := validateCalloutTLS("auth.external", c.Auth.External.URL, c.Auth.External.TLS); err != nil {
+		return err
 	}
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
