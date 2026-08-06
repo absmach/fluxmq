@@ -52,8 +52,9 @@ func (auth *certificateResolverAuthenticator) AuthorizeCertificate(context.Conte
 
 type certificateMockConnection struct {
 	mockConnection
-	leafDER   []byte
-	issuerDER []byte
+	leafDER                   []byte
+	issuerDER                 []byte
+	certificateAuthentication bool
 }
 
 func (connection *certificateMockConnection) PeerCertificateDER() []byte {
@@ -62,6 +63,10 @@ func (connection *certificateMockConnection) PeerCertificateDER() []byte {
 
 func (connection *certificateMockConnection) PeerIssuerCertificateDER() []byte {
 	return append([]byte(nil), connection.issuerDER...)
+}
+
+func (connection *certificateMockConnection) CertificateAuthenticationEnabled() bool {
+	return connection.certificateAuthentication
 }
 
 func (a *externalIDAuthenticator) Authenticate(clientID, username, secret string) (*corebroker.AuthnResult, error) {
@@ -193,7 +198,11 @@ func TestCertificateAuthenticationRunsForMQTTV3AndV5(t *testing.T) {
 			defer b.Close()
 			resolver := &certificateResolverAuthenticator{}
 			b.SetAuthEngine(corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver)))
-			connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, issuerDER: []byte{4, 5, 6}}
+			connection := &certificateMockConnection{
+				leafDER:                   []byte{1, 2, 3},
+				issuerDER:                 []byte{4, 5, 6},
+				certificateAuthentication: true,
+			}
 			clientID := "certificate-client"
 
 			err := test.handle(b, connection, test.connect(clientID))
@@ -206,13 +215,85 @@ func TestCertificateAuthenticationRunsForMQTTV3AndV5(t *testing.T) {
 	}
 }
 
+func TestVerifiedCertificateOnOrdinaryTLSListenerUsesExistingAuthentication(t *testing.T) {
+	tests := []struct {
+		name    string
+		connect func(clientID string) packets.ControlPacket
+		handle  func(*Broker, core.Connection, packets.ControlPacket) error
+	}{
+		{
+			name: "mqtt v3",
+			connect: func(clientID string) packets.ControlPacket {
+				return &v3.Connect{
+					FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+					ProtocolName:    protocolNameMQTT,
+					ProtocolVersion: 4,
+					ClientID:        clientID,
+					CleanSession:    true,
+					KeepAlive:       60,
+					UsernameFlag:    true,
+					PasswordFlag:    true,
+					Username:        "ordinary-user",
+					Password:        []byte("ordinary-password"),
+				}
+			},
+			handle: func(broker *Broker, connection core.Connection, packet packets.ControlPacket) error {
+				return newV3Handler(broker).HandleConnect(connection, packet)
+			},
+		},
+		{
+			name: "mqtt v5",
+			connect: func(clientID string) packets.ControlPacket {
+				return &v5.Connect{
+					FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+					ProtocolName:    protocolNameMQTT,
+					ProtocolVersion: 5,
+					ClientID:        clientID,
+					CleanStart:      true,
+					KeepAlive:       60,
+					UsernameFlag:    true,
+					PasswordFlag:    true,
+					Username:        "ordinary-user",
+					Password:        []byte("ordinary-password"),
+				}
+			},
+			handle: func(broker *Broker, connection core.Connection, packet packets.ControlPacket) error {
+				return newV5Handler(broker).HandleConnect(connection, packet)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			broker := NewBroker(memory.New(), nil)
+			defer broker.Close()
+			resolver := &certificateResolverAuthenticator{}
+			broker.SetAuthEngine(corebroker.NewAuthEngine(&externalIDAuthenticator{
+				result: &corebroker.AuthnResult{Authenticated: true, ID: "ordinary-identity"},
+			}, nil, corebroker.WithCertificateAuthentication(resolver)))
+			connection := &certificateMockConnection{
+				leafDER:                   []byte{1, 2, 3},
+				issuerDER:                 []byte{4, 5, 6},
+				certificateAuthentication: false,
+			}
+			clientID := "ordinary-tls-client"
+
+			err := test.handle(broker, connection, test.connect(clientID))
+			require.True(t, err == nil || err == io.EOF, "unexpected connect error: %v", err)
+			require.Zero(t, resolver.calls)
+			session := broker.Get(clientID)
+			require.NotNil(t, session)
+			require.Equal(t, "ordinary-identity", session.ExternalID)
+		})
+	}
+}
+
 func TestRejectedCertificateConnectCleansPendingIdentity(t *testing.T) {
 	b := NewBroker(memory.New(), nil)
 	defer b.Close()
 	resolver := &certificateResolverAuthenticator{}
 	auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
 	b.SetAuthEngine(auth)
-	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, issuerDER: []byte{4, 5, 6}}
+	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, issuerDER: []byte{4, 5, 6}, certificateAuthentication: true}
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
 		ProtocolName:    protocolNameMQTT,
@@ -273,7 +354,7 @@ func TestCertificateAuthenticationRejectsUnauthorizedWillBeforeSession(t *testin
 			resolver := &certificateResolverAuthenticator{authorizeErr: errors.New("cross-tenant Will")}
 			auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
 			b.SetAuthEngine(auth)
-			connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}}
+			connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, certificateAuthentication: true}
 
 			require.ErrorIs(t, test.handle(b, connection, test.connect), ErrNotAuthorized)
 			require.Zero(t, auth.CertificateSessionCount())
@@ -333,7 +414,7 @@ func TestCertificateAuthenticationRejectsPersistentSessionOwnershipTakeover(t *t
 	}}
 	auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
 	b.SetAuthEngine(auth)
-	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}}
+	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, certificateAuthentication: true}
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
 		ProtocolName:    protocolNameMQTT,
