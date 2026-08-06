@@ -91,6 +91,13 @@ func TestCertificateAuthenticationRejectsUnsafeCombinations(t *testing.T) {
 			match: "cache_ttl",
 		},
 		{
+			name: "unbounded active certificate bindings",
+			mutate: func(config *Config) {
+				config.Auth.External.IdentityCacheSize = -1
+			},
+			match: "bounded auth.external.identity_cache_size",
+		},
+		{
 			name: "events are not a durable stream contract",
 			mutate: func(config *Config) {
 				config.Queues[len(config.Queues)-1].Type = "classic"

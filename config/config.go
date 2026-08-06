@@ -2109,6 +2109,9 @@ func (c *Config) validateCertificateAuthentication() error {
 	if !c.Auth.External.EnabledFor(protocolMQTT) {
 		return fmt.Errorf("%senabled requires auth.external authorization for mqtt", path)
 	}
+	if c.Auth.External.IdentityCacheSize < 0 {
+		return fmt.Errorf("%senabled requires a bounded auth.external.identity_cache_size", path)
+	}
 	if !hasAddr(c.Server.TCP.MTLS.Addr) && !hasAddr(c.Server.WebSocket.MTLS.Addr) {
 		return fmt.Errorf("%senabled requires a configured MQTT TCP or WebSocket mTLS listener", path)
 	}

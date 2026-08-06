@@ -35,14 +35,17 @@ const (
 )
 
 type resolverStub struct {
-	mu       sync.Mutex
-	calls    int
-	requests []ResolverRequest
-	result   ResolverResult
-	results  map[string]ResolverResult
-	err      error
-	wait     bool
-	delay    time.Duration
+	mu        sync.Mutex
+	calls     int
+	requests  []ResolverRequest
+	result    ResolverResult
+	results   map[string]ResolverResult
+	err       error
+	wait      bool
+	delay     time.Duration
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
 }
 
 func (stub *resolverStub) ResolveCertificateV2(ctx context.Context, request ResolverRequest) (ResolverResult, error) {
@@ -57,8 +60,20 @@ func (stub *resolverStub) ResolveCertificateV2(ctx context.Context, request Reso
 	err := stub.err
 	wait := stub.wait
 	delay := stub.delay
+	started := stub.started
+	release := stub.release
 	stub.mu.Unlock()
 
+	if started != nil {
+		stub.startOnce.Do(func() { close(started) })
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ResolverResult{}, ctx.Err()
+		}
+	}
 	if wait {
 		<-ctx.Done()
 		return ResolverResult{}, ctx.Err()
@@ -154,6 +169,7 @@ func TestTenantBindingRejectsCrossTenantAndGlobalEscalation(t *testing.T) {
 
 	err = manager.AuthorizeCertificate(context.Background(), identity, "m/"+testOtherTenantID+"/c/channel/messages")
 	require.ErrorIs(t, err, ErrTenantMismatch)
+	require.ErrorIs(t, manager.AuthorizeCertificate(context.Background(), identity, "$share/workers/m/"+testOtherTenantID+"/c/channel/messages"), ErrTenantMismatch)
 	require.Equal(t, 1, resolver.callCount(), "cross-tenant denial must happen before authorization lookup")
 
 	globalResolver := &resolverStub{result: activeResolverResult(now)}
@@ -234,9 +250,18 @@ func TestLifecycleEventEvictsRevokedSessionAndDuplicateIsIdempotent(t *testing.T
 	now := time.Now().UTC()
 	peer, _ := makePeerCertificate(t, 5)
 	resolver := &resolverStub{result: activeResolverResult(now)}
-	manager := newTestManager(t, resolver, &now)
+	var liveIdentity corebroker.CertificateIdentity
+	disconnected := false
+	manager := newTestManager(t, resolver, &now, WithSessionInvalidator(func(match func(corebroker.CertificateIdentity) bool) int {
+		if disconnected || !match(liveIdentity) {
+			return 0
+		}
+		disconnected = true
+		return 1
+	}))
 	identity, err := manager.AuthenticateCertificate(context.Background(), peer)
 	require.NoError(t, err)
+	liveIdentity = identity
 
 	event := lifecycleEvent(t, "certificate.revoke", "credential", testCredentialID, map[string]any{
 		"credential_id": testCredentialID,
@@ -245,6 +270,8 @@ func TestLifecycleEventEvictsRevokedSessionAndDuplicateIsIdempotent(t *testing.T
 	require.NoError(t, manager.HandleEvent(event, properties))
 	require.NoError(t, manager.HandleEvent(event, properties))
 	require.Zero(t, manager.CertificateMetrics().CacheEntries)
+	require.True(t, disconnected)
+	require.Equal(t, uint64(1), manager.CertificateMetrics().SessionsDisconnected)
 
 	revoked := activeResolverResult(now)
 	revoked.Status = "revoked"
@@ -253,6 +280,38 @@ func TestLifecycleEventEvictsRevokedSessionAndDuplicateIsIdempotent(t *testing.T
 	resolver.mu.Unlock()
 	require.Error(t, manager.AuthorizeCertificate(context.Background(), identity, "$SYS/global/status"))
 	require.Equal(t, uint64(1), manager.CertificateMetrics().CacheInvalidations)
+}
+
+func TestLifecycleEventPreventsInflightResolutionFromRepopulatingCache(t *testing.T) {
+	now := time.Now().UTC()
+	peer, _ := makePeerCertificate(t, 12)
+	resolver := &resolverStub{
+		result:  activeResolverResult(now),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	manager := newTestManager(t, resolver, &now)
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.AuthenticateCertificate(context.Background(), peer)
+		result <- err
+	}()
+
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		t.Fatal("resolver call did not start")
+	}
+	event := lifecycleEvent(t, "certificate.revoke", "credential", testCredentialID, nil)
+	require.NoError(t, manager.HandleEvent(event, map[string]string{corebroker.ExternalIDProperty: testEventPrincipal}))
+	close(resolver.release)
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrResolutionInvalidated)
+	case <-time.After(time.Second):
+		t.Fatal("in-flight resolver call did not finish")
+	}
+	require.Zero(t, manager.CertificateMetrics().CacheEntries)
 }
 
 func TestCertificateRotationRebindsSameEntity(t *testing.T) {
@@ -279,6 +338,23 @@ func TestCertificateRotationRebindsSameEntity(t *testing.T) {
 	require.Equal(t, oldIdentity.EntityID, newIdentity.EntityID)
 	require.NotEqual(t, oldIdentity.CredentialID, newIdentity.CredentialID)
 	require.NoError(t, manager.AuthorizeCertificate(context.Background(), newIdentity, "m/"+testTenantID+"/c/channel"))
+}
+
+func TestRenewalDisconnectsOnlyRevokedOldCredential(t *testing.T) {
+	oldCredentialID := testCredentialID
+	newCredentialID := "05119e28-6260-4a06-8742-f925bcfdccd4"
+	keys, disconnect := sessionDisconnectionKeys(domainEvent{
+		Event:    "certificate.renew",
+		TargetID: &oldCredentialID,
+		Details: map[string]any{
+			"old_credential_id": oldCredentialID,
+			"new_credential_id": newCredentialID,
+			"revoke_old":        true,
+		},
+	})
+	require.True(t, disconnect)
+	require.True(t, keys.matches(corebroker.CertificateIdentity{CredentialID: oldCredentialID}))
+	require.False(t, keys.matches(corebroker.CertificateIdentity{CredentialID: newCredentialID}))
 }
 
 func TestResolverLoadCollapsesConcurrentConnections(t *testing.T) {
@@ -378,6 +454,10 @@ func TestUntrustedEventCannotInvalidateCache(t *testing.T) {
 	require.ErrorIs(t, manager.HandleEvent(event, map[string]string{corebroker.ExternalIDProperty: "attacker"}), ErrUntrustedEvent)
 	require.Equal(t, 1, manager.CertificateMetrics().CacheEntries)
 	require.Equal(t, uint64(1), manager.CertificateMetrics().EventsRejected)
+
+	unrelated := lifecycleEvent(t, "audit.export", "credential", testCredentialID, nil)
+	require.NoError(t, manager.HandleEvent(unrelated, map[string]string{corebroker.ExternalIDProperty: testEventPrincipal}))
+	require.Equal(t, 1, manager.CertificateMetrics().CacheEntries)
 }
 
 func lifecycleEvent(t *testing.T, event, targetKind, targetID string, details map[string]any) []byte {

@@ -54,6 +54,7 @@ type CertificateMetrics struct {
 	EventsReceived       uint64 `json:"events_received"`
 	EventsRejected       uint64 `json:"events_rejected"`
 	CacheInvalidations   uint64 `json:"cache_invalidations"`
+	SessionsDisconnected uint64 `json:"sessions_disconnected"`
 	TenantDenials        uint64 `json:"tenant_denials"`
 	TrustRefreshSuccess  uint64 `json:"trust_refresh_success"`
 	TrustRefreshFailures uint64 `json:"trust_refresh_failures"`

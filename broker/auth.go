@@ -48,7 +48,8 @@ type authEngineOptions struct {
 }
 
 // WithIdentityCache sets the bounded identity-cache size and TTL. A non-positive
-// size disables size-based eviction; a non-positive TTL disables expiry.
+// size disables size-based eviction for ordinary identities; certificate
+// session bindings retain the default bound. A non-positive TTL disables expiry.
 func WithIdentityCache(size int, ttl time.Duration) AuthEngineOption {
 	return func(o *authEngineOptions) {
 		o.cacheSize = size
@@ -78,6 +79,9 @@ type AuthEngine struct {
 	certificateAuth CertificateAuthenticator
 	certificateMu   sync.RWMutex
 	certificates    map[string]CertificateIdentity
+	pendingCerts    map[string]CertificateIdentity
+	certBindings    map[string]uint64
+	nextCertBinding uint64
 	certificateCap  int
 }
 
@@ -91,13 +95,19 @@ func NewAuthEngine(auth Authenticator, authz Authorizer, opts ...AuthEngineOptio
 	for _, fn := range opts {
 		fn(&o)
 	}
+	certificateCap := o.cacheSize
+	if o.certificateAuth != nil && certificateCap <= 0 {
+		certificateCap = DefaultIdentityCacheSize
+	}
 	return &AuthEngine{
 		auth:            auth,
 		authz:           authz,
 		identities:      newIdentityCache(o.cacheSize, o.cacheTTL),
 		certificateAuth: o.certificateAuth,
 		certificates:    make(map[string]CertificateIdentity),
-		certificateCap:  o.cacheSize,
+		pendingCerts:    make(map[string]CertificateIdentity),
+		certBindings:    make(map[string]uint64),
+		certificateCap:  certificateCap,
 	}
 }
 
@@ -124,23 +134,36 @@ func (e *AuthEngine) AuthenticateWithPeer(ctx context.Context, clientID, usernam
 		}
 
 		e.certificateMu.Lock()
+		if _, pending := e.pendingCerts[clientID]; pending {
+			e.certificateMu.Unlock()
+			return false, "", ErrCertificateAuthenticationPending
+		}
 		existing, exists := e.certificates[clientID]
 		if exists && existing.EntityID != identity.EntityID {
 			e.certificateMu.Unlock()
 			return false, "", ErrCertificateClientIdentityConflict
 		}
-		if !exists && e.certificateCap > 0 && len(e.certificates) >= e.certificateCap {
+		if !exists && e.certificateCap > 0 && len(e.certificates)+len(e.pendingCerts) >= e.certificateCap {
 			e.certificateMu.Unlock()
 			return false, "", ErrCertificateSessionCapacity
 		}
-		e.certificates[clientID] = identity
+		// Authentication is not a live session yet. Hold the resolution pending
+		// until the protocol handler has completed hooks and persistent-session
+		// ownership checks. This also serializes concurrent CONNECT attempts for
+		// one client ID, so neither attempt can commit the other's credential.
+		e.pendingCerts[clientID] = identity
 		e.certificateMu.Unlock()
-		e.identities.Store(clientID, identity.EntityID)
 		return true, identity.EntityID, nil
 	}
 
+	if current, pending := e.certificateState(clientID); current || pending {
+		if pending && !current {
+			return false, "", ErrCertificateAuthenticationPending
+		}
+		return false, "", ErrCertificateClientIdentityConflict
+	}
+
 	if e.auth == nil {
-		e.removeCertificateIdentity(clientID)
 		e.identities.Delete(clientID)
 		return true, "", nil
 	}
@@ -152,15 +175,26 @@ func (e *AuthEngine) AuthenticateWithPeer(ctx context.Context, clientID, usernam
 		return false, "", nil
 	}
 
-	// Replace an existing certificate binding only after the alternate
-	// credential has authenticated. A rejected takeover must not strip tenant
-	// enforcement from the currently connected certificate session.
-	e.removeCertificateIdentity(clientID)
+	// Recheck after the external call: a concurrent certificate attempt may
+	// have claimed this client ID while ordinary credentials were being
+	// validated. Never strip that binding from the other attempt.
+	e.certificateMu.RLock()
+	_, currentCertificate := e.certificates[clientID]
+	_, pendingCertificate := e.pendingCerts[clientID]
+	if currentCertificate || pendingCertificate {
+		e.certificateMu.RUnlock()
+		if pendingCertificate && !currentCertificate {
+			return false, "", ErrCertificateAuthenticationPending
+		}
+		return false, "", ErrCertificateClientIdentityConflict
+	}
 	if result.ID != "" {
 		e.identities.Store(clientID, result.ID)
+		e.certificateMu.RUnlock()
 		return true, result.ID, nil
 	}
 	e.identities.Delete(clientID)
+	e.certificateMu.RUnlock()
 	return true, "", nil
 }
 
@@ -191,13 +225,14 @@ func (e *AuthEngine) CanSubscribe(clientID, filter string) bool {
 // Forget removes the cached identity mapping for a client.
 // Should be called when a client disconnects.
 func (e *AuthEngine) Forget(clientID string) {
-	e.removeCertificateIdentity(clientID)
-	e.identities.Delete(clientID)
+	if e.rejectPendingOrForgetCertificate(clientID) {
+		e.identities.Delete(clientID)
+	}
 }
 
 // SetExternalID stores or replaces the resolved external identity for a client.
 func (e *AuthEngine) SetExternalID(clientID, externalID string) {
-	if identity, ok := e.certificateIdentity(clientID); ok {
+	if identity, ok := e.certificateAuthenticationIdentity(clientID); ok {
 		// A hook may deny the connection, but it cannot replace Atom's resolved
 		// certificate identity with a different subject.
 		e.identities.Store(clientID, identity.EntityID)
@@ -212,7 +247,7 @@ func (e *AuthEngine) SetExternalID(clientID, externalID string) {
 
 // ExternalID returns the authenticated external identity for a protocol client ID.
 func (e *AuthEngine) ExternalID(clientID string) string {
-	if identity, ok := e.certificateIdentity(clientID); ok {
+	if identity, ok := e.certificateAuthenticationIdentity(clientID); ok {
 		return identity.EntityID
 	}
 	id, _ := e.identities.Load(clientID)
@@ -234,6 +269,82 @@ func (e *AuthEngine) CertificateSessionCount() int {
 	return len(e.certificates)
 }
 
+// CertificateAuthenticationEnabled reports whether this engine has an Atom
+// certificate resolver configured.
+func (e *AuthEngine) CertificateAuthenticationEnabled() bool {
+	return e.certificateAuth != nil
+}
+
+// CommitCertificateAuthentication promotes a same-entity reconnect that was
+// held pending while the old connection remained live. It returns the binding
+// generation that the MQTT session must retain for generation-safe cleanup.
+func (e *AuthEngine) CommitCertificateAuthentication(clientID string) (uint64, bool) {
+	e.certificateMu.Lock()
+	pending, ok := e.pendingCerts[clientID]
+	if !ok {
+		e.certificateMu.Unlock()
+		return 0, false
+	}
+	e.certificates[clientID] = pending
+	delete(e.pendingCerts, clientID)
+	binding := e.nextCertificateBindingLocked()
+	e.certBindings[clientID] = binding
+	e.certificateMu.Unlock()
+	e.identities.Store(clientID, pending.EntityID)
+	return binding, true
+}
+
+// CertificateSessionBinding returns the current live binding generation.
+func (e *AuthEngine) CertificateSessionBinding(clientID string) (uint64, bool) {
+	e.certificateMu.RLock()
+	defer e.certificateMu.RUnlock()
+	binding, ok := e.certBindings[clientID]
+	return binding, ok && binding != 0
+}
+
+// ForgetCertificateSession removes a binding only when its generation still
+// matches. A delayed disconnect from a replaced connection therefore cannot
+// erase the certificate identity of its replacement.
+func (e *AuthEngine) ForgetCertificateSession(clientID string, binding uint64) {
+	e.certificateMu.Lock()
+	if binding == 0 || e.certBindings[clientID] != binding {
+		e.certificateMu.Unlock()
+		return
+	}
+	delete(e.certificates, clientID)
+	delete(e.certBindings, clientID)
+	e.certificateMu.Unlock()
+	e.identities.Delete(clientID)
+}
+
+// InvalidateCertificateSessions atomically removes certificate bindings that
+// match a lifecycle event and returns the affected protocol client IDs. The
+// caller can then disconnect those live sessions without holding auth locks.
+func (e *AuthEngine) InvalidateCertificateSessions(match func(CertificateIdentity) bool) []string {
+	if match == nil {
+		return nil
+	}
+	e.certificateMu.Lock()
+	clientIDs := make([]string, 0)
+	for clientID, identity := range e.certificates {
+		if match(identity) {
+			delete(e.certificates, clientID)
+			delete(e.certBindings, clientID)
+			clientIDs = append(clientIDs, clientID)
+		}
+	}
+	for clientID, identity := range e.pendingCerts {
+		if match(identity) {
+			delete(e.pendingCerts, clientID)
+		}
+	}
+	e.certificateMu.Unlock()
+	for _, clientID := range clientIDs {
+		e.identities.Delete(clientID)
+	}
+	return clientIDs
+}
+
 func (e *AuthEngine) authorizeCertificate(clientID, topic string) bool {
 	identity, ok := e.certificateIdentity(clientID)
 	if !ok {
@@ -252,10 +363,48 @@ func (e *AuthEngine) certificateIdentity(clientID string) (CertificateIdentity, 
 	return identity, ok
 }
 
-func (e *AuthEngine) removeCertificateIdentity(clientID string) {
+// certificateAuthenticationIdentity includes an in-progress authentication
+// only when there is no committed identity. A reconnect is constrained to the
+// same entity before it enters pending state, so the committed value remains
+// authoritative for an already-live session.
+func (e *AuthEngine) certificateAuthenticationIdentity(clientID string) (CertificateIdentity, bool) {
+	e.certificateMu.RLock()
+	defer e.certificateMu.RUnlock()
+	if identity, ok := e.certificates[clientID]; ok {
+		return identity, true
+	}
+	identity, ok := e.pendingCerts[clientID]
+	return identity, ok
+}
+
+func (e *AuthEngine) certificateState(clientID string) (current, pending bool) {
+	e.certificateMu.RLock()
+	defer e.certificateMu.RUnlock()
+	_, current = e.certificates[clientID]
+	_, pending = e.pendingCerts[clientID]
+	return current, pending
+}
+
+func (e *AuthEngine) rejectPendingOrForgetCertificate(clientID string) bool {
 	e.certificateMu.Lock()
+	if _, pending := e.pendingCerts[clientID]; pending {
+		delete(e.pendingCerts, clientID)
+		_, current := e.certificates[clientID]
+		e.certificateMu.Unlock()
+		return !current
+	}
 	delete(e.certificates, clientID)
+	delete(e.certBindings, clientID)
 	e.certificateMu.Unlock()
+	return true
+}
+
+func (e *AuthEngine) nextCertificateBindingLocked() uint64 {
+	e.nextCertBinding++
+	if e.nextCertBinding == 0 {
+		e.nextCertBinding++
+	}
+	return e.nextCertBinding
 }
 
 func (e *AuthEngine) resolveID(clientID string) string {

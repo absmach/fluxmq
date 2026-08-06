@@ -49,11 +49,12 @@ the maximum fallback revocation lag if event consumption is interrupted.
 Atom lifecycle events normally make revocation faster than the TTL. Atom
 publishes its outbox to a protected `atom.events` stream. FluxMQ authenticates
 the exact local publisher principal, validates the Atom v1 envelope, and
-idempotently evicts entries by credential, entity, tenant, or issuer. A revoked
-live session is not killed asynchronously; its next publish or subscribe
-re-resolves and is denied. An idle revoked socket may remain connected but has
-no usable messaging authority. Certificate rotation on a reconnect replaces
-the client ID's old binding; the new certificate must resolve independently.
+idempotently evicts entries by credential, entity, tenant, or issuer. Revocation,
+bulk entity revocation, inactive/deleted entities, and frozen/inactive/deleted
+tenants also remove matching certificate bindings and disconnect their live MQTT
+sessions. A reconnect must resolve authoritatively again. Certificate rotation
+replaces the client ID's old binding only for the same entity; the new
+certificate must resolve independently.
 
 This reference event topology uses an exact, crash-durable local-principal
 publish target and is consequently a single-node deployment contract. FluxMQ
@@ -179,6 +180,6 @@ integration is enabled; Atom's published bundle is their client trust source.
 
 `GET /api/v1/stats` includes a `certificates` object with active session and
 cache counts plus resolver requests/failures/timeouts, cache hits/misses/
-evictions, accepted/rejected events, invalidations, tenant denials, and trust
-refresh successes/failures. Counters have no entity, tenant, credential,
-fingerprint, or issuer labels.
+evictions, accepted/rejected events, invalidations, lifecycle-disconnected
+sessions, tenant denials, and trust refresh successes/failures. Counters have no
+entity, tenant, credential, fingerprint, or issuer labels.

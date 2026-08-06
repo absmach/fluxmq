@@ -23,6 +23,7 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/topics"
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 )
@@ -40,6 +41,7 @@ const (
 var (
 	ErrInvalidPeerCertificate = errors.New("invalid peer certificate")
 	ErrResolverIdentity       = errors.New("invalid certificate resolver identity")
+	ErrResolutionInvalidated  = errors.New("certificate resolution invalidated by a lifecycle event")
 	ErrTenantMismatch         = errors.New("certificate tenant does not match requested scope")
 	ErrTenantScopeUnknown     = errors.New("tenant-scoped topic has no canonical tenant UUID")
 )
@@ -94,6 +96,7 @@ type managerMetrics struct {
 	eventsReceived       atomic.Uint64
 	eventsRejected       atomic.Uint64
 	cacheInvalidations   atomic.Uint64
+	sessionsDisconnected atomic.Uint64
 	tenantDenials        atomic.Uint64
 	trustRefreshSuccess  atomic.Uint64
 	trustRefreshFailures atomic.Uint64
@@ -110,6 +113,9 @@ type Manager struct {
 	metrics    managerMetrics
 	requests   singleflight.Group
 	clock      func() time.Time
+	sessions   func(func(corebroker.CertificateIdentity) bool) int
+	lifecycle  sync.RWMutex
+	generation uint64
 
 	trustMu   sync.RWMutex
 	trustPool *x509.CertPool
@@ -125,6 +131,7 @@ type managerOptions struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	clock      func() time.Time
+	sessions   func(func(corebroker.CertificateIdentity) bool) int
 }
 
 // Option customizes a Manager.
@@ -140,6 +147,13 @@ func WithHTTPClient(client *http.Client) Option {
 
 func WithLogger(logger *slog.Logger) Option {
 	return func(options *managerOptions) { options.logger = logger }
+}
+
+// WithSessionInvalidator installs the consuming broker's live-session
+// revoker. It is invoked only for lifecycle events that make an existing
+// credential, entity, or tenant unusable.
+func WithSessionInvalidator(invalidate func(func(corebroker.CertificateIdentity) bool) int) Option {
+	return func(options *managerOptions) { options.sessions = invalidate }
 }
 
 func withClock(clock func() time.Time) Option {
@@ -188,6 +202,7 @@ func NewManager(config Config, opts ...Option) (*Manager, error) {
 		resolver:   resolver,
 		httpClient: options.httpClient,
 		logger:     options.logger,
+		sessions:   options.sessions,
 		cache:      cache,
 		clock:      options.clock,
 		refreshCh:  make(chan struct{}, 1),
@@ -300,7 +315,7 @@ func (m *Manager) resolve(ctx context.Context, request ResolverRequest) (corebro
 	if request.FingerprintSHA256 == "" {
 		return corebroker.CertificateIdentity{}, ErrInvalidPeerCertificate
 	}
-	if cached, ok := m.cache.get(request.FingerprintSHA256); ok {
+	if cached, ok := m.cachedResolution(request.FingerprintSHA256); ok {
 		m.metrics.cacheHits.Add(1)
 		if request.ExpectedTenantID != "" && cached.TenantID != request.ExpectedTenantID {
 			m.metrics.tenantDenials.Add(1)
@@ -311,10 +326,13 @@ func (m *Manager) resolve(ctx context.Context, request ResolverRequest) (corebro
 	m.metrics.cacheMisses.Add(1)
 
 	value, err, _ := m.requests.Do(request.FingerprintSHA256, func() (any, error) {
-		if cached, ok := m.cache.get(request.FingerprintSHA256); ok {
+		if cached, ok := m.cachedResolution(request.FingerprintSHA256); ok {
 			m.metrics.cacheHits.Add(1)
 			return cached, nil
 		}
+		m.lifecycle.RLock()
+		generation := m.generation
+		m.lifecycle.RUnlock()
 		m.metrics.resolverRequests.Add(1)
 		callCtx, cancel := context.WithTimeout(ctx, m.config.Timeout)
 		defer cancel()
@@ -335,7 +353,14 @@ func (m *Manager) resolve(ctx context.Context, request ResolverRequest) (corebro
 			m.metrics.tenantDenials.Add(1)
 			return corebroker.CertificateIdentity{}, ErrTenantMismatch
 		}
-		if m.cache.put(identity) {
+		m.lifecycle.RLock()
+		if generation != m.generation {
+			m.lifecycle.RUnlock()
+			return corebroker.CertificateIdentity{}, ErrResolutionInvalidated
+		}
+		evicted := m.cache.put(identity)
+		m.lifecycle.RUnlock()
+		if evicted {
 			m.metrics.cacheEvictions.Add(1)
 		}
 		return identity, nil
@@ -349,6 +374,12 @@ func (m *Manager) resolve(ctx context.Context, request ResolverRequest) (corebro
 		return corebroker.CertificateIdentity{}, ErrTenantMismatch
 	}
 	return identity, nil
+}
+
+func (m *Manager) cachedResolution(fingerprint string) (corebroker.CertificateIdentity, bool) {
+	m.lifecycle.RLock()
+	defer m.lifecycle.RUnlock()
+	return m.cache.get(fingerprint)
 }
 
 func selectorsFromPeer(peer corebroker.PeerCertificate) (ResolverRequest, error) {
@@ -418,6 +449,9 @@ func validateResolverResult(result ResolverResult, fingerprint string, now time.
 }
 
 func topicTenant(topic string) (string, bool, error) {
+	if _, sharedFilter, shared := topics.ParseShared(topic); shared {
+		topic = sharedFilter
+	}
 	parts := strings.Split(topic, "/")
 	if len(parts) == 0 || (parts[0] != "m" && parts[0] != "hc") {
 		return "", false, nil
@@ -445,6 +479,7 @@ func (m *Manager) CertificateMetrics() corebroker.CertificateMetrics {
 		EventsReceived:       m.metrics.eventsReceived.Load(),
 		EventsRejected:       m.metrics.eventsRejected.Load(),
 		CacheInvalidations:   m.metrics.cacheInvalidations.Load(),
+		SessionsDisconnected: m.metrics.sessionsDisconnected.Load(),
 		TenantDenials:        m.metrics.tenantDenials.Load(),
 		TrustRefreshSuccess:  m.metrics.trustRefreshSuccess.Load(),
 		TrustRefreshFailures: m.metrics.trustRefreshFailures.Load(),

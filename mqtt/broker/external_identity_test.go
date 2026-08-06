@@ -26,18 +26,22 @@ type externalIDAuthenticator struct {
 }
 
 type certificateResolverAuthenticator struct {
-	calls int
+	calls    int
+	identity corebroker.CertificateIdentity
 }
 
 func (auth *certificateResolverAuthenticator) AuthenticateCertificate(_ context.Context, peer corebroker.PeerCertificate) (corebroker.CertificateIdentity, error) {
 	auth.calls++
-	return corebroker.CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-		TenantID:     "d204f7df-8293-4194-963b-a47a65bc8f04",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
-		Fingerprint:  "certificate-fingerprint",
-		ExpiresAt:    time.Now().Add(time.Hour),
-	}, nil
+	if auth.identity.EntityID == "" {
+		auth.identity = corebroker.CertificateIdentity{
+			EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
+			TenantID:     "d204f7df-8293-4194-963b-a47a65bc8f04",
+			CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
+			Fingerprint:  "certificate-fingerprint",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		}
+	}
+	return auth.identity, nil
 }
 
 func (auth *certificateResolverAuthenticator) AuthorizeCertificate(context.Context, corebroker.CertificateIdentity, string) error {
@@ -198,6 +202,96 @@ func TestCertificateAuthenticationRunsForMQTTV3AndV5(t *testing.T) {
 			require.Equal(t, "8a0a5c59-4ea8-4fc1-badb-f96cf739b224", session.ExternalID)
 		})
 	}
+}
+
+func TestRejectedCertificateConnectCleansPendingIdentity(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	resolver := &certificateResolverAuthenticator{}
+	auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
+	b.SetAuthEngine(auth)
+	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, issuerDER: []byte{4, 5, 6}}
+	connect := &v5.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 5,
+		ClientID:        "rejected-certificate-client",
+		CleanStart:      true,
+		KeepAlive:       60,
+		WillFlag:        true,
+		WillTopic:       "invalid/#",
+	}
+
+	require.ErrorIs(t, newV5Handler(b).HandleConnect(connection, connect), ErrTopicInvalid)
+	require.Zero(t, auth.CertificateSessionCount())
+	require.Empty(t, auth.ExternalID(connect.ClientID))
+}
+
+func TestCertificateLifecycleInvalidationDisconnectsLiveSession(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	resolver := &certificateResolverAuthenticator{}
+	auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
+	b.SetAuthEngine(auth)
+	clientID := "revoked-certificate-client"
+	_, _, err := auth.AuthenticateWithPeer(context.Background(), clientID, "", "", corebroker.PeerCertificate{LeafDER: []byte{1}})
+	require.NoError(t, err)
+	binding, committed := auth.CommitCertificateAuthentication(clientID)
+	require.True(t, committed)
+	s, _, err := b.CreateSession(clientID, 5, session.Options{
+		CleanStart: true,
+		Will: &storage.WillMessage{
+			ClientID: clientID,
+			Topic:    "m/d204f7df-8293-4194-963b-a47a65bc8f04/c/will",
+			Payload:  []byte("must-not-publish"),
+		},
+	})
+	require.NoError(t, err)
+	_, _ = s.ConnectWithOptions(&mockConnection{}, session.ConnectOptions{
+		Version:            5,
+		CertificateBinding: binding,
+	})
+
+	disconnected := b.DisconnectCertificateSessions(func(identity corebroker.CertificateIdentity) bool {
+		return identity.CredentialID == "ca49950c-3ed2-41b4-a319-896085285686"
+	})
+	require.Equal(t, 1, disconnected)
+	require.False(t, s.IsConnected())
+	require.Nil(t, s.Will, "revocation must suppress the certificate session's Will")
+	require.Zero(t, auth.CertificateSessionCount())
+}
+
+func TestCertificateAuthenticationRejectsPersistentSessionOwnershipTakeover(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	clientID := "owned-persistent-client"
+	victimEntityID := "8a0a5c59-4ea8-4fc1-badb-f96cf739b224"
+	s, _, err := b.CreateSession(clientID, 5, session.Options{CleanStart: false, ExpiryInterval: 300})
+	require.NoError(t, err)
+	s.ExternalID = victimEntityID
+
+	resolver := &certificateResolverAuthenticator{identity: corebroker.CertificateIdentity{
+		EntityID:     "ac47c9fd-1d4a-4270-bb11-ab6476a0bd3a",
+		TenantID:     "88b65e71-e41d-4f12-9800-6c621133af9b",
+		CredentialID: "05119e28-6260-4a06-8742-f925bcfdccd4",
+		Fingerprint:  "attacker-certificate",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}}
+	auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
+	b.SetAuthEngine(auth)
+	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}}
+	connect := &v5.Connect{
+		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+		ProtocolName:    "MQTT",
+		ProtocolVersion: 5,
+		ClientID:        clientID,
+		CleanStart:      false,
+		KeepAlive:       60,
+	}
+
+	require.ErrorIs(t, newV5Handler(b).HandleConnect(connection, connect), ErrNotAuthorized)
+	require.Equal(t, victimEntityID, s.ExternalID)
+	require.Zero(t, auth.CertificateSessionCount())
 }
 
 func TestRegisterHookExternalIDOverridesAuthzIdentity(t *testing.T) {

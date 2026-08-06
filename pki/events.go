@@ -4,6 +4,7 @@
 package pki
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,7 +50,7 @@ func (m *Manager) HandleEvent(payload []byte, properties map[string]string) erro
 		m.metrics.eventsRejected.Add(1)
 		return fmt.Errorf("%w: invalid payload size", ErrUntrustedEvent)
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var event domainEvent
 	if err := decoder.Decode(&event); err != nil {
@@ -70,18 +71,78 @@ func (m *Manager) HandleEvent(payload []byte, properties map[string]string) erro
 	}
 
 	m.metrics.eventsReceived.Add(1)
+	if !eventAffectsCertificates(event.Event) {
+		return nil
+	}
 	keys := newInvalidationKeys()
 	keys.addEnvelope(event)
+	if keys.empty() {
+		m.metrics.eventsRejected.Add(1)
+		return fmt.Errorf("%w: lifecycle event has no valid invalidation target", ErrUntrustedEvent)
+	}
+	m.lifecycle.Lock()
+	m.generation++
 	removed := m.cache.invalidate(func(identity corebroker.CertificateIdentity) bool {
 		return keys.matches(identity)
 	})
+	m.lifecycle.Unlock()
 	if removed != 0 {
 		m.metrics.cacheInvalidations.Add(uint64(removed))
+	}
+	disconnectKeys, disconnectSessions := sessionDisconnectionKeys(event)
+	if m.sessions != nil && disconnectSessions {
+		disconnected := m.sessions(disconnectKeys.matches)
+		if disconnected > 0 {
+			m.metrics.sessionsDisconnected.Add(uint64(disconnected))
+		}
 	}
 	if strings.HasPrefix(event.Event, "pki.authority.") {
 		m.requestTrustRefresh()
 	}
 	return nil
+}
+
+func eventAffectsCertificates(event string) bool {
+	return strings.HasPrefix(event, "certificate.") ||
+		strings.HasPrefix(event, "entity.") ||
+		strings.HasPrefix(event, "tenant.") ||
+		strings.HasPrefix(event, "pki.authority.")
+}
+
+func sessionDisconnectionKeys(event domainEvent) (invalidationKeys, bool) {
+	keys := newInvalidationKeys()
+	switch event.Event {
+	case "certificate.revoke":
+		if event.TargetID != nil {
+			keys.add(keys.credentials, *event.TargetID)
+		}
+		keys.addDetail(keys.credentials, event.Details["credential_id"])
+	case "certificate.renew":
+		revokeOld, _ := event.Details["revoke_old"].(bool)
+		if !revokeOld {
+			return keys, false
+		}
+		if event.TargetID != nil {
+			keys.add(keys.credentials, *event.TargetID)
+		}
+		keys.addDetail(keys.credentials, event.Details["old_credential_id"])
+	case "certificate.revoke_entity", "entity.disable", "entity.suspend", "entity.delete", "entity.purge":
+		if event.TargetID != nil {
+			keys.add(keys.entities, *event.TargetID)
+		}
+		keys.addDetail(keys.entities, event.Details["entity_id"])
+	case "tenant.disable", "tenant.freeze", "tenant.delete", "tenant.purge":
+		if event.TargetID != nil {
+			keys.add(keys.tenants, *event.TargetID)
+		}
+		if event.TenantID != nil {
+			keys.add(keys.tenants, *event.TenantID)
+		}
+		keys.addDetail(keys.tenants, event.Details["tenant_id"])
+	default:
+		return keys, false
+	}
+	return keys, true
 }
 
 func newInvalidationKeys() invalidationKeys {
@@ -159,4 +220,8 @@ func (keys invalidationKeys) matches(identity corebroker.CertificateIdentity) bo
 		return true
 	}
 	return false
+}
+
+func (keys invalidationKeys) empty() bool {
+	return len(keys.credentials) == 0 && len(keys.entities) == 0 && len(keys.issuers) == 0 && len(keys.tenants) == 0
 }

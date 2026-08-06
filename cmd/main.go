@@ -705,7 +705,10 @@ func main() {
 			CacheTTL:             cfg.Auth.Certificate.CacheTTL,
 			CacheSize:            cfg.Auth.Certificate.CacheSize,
 			TrustRefreshInterval: cfg.Auth.Certificate.TrustRefreshInterval,
-		}, pki.WithLogger(logger))
+		},
+			pki.WithLogger(logger),
+			pki.WithSessionInvalidator(b.DisconnectCertificateSessions),
+		)
 		if err != nil {
 			slog.Error("Failed to configure Atom certificate resolver", "error", err)
 			os.Exit(1)

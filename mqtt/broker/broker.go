@@ -130,6 +130,7 @@ type Broker struct {
 	cfg       brokerConfig
 
 	sessionLocks  keyLock
+	connectLocks  keyLock
 	globalMu      sync.Mutex // protects lifecycle (Close, transferActiveSessions, expireSessions)
 	wg            sync.WaitGroup
 	sessionsMap   session.Cache

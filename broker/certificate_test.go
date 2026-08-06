@@ -12,6 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testCertificateClientID     = "mqtt-client"
+	testCertificateEntityID     = "8a0a5c59-4ea8-4fc1-badb-f96cf739b224"
+	testCertificateCredentialID = "ca49950c-3ed2-41b4-a319-896085285686"
+	testCertificateFingerprint  = "abc123"
+	testCertificateGlobalTopic  = "$SYS/global/status"
+)
+
 type certificateAuthenticatorStub struct {
 	identity               CertificateIdentity
 	authenticateErr        error
@@ -35,10 +43,10 @@ func (stub *certificateAuthenticatorStub) AuthorizeCertificate(_ context.Context
 
 func TestAuthEngineCertificateIdentityPrecedesNormalAuthorization(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
+		EntityID:     testCertificateEntityID,
 		TenantID:     "d204f7df-8293-4194-963b-a47a65bc8f04",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
-		Fingerprint:  "abc123",
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
 		ExpiresAt:    time.Now().Add(time.Hour),
 	}}
 	authorizer := &stubAuthorizer{allow: true}
@@ -46,7 +54,7 @@ func TestAuthEngineCertificateIdentityPrecedesNormalAuthorization(t *testing.T) 
 
 	ok, entityID, err := engine.AuthenticateWithPeer(
 		context.Background(),
-		"mqtt-client",
+		testCertificateClientID,
 		"ignored",
 		"ignored",
 		PeerCertificate{LeafDER: []byte{1, 2, 3}},
@@ -54,7 +62,9 @@ func TestAuthEngineCertificateIdentityPrecedesNormalAuthorization(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, certificateAuth.identity.EntityID, entityID)
-	require.True(t, engine.CanPublish("mqtt-client", "m/d204f7df-8293-4194-963b-a47a65bc8f04/c/channel"))
+	_, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
+	require.True(t, engine.CanPublish(testCertificateClientID, "m/d204f7df-8293-4194-963b-a47a65bc8f04/c/channel"))
 	require.Equal(t, 1, certificateAuth.authorizeCalls)
 	require.Equal(t, certificateAuth.identity.EntityID, authorizer.receivedClientID)
 }
@@ -62,87 +72,99 @@ func TestAuthEngineCertificateIdentityPrecedesNormalAuthorization(t *testing.T) 
 func TestAuthEngineCertificateDenialStopsNormalAuthorization(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{
 		identity: CertificateIdentity{
-			EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-			CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
-			Fingerprint:  "abc123",
+			EntityID:     testCertificateEntityID,
+			CredentialID: testCertificateCredentialID,
+			Fingerprint:  testCertificateFingerprint,
 		},
-		authorizeErr: ErrTenantMismatchForTest,
+		authorizeErr: errTenantMismatchForTest,
 	}
 	authorizer := &stubAuthorizer{allow: true}
 	engine := NewAuthEngine(nil, authorizer, WithCertificateAuthentication(certificateAuth))
-	_, _, err := engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{1}})
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
 	require.NoError(t, err)
+	_, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
 
-	require.False(t, engine.CanSubscribe("mqtt-client", "m/other/#"))
+	require.False(t, engine.CanSubscribe(testCertificateClientID, "m/other/#"))
 	require.Empty(t, authorizer.receivedClientID, "normal authorization must not run after tenant denial")
 }
 
 func TestAuthEngineNormalAuthorizationCanDenyCertificateIdentity(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
-		Fingerprint:  "abc123",
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
 	}}
 	authorizer := &stubAuthorizer{allow: false}
 	engine := NewAuthEngine(nil, authorizer, WithCertificateAuthentication(certificateAuth))
-	_, _, err := engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{1}})
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
 	require.NoError(t, err)
+	_, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
 
-	require.False(t, engine.CanPublish("mqtt-client", "$SYS/global/status"))
+	require.False(t, engine.CanPublish(testCertificateClientID, testCertificateGlobalTopic))
 	require.Equal(t, certificateAuth.identity.EntityID, authorizer.receivedClientID)
 }
 
 func TestAuthEngineCertificateIdentityCannotBeOverriddenByHook(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
-		Fingerprint:  "abc123",
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
 	}}
 	engine := NewAuthEngine(nil, nil, WithCertificateAuthentication(certificateAuth))
-	_, _, err := engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{1}})
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
 	require.NoError(t, err)
 
-	engine.SetExternalID("mqtt-client", "hook-chosen-identity")
-	require.Equal(t, certificateAuth.identity.EntityID, engine.ExternalID("mqtt-client"))
-	engine.Forget("mqtt-client")
+	engine.SetExternalID(testCertificateClientID, "hook-chosen-identity")
+	require.Equal(t, certificateAuth.identity.EntityID, engine.ExternalID(testCertificateClientID))
+	engine.Forget(testCertificateClientID)
 	require.Zero(t, engine.CertificateSessionCount())
 }
 
 func TestAuthEngineCertificateRotationRebindsClientBeforeNextOperation(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
 		Fingerprint:  "old-fingerprint",
 	}}
 	engine := NewAuthEngine(nil, nil, WithCertificateAuthentication(certificateAuth))
-	_, _, err := engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{1}})
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
 	require.NoError(t, err)
+	oldBinding, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
 
 	certificateAuth.identity.CredentialID = "05119e28-6260-4a06-8742-f925bcfdccd4"
 	certificateAuth.identity.Fingerprint = "new-fingerprint"
-	_, _, err = engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{2}})
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
 	require.NoError(t, err)
-	require.True(t, engine.CanPublish("mqtt-client", "$SYS/global/status"))
+	newBinding, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
+	require.NotEqual(t, oldBinding, newBinding)
+	engine.ForgetCertificateSession(testCertificateClientID, oldBinding)
+	require.True(t, engine.CanPublish(testCertificateClientID, testCertificateGlobalTopic))
 	require.Equal(t, "new-fingerprint", certificateAuth.lastAuthorizedIdentity.Fingerprint)
 	require.Equal(t, 1, engine.CertificateSessionCount())
 }
 
 func TestAuthEngineRejectsCrossEntityCertificateClientIDTakeover(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
 		Fingerprint:  "first-fingerprint",
 	}}
 	engine := NewAuthEngine(nil, nil, WithCertificateAuthentication(certificateAuth))
-	_, _, err := engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{1}})
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
 	require.NoError(t, err)
+	_, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
 
 	certificateAuth.identity.EntityID = "ac47c9fd-1d4a-4270-bb11-ab6476a0bd3a"
 	certificateAuth.identity.CredentialID = "05119e28-6260-4a06-8742-f925bcfdccd4"
 	certificateAuth.identity.Fingerprint = "second-fingerprint"
-	_, _, err = engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{2}})
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
 	require.ErrorIs(t, err, ErrCertificateClientIdentityConflict)
-	require.Equal(t, "8a0a5c59-4ea8-4fc1-badb-f96cf739b224", engine.ExternalID("mqtt-client"))
+	require.Equal(t, testCertificateEntityID, engine.ExternalID(testCertificateClientID))
 	require.Equal(t, 1, engine.CertificateSessionCount())
 }
 
@@ -159,22 +181,71 @@ func TestAuthEngineNonCertificatePathUnchanged(t *testing.T) {
 
 func TestRejectedPlainTakeoverPreservesCertificateSession(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
-		EntityID:     "8a0a5c59-4ea8-4fc1-badb-f96cf739b224",
-		CredentialID: "ca49950c-3ed2-41b4-a319-896085285686",
-		Fingerprint:  "abc123",
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
 	}}
 	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: false}}
 	engine := NewAuthEngine(authn, nil, WithCertificateAuthentication(certificateAuth))
-	_, _, err := engine.AuthenticateWithPeer(context.Background(), "mqtt-client", "", "", PeerCertificate{LeafDER: []byte{1}})
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
 	require.NoError(t, err)
+	_, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
 
-	ok, _, err := engine.Authenticate("mqtt-client", "attacker", "wrong")
+	ok, _, err := engine.Authenticate(testCertificateClientID, "attacker", "wrong")
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Equal(t, 1, engine.CertificateSessionCount())
-	require.Equal(t, certificateAuth.identity.EntityID, engine.ExternalID("mqtt-client"))
-	require.True(t, engine.CanPublish("mqtt-client", "$SYS/global/status"))
+	require.Equal(t, certificateAuth.identity.EntityID, engine.ExternalID(testCertificateClientID))
+	require.True(t, engine.CanPublish(testCertificateClientID, testCertificateGlobalTopic))
 	require.Equal(t, 1, certificateAuth.authorizeCalls)
 }
 
-var ErrTenantMismatchForTest = errors.New("tenant mismatch")
+func TestAuthEngineSerializesConcurrentCertificateAuthentication(t *testing.T) {
+	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
+	}}
+	engine := NewAuthEngine(nil, nil, WithCertificateAuthentication(certificateAuth))
+
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
+	require.NoError(t, err)
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
+	require.ErrorIs(t, err, ErrCertificateAuthenticationPending)
+
+	binding, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
+	require.NotZero(t, binding)
+	require.Equal(t, 1, engine.CertificateSessionCount())
+}
+
+func TestAuthEngineRejectedReconnectPreservesCommittedCertificate(t *testing.T) {
+	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  "old-fingerprint",
+	}}
+	engine := NewAuthEngine(nil, nil, WithCertificateAuthentication(certificateAuth))
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{1}})
+	require.NoError(t, err)
+	oldBinding, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.True(t, committed)
+
+	certificateAuth.identity.CredentialID = "05119e28-6260-4a06-8742-f925bcfdccd4"
+	certificateAuth.identity.Fingerprint = "rejected-fingerprint"
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
+	require.NoError(t, err)
+	engine.Forget(testCertificateClientID)
+
+	currentBinding, current := engine.CertificateSessionBinding(testCertificateClientID)
+	require.True(t, current)
+	require.Equal(t, oldBinding, currentBinding)
+	require.Equal(t, testCertificateEntityID, engine.ExternalID(testCertificateClientID))
+	require.True(t, engine.CanPublish(testCertificateClientID, testCertificateGlobalTopic))
+	require.Equal(t, "old-fingerprint", certificateAuth.lastAuthorizedIdentity.Fingerprint)
+	_, committed = engine.CommitCertificateAuthentication(testCertificateClientID)
+	require.False(t, committed)
+}
+
+var errTenantMismatchForTest = errors.New("tenant mismatch")

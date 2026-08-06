@@ -17,6 +17,10 @@ var ErrCertificateSessionCapacity = errors.New("certificate session capacity rea
 // client ID from being taken over by a different Atom entity.
 var ErrCertificateClientIdentityConflict = errors.New("certificate client ID is already bound to another entity")
 
+// ErrCertificateAuthenticationPending prevents concurrent certificate
+// takeovers for one protocol client ID from swapping each other's identity.
+var ErrCertificateAuthenticationPending = errors.New("certificate authentication is already pending for this client ID")
+
 // IsErrClientNotConnected reports whether err means a queue delivery target is
 // gone. Across the cluster RPC the signal is carried structurally (the
 // client_not_connected proto field, re-wrapped into ErrClientNotConnected by

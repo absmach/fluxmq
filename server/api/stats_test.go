@@ -26,9 +26,10 @@ type certificateMetricsStub struct{}
 
 func (certificateMetricsStub) CertificateMetrics() corebroker.CertificateMetrics {
 	return corebroker.CertificateMetrics{
-		ResolverRequests:   7,
-		CacheEntries:       2,
-		CacheInvalidations: 3,
+		ResolverRequests:     7,
+		CacheEntries:         2,
+		CacheInvalidations:   3,
+		SessionsDisconnected: 1,
 	}
 }
 
@@ -108,7 +109,7 @@ func TestStatsIncludesLabelFreeCertificateMetrics(t *testing.T) {
 	if response.Certificates == nil {
 		t.Fatal("expected certificate metrics")
 	}
-	if response.Certificates.ResolverRequests != 7 || response.Certificates.CacheInvalidations != 3 {
+	if response.Certificates.ResolverRequests != 7 || response.Certificates.CacheInvalidations != 3 || response.Certificates.SessionsDisconnected != 1 {
 		t.Fatalf("unexpected certificate metrics: %+v", response.Certificates)
 	}
 }

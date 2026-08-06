@@ -804,6 +804,9 @@ components:
         cache_invalidations:
           type: integer
           format: uint64
+        sessions_disconnected:
+          type: integer
+          format: uint64
         tenant_denials:
           type: integer
           format: uint64
