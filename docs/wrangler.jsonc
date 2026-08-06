@@ -1,12 +1,20 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fluxmq-docs",
+  "main": "./worker.ts",
   "compatibility_date": "2026-05-29",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "observability": {
     "enabled": true
   },
   "assets": {
-    "directory": "./out"
-  }
+    "directory": "./out",
+    "binding": "ASSETS"
+  },
+  "r2_buckets": [
+    {
+      "binding": "IMAGES_BUCKET",
+      "bucket_name": "websites-images"
+    }
+  ]
 }

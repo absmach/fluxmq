@@ -24,3 +24,7 @@ yarn-error.log*
 .env*.local
 .vercel
 next-env.d.ts
+
+# publish-image maintainer credentials (never commit the real file)
+scripts/.env.publish-image
+!scripts/.env.publish-image.example
