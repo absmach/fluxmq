@@ -303,12 +303,26 @@ func (m *Manager) AuthorizeCertificate(ctx context.Context, identity corebroker.
 		ExpectedTenantID:  tenantID,
 	})
 	if err != nil {
+		m.disconnectResolvedSession(identity)
 		return err
 	}
 	if current.EntityID != identity.EntityID || current.TenantID != identity.TenantID || current.CredentialID != identity.CredentialID {
+		m.disconnectResolvedSession(identity)
 		return ErrResolverIdentity
 	}
 	return nil
+}
+
+func (m *Manager) disconnectResolvedSession(identity corebroker.CertificateIdentity) {
+	if m.sessions == nil {
+		return
+	}
+	disconnected := m.sessions(func(candidate corebroker.CertificateIdentity) bool {
+		return candidate.CredentialID == identity.CredentialID && candidate.Fingerprint == identity.Fingerprint
+	})
+	if disconnected > 0 {
+		m.metrics.sessionsDisconnected.Add(uint64(disconnected))
+	}
 }
 
 func (m *Manager) resolve(ctx context.Context, request ResolverRequest) (corebroker.CertificateIdentity, error) {

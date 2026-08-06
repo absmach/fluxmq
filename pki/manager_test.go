@@ -246,6 +246,34 @@ func TestReviewedCacheAllowsBoundedOutageThenFailsClosed(t *testing.T) {
 	require.Equal(t, 2, resolver.callCount())
 }
 
+func TestAuthorizationResolverFailureDisconnectsCertificateSession(t *testing.T) {
+	now := time.Now().UTC()
+	peer, _ := makePeerCertificate(t, 13)
+	selectors, err := selectorsFromPeer(peer)
+	require.NoError(t, err)
+	resolver := &resolverStub{result: activeResolverResult(now)}
+	disconnected := false
+	manager := newTestManager(t, resolver, &now, WithSessionInvalidator(func(match func(corebroker.CertificateIdentity) bool) int {
+		if disconnected || !match(corebroker.CertificateIdentity{
+			CredentialID: testCredentialID,
+			Fingerprint:  selectors.FingerprintSHA256,
+		}) {
+			return 0
+		}
+		disconnected = true
+		return 1
+	}))
+	identity, err := manager.AuthenticateCertificate(context.Background(), peer)
+	require.NoError(t, err)
+	resolver.setError(errors.New("Atom unavailable"))
+	now = now.Add(manager.config.CacheTTL + time.Second)
+
+	err = manager.AuthorizeCertificate(context.Background(), identity, "m/"+testTenantID+"/c/channel")
+	require.ErrorContains(t, err, "Atom unavailable")
+	require.True(t, disconnected)
+	require.Equal(t, uint64(1), manager.CertificateMetrics().SessionsDisconnected)
+}
+
 func TestLifecycleEventEvictsRevokedSessionAndDuplicateIsIdempotent(t *testing.T) {
 	now := time.Now().UTC()
 	peer, _ := makePeerCertificate(t, 5)

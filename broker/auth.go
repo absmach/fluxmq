@@ -222,6 +222,26 @@ func (e *AuthEngine) CanSubscribe(clientID, filter string) bool {
 	return e.authz.CanSubscribe(e.resolveID(clientID), filter)
 }
 
+// CanPublishPendingCertificate authorizes a publish requested as part of
+// CONNECT (notably an MQTT Will) before the certificate binding is committed.
+// The pending Atom identity is used directly so a hook or prior client-ID
+// mapping cannot change the subject presented to normal authorization.
+func (e *AuthEngine) CanPublishPendingCertificate(clientID, topic string) bool {
+	e.certificateMu.RLock()
+	identity, ok := e.pendingCerts[clientID]
+	e.certificateMu.RUnlock()
+	if !ok || e.certificateAuth == nil {
+		return false
+	}
+	if e.certificateAuth.AuthorizeCertificate(context.Background(), identity, topic) != nil {
+		return false
+	}
+	if e.authz == nil {
+		return true
+	}
+	return e.authz.CanPublish(identity.EntityID, topic)
+}
+
 // Forget removes the cached identity mapping for a client.
 // Should be called when a client disconnects.
 func (e *AuthEngine) Forget(clientID string) {

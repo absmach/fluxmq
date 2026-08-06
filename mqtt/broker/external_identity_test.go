@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -26,8 +27,9 @@ type externalIDAuthenticator struct {
 }
 
 type certificateResolverAuthenticator struct {
-	calls    int
-	identity corebroker.CertificateIdentity
+	calls        int
+	identity     corebroker.CertificateIdentity
+	authorizeErr error
 }
 
 func (auth *certificateResolverAuthenticator) AuthenticateCertificate(_ context.Context, peer corebroker.PeerCertificate) (corebroker.CertificateIdentity, error) {
@@ -45,7 +47,7 @@ func (auth *certificateResolverAuthenticator) AuthenticateCertificate(_ context.
 }
 
 func (auth *certificateResolverAuthenticator) AuthorizeCertificate(context.Context, corebroker.CertificateIdentity, string) error {
-	return nil
+	return auth.authorizeErr
 }
 
 type certificateMockConnection struct {
@@ -225,6 +227,58 @@ func TestRejectedCertificateConnectCleansPendingIdentity(t *testing.T) {
 	require.ErrorIs(t, newV5Handler(b).HandleConnect(connection, connect), ErrTopicInvalid)
 	require.Zero(t, auth.CertificateSessionCount())
 	require.Empty(t, auth.ExternalID(connect.ClientID))
+}
+
+func TestCertificateAuthenticationRejectsUnauthorizedWillBeforeSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		connect packets.ControlPacket
+		handle  func(*Broker, core.Connection, packets.ControlPacket) error
+	}{
+		{
+			name: "mqtt v3",
+			connect: &v3.Connect{
+				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+				ProtocolName:    "MQTT",
+				ProtocolVersion: 4,
+				ClientID:        "certificate-will-v3",
+				CleanSession:    true,
+				WillFlag:        true,
+				WillTopic:       "m/88b65e71-e41d-4f12-9800-6c621133af9b/c/will",
+			},
+			handle: func(broker *Broker, connection core.Connection, packet packets.ControlPacket) error {
+				return newV3Handler(broker).HandleConnect(connection, packet)
+			},
+		},
+		{
+			name: "mqtt v5",
+			connect: &v5.Connect{
+				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+				ProtocolName:    "MQTT",
+				ProtocolVersion: 5,
+				ClientID:        "certificate-will-v5",
+				CleanStart:      true,
+				WillFlag:        true,
+				WillTopic:       "m/88b65e71-e41d-4f12-9800-6c621133af9b/c/will",
+			},
+			handle: func(broker *Broker, connection core.Connection, packet packets.ControlPacket) error {
+				return newV5Handler(broker).HandleConnect(connection, packet)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			b := NewBroker(memory.New(), nil)
+			defer b.Close()
+			resolver := &certificateResolverAuthenticator{authorizeErr: errors.New("cross-tenant Will")}
+			auth := corebroker.NewAuthEngine(nil, nil, corebroker.WithCertificateAuthentication(resolver))
+			b.SetAuthEngine(auth)
+			connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}}
+
+			require.ErrorIs(t, test.handle(b, connection, test.connect), ErrNotAuthorized)
+			require.Zero(t, auth.CertificateSessionCount())
+		})
+	}
 }
 
 func TestCertificateLifecycleInvalidationDisconnectsLiveSession(t *testing.T) {
