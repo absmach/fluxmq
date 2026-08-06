@@ -1172,17 +1172,18 @@ func main() {
 		}
 
 		tcpCfg := tcp.Config{
-			Address:          slot.cfg.Addr,
-			TLSConfig:        tlsCfg,
-			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
-			MaxConnections:   slot.cfg.MaxConnections,
-			ReadTimeout:      slot.cfg.ReadTimeout,
-			WriteTimeout:     slot.cfg.WriteTimeout,
-			SendQueueSize:    cfg.Session.MaxSendQueueSize,
-			DisconnectOnFull: cfg.Session.DisconnectOnFull,
-			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
-			MaxPacketSize:    maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
-			Logger:           logger,
+			Address:                   slot.cfg.Addr,
+			TLSConfig:                 tlsCfg,
+			ShutdownTimeout:           cfg.Server.ShutdownTimeout,
+			MaxConnections:            slot.cfg.MaxConnections,
+			ReadTimeout:               slot.cfg.ReadTimeout,
+			WriteTimeout:              slot.cfg.WriteTimeout,
+			SendQueueSize:             cfg.Session.MaxSendQueueSize,
+			DisconnectOnFull:          cfg.Session.DisconnectOnFull,
+			ProtocolVersion:           protocolVersionForMode(slot.cfg.Protocol),
+			CertificateAuthentication: certificateManager != nil && slot.name == listenerMTLS,
+			MaxPacketSize:             maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			Logger:                    logger,
 		}
 		tcpCfg.IPRateLimiter = rateLimitManager
 		tcpServer := tcp.New(tcpCfg, b)
@@ -1226,16 +1227,17 @@ func main() {
 		}
 
 		wsCfg := websocket.Config{
-			Address:         slot.cfg.Addr,
-			Path:            slot.cfg.Path,
-			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			TLSConfig:       tlsCfg,
-			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
-			AllowedOrigins:  slot.cfg.AllowedOrigins,
-			MaxPacketSize:   maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
-			ReadTimeout:     slot.cfg.ReadTimeout,
-			WriteTimeout:    slot.cfg.WriteTimeout,
-			MaxConnections:  slot.cfg.MaxConnections,
+			Address:                   slot.cfg.Addr,
+			Path:                      slot.cfg.Path,
+			ShutdownTimeout:           cfg.Server.ShutdownTimeout,
+			TLSConfig:                 tlsCfg,
+			ProtocolVersion:           protocolVersionForMode(slot.cfg.Protocol),
+			AllowedOrigins:            slot.cfg.AllowedOrigins,
+			MaxPacketSize:             maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			ReadTimeout:               slot.cfg.ReadTimeout,
+			WriteTimeout:              slot.cfg.WriteTimeout,
+			MaxConnections:            slot.cfg.MaxConnections,
+			CertificateAuthentication: certificateManager != nil && slot.name == listenerMTLS,
 		}
 		wsCfg.IPRateLimiter = rateLimitManager
 
