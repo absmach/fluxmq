@@ -438,6 +438,7 @@ func TestTrustBundleRefreshAfterAuthorityProvisioningEvent(t *testing.T) {
 	resolver := &resolverStub{result: activeResolverResult(now)}
 	manager, err := NewManager(Config{
 		ResolverAddress:      "atom.invalid:8081",
+		ResolverInsecure:     true,
 		ServiceTokenFile:     "unused-by-test-resolver",
 		TrustBundleURL:       server.URL,
 		EventSourcePrincipal: testEventPrincipal,
@@ -468,6 +469,13 @@ func TestTrustBundleRefreshAfterAuthorityProvisioningEvent(t *testing.T) {
 	current, err := wrapped.GetConfigForClient(nil)
 	require.NoError(t, err)
 	require.Len(t, current.ClientCAs.Subjects(), 2)
+}
+
+func TestTrustBundleRejectsNonCA(t *testing.T) {
+	peer, _ := makePeerCertificate(t, 14)
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: peer.LeafDER})
+	_, err := parseTrustBundle(leafPEM)
+	require.ErrorContains(t, err, "cannot sign certificates")
 }
 
 func TestUntrustedEventCannotInvalidateCache(t *testing.T) {

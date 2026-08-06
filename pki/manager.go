@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,8 +233,12 @@ func validateConfig(config Config) error {
 	if strings.TrimSpace(config.ServiceTokenFile) == "" {
 		return fmt.Errorf("certificate resolver service token file is required")
 	}
-	if strings.TrimSpace(config.TrustBundleURL) == "" {
-		return fmt.Errorf("Atom trust bundle URL is required")
+	trustURL, err := url.ParseRequestURI(config.TrustBundleURL)
+	if err != nil || trustURL.Host == "" || (trustURL.Scheme != "https" && trustURL.Scheme != "http") {
+		return fmt.Errorf("Atom trust bundle URL must be an absolute HTTP(S) URL")
+	}
+	if trustURL.Scheme != "https" && !config.ResolverInsecure {
+		return fmt.Errorf("Atom trust bundle URL must use HTTPS unless resolver insecure mode is enabled")
 	}
 	if strings.TrimSpace(config.EventSourcePrincipal) == "" {
 		return fmt.Errorf("Atom event source principal is required")

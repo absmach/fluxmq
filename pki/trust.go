@@ -39,6 +39,10 @@ func (m *Manager) RefreshTrustBundle(ctx context.Context) error {
 		return fmt.Errorf("fetch Atom trust bundle: %w", err)
 	}
 	defer response.Body.Close()
+	if !m.config.ResolverInsecure && response.Request != nil && response.Request.URL.Scheme != "https" {
+		m.metrics.trustRefreshFailures.Add(1)
+		return fmt.Errorf("Atom trust bundle redirect downgraded HTTPS")
+	}
 
 	if response.StatusCode == http.StatusNotModified {
 		m.trustMu.RLock()
@@ -95,6 +99,10 @@ func parseTrustBundle(bundle []byte) (*x509.CertPool, error) {
 		certificate, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse Atom trust bundle certificate: %w", err)
+		}
+		if !certificate.IsCA || !certificate.BasicConstraintsValid ||
+			(certificate.KeyUsage != 0 && certificate.KeyUsage&x509.KeyUsageCertSign == 0) {
+			return nil, fmt.Errorf("Atom trust bundle contains a certificate that cannot sign certificates")
 		}
 		pool.AddCert(certificate)
 		count++
