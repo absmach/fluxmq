@@ -298,6 +298,7 @@ func (b *Broker) ApplyRegisterHooks(ctx context.Context, clientID, externalID, u
 			b.auth.Forget(clientID)
 		} else {
 			b.auth.SetExternalID(clientID, req.ExternalID)
+			req.ExternalID = b.auth.ExternalID(clientID)
 		}
 	}
 	return req.ExternalID, ok
@@ -347,6 +348,15 @@ func (b *Broker) ExternalID(clientID string) string {
 		return ""
 	}
 	return b.auth.ExternalID(clientID)
+}
+
+// CertificateSessionCount returns the number of bounded certificate identity
+// bindings currently retained by the authentication engine.
+func (b *Broker) CertificateSessionCount() int {
+	if b.auth == nil {
+		return 0
+	}
+	return b.auth.CertificateSessionCount()
 }
 
 // SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.

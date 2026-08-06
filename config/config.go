@@ -57,6 +57,7 @@ const (
 	authProtocolsField         = "protocols"
 	authIdentityCacheSizeField = "identity_cache_size"
 	authIdentityCacheTTLField  = "identity_cache_ttl"
+	certificateMaximumCacheTTL = 5 * time.Minute
 	clientAuthRequire          = "require"
 )
 
@@ -79,7 +80,26 @@ type Config struct {
 // AuthConfig configures external callouts and broker-local principals.
 type AuthConfig struct {
 	External        ExternalAuthConfig     `yaml:"external"`
+	Certificate     CertificateAuthConfig  `yaml:"certificate"`
 	LocalPrincipals []LocalPrincipalConfig `yaml:"local_principals"`
+}
+
+// CertificateAuthConfig enables Atom resolver-tier authentication on the MQTT
+// TCP and WebSocket mTLS listeners. Other listeners and non-certificate
+// authentication paths are intentionally unaffected.
+type CertificateAuthConfig struct {
+	Enabled                  bool          `yaml:"enabled"`
+	ResolverAddress          string        `yaml:"resolver_address"`
+	ResolverInsecure         bool          `yaml:"resolver_insecure"`
+	ServiceTokenFile         string        `yaml:"service_token_file"`
+	TrustBundleURL           string        `yaml:"trust_bundle_url"`
+	ResolverTimeout          time.Duration `yaml:"resolver_timeout"`
+	CacheTTL                 time.Duration `yaml:"cache_ttl"`
+	CacheSize                int           `yaml:"cache_size"`
+	TrustRefreshInterval     time.Duration `yaml:"trust_refresh_interval"`
+	EventQueue               string        `yaml:"event_queue"`
+	EventConsumerGroupPrefix string        `yaml:"event_consumer_group_prefix"`
+	EventSourcePrincipal     string        `yaml:"event_source_principal"`
 }
 
 // ExternalAuthConfig configures the external authentication/authorization callout.
@@ -298,6 +318,22 @@ func validateAuthYAML(node *yaml.Node) error {
 				authProtocolsField:         nil,
 				authIdentityCacheSizeField: nil,
 				authIdentityCacheTTLField:  nil,
+			})
+		},
+		"certificate": func(certificate *yaml.Node) error {
+			return validateYAMLMapping(certificate, "auth.certificate", map[string]func(*yaml.Node) error{
+				"enabled":                     nil,
+				"resolver_address":            nil,
+				"resolver_insecure":           nil,
+				"service_token_file":          nil,
+				"trust_bundle_url":            nil,
+				"resolver_timeout":            nil,
+				"cache_ttl":                   nil,
+				"cache_size":                  nil,
+				"trust_refresh_interval":      nil,
+				"event_queue":                 nil,
+				"event_consumer_group_prefix": nil,
+				"event_source_principal":      nil,
 			})
 		},
 		"local_principals": func(principals *yaml.Node) error {
@@ -1230,6 +1266,15 @@ func Default() *Config {
 				Burst:   10,
 			},
 		},
+		Auth: AuthConfig{
+			Certificate: CertificateAuthConfig{
+				ResolverTimeout:          3 * time.Second,
+				CacheTTL:                 30 * time.Second,
+				CacheSize:                10000,
+				TrustRefreshInterval:     time.Minute,
+				EventConsumerGroupPrefix: "fluxmq-pki",
+			},
+		},
 		QueueManager: QueueManagerConfig{
 			AutoCommitInterval: 5 * time.Second,
 		},
@@ -1402,7 +1447,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("server.tcp.%s.write_timeout cannot be negative", slot.name)
 		}
 		if slot.requireTLS {
-			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+			requireStaticCA := slot.requireClientAuth && !(c.Auth.Certificate.Enabled && slot.name == listenerNameMTLS)
+			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, requireStaticCA); err != nil {
 				return err
 			}
 		} else if tlsConfigured(slot.cfg.TLS) {
@@ -1436,7 +1482,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("server.websocket.%s.write_timeout cannot be negative", slot.name)
 		}
 		if slot.requireTLS {
-			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+			requireStaticCA := slot.requireClientAuth && !(c.Auth.Certificate.Enabled && slot.name == listenerNameMTLS)
+			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, requireStaticCA); err != nil {
 				return err
 			}
 		} else if tlsConfigured(slot.cfg.TLS) {
@@ -1580,6 +1627,9 @@ func (c *Config) Validate() error {
 		if !knownAuthProtocols[proto] {
 			return fmt.Errorf("auth.external.protocols: unknown protocol %q (valid: mqtt, amqp, amqp091, http, coap)", proto)
 		}
+	}
+	if err := c.validateCertificateAuthentication(); err != nil {
+		return err
 	}
 	if err := ValidateLocalPrincipals(c.Auth.LocalPrincipals); err != nil {
 		return err
@@ -2047,6 +2097,105 @@ func ValidateLocalPrincipals(principals []LocalPrincipalConfig) error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Config) validateCertificateAuthentication() error {
+	certificate := c.Auth.Certificate
+	if !certificate.Enabled {
+		return nil
+	}
+	const path = "auth.certificate."
+	if !c.Auth.External.EnabledFor(protocolMQTT) {
+		return fmt.Errorf("%senabled requires auth.external authorization for mqtt", path)
+	}
+	if !hasAddr(c.Server.TCP.MTLS.Addr) && !hasAddr(c.Server.WebSocket.MTLS.Addr) {
+		return fmt.Errorf("%senabled requires a configured MQTT TCP or WebSocket mTLS listener", path)
+	}
+	if hasAddr(c.Server.TCP.MTLS.Addr) && strings.ToLower(strings.TrimSpace(c.Server.TCP.MTLS.TLS.ClientAuth)) != clientAuthRequire {
+		return fmt.Errorf("server.tcp.mtls.client_auth must be %q when %senabled is true", clientAuthRequire, path)
+	}
+	if hasAddr(c.Server.WebSocket.MTLS.Addr) && strings.ToLower(strings.TrimSpace(c.Server.WebSocket.MTLS.TLS.ClientAuth)) != clientAuthRequire {
+		return fmt.Errorf("server.websocket.mtls.client_auth must be %q when %senabled is true", clientAuthRequire, path)
+	}
+	if strings.TrimSpace(certificate.ResolverAddress) == "" {
+		return fmt.Errorf("%sresolver_address is required", path)
+	}
+	if strings.TrimSpace(certificate.ServiceTokenFile) == "" {
+		return fmt.Errorf("%sservice_token_file is required", path)
+	}
+	info, err := os.Stat(certificate.ServiceTokenFile)
+	if err != nil {
+		return fmt.Errorf("%sservice_token_file: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%sservice_token_file must be a regular file", path)
+	}
+	parsedTrustURL, err := url.ParseRequestURI(certificate.TrustBundleURL)
+	if err != nil || parsedTrustURL.Host == "" || (parsedTrustURL.Scheme != "https" && parsedTrustURL.Scheme != "http") {
+		return fmt.Errorf("%strust_bundle_url must be an absolute HTTP(S) URL", path)
+	}
+	if parsedTrustURL.Scheme != "https" && !certificate.ResolverInsecure {
+		return fmt.Errorf("%strust_bundle_url must use HTTPS unless resolver_insecure is explicitly enabled", path)
+	}
+	if certificate.ResolverTimeout < 0 {
+		return fmt.Errorf("%sresolver_timeout cannot be negative", path)
+	}
+	if certificate.CacheTTL < 0 || certificate.CacheTTL > certificateMaximumCacheTTL {
+		return fmt.Errorf("%scache_ttl must not exceed %s", path, certificateMaximumCacheTTL)
+	}
+	if certificate.CacheSize < 0 {
+		return fmt.Errorf("%scache_size cannot be negative", path)
+	}
+	if certificate.TrustRefreshInterval < 0 {
+		return fmt.Errorf("%strust_refresh_interval cannot be negative", path)
+	}
+	if strings.TrimSpace(certificate.EventQueue) == "" {
+		return fmt.Errorf("%sevent_queue is required", path)
+	}
+	if strings.TrimSpace(certificate.EventConsumerGroupPrefix) == "" || containsWildcard(certificate.EventConsumerGroupPrefix) {
+		return fmt.Errorf("%sevent_consumer_group_prefix must be non-empty and contain no wildcard", path)
+	}
+	if strings.TrimSpace(certificate.EventSourcePrincipal) == "" {
+		return fmt.Errorf("%sevent_source_principal is required", path)
+	}
+
+	queueFound := false
+	for _, queue := range c.Queues {
+		if queue.Name != certificate.EventQueue {
+			continue
+		}
+		queueFound = true
+		if queue.Type != "stream" || !queue.Reserved {
+			return fmt.Errorf("%sevent_queue must name a reserved stream queue", path)
+		}
+		break
+	}
+	if !queueFound {
+		return fmt.Errorf("%sevent_queue must name an entry in queues", path)
+	}
+
+	principalFound := false
+	for _, principal := range c.Auth.LocalPrincipals {
+		if principal.Name != certificate.EventSourcePrincipal {
+			continue
+		}
+		principalFound = true
+		allowed := false
+		for _, permission := range principal.Permissions.Publish {
+			if permission.Exchange == "" && permission.RoutingKey == certificate.EventQueue && !permission.IsPrefix() {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("%sevent_source_principal must have an exact default-exchange publish grant for event_queue", path)
+		}
+		break
+	}
+	if !principalFound {
+		return fmt.Errorf("%sevent_source_principal must name an auth.local_principals entry", path)
+	}
 	return nil
 }
 

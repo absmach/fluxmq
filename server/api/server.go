@@ -11,6 +11,7 @@ import (
 	"time"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
@@ -32,14 +33,21 @@ type Config struct {
 
 // Server provides the HTTP/gRPC API server using Connect protocol.
 type Server struct {
-	config        Config
-	broker        *mqttbroker.Broker
-	amqpBroker    *amqpbroker.Broker
-	cluster       cluster.Cluster
-	queueManager  *queue.Manager
-	reloadManager *reload.Manager
-	httpServer    *http.Server
-	logger        *slog.Logger
+	config             Config
+	broker             *mqttbroker.Broker
+	amqpBroker         *amqpbroker.Broker
+	cluster            cluster.Cluster
+	queueManager       *queue.Manager
+	reloadManager      *reload.Manager
+	certificateMetrics corebroker.CertificateMetricsProvider
+	httpServer         *http.Server
+	logger             *slog.Logger
+}
+
+// SetCertificateMetricsProvider exposes label-free PKI resolver counters in
+// the existing admin statistics endpoint.
+func (s *Server) SetCertificateMetricsProvider(provider corebroker.CertificateMetricsProvider) {
+	s.certificateMetrics = provider
 }
 
 // New creates a new API server.

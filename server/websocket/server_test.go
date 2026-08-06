@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -28,6 +29,30 @@ func TestNewWSConnectionProtocolVersion(t *testing.T) {
 
 	if wsConn.version != core.ProtocolV5 {
 		t.Fatalf("expected protocol version %d, got %d", core.ProtocolV5, wsConn.version)
+	}
+}
+
+func TestWSConnectionExposesCopiedVerifiedPeerChain(t *testing.T) {
+	leaf := []byte{1, 2, 3}
+	issuer := []byte{4, 5, 6}
+	conn := newWSConnection(nil, "127.0.0.1:1111", core.ProtocolV5, 0, 0, corebroker.PeerCertificate{
+		LeafDER:   leaf,
+		IssuerDER: issuer,
+	})
+	peer, ok := conn.(corebroker.PeerCertificateSource)
+	if !ok {
+		t.Fatalf("expected certificate-aware WebSocket connection, got %T", conn)
+	}
+	leaf[0] = 9
+	issuer[0] = 9
+	gotLeaf := peer.PeerCertificateDER()
+	gotIssuer := peer.PeerIssuerCertificateDER()
+	if gotLeaf[0] != 1 || gotIssuer[0] != 4 {
+		t.Fatal("WebSocket connection did not retain defensive peer-chain copies")
+	}
+	gotLeaf[0] = 8
+	if peer.PeerCertificateDER()[0] != 1 {
+		t.Fatal("WebSocket peer leaf accessor leaked mutable internal state")
 	}
 }
 

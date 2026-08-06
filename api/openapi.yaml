@@ -767,6 +767,53 @@ components:
         pending:
           $ref: "#/components/schemas/QueuePendingStats"
 
+    CertificateMetrics:
+      type: object
+      description: Label-free Atom certificate resolver, cache, event, and trust counters.
+      properties:
+        active_sessions:
+          type: integer
+          format: int64
+        resolver_requests:
+          type: integer
+          format: uint64
+        resolver_failures:
+          type: integer
+          format: uint64
+        resolver_timeouts:
+          type: integer
+          format: uint64
+        cache_hits:
+          type: integer
+          format: uint64
+        cache_misses:
+          type: integer
+          format: uint64
+        cache_evictions:
+          type: integer
+          format: uint64
+        cache_entries:
+          type: integer
+          format: int64
+        events_received:
+          type: integer
+          format: uint64
+        events_rejected:
+          type: integer
+          format: uint64
+        cache_invalidations:
+          type: integer
+          format: uint64
+        tenant_denials:
+          type: integer
+          format: uint64
+        trust_refresh_success:
+          type: integer
+          format: uint64
+        trust_refresh_failures:
+          type: integer
+          format: uint64
+
     StatsResponse:
       type: object
       description: |
@@ -793,6 +840,8 @@ components:
           $ref: "#/components/schemas/ByProtocolStats"
         queues:
           $ref: "#/components/schemas/QueueStats"
+        certificates:
+          $ref: "#/components/schemas/CertificateMetrics"
 
     # ── Cluster ──
 

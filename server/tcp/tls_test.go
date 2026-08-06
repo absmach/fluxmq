@@ -4,6 +4,7 @@
 package tcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
+	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 )
@@ -174,6 +177,45 @@ func TestTLS_RequireClientCert(t *testing.T) {
 		_ = tlsClient.Close()
 		waitForConnections(t, server)
 	})
+}
+
+func TestTLSConnectionExposesVerifiedPeerChain(t *testing.T) {
+	certs := GenerateTestCerts(t)
+	serverTLS := LoadServerTLSConfig(t, certs, tls.RequireAndVerifyClientCert)
+	clientTLS := LoadClientTLSConfig(t, certs, true)
+	clientTLS.ServerName = "localhost"
+
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	tlsServer := tls.Server(serverConn, serverTLS)
+	tlsClient := tls.Client(clientConn, clientTLS)
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- tlsServer.Handshake() }()
+	if err := tlsHandshakeWithTimeout(tlsClient, 2*time.Second); err != nil {
+		t.Fatalf("client TLS handshake failed: %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server TLS handshake failed: %v", err)
+	}
+
+	state := tlsServer.ConnectionState()
+	if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) < 2 {
+		t.Fatal("expected a verified client leaf and issuer")
+	}
+	connection := core.NewConnection(tlsServer, 0, false)
+	peer, ok := connection.(corebroker.PeerCertificateSource)
+	if !ok {
+		t.Fatalf("expected certificate-aware TCP connection, got %T", connection)
+	}
+	if !bytes.Equal(peer.PeerCertificateDER(), state.VerifiedChains[0][0].Raw) {
+		t.Fatal("TCP connection did not expose the verified client leaf")
+	}
+	if !bytes.Equal(peer.PeerIssuerCertificateDER(), state.VerifiedChains[0][1].Raw) {
+		t.Fatal("TCP connection did not expose the verified client issuer")
+	}
 }
 
 func TestTLS_UntrustedServer(t *testing.T) {

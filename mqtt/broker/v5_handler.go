@@ -84,7 +84,12 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		username := p.Username
 		password := string(p.Password)
 
-		authenticated, resolvedID, err := h.broker.auth.Authenticate(clientID, username, password)
+		var peerCertificate corebroker.PeerCertificate
+		if peer, ok := conn.(corebroker.PeerCertificateSource); ok {
+			peerCertificate.LeafDER = peer.PeerCertificateDER()
+			peerCertificate.IssuerDER = peer.PeerIssuerCertificateDER()
+		}
+		authenticated, resolvedID, err := h.broker.auth.AuthenticateWithPeer(context.Background(), clientID, username, password, peerCertificate)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
 			sendV5ConnAck(conn, false, v5.ConnAckBadUsernameOrPassword, nil) //nolint:errcheck // best-effort rejection reply before closing

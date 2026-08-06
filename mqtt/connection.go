@@ -5,6 +5,7 @@ package mqtt
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -184,6 +185,32 @@ func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull boo
 	}
 
 	return c
+}
+
+// PeerCertificateDER returns a copy of the verified TLS peer leaf.
+func (c *connection) PeerCertificateDER() []byte {
+	tlsConn, ok := c.conn.(*tls.Conn)
+	if !ok {
+		return nil
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
+		return nil
+	}
+	return append([]byte(nil), state.VerifiedChains[0][0].Raw...)
+}
+
+// PeerIssuerCertificateDER returns a copy of the verified leaf issuer.
+func (c *connection) PeerIssuerCertificateDER() []byte {
+	tlsConn, ok := c.conn.(*tls.Conn)
+	if !ok {
+		return nil
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) < 2 {
+		return nil
+	}
+	return append([]byte(nil), state.VerifiedChains[0][1].Raw...)
 }
 
 // ReadPacket reads the next MQTT packet from the connection.
