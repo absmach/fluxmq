@@ -315,6 +315,42 @@ func TestLifecycleEventEvictsRevokedSessionAndDuplicateIsIdempotent(t *testing.T
 	require.Equal(t, uint64(1), manager.CertificateMetrics().CacheInvalidations)
 }
 
+func TestUnusableAuthorityEventDisconnectsSessionsIssuedByThatAuthority(t *testing.T) {
+	now := time.Now().UTC()
+	peer, _ := makePeerCertificate(t, 18)
+	resolver := &resolverStub{result: activeResolverResult(now)}
+	var liveIdentity corebroker.CertificateIdentity
+	disconnected := false
+	manager := newTestManager(t, resolver, &now, WithSessionInvalidator(func(match func(corebroker.CertificateIdentity) bool) int {
+		if disconnected || !match(liveIdentity) {
+			return 0
+		}
+		disconnected = true
+		return 1
+	}))
+	identity, err := manager.AuthenticateCertificate(context.Background(), peer)
+	require.NoError(t, err)
+	liveIdentity = identity
+
+	event := lifecycleEvent(t, "pki.authority.revoked", "authority", testIssuerID, map[string]any{
+		issuerIDDetail: testIssuerID,
+	})
+	require.NoError(t, manager.HandleEvent(event, map[string]string{corebroker.ExternalIDProperty: testEventPrincipal}))
+	require.Zero(t, manager.CertificateMetrics().CacheEntries)
+	require.True(t, disconnected)
+	require.Equal(t, uint64(1), manager.CertificateMetrics().SessionsDisconnected)
+
+	// Atom deliberately retains retiring and retired issuers for verification of
+	// already-issued certificates, so retirement must not drop live sessions.
+	retiredIssuerID := testIssuerID
+	_, disconnectRetired := sessionDisconnectionKeys(domainEvent{
+		Event:    "pki.authority.retired",
+		TargetID: &retiredIssuerID,
+		Details:  map[string]any{issuerIDDetail: testIssuerID},
+	})
+	require.False(t, disconnectRetired)
+}
+
 func TestLifecycleEventPreventsInflightResolutionFromRepopulatingCache(t *testing.T) {
 	now := time.Now().UTC()
 	peer, _ := makePeerCertificate(t, 12)
