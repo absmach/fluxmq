@@ -128,7 +128,9 @@ func (e *AuthEngine) AuthenticateContext(ctx context.Context, clientID, username
 
 // AuthenticateWithPeer authenticates a verified TLS leaf through Atom when a
 // certificate resolver is configured. Connections without a leaf follow the
-// historical username/secret path unchanged.
+// historical username/secret path unchanged: failed ordinary credentials stay
+// an ordinary denial, while a successful attempt is rejected before it can
+// replace a live certificate binding.
 func (e *AuthEngine) AuthenticateWithPeer(ctx context.Context, clientID, username, password string, peer PeerCertificate) (bool, string, error) {
 	if len(peer.LeafDER) != 0 && e.certificateAuth != nil {
 		identity, err := e.certificateAuth.AuthenticateCertificate(ctx, peer)
