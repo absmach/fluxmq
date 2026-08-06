@@ -15,7 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const maximumEventBytes = 1024 * 1024
+const (
+	maximumEventBytes = 1024 * 1024
+	issuerIDDetail    = "issuer_id"
+)
 
 var ErrUntrustedEvent = errors.New("untrusted Atom certificate lifecycle event")
 
@@ -139,6 +142,19 @@ func sessionDisconnectionKeys(event domainEvent) (invalidationKeys, bool) {
 			keys.add(keys.tenants, *event.TenantID)
 		}
 		keys.addDetail(keys.tenants, event.Details["tenant_id"])
+	case "pki.authority.revoke", "pki.authority.revoked",
+		"pki.authority.expire", "pki.authority.expired",
+		"pki.authority.fail", "pki.authority.failed",
+		"pki.authority.disable", "pki.authority.disabled",
+		"pki.authority.delete", "pki.authority.deleted",
+		"pki.authority.remove", "pki.authority.removed",
+		"pki.authority.purge", "pki.authority.purged":
+		if event.TargetID != nil {
+			keys.add(keys.issuers, *event.TargetID)
+		}
+		for _, field := range []string{issuerIDDetail, "old_issuer_id"} {
+			keys.addDetail(keys.issuers, event.Details[field])
+		}
 	default:
 		return keys, false
 	}
@@ -179,7 +195,7 @@ func (keys invalidationKeys) addEnvelope(event domainEvent) {
 	for _, field := range []string{"entity_id"} {
 		keys.addDetail(keys.entities, event.Details[field])
 	}
-	for _, field := range []string{"issuer_id", "old_issuer_id", "new_issuer_id"} {
+	for _, field := range []string{issuerIDDetail, "old_issuer_id", "new_issuer_id"} {
 		keys.addDetail(keys.issuers, event.Details[field])
 	}
 	keys.addDetail(keys.issuers, event.Details["issuer_ids"])
