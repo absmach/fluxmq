@@ -748,6 +748,20 @@ auth:
     identity_cache_size: 50000
     identity_cache_ttl: "1h"
 
+  certificate:
+    enabled: true
+    resolver_address: "atom.internal:8081"
+    resolver_insecure: false
+    service_token_file: "/run/secrets/fluxmq-atom-token"
+    trust_bundle_url: "https://atom.internal/certs/trust-bundle.pem"
+    resolver_timeout: "3s"
+    cache_ttl: "30s"
+    cache_size: 10000
+    trust_refresh_interval: "1m"
+    event_queue: "atom.events"
+    event_consumer_group_prefix: "fluxmq-pki"
+    event_source_principal: "atom-events"
+
   local_principals:
     - name: "audit-publisher"
       certificate_uri_san: "spiffe://example.org/audit-publisher"
@@ -769,6 +783,18 @@ auth:
 | `external.protocols`                            | `{}`    | External-auth protocol toggle. Empty means every protocol. |
 | `external.identity_cache_size`                  | `0`     | Maximum cached external identities; zero selects the broker default (`10000`), while a negative value disables size eviction. |
 | `external.identity_cache_ttl`                   | `0`     | External identity cache TTL; zero selects the broker default (`24h`), while a negative value disables TTL eviction. |
+| `certificate.enabled`                           | `false` | Enables Atom resolver-tier authentication on MQTT TCP and WebSocket mTLS listeners. Requires normal MQTT external authorization. |
+| `certificate.resolver_address`                  | —       | Atom gRPC address for `ResolveCertificateV2`. |
+| `certificate.resolver_insecure`                 | `false` | Explicitly permits plaintext resolver gRPC and an HTTP trust URL on a separately protected hop. |
+| `certificate.service_token_file`                | —       | File containing the resolver bearer token; reread on every cache-miss call for rotation. |
+| `certificate.trust_bundle_url`                  | —       | Atom `/certs/trust-bundle.pem` URL. Initial load is fail-closed; later refreshes retain the last known-good pool. |
+| `certificate.resolver_timeout`                  | `3s`    | Per-resolver-call and trust-refresh timeout. |
+| `certificate.cache_ttl`                         | `30s`   | Reviewed outage/revocation cache window. Must be positive and at most `5m`. |
+| `certificate.cache_size`                        | `10000` | Maximum LRU resolver entries. Must be positive. |
+| `certificate.trust_refresh_interval`            | `1m`    | ETag-based trust refresh interval; authority events also trigger refresh. |
+| `certificate.event_queue`                       | —       | Reserved stream carrying Atom outbox events. |
+| `certificate.event_consumer_group_prefix`       | `fluxmq-pki` | Prefix combined with the node ID so each node has its own invalidation group. |
+| `certificate.event_source_principal`            | —       | Exact local-principal name Atom must authenticate as when publishing events. |
 | `local_principals[].name`                       | —       | Unique SASL username for the local principal. |
 | `local_principals[].certificate_uri_san`        | —       | Exact URI SAN required on a CA-verified client certificate. |
 | `local_principals[].role`                       | `publisher` | Capability of the principal on every local listener: `publisher` may only publish; `service` may also consume and relay an origin identity. |
@@ -781,7 +807,9 @@ Valid `external.protocols` keys: `mqtt`, `amqp`, `amqp091`, `http`, `coap`.
 The old flat `auth.url`, `auth.transport`, `auth.timeout`, `auth.protocols`, and
 cache fields are invalid.
 
-See [Security configuration](/configuration/security) for detailed examples.
+See [Security configuration](/configuration/security) and
+[Atom Certificate Authentication](/configuration/atom-certificate-authentication)
+for detailed examples.
 
 ## Logging
 

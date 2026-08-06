@@ -9,6 +9,18 @@ import "errors"
 // targets a client that no longer has a live connection.
 var ErrClientNotConnected = errors.New("client not connected")
 
+// ErrCertificateSessionCapacity prevents certificate-authenticated session
+// state from growing without a configured bound.
+var ErrCertificateSessionCapacity = errors.New("certificate session capacity reached")
+
+// ErrCertificateClientIdentityConflict prevents a live certificate-bound
+// client ID from being taken over by a different Atom entity.
+var ErrCertificateClientIdentityConflict = errors.New("certificate client ID is already bound to another entity")
+
+// ErrCertificateAuthenticationPending prevents concurrent certificate
+// takeovers for one protocol client ID from swapping each other's identity.
+var ErrCertificateAuthenticationPending = errors.New("certificate authentication is already pending for this client ID")
+
 // IsErrClientNotConnected reports whether err means a queue delivery target is
 // gone. Across the cluster RPC the signal is carried structurally (the
 // client_not_connected proto field, re-wrapped into ErrClientNotConnected by

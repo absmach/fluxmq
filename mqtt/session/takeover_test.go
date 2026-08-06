@@ -194,6 +194,37 @@ func TestConnectWithOptions_AppliesNewOptionsOnReconnect(t *testing.T) {
 	require.Equal(t, byte(4), superseded.Version, "superseded carries the old version")
 }
 
+func TestDisconnectCallbackCapturesCertificateBindingGeneration(t *testing.T) {
+	s := newTakeoverSession(t)
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	capturedBinding := make(chan uint64, 1)
+	s.SetOnBoundDisconnect(func(_ *Session, _ bool, certificateBinding uint64) {
+		close(callbackStarted)
+		<-releaseCallback
+		capturedBinding <- certificateBinding
+	})
+
+	oldConn := &recordingConn{}
+	oldEpoch, _ := s.ConnectWithOptions(oldConn, ConnectOptions{
+		Version:            5,
+		CertificateBinding: 41,
+	})
+	require.NoError(t, s.DisconnectIf(false, oldEpoch, v5.DisconnectUnspecifiedError))
+	<-callbackStarted
+
+	newConn := &recordingConn{}
+	_, _ = s.ConnectWithOptions(newConn, ConnectOptions{
+		Version:            5,
+		CertificateBinding: 42,
+	})
+	close(releaseCallback)
+
+	require.Equal(t, uint64(41), <-capturedBinding,
+		"delayed cleanup from the old connection must retain its old binding")
+	require.Equal(t, uint64(42), s.certificateBinding)
+}
+
 // TestSetExpiryInterval_ZeroReplacesPositive guards finding #3: a reconnect
 // carrying session expiry 0 (expire on disconnect) must replace a previous
 // positive value, not be ignored.

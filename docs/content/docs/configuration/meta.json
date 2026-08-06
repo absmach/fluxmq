@@ -1,4 +1,11 @@
 {
   "title": "Configuration",
-  "pages": ["server", "storage", "clustering", "security", "hot-reload"]
+  "pages": [
+    "server",
+    "storage",
+    "clustering",
+    "security",
+    "atom-certificate-authentication",
+    "hot-reload"
+  ]
 }

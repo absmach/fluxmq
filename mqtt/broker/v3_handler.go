@@ -77,13 +77,33 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			return ErrClientIDRequired
 		}
 	}
+	h.broker.connectLocks.Lock(clientID)
+	connectLocked := true
+	defer func() {
+		if connectLocked {
+			h.broker.connectLocks.Unlock(clientID)
+		}
+	}()
+	authenticationPending := false
+	defer func() {
+		if authenticationPending && h.broker.auth != nil {
+			h.broker.auth.Forget(clientID)
+		}
+	}()
 
 	externalID := ""
+	certificateAuthentication := false
 	if h.broker.auth != nil {
 		username := p.Username
 		password := string(p.Password)
 
-		authenticated, resolvedID, err := h.broker.auth.Authenticate(clientID, username, password)
+		var peerCertificate corebroker.PeerCertificate
+		if peer, ok := conn.(corebroker.CertificateAuthenticationSource); ok && peer.CertificateAuthenticationEnabled() {
+			peerCertificate.LeafDER = peer.PeerCertificateDER()
+			peerCertificate.IssuerDER = peer.PeerIssuerCertificateDER()
+		}
+		certificateAuthentication = len(peerCertificate.LeafDER) != 0 && h.broker.auth.CertificateAuthenticationEnabled()
+		authenticated, resolvedID, err := h.broker.auth.AuthenticateWithPeer(context.Background(), clientID, username, password, peerCertificate)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword) //nolint:errcheck // best-effort rejection reply before closing
@@ -91,9 +111,11 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			return ErrNotAuthorized
 		}
 		externalID = resolvedID
+		authenticationPending = true
 	}
 	hookExternalID, ok := h.broker.ApplyRegisterHooks(context.Background(), clientID, externalID, p.Username, string(p.Password), corebroker.HookProtocolMQTT)
 	if !ok {
+		authenticationPending = false
 		h.broker.telemetry.stats.IncrementAuthErrors()
 		sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
@@ -108,6 +130,12 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 			sendV3ConnAck(conn, false, v3.ConnAckIdentifierRejected) //nolint:errcheck // best-effort rejection reply before closing
 			conn.Close()
 			return ErrTopicInvalid
+		}
+		if certificateAuthentication && !h.broker.auth.CanPublishPendingCertificate(clientID, p.WillTopic) {
+			h.broker.telemetry.stats.IncrementAuthErrors()
+			sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+			conn.Close()
+			return ErrNotAuthorized
 		}
 		// Note: Will payload is stored as []byte in storage.WillMessage
 		//nolint:godox // TODO: Consider zero-copy for will messages in future
@@ -135,6 +163,23 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		conn.Close()
 		return err
 	}
+	if certificateAuthentication && s.ExternalID != "" && s.ExternalID != externalID {
+		h.broker.telemetry.stats.IncrementAuthErrors()
+		sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+		conn.Close()
+		return ErrNotAuthorized
+	}
+	certificateBinding := uint64(0)
+	if certificateAuthentication {
+		var committed bool
+		certificateBinding, committed = h.broker.auth.CommitCertificateAuthentication(clientID)
+		if !committed {
+			h.broker.telemetry.stats.IncrementAuthErrors()
+			sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+			conn.Close()
+			return ErrNotAuthorized
+		}
+	}
 
 	s.ExternalID = externalID
 
@@ -146,12 +191,21 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 	// 3.1.1 cannot advertise the value, so a client has no way to learn about a
 	// later change.
 	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
-		Version:        p.ProtocolVersion,
-		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
-		Will:           will,
-		ReceiveMaximum: maxReceived,
-		MaxQoS:         h.broker.MaxQoS(),
+		Version:            p.ProtocolVersion,
+		KeepAlive:          time.Duration(p.KeepAlive) * time.Second,
+		Will:               will,
+		ReceiveMaximum:     maxReceived,
+		MaxQoS:             h.broker.MaxQoS(),
+		CertificateBinding: certificateBinding,
 	})
+	authenticationPending = false
+	if certificateAuthentication {
+		currentBinding, current := h.broker.auth.CertificateSessionBinding(clientID)
+		if !current || currentBinding != certificateBinding {
+			s.DisconnectIf(true, epoch, v5.DisconnectAdministrativeAction) //nolint:errcheck // lifecycle invalidation raced connection establishment
+			return ErrNotAuthorized
+		}
+	}
 	if superseded != nil {
 		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
 	}
@@ -174,6 +228,8 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 
 	h.deliverOfflineMessages(s)
 
+	h.broker.connectLocks.Unlock(clientID)
+	connectLocked = false
 	return h.broker.runSession(h, s, conn, epoch, time.Duration(p.KeepAlive)*time.Second)
 }
 

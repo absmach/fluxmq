@@ -3,7 +3,11 @@
 
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/absmach/fluxmq/broker"
+)
 
 type connectionStats struct {
 	Current        uint64 `json:"current"`
@@ -136,17 +140,25 @@ type queuePendingStats struct {
 }
 
 type statsResponse struct {
-	UptimeSeconds float64         `json:"uptime_seconds"`
-	Connections   connectionStats `json:"connections"`
-	Messages      messageStats    `json:"messages"`
-	Bytes         byteStats       `json:"bytes"`
-	Errors        errorStats      `json:"errors"`
-	ByProtocol    byProtocolStats `json:"by_protocol"`
-	Queues        *queueStats     `json:"queues,omitempty"`
+	UptimeSeconds float64                    `json:"uptime_seconds"`
+	Connections   connectionStats            `json:"connections"`
+	Messages      messageStats               `json:"messages"`
+	Bytes         byteStats                  `json:"bytes"`
+	Errors        errorStats                 `json:"errors"`
+	ByProtocol    byProtocolStats            `json:"by_protocol"`
+	Queues        *queueStats                `json:"queues,omitempty"`
+	Certificates  *broker.CertificateMetrics `json:"certificates,omitempty"`
 }
 
 func (s *Server) buildStatsResponse() statsResponse {
 	var resp statsResponse
+	if s.certificateMetrics != nil {
+		metrics := s.certificateMetrics.CertificateMetrics()
+		if s.broker != nil {
+			metrics.ActiveSessions = s.broker.CertificateSessionCount()
+		}
+		resp.Certificates = &metrics
+	}
 
 	if s.broker != nil {
 		st := s.broker.Stats()

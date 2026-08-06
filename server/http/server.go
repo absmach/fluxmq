@@ -331,7 +331,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		return
 	}
 
-	authenticated, externalID, err := s.broker.Authenticate(clientID, username, password)
+	authenticated, externalID, err := s.broker.AuthenticateContext(r.Context(), clientID, username, password)
 	if err != nil || !authenticated {
 		s.logger.Warn("http_publish_auth_failed",
 			slog.String("client_id", clientID),
@@ -361,7 +361,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		return
 	}
 	topic, payload, qos, retain, props = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, hookReq.Properties
-	if !s.broker.CanPublish(clientID, topic) {
+	if !s.broker.CanPublishContext(r.Context(), clientID, topic) {
 		s.logger.Warn("http_publish_forbidden",
 			slog.String("client_id", clientID),
 			slog.String("topic", topic))

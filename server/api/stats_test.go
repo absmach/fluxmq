@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	corebroker "github.com/absmach/fluxmq/broker"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/queue"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
@@ -20,6 +21,17 @@ import (
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage/memory"
 )
+
+type certificateMetricsStub struct{}
+
+func (certificateMetricsStub) CertificateMetrics() corebroker.CertificateMetrics {
+	return corebroker.CertificateMetrics{
+		ResolverRequests:     7,
+		CacheEntries:         2,
+		CacheInvalidations:   3,
+		SessionsDisconnected: 1,
+	}
+}
 
 func TestStatsMQTTOnly(t *testing.T) {
 	store := memory.New()
@@ -77,6 +89,28 @@ func TestStatsMQTTOnly(t *testing.T) {
 	}
 	if resp.ByProtocol.AMQP != nil {
 		t.Fatal("expected no amqp in by_protocol when amqp broker is nil")
+	}
+}
+
+func TestStatsIncludesLabelFreeCertificateMetrics(t *testing.T) {
+	store := memory.New()
+	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
+	srv := New(Config{}, b, nil, nil, nil, nil, nil, slog.Default())
+	srv.SetCertificateMetricsProvider(certificateMetricsStub{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	var response statsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if response.Certificates == nil {
+		t.Fatal("expected certificate metrics")
+	}
+	if response.Certificates.ResolverRequests != 7 || response.Certificates.CacheInvalidations != 3 || response.Certificates.SessionsDisconnected != 1 {
+		t.Fatalf("unexpected certificate metrics: %+v", response.Certificates)
 	}
 }
 
