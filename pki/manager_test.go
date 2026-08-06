@@ -414,6 +414,26 @@ func TestResolverLoadCollapsesConcurrentConnections(t *testing.T) {
 	require.Equal(t, 1, manager.CertificateMetrics().CacheEntries)
 }
 
+func TestResolutionCacheEvictsAtConfiguredCapacity(t *testing.T) {
+	now := time.Now().UTC()
+	firstPeer, _ := makePeerCertificate(t, 15)
+	secondPeer, _ := makePeerCertificate(t, 16)
+	resolver := &resolverStub{result: activeResolverResult(now)}
+	manager := newTestManager(t, resolver, &now)
+	manager.cache.capacity = 1
+
+	_, err := manager.AuthenticateCertificate(context.Background(), firstPeer)
+	require.NoError(t, err)
+	_, err = manager.AuthenticateCertificate(context.Background(), secondPeer)
+	require.NoError(t, err)
+	require.Equal(t, 1, manager.CertificateMetrics().CacheEntries)
+	require.Equal(t, uint64(1), manager.CertificateMetrics().CacheEvictions)
+
+	_, err = manager.AuthenticateCertificate(context.Background(), firstPeer)
+	require.NoError(t, err)
+	require.Equal(t, 3, resolver.callCount(), "evicted fingerprints must resolve authoritatively again")
+}
+
 func TestTrustBundleRefreshAfterAuthorityProvisioningEvent(t *testing.T) {
 	now := time.Now().UTC()
 	_, firstPEM := makePeerCertificate(t, 9)

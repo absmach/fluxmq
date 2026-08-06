@@ -220,6 +220,32 @@ func TestAuthEngineSerializesConcurrentCertificateAuthentication(t *testing.T) {
 	require.Equal(t, 1, engine.CertificateSessionCount())
 }
 
+func TestAuthEngineBoundsPendingAndCommittedCertificateSessions(t *testing.T) {
+	const secondClientID = "client-2"
+	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
+		EntityID:     testCertificateEntityID,
+		CredentialID: testCertificateCredentialID,
+		Fingerprint:  testCertificateFingerprint,
+	}}
+	engine := NewAuthEngine(nil, nil,
+		WithIdentityCache(1, time.Hour),
+		WithCertificateAuthentication(certificateAuth),
+	)
+
+	_, _, err := engine.AuthenticateWithPeer(context.Background(), "client-1", "", "", PeerCertificate{LeafDER: []byte{1}})
+	require.NoError(t, err)
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), secondClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
+	require.ErrorIs(t, err, ErrCertificateSessionCapacity, "pending bindings count toward the bound")
+	binding, committed := engine.CommitCertificateAuthentication("client-1")
+	require.True(t, committed)
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), secondClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
+	require.ErrorIs(t, err, ErrCertificateSessionCapacity, "committed bindings count toward the bound")
+
+	engine.ForgetCertificateSession("client-1", binding)
+	_, _, err = engine.AuthenticateWithPeer(context.Background(), secondClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
+	require.NoError(t, err)
+}
+
 func TestAuthEngineRejectedReconnectPreservesCommittedCertificate(t *testing.T) {
 	certificateAuth := &certificateAuthenticatorStub{identity: CertificateIdentity{
 		EntityID:     testCertificateEntityID,
