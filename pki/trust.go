@@ -39,7 +39,7 @@ func (m *Manager) RefreshTrustBundle(ctx context.Context) error {
 		return fmt.Errorf("fetch Atom trust bundle: %w", err)
 	}
 	defer response.Body.Close()
-	if !m.config.ResolverInsecure && response.Request != nil && response.Request.URL.Scheme != "https" {
+	if !m.config.ResolverInsecure && response.Request != nil && response.Request.URL.Scheme != httpsScheme {
 		m.metrics.trustRefreshFailures.Add(1)
 		return fmt.Errorf("Atom trust bundle redirect downgraded HTTPS")
 	}
@@ -93,7 +93,7 @@ func parseTrustBundle(bundle []byte) (*x509.CertPool, error) {
 		if block == nil {
 			return nil, fmt.Errorf("Atom trust bundle contains malformed PEM data")
 		}
-		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+		if block.Type != certificatePEMType || len(block.Headers) != 0 {
 			return nil, fmt.Errorf("Atom trust bundle contains a non-certificate PEM block")
 		}
 		certificate, err := x509.ParseCertificate(block.Bytes)

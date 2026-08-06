@@ -37,6 +37,8 @@ const (
 	DefaultTrustRefresh        = time.Minute
 	maximumCertificateDERBytes = 64 * 1024
 	maximumTrustBundleBytes    = 4 * 1024 * 1024
+	httpsScheme                = "https"
+	certificatePEMType         = "CERTIFICATE"
 )
 
 var (
@@ -234,10 +236,10 @@ func validateConfig(config Config) error {
 		return fmt.Errorf("certificate resolver service token file is required")
 	}
 	trustURL, err := url.ParseRequestURI(config.TrustBundleURL)
-	if err != nil || trustURL.Host == "" || (trustURL.Scheme != "https" && trustURL.Scheme != "http") {
+	if err != nil || trustURL.Host == "" || (trustURL.Scheme != httpsScheme && trustURL.Scheme != "http") {
 		return fmt.Errorf("Atom trust bundle URL must be an absolute HTTP(S) URL")
 	}
-	if trustURL.Scheme != "https" && !config.ResolverInsecure {
+	if trustURL.Scheme != httpsScheme && !config.ResolverInsecure {
 		return fmt.Errorf("Atom trust bundle URL must use HTTPS unless resolver insecure mode is enabled")
 	}
 	if strings.TrimSpace(config.EventSourcePrincipal) == "" {

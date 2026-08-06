@@ -498,7 +498,7 @@ func TestTrustBundleRefreshAfterAuthorityProvisioningEvent(t *testing.T) {
 
 func TestTrustBundleRejectsNonCA(t *testing.T) {
 	peer, _ := makePeerCertificate(t, 14)
-	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: peer.LeafDER})
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: certificatePEMType, Bytes: peer.LeafDER})
 	_, err := parseTrustBundle(leafPEM)
 	require.ErrorContains(t, err, "cannot sign certificates")
 }
@@ -570,5 +570,5 @@ func makePeerCertificate(t *testing.T, serial int64) (corebroker.PeerCertificate
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, issuerTemplate, &leafKey.PublicKey, issuerKey)
 	require.NoError(t, err)
-	return corebroker.PeerCertificate{LeafDER: leafDER, IssuerDER: issuerDER}, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerDER})
+	return corebroker.PeerCertificate{LeafDER: leafDER, IssuerDER: issuerDER}, pem.EncodeToMemory(&pem.Block{Type: certificatePEMType, Bytes: issuerDER})
 }
