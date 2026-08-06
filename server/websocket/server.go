@@ -67,6 +67,9 @@ type Config struct {
 	WriteTimeout time.Duration
 	// MaxConnections caps concurrently upgraded connections. 0 means unlimited.
 	MaxConnections int
+	// CertificateAuthentication marks this listener as the Atom-backed mTLS
+	// authentication boundary. Ordinary TLS listeners leave it false.
+	CertificateAuthentication bool
 }
 
 type Server struct {
@@ -330,7 +333,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			peerCertificate.IssuerDER = append([]byte(nil), r.TLS.VerifiedChains[0][1].Raw...)
 		}
 	}
-	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion, s.config.MaxPacketSize, s.config.WriteTimeout, peerCertificate)
+	conn := newWSConnection(ws, r.RemoteAddr, s.config.ProtocolVersion, s.config.MaxPacketSize, s.config.WriteTimeout, s.config.CertificateAuthentication, peerCertificate)
 
 	// Bound the pre-session phase: an upgraded client that never sends a CONNECT
 	// would otherwise hold a goroutine and a connection slot indefinitely. The
@@ -345,25 +348,26 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // wsConnection implements core.Connection for WebSocket transport.
 type wsConnection struct {
-	ws              *websocket.Conn
-	remoteAddr      string
-	reader          io.Reader
-	frameReader     *wsFrameReader
-	version         int
-	mu              sync.RWMutex
-	closeOnce       sync.Once
-	readMu          sync.RWMutex
-	writeMu         sync.Mutex
-	closed          bool
-	closeCh         chan struct{}
-	readDeadline    time.Time
-	lastActivity    time.Time
-	onDisconnect    func(graceful bool)
-	pingStop        chan struct{}
-	pingOnce        sync.Once
-	maxPacketSize   int           // 0 = unlimited
-	writeTimeout    time.Duration // 0 = no write deadline
-	peerCertificate corebroker.PeerCertificate
+	ws                        *websocket.Conn
+	remoteAddr                string
+	reader                    io.Reader
+	frameReader               *wsFrameReader
+	version                   int
+	mu                        sync.RWMutex
+	closeOnce                 sync.Once
+	readMu                    sync.RWMutex
+	writeMu                   sync.Mutex
+	closed                    bool
+	closeCh                   chan struct{}
+	readDeadline              time.Time
+	lastActivity              time.Time
+	onDisconnect              func(graceful bool)
+	pingStop                  chan struct{}
+	pingOnce                  sync.Once
+	maxPacketSize             int           // 0 = unlimited
+	writeTimeout              time.Duration // 0 = no write deadline
+	peerCertificate           corebroker.PeerCertificate
+	certificateAuthentication bool
 }
 
 // wsFrameOverhead allows an MQTT packet's fixed header (up to 5 bytes) to fit
@@ -372,18 +376,19 @@ type wsConnection struct {
 // tearing the connection down first.
 const wsFrameOverhead = 5
 
-func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, maxPacketSize int, writeTimeout time.Duration, peerCertificate ...corebroker.PeerCertificate) core.Connection {
+func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, maxPacketSize int, writeTimeout time.Duration, certificateAuthentication bool, peerCertificate ...corebroker.PeerCertificate) core.Connection {
 	if ws != nil && maxPacketSize > 0 {
 		ws.SetReadLimit(int64(maxPacketSize) + wsFrameOverhead)
 	}
 	conn := &wsConnection{
-		ws:            ws,
-		remoteAddr:    remoteAddr,
-		version:       protocolVersion,
-		closed:        false,
-		closeCh:       make(chan struct{}),
-		maxPacketSize: maxPacketSize,
-		writeTimeout:  writeTimeout,
+		ws:                        ws,
+		remoteAddr:                remoteAddr,
+		version:                   protocolVersion,
+		closed:                    false,
+		closeCh:                   make(chan struct{}),
+		maxPacketSize:             maxPacketSize,
+		writeTimeout:              writeTimeout,
+		certificateAuthentication: certificateAuthentication,
 	}
 	if len(peerCertificate) != 0 {
 		conn.peerCertificate.LeafDER = append([]byte(nil), peerCertificate[0].LeafDER...)
@@ -400,6 +405,12 @@ func (c *wsConnection) PeerCertificateDER() []byte {
 // PeerIssuerCertificateDER returns a copy of the verified leaf issuer.
 func (c *wsConnection) PeerIssuerCertificateDER() []byte {
 	return append([]byte(nil), c.peerCertificate.IssuerDER...)
+}
+
+// CertificateAuthenticationEnabled reports whether this connection belongs to
+// the explicitly configured certificate-authentication listener.
+func (c *wsConnection) CertificateAuthenticationEnabled() bool {
+	return c.certificateAuthentication
 }
 
 func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
