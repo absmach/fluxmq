@@ -212,7 +212,7 @@ func TestWSWriteTimeoutAppliedPerWrite(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	t.Cleanup(func() { clientWS.Close() }) //nolint:errcheck // best-effort teardown
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolV3, 0, time.Nanosecond)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolV3, 0, time.Nanosecond, false)
 	t.Cleanup(func() { conn.Close() }) //nolint:errcheck // best-effort teardown
 
 	err := conn.WritePacket(&v3.PingResp{
@@ -228,7 +228,7 @@ func TestWSWriteWithoutTimeoutHasNoDeadline(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	t.Cleanup(func() { clientWS.Close() }) //nolint:errcheck // best-effort teardown
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolV3, 0, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolV3, 0, 0, false)
 	t.Cleanup(func() { conn.Close() }) //nolint:errcheck // best-effort teardown
 
 	require.NoError(t, conn.WritePacket(&v3.PingResp{
