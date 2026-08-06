@@ -99,7 +99,7 @@ func (h *v5Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		password := string(p.Password)
 
 		var peerCertificate corebroker.PeerCertificate
-		if peer, ok := conn.(corebroker.PeerCertificateSource); ok {
+		if peer, ok := conn.(corebroker.CertificateAuthenticationSource); ok && peer.CertificateAuthenticationEnabled() {
 			peerCertificate.LeafDER = peer.PeerCertificateDER()
 			peerCertificate.IssuerDER = peer.PeerIssuerCertificateDER()
 		}
