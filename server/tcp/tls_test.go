@@ -205,7 +205,7 @@ func TestTLSConnectionExposesVerifiedPeerChain(t *testing.T) {
 	if len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) < 2 {
 		t.Fatal("expected a verified client leaf and issuer")
 	}
-	connection := core.NewConnection(tlsServer, 0, false)
+	connection := core.NewConnection(tlsServer, 0, false, core.WithCertificateAuthentication(true))
 	peer, ok := connection.(corebroker.PeerCertificateSource)
 	if !ok {
 		t.Fatalf("expected certificate-aware TCP connection, got %T", connection)
@@ -215,6 +215,10 @@ func TestTLSConnectionExposesVerifiedPeerChain(t *testing.T) {
 	}
 	if !bytes.Equal(peer.PeerIssuerCertificateDER(), state.VerifiedChains[0][1].Raw) {
 		t.Fatal("TCP connection did not expose the verified client issuer")
+	}
+	authentication, ok := connection.(corebroker.CertificateAuthenticationSource)
+	if !ok || !authentication.CertificateAuthenticationEnabled() {
+		t.Fatal("TCP connection did not retain certificate-authentication listener metadata")
 	}
 }
 
