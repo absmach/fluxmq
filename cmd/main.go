@@ -711,7 +711,7 @@ func main() {
 		)
 		if err != nil {
 			slog.Error("Failed to configure Atom certificate resolver", "error", err)
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // fatal initialization errors terminate immediately
 		}
 		startTimeout := cfg.Auth.Certificate.ResolverTimeout
 		if startTimeout == 0 {
@@ -722,7 +722,7 @@ func main() {
 		startCancel()
 		if err != nil {
 			slog.Error("Failed to load Atom trust bundle", "error", err)
-			os.Exit(1)
+			os.Exit(1) //nolint:gocritic // fatal initialization errors terminate immediately
 		}
 		certificateManager = manager
 		defer func() {

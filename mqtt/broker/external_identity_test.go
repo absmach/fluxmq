@@ -129,7 +129,7 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 	handler := newV5Handler(b)
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    protocolNameMQTT,
 		ProtocolVersion: 5,
 		ClientID:        "test-client",
 		CleanStart:      true,
@@ -159,7 +159,7 @@ func TestCertificateAuthenticationRunsForMQTTV3AndV5(t *testing.T) {
 			connect: func(clientID string) packets.ControlPacket {
 				return &v3.Connect{
 					FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-					ProtocolName:    "MQTT",
+					ProtocolName:    protocolNameMQTT,
 					ProtocolVersion: 4,
 					ClientID:        clientID,
 					CleanSession:    true,
@@ -175,7 +175,7 @@ func TestCertificateAuthenticationRunsForMQTTV3AndV5(t *testing.T) {
 			connect: func(clientID string) packets.ControlPacket {
 				return &v5.Connect{
 					FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-					ProtocolName:    "MQTT",
+					ProtocolName:    protocolNameMQTT,
 					ProtocolVersion: 5,
 					ClientID:        clientID,
 					CleanStart:      true,
@@ -215,7 +215,7 @@ func TestRejectedCertificateConnectCleansPendingIdentity(t *testing.T) {
 	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}, issuerDER: []byte{4, 5, 6}}
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    protocolNameMQTT,
 		ProtocolVersion: 5,
 		ClientID:        "rejected-certificate-client",
 		CleanStart:      true,
@@ -239,7 +239,7 @@ func TestCertificateAuthenticationRejectsUnauthorizedWillBeforeSession(t *testin
 			name: "mqtt v3",
 			connect: &v3.Connect{
 				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    protocolNameMQTT,
 				ProtocolVersion: 4,
 				ClientID:        "certificate-will-v3",
 				CleanSession:    true,
@@ -254,7 +254,7 @@ func TestCertificateAuthenticationRejectsUnauthorizedWillBeforeSession(t *testin
 			name: "mqtt v5",
 			connect: &v5.Connect{
 				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-				ProtocolName:    "MQTT",
+				ProtocolName:    protocolNameMQTT,
 				ProtocolVersion: 5,
 				ClientID:        "certificate-will-v5",
 				CleanStart:      true,
@@ -336,7 +336,7 @@ func TestCertificateAuthenticationRejectsPersistentSessionOwnershipTakeover(t *t
 	connection := &certificateMockConnection{leafDER: []byte{1, 2, 3}}
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    protocolNameMQTT,
 		ProtocolVersion: 5,
 		ClientID:        clientID,
 		CleanStart:      false,

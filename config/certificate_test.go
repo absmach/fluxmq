@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testAtomEventQueue = "atom.events"
+
 func validCertificateConfig(t *testing.T) *Config {
 	t.Helper()
 	secretFile := filepath.Join(t.TempDir(), "secret")
@@ -33,7 +35,7 @@ func validCertificateConfig(t *testing.T) *Config {
 		CacheTTL:                 30 * time.Second,
 		CacheSize:                100,
 		TrustRefreshInterval:     time.Minute,
-		EventQueue:               "atom.events",
+		EventQueue:               testAtomEventQueue,
 		EventConsumerGroupPrefix: "fluxmq-pki",
 		EventSourcePrincipal:     "atom-events",
 	}
@@ -48,8 +50,8 @@ func validCertificateConfig(t *testing.T) *Config {
 	config.Server.TCP.MTLS.TLS.KeyFile = "server.key"
 	config.Server.TCP.MTLS.TLS.ClientAuth = "require"
 	config.Queues = append(config.Queues, QueueConfig{
-		Name:     "atom.events",
-		Topics:   []string{"$queue/atom.events/#"},
+		Name:     testAtomEventQueue,
+		Topics:   []string{"$queue/" + testAtomEventQueue + "/#"},
 		Reserved: true,
 		Type:     "stream",
 	})
@@ -59,7 +61,7 @@ func validCertificateConfig(t *testing.T) *Config {
 			CertificateURISAN: "spiffe://example.test/atom/events",
 			CurrentSecretFile: secretFile,
 			Permissions: LocalPermissionsConfig{Publish: []LocalPublishPermission{
-				{Exchange: "", RoutingKey: "atom.events"},
+				{Exchange: "", RoutingKey: testAtomEventQueue},
 			}},
 		},
 	}

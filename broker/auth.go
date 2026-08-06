@@ -117,7 +117,13 @@ func NewAuthEngine(auth Authenticator, authz Authorizer, opts ...AuthEngineOptio
 // authenticator did not provide one) and caches it for subsequent
 // authorization calls.
 func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, string, error) {
-	return e.AuthenticateWithPeer(context.Background(), clientID, username, password, PeerCertificate{})
+	return e.AuthenticateContext(context.Background(), clientID, username, password)
+}
+
+// AuthenticateContext is the context-aware form of Authenticate for protocol
+// adapters that already own a request context.
+func (e *AuthEngine) AuthenticateContext(ctx context.Context, clientID, username, password string) (bool, string, error) {
+	return e.AuthenticateWithPeer(ctx, clientID, username, password, PeerCertificate{})
 }
 
 // AuthenticateWithPeer authenticates a verified TLS leaf through Atom when a
@@ -201,7 +207,12 @@ func (e *AuthEngine) AuthenticateWithPeer(ctx context.Context, clientID, usernam
 // CanPublish checks if a client is authorized to publish to a topic.
 // Returns true if authorized or if no authorizer is configured.
 func (e *AuthEngine) CanPublish(clientID, topic string) bool {
-	if !e.authorizeCertificate(clientID, topic) {
+	return e.CanPublishContext(context.Background(), clientID, topic)
+}
+
+// CanPublishContext is the context-aware form of CanPublish.
+func (e *AuthEngine) CanPublishContext(ctx context.Context, clientID, topic string) bool {
+	if !e.authorizeCertificate(ctx, clientID, topic) {
 		return false
 	}
 	if e.authz == nil {
@@ -213,7 +224,12 @@ func (e *AuthEngine) CanPublish(clientID, topic string) bool {
 // CanSubscribe checks if a client is authorized to subscribe to a topic filter.
 // Returns true if authorized or if no authorizer is configured.
 func (e *AuthEngine) CanSubscribe(clientID, filter string) bool {
-	if !e.authorizeCertificate(clientID, filter) {
+	return e.CanSubscribeContext(context.Background(), clientID, filter)
+}
+
+// CanSubscribeContext is the context-aware form of CanSubscribe.
+func (e *AuthEngine) CanSubscribeContext(ctx context.Context, clientID, filter string) bool {
+	if !e.authorizeCertificate(ctx, clientID, filter) {
 		return false
 	}
 	if e.authz == nil {
@@ -227,13 +243,19 @@ func (e *AuthEngine) CanSubscribe(clientID, filter string) bool {
 // The pending Atom identity is used directly so a hook or prior client-ID
 // mapping cannot change the subject presented to normal authorization.
 func (e *AuthEngine) CanPublishPendingCertificate(clientID, topic string) bool {
+	return e.CanPublishPendingCertificateContext(context.Background(), clientID, topic)
+}
+
+// CanPublishPendingCertificateContext is the context-aware form of
+// CanPublishPendingCertificate.
+func (e *AuthEngine) CanPublishPendingCertificateContext(ctx context.Context, clientID, topic string) bool {
 	e.certificateMu.RLock()
 	identity, ok := e.pendingCerts[clientID]
 	e.certificateMu.RUnlock()
 	if !ok || e.certificateAuth == nil {
 		return false
 	}
-	if e.certificateAuth.AuthorizeCertificate(context.Background(), identity, topic) != nil {
+	if e.certificateAuth.AuthorizeCertificate(ctx, identity, topic) != nil {
 		return false
 	}
 	if e.authz == nil {
@@ -365,7 +387,7 @@ func (e *AuthEngine) InvalidateCertificateSessions(match func(CertificateIdentit
 	return clientIDs
 }
 
-func (e *AuthEngine) authorizeCertificate(clientID, topic string) bool {
+func (e *AuthEngine) authorizeCertificate(ctx context.Context, clientID, topic string) bool {
 	identity, ok := e.certificateIdentity(clientID)
 	if !ok {
 		return true
@@ -373,7 +395,7 @@ func (e *AuthEngine) authorizeCertificate(clientID, topic string) bool {
 	if e.certificateAuth == nil {
 		return false
 	}
-	return e.certificateAuth.AuthorizeCertificate(context.Background(), identity, topic) == nil
+	return e.certificateAuth.AuthorizeCertificate(ctx, identity, topic) == nil
 }
 
 func (e *AuthEngine) certificateIdentity(clientID string) (CertificateIdentity, bool) {

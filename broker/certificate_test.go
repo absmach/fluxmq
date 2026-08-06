@@ -16,6 +16,7 @@ const (
 	testCertificateClientID     = "mqtt-client"
 	testCertificateEntityID     = "8a0a5c59-4ea8-4fc1-badb-f96cf739b224"
 	testCertificateCredentialID = "ca49950c-3ed2-41b4-a319-896085285686"
+	testRotatedCredentialID     = "05119e28-6260-4a06-8742-f925bcfdccd4"
 	testCertificateFingerprint  = "abc123"
 	testCertificateGlobalTopic  = "$SYS/global/status"
 )
@@ -134,7 +135,7 @@ func TestAuthEngineCertificateRotationRebindsClientBeforeNextOperation(t *testin
 	oldBinding, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
 	require.True(t, committed)
 
-	certificateAuth.identity.CredentialID = "05119e28-6260-4a06-8742-f925bcfdccd4"
+	certificateAuth.identity.CredentialID = testRotatedCredentialID
 	certificateAuth.identity.Fingerprint = "new-fingerprint"
 	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
 	require.NoError(t, err)
@@ -160,7 +161,7 @@ func TestAuthEngineRejectsCrossEntityCertificateClientIDTakeover(t *testing.T) {
 	require.True(t, committed)
 
 	certificateAuth.identity.EntityID = "ac47c9fd-1d4a-4270-bb11-ab6476a0bd3a"
-	certificateAuth.identity.CredentialID = "05119e28-6260-4a06-8742-f925bcfdccd4"
+	certificateAuth.identity.CredentialID = testRotatedCredentialID
 	certificateAuth.identity.Fingerprint = "second-fingerprint"
 	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
 	require.ErrorIs(t, err, ErrCertificateClientIdentityConflict)
@@ -258,7 +259,7 @@ func TestAuthEngineRejectedReconnectPreservesCommittedCertificate(t *testing.T) 
 	oldBinding, committed := engine.CommitCertificateAuthentication(testCertificateClientID)
 	require.True(t, committed)
 
-	certificateAuth.identity.CredentialID = "05119e28-6260-4a06-8742-f925bcfdccd4"
+	certificateAuth.identity.CredentialID = testRotatedCredentialID
 	certificateAuth.identity.Fingerprint = "rejected-fingerprint"
 	_, _, err = engine.AuthenticateWithPeer(context.Background(), testCertificateClientID, "", "", PeerCertificate{LeafDER: []byte{2}})
 	require.NoError(t, err)

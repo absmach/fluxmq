@@ -164,7 +164,7 @@ func (m *Manager) requestTrustRefresh() {
 	}
 }
 
-func (m *Manager) trustRefreshLoop() {
+func (m *Manager) trustRefreshLoop(parent context.Context) {
 	defer m.wg.Done()
 	ticker := time.NewTicker(m.config.TrustRefreshInterval)
 	defer ticker.Stop()
@@ -175,7 +175,7 @@ func (m *Manager) trustRefreshLoop() {
 		case <-ticker.C:
 		case <-m.refreshCh:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), m.config.Timeout)
+		ctx, cancel := context.WithTimeout(parent, m.config.Timeout)
 		err := m.RefreshTrustBundle(ctx)
 		cancel()
 		if err != nil {

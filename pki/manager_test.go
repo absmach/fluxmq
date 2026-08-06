@@ -32,6 +32,7 @@ const (
 	testCredentialID   = "ca49950c-3ed2-41b4-a319-896085285686"
 	testIssuerID       = "95bdde91-c07a-4fc2-bf7f-cec505475449"
 	testEventPrincipal = "atom-events"
+	testRevokedStatus  = "revoked"
 )
 
 type resolverStub struct {
@@ -191,7 +192,11 @@ func TestResolverLifecycleDenialsOccurBeforeSession(t *testing.T) {
 		err    error
 	}{
 		{name: "unknown", result: activeResolverResult(now), err: errors.New("not found")},
-		{name: "revoked", result: func() ResolverResult { value := activeResolverResult(now); value.Status = "revoked"; return value }()},
+		{name: testRevokedStatus, result: func() ResolverResult {
+			value := activeResolverResult(now)
+			value.Status = testRevokedStatus
+			return value
+		}()},
 		{name: "expired", result: func() ResolverResult {
 			value := activeResolverResult(now)
 			value.ExpiresAt = now.Add(-time.Second).Format(time.RFC3339)
@@ -302,7 +307,7 @@ func TestLifecycleEventEvictsRevokedSessionAndDuplicateIsIdempotent(t *testing.T
 	require.Equal(t, uint64(1), manager.CertificateMetrics().SessionsDisconnected)
 
 	revoked := activeResolverResult(now)
-	revoked.Status = "revoked"
+	revoked.Status = testRevokedStatus
 	resolver.mu.Lock()
 	resolver.result = revoked
 	resolver.mu.Unlock()

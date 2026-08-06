@@ -34,6 +34,8 @@ const (
 	protocolMQTT    = "mqtt"
 	protocolAMQP    = "amqp"
 	protocolAMQP091 = "amqp091"
+	protocolHTTP    = "http"
+	protocolCoAP    = "coap"
 
 	defaultTCPV3Addr = ":1883"
 	defaultTCPV5Addr = ":1884"
@@ -470,7 +472,7 @@ type HooksConfig struct {
 
 // knownAuthProtocols is the set of valid protocol names for auth config.
 var knownAuthProtocols = map[string]bool{
-	protocolMQTT: true, protocolAMQP: true, protocolAMQP091: true, "http": true, "coap": true,
+	protocolMQTT: true, protocolAMQP: true, protocolAMQP091: true, protocolHTTP: true, protocolCoAP: true,
 }
 
 var knownBlockingHooks = map[string]bool{
@@ -1884,7 +1886,7 @@ func (c *Config) Validate() error {
 			if endpoint.Name == "" {
 				return fmt.Errorf("webhook.endpoints[%d].name cannot be empty", i)
 			}
-			if endpoint.Type != "http" {
+			if endpoint.Type != protocolHTTP {
 				return fmt.Errorf("webhook.endpoints[%d].type must be 'http' (grpc not yet supported)", i)
 			}
 			if endpoint.URL == "" {
@@ -2135,7 +2137,7 @@ func (c *Config) validateCertificateAuthentication() error {
 		return fmt.Errorf("%sservice_token_file must be a regular file", path)
 	}
 	parsedTrustURL, err := url.ParseRequestURI(certificate.TrustBundleURL)
-	if err != nil || parsedTrustURL.Host == "" || (parsedTrustURL.Scheme != "https" && parsedTrustURL.Scheme != "http") {
+	if err != nil || parsedTrustURL.Host == "" || (parsedTrustURL.Scheme != "https" && parsedTrustURL.Scheme != protocolHTTP) {
 		return fmt.Errorf("%strust_bundle_url must be an absolute HTTP(S) URL", path)
 	}
 	if parsedTrustURL.Scheme != "https" && !certificate.ResolverInsecure {

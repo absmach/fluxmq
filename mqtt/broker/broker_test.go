@@ -95,7 +95,7 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.ConnectType,
 		},
-		ProtocolName:    "MQTT",
+		ProtocolName:    protocolNameMQTT,
 		ProtocolVersion: 5,
 		ClientID:        "test-client",
 		CleanStart:      true,

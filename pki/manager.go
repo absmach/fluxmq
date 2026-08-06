@@ -265,7 +265,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 	m.wg.Add(1)
-	go m.trustRefreshLoop()
+	// Startup callers commonly use a short-lived timeout context. Preserve its
+	// values for refresh requests while leaving shutdown ownership with Close.
+	go m.trustRefreshLoop(context.WithoutCancel(ctx))
 	return nil
 }
 
