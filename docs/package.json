@@ -14,7 +14,8 @@
     "lint": "biome check",
     "lint:fix": "biome check --fix",
     "check": "pnpm run types:check && pnpm run lint",
-    "format": "biome format --write"
+    "format": "biome format --write",
+    "publish-image": "node scripts/publish-image.mjs"
   },
   "dependencies": {
     "@fastify/deepmerge": "^3.2.1",
