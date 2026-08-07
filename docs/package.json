@@ -48,7 +48,7 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",
-    "wrangler": "^4.115.0"
+    "wrangler": "^4.120.0"
   },
   "packageManager": "pnpm@10.33.0"
 }
