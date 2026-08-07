@@ -29,6 +29,7 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/internal/httpclient"
 	"github.com/absmach/fluxmq/internal/wiring"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	core "github.com/absmach/fluxmq/mqtt"
@@ -696,14 +697,26 @@ func main() {
 			authcallout.WithCircuitBreaker(cb),
 		}
 
+		// Loaded once: every protocol's client shares the certificate, and a
+		// bad path must stop the process here rather than surface later as a
+		// callout failure that trips the circuit breaker.
+		calloutTLS, err := mqtttls.LoadClientTLSConfig(cfg.Auth.External.TLS)
+		if err != nil {
+			slog.Error("Failed to load auth callout TLS configuration", "error", err)
+			os.Exit(1)
+		}
+
 		newClient := func(proto authcallout.Protocol) (corebroker.Authenticator, corebroker.Authorizer) {
 			opts := append(sharedOpts, authcallout.WithProtocol(proto))
 			switch transport {
 			case "http":
-				c := authcallout.NewHTTPClient(nil, cfg.Auth.External.URL, opts...)
+				c := authcallout.NewHTTPClient(
+					httpclient.WithTLS(calloutTLS), cfg.Auth.External.URL, opts...)
 				return c, c
 			default:
-				c := authcallout.NewGRPCClient(nil, cfg.Auth.External.URL, opts...)
+				c := authcallout.NewGRPCClient(
+					httpclient.GRPCWithTLS(cfg.Auth.External.URL, calloutTLS),
+					cfg.Auth.External.URL, opts...)
 				return c, c
 			}
 		}
