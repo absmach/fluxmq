@@ -14,7 +14,12 @@
   "r2_buckets": [
     {
       "binding": "IMAGES_BUCKET",
-      "bucket_name": "websites-images"
+      "bucket_name": "websites-images",
+      // Local dev (`wrangler dev`) hits the real bucket instead of an
+      // empty local simulator, so images published via publish-image.mjs
+      // are visible immediately without manually seeding local R2 state.
+      // No effect on the deployed Worker -- bindings are always real there.
+      "remote": true
     }
   ]
 }
