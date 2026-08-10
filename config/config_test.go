@@ -17,6 +17,8 @@ const (
 	testLogLevelDebug = "debug"
 	testBindAddr      = "127.0.0.1:8100"
 	testAuthURL       = "localhost:7016"
+	testAuthHTTPSURL  = "https://auth.internal:7016"
+	testClientCert    = "client.crt"
 	testProfileHot    = "hot"
 )
 
@@ -247,9 +249,9 @@ func TestValidate(t *testing.T) {
 		{
 			name: "auth callout TLS over https",
 			modify: func(c *Config) {
-				c.Auth.External.URL = "https://auth.internal:7016"
+				c.Auth.External.URL = testAuthHTTPSURL
 				c.Auth.External.TLS = &mqtttls.ClientConfig{
-					CertFile: "client.crt",
+					CertFile: testClientCert,
 					KeyFile:  "client.key",
 					CAFile:   "ca.crt",
 				}
@@ -264,7 +266,7 @@ func TestValidate(t *testing.T) {
 			modify: func(c *Config) {
 				c.Auth.External.URL = "http://auth.internal:7016"
 				c.Auth.External.TLS = &mqtttls.ClientConfig{
-					CertFile: "client.crt",
+					CertFile: testClientCert,
 					KeyFile:  "client.key",
 				}
 			},
@@ -273,15 +275,15 @@ func TestValidate(t *testing.T) {
 		{
 			name: "auth callout TLS with a certificate but no key",
 			modify: func(c *Config) {
-				c.Auth.External.URL = "https://auth.internal:7016"
-				c.Auth.External.TLS = &mqtttls.ClientConfig{CertFile: "client.crt"}
+				c.Auth.External.URL = testAuthHTTPSURL
+				c.Auth.External.TLS = &mqtttls.ClientConfig{CertFile: testClientCert}
 			},
 			wantErr: true,
 		},
 		{
 			name: "auth callout TLS with an unknown min_version",
 			modify: func(c *Config) {
-				c.Auth.External.URL = "https://auth.internal:7016"
+				c.Auth.External.URL = testAuthHTTPSURL
 				c.Auth.External.TLS = &mqtttls.ClientConfig{MinVersion: "TLS9.9"}
 			},
 			wantErr: true,

@@ -179,8 +179,11 @@ func TestClientConfigConfigured(t *testing.T) {
 		t.Fatal("empty config reports configured")
 	}
 	for _, cfg := range []ClientConfig{
-		{CertFile: "c"}, {KeyFile: "k"}, {CAFile: "ca"},
-		{ServerName: "s"}, {MinVersion: "TLS1.2"},
+		{CertFile: "c"},
+		{KeyFile: "k"},
+		{CAFile: "ca"},
+		{ServerName: "s"},
+		{MinVersion: "TLS1.2"},
 	} {
 		if !cfg.Configured() {
 			t.Fatalf("%+v reports unconfigured", cfg)

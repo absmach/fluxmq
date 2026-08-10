@@ -424,6 +424,19 @@ func main() {
 	}
 	localPolicyAdapter := &localAMQPPolicy{store: localPrincipalStore}
 
+	// Loaded once, and before anything registers a deferred close: every
+	// protocol's callout client shares the certificate, and a bad path is a
+	// configuration error that must stop the process rather than surface later
+	// as a callout failure that trips the circuit breaker.
+	var calloutTLS *tls.Config
+	if cfg.Auth.External.URL != "" {
+		calloutTLS, err = mqtttls.LoadClientTLSConfig(cfg.Auth.External.TLS)
+		if err != nil {
+			slog.Error("Failed to load auth callout TLS configuration", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	slog.Info("Starting MQTT broker", "version", fluxmq.Version)
 	slog.Info("Configuration loaded",
 		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
@@ -695,15 +708,6 @@ func main() {
 			authcallout.WithTimeout(cfg.Auth.External.Timeout),
 			authcallout.WithLogger(logger),
 			authcallout.WithCircuitBreaker(cb),
-		}
-
-		// Loaded once: every protocol's client shares the certificate, and a
-		// bad path must stop the process here rather than surface later as a
-		// callout failure that trips the circuit breaker.
-		calloutTLS, err := mqtttls.LoadClientTLSConfig(cfg.Auth.External.TLS)
-		if err != nil {
-			slog.Error("Failed to load auth callout TLS configuration", "error", err)
-			os.Exit(1)
 		}
 
 		newClient := func(proto authcallout.Protocol) (corebroker.Authenticator, corebroker.Authorizer) {
