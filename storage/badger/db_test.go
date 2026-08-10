@@ -5,6 +5,7 @@ package badger
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -170,10 +171,19 @@ func TestStore_CloseDuringOperations(t *testing.T) {
 
 	// Losing the race is fine; anything other than ErrClosed or a not-found is
 	// not.
+	//
+	// A conflict is not about the close race at all. DeleteByPrefix reads the
+	// prefix through an iterator before deleting what it found, so a Store that
+	// commits into the same prefix meanwhile puts a key it read under a newer
+	// version and badger refuses the commit. Both operations are in the loop
+	// above, on the same prefix, across eight goroutines, so the contention is
+	// what this test manufactures rather than anything it is asserting about.
 	for _, err := range errs {
 		if assert.Error(t, err) {
 			assert.True(t,
-				assert.ObjectsAreEqual(storage.ErrClosed, err) || assert.ObjectsAreEqual(storage.ErrNotFound, err),
+				assert.ObjectsAreEqual(storage.ErrClosed, err) ||
+					assert.ObjectsAreEqual(storage.ErrNotFound, err) ||
+					errors.Is(err, badger.ErrConflict),
 				"unexpected error during close race: %v", err)
 		}
 	}
