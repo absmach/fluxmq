@@ -7,6 +7,14 @@
 // 	protoc        (unknown)
 // source: auth/v1/auth.proto
 
+// The package is vendor-neutral on purpose. These services are a generic
+// broker-callout contract — the messages carry no FluxMQ concept, and other
+// brokers and providers implement them — but the proto package is what a caller
+// dials (`/broker.auth.v1.AuthService/Authorize`), so naming it after one
+// implementation would put that implementation's name in every peer's public
+// wire surface. The Go import path is derived from this file's location, not
+// from the package, so it is unaffected.
+
 package authv1
 
 import (
@@ -245,7 +253,7 @@ type AuthnReq struct {
 	// Password credential.
 	Password string `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"`
 	// Protocol the client connected with.
-	Protocol      Protocol `protobuf:"varint,4,opt,name=protocol,proto3,enum=fluxmq.auth.v1.Protocol" json:"protocol,omitempty"`
+	Protocol      Protocol `protobuf:"varint,4,opt,name=protocol,proto3,enum=broker.auth.v1.Protocol" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -388,7 +396,7 @@ type AuthzReq struct {
 	// Raw topic or topic filter from the publish/subscribe operation.
 	Topic string `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
 	// The action being requested.
-	Action        Action `protobuf:"varint,3,opt,name=action,proto3,enum=fluxmq.auth.v1.Action" json:"action,omitempty"`
+	Action        Action `protobuf:"varint,3,opt,name=action,proto3,enum=broker.auth.v1.Action" json:"action,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -509,13 +517,13 @@ func (x *AuthzRes) GetReason() string {
 
 type HookReq struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Hook  HookType               `protobuf:"varint,1,opt,name=hook,proto3,enum=fluxmq.auth.v1.HookType" json:"hook,omitempty"`
+	Hook  HookType               `protobuf:"varint,1,opt,name=hook,proto3,enum=broker.auth.v1.HookType" json:"hook,omitempty"`
 	// Protocol-level client identifier.
 	ClientId string `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
 	// External identity returned from AuthnRes.id when available.
 	ExternalId string `protobuf:"bytes,3,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
 	// Protocol the client connected with.
-	Protocol Protocol `protobuf:"varint,4,opt,name=protocol,proto3,enum=fluxmq.auth.v1.Protocol" json:"protocol,omitempty"`
+	Protocol Protocol `protobuf:"varint,4,opt,name=protocol,proto3,enum=broker.auth.v1.Protocol" json:"protocol,omitempty"`
 	// Topic, topic filter, or address being handled.
 	Topic string `protobuf:"bytes,5,opt,name=topic,proto3" json:"topic,omitempty"`
 	// Publish payload. Empty for non-publish hooks.
@@ -639,7 +647,7 @@ func (x *HookReq) GetPassword() string {
 
 type HookRes struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
-	Result HookResult             `protobuf:"varint,1,opt,name=result,proto3,enum=fluxmq.auth.v1.HookResult" json:"result,omitempty"`
+	Result HookResult             `protobuf:"varint,1,opt,name=result,proto3,enum=broker.auth.v1.HookResult" json:"result,omitempty"`
 	// Empty means keep the requested topic/filter.
 	Topic      string `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
 	Payload    []byte `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
@@ -776,12 +784,12 @@ var File_auth_v1_auth_proto protoreflect.FileDescriptor
 
 const file_auth_v1_auth_proto_rawDesc = "" +
 	"\n" +
-	"\x12auth/v1/auth.proto\x12\x0efluxmq.auth.v1\"\x95\x01\n" +
+	"\x12auth/v1/auth.proto\x12\x0ebroker.auth.v1\"\x95\x01\n" +
 	"\bAuthnReq\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x03 \x01(\tR\bpassword\x124\n" +
-	"\bprotocol\x18\x04 \x01(\x0e2\x18.fluxmq.auth.v1.ProtocolR\bprotocol\"y\n" +
+	"\bprotocol\x18\x04 \x01(\x0e2\x18.broker.auth.v1.ProtocolR\bprotocol\"y\n" +
 	"\bAuthnRes\x12$\n" +
 	"\rauthenticated\x18\x01 \x01(\bR\rauthenticated\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1f\n" +
@@ -792,7 +800,7 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\vexternal_id\x18\x01 \x01(\tR\n" +
 	"externalId\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12.\n" +
-	"\x06action\x18\x03 \x01(\x0e2\x16.fluxmq.auth.v1.ActionR\x06action\"c\n" +
+	"\x06action\x18\x03 \x01(\x0e2\x16.broker.auth.v1.ActionR\x06action\"c\n" +
 	"\bAuthzRes\x12\x1e\n" +
 	"\n" +
 	"authorized\x18\x01 \x01(\bR\n" +
@@ -801,17 +809,17 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"reasonCode\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xc5\x03\n" +
 	"\aHookReq\x12,\n" +
-	"\x04hook\x18\x01 \x01(\x0e2\x18.fluxmq.auth.v1.HookTypeR\x04hook\x12\x1b\n" +
+	"\x04hook\x18\x01 \x01(\x0e2\x18.broker.auth.v1.HookTypeR\x04hook\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1f\n" +
 	"\vexternal_id\x18\x03 \x01(\tR\n" +
 	"externalId\x124\n" +
-	"\bprotocol\x18\x04 \x01(\x0e2\x18.fluxmq.auth.v1.ProtocolR\bprotocol\x12\x14\n" +
+	"\bprotocol\x18\x04 \x01(\x0e2\x18.broker.auth.v1.ProtocolR\bprotocol\x12\x14\n" +
 	"\x05topic\x18\x05 \x01(\tR\x05topic\x12\x18\n" +
 	"\apayload\x18\x06 \x01(\fR\apayload\x12\x10\n" +
 	"\x03qos\x18\a \x01(\rR\x03qos\x12\x16\n" +
 	"\x06retain\x18\b \x01(\bR\x06retain\x12G\n" +
 	"\n" +
-	"properties\x18\t \x03(\v2'.fluxmq.auth.v1.HookReq.PropertiesEntryR\n" +
+	"properties\x18\t \x03(\v2'.broker.auth.v1.HookReq.PropertiesEntryR\n" +
 	"properties\x12\x1a\n" +
 	"\busername\x18\n" +
 	" \x01(\tR\busername\x12\x1a\n" +
@@ -820,7 +828,7 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd2\x03\n" +
 	"\aHookRes\x122\n" +
-	"\x06result\x18\x01 \x01(\x0e2\x1a.fluxmq.auth.v1.HookResultR\x06result\x12\x14\n" +
+	"\x06result\x18\x01 \x01(\x0e2\x1a.broker.auth.v1.HookResultR\x06result\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x1f\n" +
 	"\vpayload_set\x18\x04 \x01(\bR\n" +
@@ -831,7 +839,7 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\n" +
 	"retain_set\x18\b \x01(\bR\tretainSet\x12G\n" +
 	"\n" +
-	"properties\x18\t \x03(\v2'.fluxmq.auth.v1.HookRes.PropertiesEntryR\n" +
+	"properties\x18\t \x03(\v2'.broker.auth.v1.HookRes.PropertiesEntryR\n" +
 	"properties\x12\x1f\n" +
 	"\vreason_code\x18\n" +
 	" \x01(\rR\n" +
@@ -866,11 +874,11 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\fHookResultOk\x10\x01\x12\x12\n" +
 	"\x0eHookResultDeny\x10\x022\x92\x01\n" +
 	"\vAuthService\x12B\n" +
-	"\fAuthenticate\x12\x18.fluxmq.auth.v1.AuthnReq\x1a\x18.fluxmq.auth.v1.AuthnRes\x12?\n" +
-	"\tAuthorize\x12\x18.fluxmq.auth.v1.AuthzReq\x1a\x18.fluxmq.auth.v1.AuthzRes2I\n" +
+	"\fAuthenticate\x12\x18.broker.auth.v1.AuthnReq\x1a\x18.broker.auth.v1.AuthnRes\x12?\n" +
+	"\tAuthorize\x12\x18.broker.auth.v1.AuthzReq\x1a\x18.broker.auth.v1.AuthzRes2I\n" +
 	"\vHookService\x12:\n" +
-	"\x06Handle\x12\x17.fluxmq.auth.v1.HookReq\x1a\x17.fluxmq.auth.v1.HookResB\xad\x01\n" +
-	"\x12com.fluxmq.auth.v1B\tAuthProtoP\x01Z2github.com/absmach/fluxmq/pkg/proto/auth/v1;authv1\xa2\x02\x03FAX\xaa\x02\x0eFluxmq.Auth.V1\xca\x02\x0eFluxmq\\Auth\\V1\xe2\x02\x1aFluxmq\\Auth\\V1\\GPBMetadata\xea\x02\x10Fluxmq::Auth::V1b\x06proto3"
+	"\x06Handle\x12\x17.broker.auth.v1.HookReq\x1a\x17.broker.auth.v1.HookResB\xad\x01\n" +
+	"\x12com.broker.auth.v1B\tAuthProtoP\x01Z2github.com/absmach/fluxmq/pkg/proto/auth/v1;authv1\xa2\x02\x03BAX\xaa\x02\x0eBroker.Auth.V1\xca\x02\x0eBroker\\Auth\\V1\xe2\x02\x1aBroker\\Auth\\V1\\GPBMetadata\xea\x02\x10Broker::Auth::V1b\x06proto3"
 
 var (
 	file_auth_v1_auth_proto_rawDescOnce sync.Once
@@ -887,33 +895,33 @@ func file_auth_v1_auth_proto_rawDescGZIP() []byte {
 var file_auth_v1_auth_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_auth_v1_auth_proto_goTypes = []any{
-	(Protocol)(0),    // 0: fluxmq.auth.v1.Protocol
-	(Action)(0),      // 1: fluxmq.auth.v1.Action
-	(HookType)(0),    // 2: fluxmq.auth.v1.HookType
-	(HookResult)(0),  // 3: fluxmq.auth.v1.HookResult
-	(*AuthnReq)(nil), // 4: fluxmq.auth.v1.AuthnReq
-	(*AuthnRes)(nil), // 5: fluxmq.auth.v1.AuthnRes
-	(*AuthzReq)(nil), // 6: fluxmq.auth.v1.AuthzReq
-	(*AuthzRes)(nil), // 7: fluxmq.auth.v1.AuthzRes
-	(*HookReq)(nil),  // 8: fluxmq.auth.v1.HookReq
-	(*HookRes)(nil),  // 9: fluxmq.auth.v1.HookRes
-	nil,              // 10: fluxmq.auth.v1.HookReq.PropertiesEntry
-	nil,              // 11: fluxmq.auth.v1.HookRes.PropertiesEntry
+	(Protocol)(0),    // 0: broker.auth.v1.Protocol
+	(Action)(0),      // 1: broker.auth.v1.Action
+	(HookType)(0),    // 2: broker.auth.v1.HookType
+	(HookResult)(0),  // 3: broker.auth.v1.HookResult
+	(*AuthnReq)(nil), // 4: broker.auth.v1.AuthnReq
+	(*AuthnRes)(nil), // 5: broker.auth.v1.AuthnRes
+	(*AuthzReq)(nil), // 6: broker.auth.v1.AuthzReq
+	(*AuthzRes)(nil), // 7: broker.auth.v1.AuthzRes
+	(*HookReq)(nil),  // 8: broker.auth.v1.HookReq
+	(*HookRes)(nil),  // 9: broker.auth.v1.HookRes
+	nil,              // 10: broker.auth.v1.HookReq.PropertiesEntry
+	nil,              // 11: broker.auth.v1.HookRes.PropertiesEntry
 }
 var file_auth_v1_auth_proto_depIdxs = []int32{
-	0,  // 0: fluxmq.auth.v1.AuthnReq.protocol:type_name -> fluxmq.auth.v1.Protocol
-	1,  // 1: fluxmq.auth.v1.AuthzReq.action:type_name -> fluxmq.auth.v1.Action
-	2,  // 2: fluxmq.auth.v1.HookReq.hook:type_name -> fluxmq.auth.v1.HookType
-	0,  // 3: fluxmq.auth.v1.HookReq.protocol:type_name -> fluxmq.auth.v1.Protocol
-	10, // 4: fluxmq.auth.v1.HookReq.properties:type_name -> fluxmq.auth.v1.HookReq.PropertiesEntry
-	3,  // 5: fluxmq.auth.v1.HookRes.result:type_name -> fluxmq.auth.v1.HookResult
-	11, // 6: fluxmq.auth.v1.HookRes.properties:type_name -> fluxmq.auth.v1.HookRes.PropertiesEntry
-	4,  // 7: fluxmq.auth.v1.AuthService.Authenticate:input_type -> fluxmq.auth.v1.AuthnReq
-	6,  // 8: fluxmq.auth.v1.AuthService.Authorize:input_type -> fluxmq.auth.v1.AuthzReq
-	8,  // 9: fluxmq.auth.v1.HookService.Handle:input_type -> fluxmq.auth.v1.HookReq
-	5,  // 10: fluxmq.auth.v1.AuthService.Authenticate:output_type -> fluxmq.auth.v1.AuthnRes
-	7,  // 11: fluxmq.auth.v1.AuthService.Authorize:output_type -> fluxmq.auth.v1.AuthzRes
-	9,  // 12: fluxmq.auth.v1.HookService.Handle:output_type -> fluxmq.auth.v1.HookRes
+	0,  // 0: broker.auth.v1.AuthnReq.protocol:type_name -> broker.auth.v1.Protocol
+	1,  // 1: broker.auth.v1.AuthzReq.action:type_name -> broker.auth.v1.Action
+	2,  // 2: broker.auth.v1.HookReq.hook:type_name -> broker.auth.v1.HookType
+	0,  // 3: broker.auth.v1.HookReq.protocol:type_name -> broker.auth.v1.Protocol
+	10, // 4: broker.auth.v1.HookReq.properties:type_name -> broker.auth.v1.HookReq.PropertiesEntry
+	3,  // 5: broker.auth.v1.HookRes.result:type_name -> broker.auth.v1.HookResult
+	11, // 6: broker.auth.v1.HookRes.properties:type_name -> broker.auth.v1.HookRes.PropertiesEntry
+	4,  // 7: broker.auth.v1.AuthService.Authenticate:input_type -> broker.auth.v1.AuthnReq
+	6,  // 8: broker.auth.v1.AuthService.Authorize:input_type -> broker.auth.v1.AuthzReq
+	8,  // 9: broker.auth.v1.HookService.Handle:input_type -> broker.auth.v1.HookReq
+	5,  // 10: broker.auth.v1.AuthService.Authenticate:output_type -> broker.auth.v1.AuthnRes
+	7,  // 11: broker.auth.v1.AuthService.Authorize:output_type -> broker.auth.v1.AuthzRes
+	9,  // 12: broker.auth.v1.HookService.Handle:output_type -> broker.auth.v1.HookRes
 	10, // [10:13] is the sub-list for method output_type
 	7,  // [7:10] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name

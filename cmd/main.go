@@ -29,6 +29,7 @@ import (
 	"github.com/absmach/fluxmq/broker/webhook"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/internal/httpclient"
 	"github.com/absmach/fluxmq/internal/wiring"
 	logStorage "github.com/absmach/fluxmq/logstorage"
 	core "github.com/absmach/fluxmq/mqtt"
@@ -423,6 +424,19 @@ func main() {
 	}
 	localPolicyAdapter := &localAMQPPolicy{store: localPrincipalStore}
 
+	// Loaded once, and before anything registers a deferred close: every
+	// protocol's callout client shares the certificate, and a bad path is a
+	// configuration error that must stop the process rather than surface later
+	// as a callout failure that trips the circuit breaker.
+	var calloutTLS *tls.Config
+	if cfg.Auth.External.URL != "" {
+		calloutTLS, err = mqtttls.LoadClientTLSConfig(cfg.Auth.External.TLS)
+		if err != nil {
+			slog.Error("Failed to load auth callout TLS configuration", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	slog.Info("Starting MQTT broker", "version", fluxmq.Version)
 	slog.Info("Configuration loaded",
 		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
@@ -700,10 +714,13 @@ func main() {
 			opts := append(sharedOpts, authcallout.WithProtocol(proto))
 			switch transport {
 			case "http":
-				c := authcallout.NewHTTPClient(nil, cfg.Auth.External.URL, opts...)
+				c := authcallout.NewHTTPClient(
+					httpclient.WithTLS(calloutTLS), cfg.Auth.External.URL, opts...)
 				return c, c
 			default:
-				c := authcallout.NewGRPCClient(nil, cfg.Auth.External.URL, opts...)
+				c := authcallout.NewGRPCClient(
+					httpclient.GRPCWithTLS(cfg.Auth.External.URL, calloutTLS),
+					cfg.Auth.External.URL, opts...)
 				return c, c
 			}
 		}

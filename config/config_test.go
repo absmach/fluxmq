@@ -9,12 +9,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	mqtttls "github.com/absmach/fluxmq/pkg/tls"
 )
 
 const (
 	testLogLevelDebug = "debug"
 	testBindAddr      = "127.0.0.1:8100"
 	testAuthURL       = "localhost:7016"
+	testAuthHTTPSURL  = "https://auth.internal:7016"
+	testClientCert    = "client.crt"
 	testProfileHot    = "hot"
 )
 
@@ -241,6 +245,48 @@ func TestValidate(t *testing.T) {
 				c.Auth.External.Protocols = map[string]bool{protocolMQTT: true, protocolAMQP091: false}
 			},
 			wantErr: false,
+		},
+		{
+			name: "auth callout TLS over https",
+			modify: func(c *Config) {
+				c.Auth.External.URL = testAuthHTTPSURL
+				c.Auth.External.TLS = &mqtttls.ClientConfig{
+					CertFile: testClientCert,
+					KeyFile:  "client.key",
+					CAFile:   "ca.crt",
+				}
+			},
+			wantErr: false,
+		},
+		{
+			// The connection would be cleartext while the config advertises a
+			// client certificate: it looks mutually authenticated and is not
+			// authenticated at all.
+			name: "auth callout TLS over a plaintext url",
+			modify: func(c *Config) {
+				c.Auth.External.URL = "http://auth.internal:7016"
+				c.Auth.External.TLS = &mqtttls.ClientConfig{
+					CertFile: testClientCert,
+					KeyFile:  "client.key",
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "auth callout TLS with a certificate but no key",
+			modify: func(c *Config) {
+				c.Auth.External.URL = testAuthHTTPSURL
+				c.Auth.External.TLS = &mqtttls.ClientConfig{CertFile: testClientCert}
+			},
+			wantErr: true,
+		},
+		{
+			name: "auth callout TLS with an unknown min_version",
+			modify: func(c *Config) {
+				c.Auth.External.URL = testAuthHTTPSURL
+				c.Auth.External.TLS = &mqtttls.ClientConfig{MinVersion: "TLS9.9"}
+			},
+			wantErr: true,
 		},
 		{
 			name: "unknown auth protocol",

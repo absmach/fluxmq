@@ -5,6 +5,13 @@
 //
 // Source: auth/v1/auth.proto
 
+// The package is vendor-neutral on purpose. These services are a generic
+// broker-callout contract — the messages carry no FluxMQ concept, and other
+// brokers and providers implement them — but the proto package is what a caller
+// dials (`/broker.auth.v1.AuthService/Authorize`), so naming it after one
+// implementation would put that implementation's name in every peer's public
+// wire surface. The Go import path is derived from this file's location, not
+// from the package, so it is unaffected.
 package authv1connect
 
 import (
@@ -25,9 +32,9 @@ const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// AuthServiceName is the fully-qualified name of the AuthService service.
-	AuthServiceName = "fluxmq.auth.v1.AuthService"
+	AuthServiceName = "broker.auth.v1.AuthService"
 	// HookServiceName is the fully-qualified name of the HookService service.
-	HookServiceName = "fluxmq.auth.v1.HookService"
+	HookServiceName = "broker.auth.v1.HookService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -40,14 +47,14 @@ const (
 const (
 	// AuthServiceAuthenticateProcedure is the fully-qualified name of the AuthService's Authenticate
 	// RPC.
-	AuthServiceAuthenticateProcedure = "/fluxmq.auth.v1.AuthService/Authenticate"
+	AuthServiceAuthenticateProcedure = "/broker.auth.v1.AuthService/Authenticate"
 	// AuthServiceAuthorizeProcedure is the fully-qualified name of the AuthService's Authorize RPC.
-	AuthServiceAuthorizeProcedure = "/fluxmq.auth.v1.AuthService/Authorize"
+	AuthServiceAuthorizeProcedure = "/broker.auth.v1.AuthService/Authorize"
 	// HookServiceHandleProcedure is the fully-qualified name of the HookService's Handle RPC.
-	HookServiceHandleProcedure = "/fluxmq.auth.v1.HookService/Handle"
+	HookServiceHandleProcedure = "/broker.auth.v1.HookService/Handle"
 )
 
-// AuthServiceClient is a client for the fluxmq.auth.v1.AuthService service.
+// AuthServiceClient is a client for the broker.auth.v1.AuthService service.
 type AuthServiceClient interface {
 	// Authenticate validates client credentials presented during connection.
 	// The server resolves the credentials to an external identity (e.g. a UUID)
@@ -60,7 +67,7 @@ type AuthServiceClient interface {
 	Authorize(context.Context, *connect.Request[v1.AuthzReq]) (*connect.Response[v1.AuthzRes], error)
 }
 
-// NewAuthServiceClient constructs a client for the fluxmq.auth.v1.AuthService service. By default,
+// NewAuthServiceClient constructs a client for the broker.auth.v1.AuthService service. By default,
 // it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and
 // sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC()
 // or connect.WithGRPCWeb() options.
@@ -92,17 +99,17 @@ type authServiceClient struct {
 	authorize    *connect.Client[v1.AuthzReq, v1.AuthzRes]
 }
 
-// Authenticate calls fluxmq.auth.v1.AuthService.Authenticate.
+// Authenticate calls broker.auth.v1.AuthService.Authenticate.
 func (c *authServiceClient) Authenticate(ctx context.Context, req *connect.Request[v1.AuthnReq]) (*connect.Response[v1.AuthnRes], error) {
 	return c.authenticate.CallUnary(ctx, req)
 }
 
-// Authorize calls fluxmq.auth.v1.AuthService.Authorize.
+// Authorize calls broker.auth.v1.AuthService.Authorize.
 func (c *authServiceClient) Authorize(ctx context.Context, req *connect.Request[v1.AuthzReq]) (*connect.Response[v1.AuthzRes], error) {
 	return c.authorize.CallUnary(ctx, req)
 }
 
-// AuthServiceHandler is an implementation of the fluxmq.auth.v1.AuthService service.
+// AuthServiceHandler is an implementation of the broker.auth.v1.AuthService service.
 type AuthServiceHandler interface {
 	// Authenticate validates client credentials presented during connection.
 	// The server resolves the credentials to an external identity (e.g. a UUID)
@@ -134,7 +141,7 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("Authorize")),
 		connect.WithHandlerOptions(opts...),
 	)
-	return "/fluxmq.auth.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return "/broker.auth.v1.AuthService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AuthServiceAuthenticateProcedure:
 			authServiceAuthenticateHandler.ServeHTTP(w, r)
@@ -150,19 +157,19 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 type UnimplementedAuthServiceHandler struct{}
 
 func (UnimplementedAuthServiceHandler) Authenticate(context.Context, *connect.Request[v1.AuthnReq]) (*connect.Response[v1.AuthnRes], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.auth.v1.AuthService.Authenticate is not implemented"))
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("broker.auth.v1.AuthService.Authenticate is not implemented"))
 }
 
 func (UnimplementedAuthServiceHandler) Authorize(context.Context, *connect.Request[v1.AuthzReq]) (*connect.Response[v1.AuthzRes], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.auth.v1.AuthService.Authorize is not implemented"))
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("broker.auth.v1.AuthService.Authorize is not implemented"))
 }
 
-// HookServiceClient is a client for the fluxmq.auth.v1.HookService service.
+// HookServiceClient is a client for the broker.auth.v1.HookService service.
 type HookServiceClient interface {
 	Handle(context.Context, *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error)
 }
 
-// NewHookServiceClient constructs a client for the fluxmq.auth.v1.HookService service. By default,
+// NewHookServiceClient constructs a client for the broker.auth.v1.HookService service. By default,
 // it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and
 // sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC()
 // or connect.WithGRPCWeb() options.
@@ -187,12 +194,12 @@ type hookServiceClient struct {
 	handle *connect.Client[v1.HookReq, v1.HookRes]
 }
 
-// Handle calls fluxmq.auth.v1.HookService.Handle.
+// Handle calls broker.auth.v1.HookService.Handle.
 func (c *hookServiceClient) Handle(ctx context.Context, req *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error) {
 	return c.handle.CallUnary(ctx, req)
 }
 
-// HookServiceHandler is an implementation of the fluxmq.auth.v1.HookService service.
+// HookServiceHandler is an implementation of the broker.auth.v1.HookService service.
 type HookServiceHandler interface {
 	Handle(context.Context, *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error)
 }
@@ -210,7 +217,7 @@ func NewHookServiceHandler(svc HookServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(hookServiceMethods.ByName("Handle")),
 		connect.WithHandlerOptions(opts...),
 	)
-	return "/fluxmq.auth.v1.HookService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return "/broker.auth.v1.HookService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case HookServiceHandleProcedure:
 			hookServiceHandleHandler.ServeHTTP(w, r)
@@ -224,5 +231,5 @@ func NewHookServiceHandler(svc HookServiceHandler, opts ...connect.HandlerOption
 type UnimplementedHookServiceHandler struct{}
 
 func (UnimplementedHookServiceHandler) Handle(context.Context, *connect.Request[v1.HookReq]) (*connect.Response[v1.HookRes], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.auth.v1.HookService.Handle is not implemented"))
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("broker.auth.v1.HookService.Handle is not implemented"))
 }

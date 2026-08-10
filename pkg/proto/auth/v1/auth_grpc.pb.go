@@ -7,6 +7,14 @@
 // - protoc             (unknown)
 // source: auth/v1/auth.proto
 
+// The package is vendor-neutral on purpose. These services are a generic
+// broker-callout contract — the messages carry no FluxMQ concept, and other
+// brokers and providers implement them — but the proto package is what a caller
+// dials (`/broker.auth.v1.AuthService/Authorize`), so naming it after one
+// implementation would put that implementation's name in every peer's public
+// wire surface. The Go import path is derived from this file's location, not
+// from the package, so it is unaffected.
+
 package authv1
 
 import (
@@ -22,8 +30,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AuthService_Authenticate_FullMethodName = "/fluxmq.auth.v1.AuthService/Authenticate"
-	AuthService_Authorize_FullMethodName    = "/fluxmq.auth.v1.AuthService/Authorize"
+	AuthService_Authenticate_FullMethodName = "/broker.auth.v1.AuthService/Authenticate"
+	AuthService_Authorize_FullMethodName    = "/broker.auth.v1.AuthService/Authorize"
 )
 
 // AuthServiceClient is the client API for AuthService service.
@@ -169,7 +177,7 @@ func _AuthService_Authorize_Handler(srv interface{}, ctx context.Context, dec fu
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var AuthService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "fluxmq.auth.v1.AuthService",
+	ServiceName: "broker.auth.v1.AuthService",
 	HandlerType: (*AuthServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -186,7 +194,7 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	HookService_Handle_FullMethodName = "/fluxmq.auth.v1.HookService/Handle"
+	HookService_Handle_FullMethodName = "/broker.auth.v1.HookService/Handle"
 )
 
 // HookServiceClient is the client API for HookService service.
@@ -283,7 +291,7 @@ func _HookService_Handle_Handler(srv interface{}, ctx context.Context, dec func(
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var HookService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "fluxmq.auth.v1.HookService",
+	ServiceName: "broker.auth.v1.HookService",
 	HandlerType: (*HookServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

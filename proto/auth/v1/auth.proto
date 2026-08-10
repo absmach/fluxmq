@@ -3,7 +3,14 @@
 
 syntax = "proto3";
 
-package fluxmq.auth.v1;
+// The package is vendor-neutral on purpose. These services are a generic
+// broker-callout contract — the messages carry no FluxMQ concept, and other
+// brokers and providers implement them — but the proto package is what a caller
+// dials (`/broker.auth.v1.AuthService/Authorize`), so naming it after one
+// implementation would put that implementation's name in every peer's public
+// wire surface. The Go import path is derived from this file's location, not
+// from the package, so it is unaffected.
+package broker.auth.v1;
 
 // AuthService is a callout service for external authentication and
 // authorization. Broker implementations call this service during connection
