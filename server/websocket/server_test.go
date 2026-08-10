@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	corebroker "github.com/absmach/fluxmq/broker"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -19,7 +20,7 @@ import (
 )
 
 func TestNewWSConnectionProtocolVersion(t *testing.T) {
-	conn := newWSConnection(nil, "127.0.0.1:1111", core.ProtocolV5, 0, 0)
+	conn := newWSConnection(nil, "127.0.0.1:1111", core.ProtocolV5, 0, 0, false)
 
 	wsConn, ok := conn.(*wsConnection)
 	if !ok {
@@ -28,6 +29,34 @@ func TestNewWSConnectionProtocolVersion(t *testing.T) {
 
 	if wsConn.version != core.ProtocolV5 {
 		t.Fatalf("expected protocol version %d, got %d", core.ProtocolV5, wsConn.version)
+	}
+}
+
+func TestWSConnectionExposesCopiedVerifiedPeerChain(t *testing.T) {
+	leaf := []byte{1, 2, 3}
+	issuer := []byte{4, 5, 6}
+	conn := newWSConnection(nil, "127.0.0.1:1111", core.ProtocolV5, 0, 0, true, corebroker.PeerCertificate{
+		LeafDER:   leaf,
+		IssuerDER: issuer,
+	})
+	peer, ok := conn.(corebroker.PeerCertificateSource)
+	if !ok {
+		t.Fatalf("expected certificate-aware WebSocket connection, got %T", conn)
+	}
+	leaf[0] = 9
+	issuer[0] = 9
+	gotLeaf := peer.PeerCertificateDER()
+	gotIssuer := peer.PeerIssuerCertificateDER()
+	if gotLeaf[0] != 1 || gotIssuer[0] != 4 {
+		t.Fatal("WebSocket connection did not retain defensive peer-chain copies")
+	}
+	gotLeaf[0] = 8
+	if peer.PeerCertificateDER()[0] != 1 {
+		t.Fatal("WebSocket peer leaf accessor leaked mutable internal state")
+	}
+	authentication, ok := conn.(corebroker.CertificateAuthenticationSource)
+	if !ok || !authentication.CertificateAuthenticationEnabled() {
+		t.Fatal("WebSocket connection did not retain certificate-authentication listener metadata")
 	}
 }
 
@@ -170,7 +199,7 @@ func TestReadPacketAcrossWebSocketMessages(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0, false)
 	defer conn.Close()
 
 	want := &v3.Connect{
@@ -223,7 +252,7 @@ func TestReadPacketSequentialMessages(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0, false)
 	defer conn.Close()
 
 	const count = 50
@@ -265,7 +294,7 @@ func TestReadPacketTimeoutDoesNotPoisonWebSocket(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0, false)
 	defer conn.Close()
 
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
@@ -314,7 +343,7 @@ func TestSetKeepAliveAfterReadPacketProcessesPong(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0).(*wsConnection)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0, false).(*wsConnection)
 	defer conn.Close()
 
 	connect := &v3.Connect{
@@ -368,7 +397,7 @@ func TestReadPumpStopsAfterCloseWithBufferedRead(t *testing.T) {
 	serverWS, clientWS := wsConnPair(t)
 	defer clientWS.Close()
 
-	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0).(*wsConnection)
+	conn := newWSConnection(serverWS, "127.0.0.1:9999", core.ProtocolAuto, 0, 0, false).(*wsConnection)
 	reader := &wsFrameReader{conn: conn}
 	reader.once.Do(reader.start)
 

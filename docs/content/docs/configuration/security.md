@@ -170,6 +170,16 @@ See [Internal AMQP Local Principals](/deployment/internal-amqp-local-principals)
 for the complete production configuration, rotation process, tests, and
 rollout contract.
 
+## Atom Certificate Authentication
+
+MQTT TCP and WebSocket mTLS listeners can use Atom's authoritative certificate
+resolver while retaining the existing external authorizer. This resolver tier
+binds certificate identities to canonical tenant UUIDs before authorization,
+uses a bounded cache with outbox-event invalidation, and refreshes client trust
+from Atom's published bundle. See
+[Atom Certificate Authentication](/configuration/atom-certificate-authentication)
+for its failure policy and complete deployment contract.
+
 ## Reserved Message Properties
 
 Message property names beginning with `_flux.` are reserved for broker-internal

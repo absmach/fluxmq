@@ -46,6 +46,10 @@ type Config struct {
 	SendQueueSize    int
 	DisconnectOnFull bool
 	ProtocolVersion  int
+	// CertificateAuthentication marks this listener as the Atom-backed mTLS
+	// authentication boundary. Ordinary TLS listeners leave it false even when
+	// they request or verify optional client certificates.
+	CertificateAuthentication bool
 	// MaxPacketSize bounds an inbound MQTT packet's remaining length. The limit
 	// is applied from the fixed header, before the body is buffered, so an
 	// unauthenticated peer cannot reserve memory by advertising a large length.
@@ -291,7 +295,8 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	// socket write by the connection itself.
 	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion,
 		core.WithMaxPacketSize(s.config.MaxPacketSize),
-		core.WithWriteTimeout(s.config.WriteTimeout))
+		core.WithWriteTimeout(s.config.WriteTimeout),
+		core.WithCertificateAuthentication(s.config.CertificateAuthentication))
 	broker.HandleConnection(connCtx, s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",

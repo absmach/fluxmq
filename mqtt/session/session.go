@@ -61,6 +61,7 @@ type Session struct {
 	ExternalID          string
 	authMethod          string
 	authState           any
+	certificateBinding  uint64
 	conn                core.Connection
 	msgHandler          *msgHandler
 	Will                *storage.WillMessage
@@ -68,6 +69,7 @@ type Session struct {
 	subscriptionAliases map[string]string
 	subscriptionIDs     map[string][]uint32
 	onDisconnect        func(s *Session, graceful bool)
+	onBoundDisconnect   func(s *Session, graceful bool, certificateBinding uint64)
 	KeepAlive           time.Duration
 	state               State
 	// epoch is bumped on every Connect. It identifies the current connection
@@ -218,6 +220,9 @@ type ConnectOptions struct {
 	Will           *storage.WillMessage
 	ReceiveMaximum uint16
 	TopicAliasMax  uint16
+	// CertificateBinding scopes authentication cleanup to this connection
+	// generation. Zero denotes a non-certificate connection.
+	CertificateBinding uint64
 	// MaxQoS is the maximum QoS advertised to this connection. It is applied
 	// with the epoch bump so a superseded CONNECT cannot overwrite the value a
 	// replacement connection was granted.
@@ -273,6 +278,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 		s.Will = opts.Will
 		s.TopicAliasMax = opts.TopicAliasMax
 		s.maxQoS = opts.MaxQoS
+		s.certificateBinding = opts.CertificateBinding
 	}
 
 	// Topic alias mappings are scoped to a single network connection and must
@@ -563,8 +569,13 @@ func (s *Session) disconnectLocked(graceful bool, reasonCode byte) error {
 	s.msgHandler.ClearAliases()
 
 	callback := s.onDisconnect
+	boundCallback := s.onBoundDisconnect
+	certificateBinding := s.certificateBinding
 	if callback != nil {
 		go callback(s, graceful)
+	}
+	if boundCallback != nil {
+		go boundCallback(s, graceful, certificateBinding)
 	}
 
 	return nil
@@ -738,6 +749,14 @@ func (s *Session) SetOnDisconnect(fn func(*Session, bool)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onDisconnect = fn
+}
+
+// SetOnBoundDisconnect sets a callback that receives the authentication
+// binding captured from the connection generation being disconnected.
+func (s *Session) SetOnBoundDisconnect(fn func(*Session, bool, uint64)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onBoundDisconnect = fn
 }
 
 // AddSubscription adds a subscription to the cache.

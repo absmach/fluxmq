@@ -165,8 +165,8 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		return nil, false, err
 	}
 
-	s.SetOnDisconnect(func(s *session.Session, graceful bool) {
-		b.handleDisconnect(s, graceful)
+	s.SetOnBoundDisconnect(func(s *session.Session, graceful bool, certificateBinding uint64) {
+		b.handleDisconnect(s, graceful, certificateBinding)
 	})
 
 	b.sessionsMap.Set(clientID, s)
@@ -260,9 +260,13 @@ func (b *Broker) destroySessionLocked(ctx context.Context, s *session.Session) e
 }
 
 // handleDisconnect handles session disconnect.
-func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
+func (b *Broker) handleDisconnect(s *session.Session, graceful bool, certificateBinding uint64) {
 	if b.auth != nil {
-		b.auth.Forget(s.ID)
+		if certificateBinding != 0 {
+			b.auth.ForgetCertificateSession(s.ID, certificateBinding)
+		} else {
+			b.auth.Forget(s.ID)
+		}
 	}
 
 	// Webhook: client disconnected

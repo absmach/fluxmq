@@ -130,6 +130,7 @@ type Broker struct {
 	cfg       brokerConfig
 
 	sessionLocks  keyLock
+	connectLocks  keyLock
 	globalMu      sync.Mutex // protects lifecycle (Close, transferActiveSessions, expireSessions)
 	wg            sync.WaitGroup
 	sessionsMap   session.Cache
@@ -259,28 +260,43 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 // resolved external identity (empty when no authenticator is configured or
 // when the authenticator did not return one).
 func (b *Broker) Authenticate(clientID, username, password string) (bool, string, error) {
+	return b.AuthenticateContext(context.Background(), clientID, username, password)
+}
+
+// AuthenticateContext validates credentials using the caller's context.
+func (b *Broker) AuthenticateContext(ctx context.Context, clientID, username, password string) (bool, string, error) {
 	if b.auth == nil {
 		return true, "", nil
 	}
-	return b.auth.Authenticate(clientID, username, password)
+	return b.auth.AuthenticateContext(ctx, clientID, username, password)
 }
 
 // CanPublish checks publish authorization for a client/topic pair.
 // Returns true when authz is not configured.
 func (b *Broker) CanPublish(clientID, topic string) bool {
+	return b.CanPublishContext(context.Background(), clientID, topic)
+}
+
+// CanPublishContext checks publish authorization using the caller's context.
+func (b *Broker) CanPublishContext(ctx context.Context, clientID, topic string) bool {
 	if b.auth == nil {
 		return true
 	}
-	return b.auth.CanPublish(clientID, topic)
+	return b.auth.CanPublishContext(ctx, clientID, topic)
 }
 
 // CanSubscribe checks subscribe authorization for a client/filter pair.
 // Returns true when authz is not configured.
 func (b *Broker) CanSubscribe(clientID, filter string) bool {
+	return b.CanSubscribeContext(context.Background(), clientID, filter)
+}
+
+// CanSubscribeContext checks subscribe authorization using the caller's context.
+func (b *Broker) CanSubscribeContext(ctx context.Context, clientID, filter string) bool {
 	if b.auth == nil {
 		return true
 	}
-	return b.auth.CanSubscribe(clientID, filter)
+	return b.auth.CanSubscribeContext(ctx, clientID, filter)
 }
 
 // ApplyRegisterHooks runs the optional auth_on_register hook.
@@ -298,6 +314,7 @@ func (b *Broker) ApplyRegisterHooks(ctx context.Context, clientID, externalID, u
 			b.auth.Forget(clientID)
 		} else {
 			b.auth.SetExternalID(clientID, req.ExternalID)
+			req.ExternalID = b.auth.ExternalID(clientID)
 		}
 	}
 	return req.ExternalID, ok
@@ -347,6 +364,15 @@ func (b *Broker) ExternalID(clientID string) string {
 		return ""
 	}
 	return b.auth.ExternalID(clientID)
+}
+
+// CertificateSessionCount returns the number of bounded certificate identity
+// bindings currently retained by the authentication engine.
+func (b *Broker) CertificateSessionCount() int {
+	if b.auth == nil {
+		return 0
+	}
+	return b.auth.CertificateSessionCount()
 }
 
 // SetClientRateLimiter sets the client rate limiter for publish/subscribe rate limiting.

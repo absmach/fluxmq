@@ -34,6 +34,7 @@ import (
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
+	"github.com/absmach/fluxmq/pki"
 	"github.com/absmach/fluxmq/queue"
 	qraft "github.com/absmach/fluxmq/queue/raft"
 	queueStorage "github.com/absmach/fluxmq/queue/storage"
@@ -97,9 +98,11 @@ func maxMQTTPacketSize(maxMessageSize int) int {
 }
 
 type brokerDeliveryTarget struct {
-	mqtt    *broker.Broker
-	amqp    *amqp1broker.Broker
-	amqp091 *amqpbroker.Broker
+	mqtt                     *broker.Broker
+	amqp                     *amqp1broker.Broker
+	amqp091                  *amqpbroker.Broker
+	certificateManager       *pki.Manager
+	certificateEventClientID string
 }
 
 type localAMQPPolicy struct {
@@ -320,6 +323,15 @@ func localPrincipalPublishTargetContracts(principals []config.LocalPrincipalConf
 }
 
 func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg *storage.Message) error {
+	if t.certificateManager != nil && clientID == t.certificateEventClientID {
+		if err := t.certificateManager.HandleEvent(msg.GetPayload(), msg.Properties); err != nil {
+			// Invalid events are acknowledged and dropped. Retrying an untrusted or
+			// malformed record would permanently block later revocations in the
+			// stream; the protected publisher contract prevents forgery at ingress.
+			slog.Warn("discarding invalid Atom lifecycle event", "error", err)
+		}
+		return nil
+	}
 	if amqp1broker.IsAMQPClient(clientID) {
 		return t.amqp.DeliverToClient(ctx, clientID, msg)
 	}
@@ -330,6 +342,9 @@ func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg
 }
 
 func (t *brokerDeliveryTarget) HasDeliveryTarget(clientID string) bool {
+	if t.certificateManager != nil && clientID == t.certificateEventClientID {
+		return true
+	}
 	if amqp1broker.IsAMQPClient(clientID) {
 		return t.amqp != nil && t.amqp.IsClientConnected(clientID)
 	}
@@ -677,6 +692,48 @@ func main() {
 	// Create AMQP 0.9.1 broker (needs queue manager set later)
 	amqp091Broker := amqpbroker.New(nil, logger)
 	defer amqp091Broker.Close()
+
+	var certificateManager *pki.Manager
+	if cfg.Auth.Certificate.Enabled {
+		manager, err := pki.NewManager(pki.Config{
+			ResolverAddress:      cfg.Auth.Certificate.ResolverAddress,
+			ResolverInsecure:     cfg.Auth.Certificate.ResolverInsecure,
+			ServiceTokenFile:     cfg.Auth.Certificate.ServiceTokenFile,
+			TrustBundleURL:       cfg.Auth.Certificate.TrustBundleURL,
+			EventSourcePrincipal: cfg.Auth.Certificate.EventSourcePrincipal,
+			Timeout:              cfg.Auth.Certificate.ResolverTimeout,
+			CacheTTL:             cfg.Auth.Certificate.CacheTTL,
+			CacheSize:            cfg.Auth.Certificate.CacheSize,
+			TrustRefreshInterval: cfg.Auth.Certificate.TrustRefreshInterval,
+		},
+			pki.WithLogger(logger),
+			pki.WithSessionInvalidator(b.DisconnectCertificateSessions),
+		)
+		if err != nil {
+			slog.Error("Failed to configure Atom certificate resolver", "error", err)
+			os.Exit(1) //nolint:gocritic // fatal initialization errors terminate immediately
+		}
+		startTimeout := cfg.Auth.Certificate.ResolverTimeout
+		if startTimeout == 0 {
+			startTimeout = pki.DefaultResolverTimeout
+		}
+		startCtx, startCancel := context.WithTimeout(context.Background(), startTimeout)
+		err = manager.Start(startCtx)
+		startCancel()
+		if err != nil {
+			slog.Error("Failed to load Atom trust bundle", "error", err)
+			os.Exit(1) //nolint:gocritic // fatal initialization errors terminate immediately
+		}
+		certificateManager = manager
+		defer func() {
+			if err := manager.Close(); err != nil {
+				slog.Warn("Failed to close Atom certificate resolver", "error", err)
+			}
+		}()
+		slog.Info("Atom resolver-tier certificate authentication enabled",
+			"cache_ttl", cfg.Auth.Certificate.CacheTTL,
+			"cache_size", cfg.Auth.Certificate.CacheSize)
+	}
 	var (
 		amqp091ExternalAuth  *corebroker.AuthEngine
 		amqp091ExternalHooks *corebroker.BlockingHookEngine
@@ -718,6 +775,9 @@ func main() {
 		}
 		engineOpts := []corebroker.AuthEngineOption{
 			corebroker.WithIdentityCache(cacheSize, cacheTTL),
+		}
+		if certificateManager != nil {
+			engineOpts = append(engineOpts, corebroker.WithCertificateAuthentication(certificateManager))
 		}
 
 		if cfg.Auth.External.EnabledFor("mqtt") {
@@ -936,11 +996,17 @@ func main() {
 			amqp091Broker.CancelConsumers(queueName, groupID, consumerIDs)
 		}
 
+		certificateEventClientID := ""
+		if certificateManager != nil {
+			certificateEventClientID = "pki-events:" + cfg.Cluster.NodeID
+		}
 		// Delivery dispatcher: routes to AMQP or MQTT broker based on client ID prefix.
 		deliveryTarget := &brokerDeliveryTarget{
-			mqtt:    b,
-			amqp:    amqpBroker,
-			amqp091: amqp091Broker,
+			mqtt:                     b,
+			amqp:                     amqpBroker,
+			amqp091:                  amqp091Broker,
+			certificateManager:       certificateManager,
+			certificateEventClientID: certificateEventClientID,
 		}
 
 		// Create log-based queue manager with wildcard support
@@ -1001,6 +1067,25 @@ func main() {
 		// Set queue manager on AMQP broker
 		amqpBroker.SetQueueManager(qm)
 		amqp091Broker.SetQueueManager(qm)
+		if certificateManager != nil {
+			groupID := cfg.Auth.Certificate.EventConsumerGroupPrefix + "." + cfg.Cluster.NodeID
+			cursor := &queueTypes.CursorOption{
+				Position: queueTypes.CursorLatest,
+				Mode:     queueTypes.GroupModeStream,
+			}
+			if err := qm.SubscribeExistingWithCursor(
+				context.Background(),
+				cfg.Auth.Certificate.EventQueue,
+				"",
+				certificateEventClientID,
+				groupID,
+				"",
+				cursor,
+			); err != nil {
+				slog.Error("Failed to subscribe to Atom lifecycle events", "error", err)
+				os.Exit(1)
+			}
+		}
 
 		// Set queue handler on cluster for cross-node message routing
 		if etcdCluster != nil {
@@ -1078,19 +1163,27 @@ func main() {
 			slog.Error("Failed to build TCP TLS configuration", "listener", slot.name, "error", err)
 			os.Exit(1)
 		}
+		if certificateManager != nil && slot.name == listenerMTLS {
+			tlsCfg, err = certificateManager.WrapTLSConfig(tlsCfg)
+			if err != nil {
+				slog.Error("Failed to attach Atom trust bundle to TCP mTLS listener", "error", err)
+				os.Exit(1)
+			}
+		}
 
 		tcpCfg := tcp.Config{
-			Address:          slot.cfg.Addr,
-			TLSConfig:        tlsCfg,
-			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
-			MaxConnections:   slot.cfg.MaxConnections,
-			ReadTimeout:      slot.cfg.ReadTimeout,
-			WriteTimeout:     slot.cfg.WriteTimeout,
-			SendQueueSize:    cfg.Session.MaxSendQueueSize,
-			DisconnectOnFull: cfg.Session.DisconnectOnFull,
-			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
-			MaxPacketSize:    maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
-			Logger:           logger,
+			Address:                   slot.cfg.Addr,
+			TLSConfig:                 tlsCfg,
+			ShutdownTimeout:           cfg.Server.ShutdownTimeout,
+			MaxConnections:            slot.cfg.MaxConnections,
+			ReadTimeout:               slot.cfg.ReadTimeout,
+			WriteTimeout:              slot.cfg.WriteTimeout,
+			SendQueueSize:             cfg.Session.MaxSendQueueSize,
+			DisconnectOnFull:          cfg.Session.DisconnectOnFull,
+			ProtocolVersion:           protocolVersionForMode(slot.cfg.Protocol),
+			CertificateAuthentication: certificateManager != nil && slot.name == listenerMTLS,
+			MaxPacketSize:             maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			Logger:                    logger,
 		}
 		tcpCfg.IPRateLimiter = rateLimitManager
 		tcpServer := tcp.New(tcpCfg, b)
@@ -1125,18 +1218,26 @@ func main() {
 			slog.Error("Failed to build WebSocket TLS configuration", "listener", slot.name, "error", err)
 			os.Exit(1)
 		}
+		if certificateManager != nil && slot.name == listenerMTLS {
+			tlsCfg, err = certificateManager.WrapTLSConfig(tlsCfg)
+			if err != nil {
+				slog.Error("Failed to attach Atom trust bundle to WebSocket mTLS listener", "error", err)
+				os.Exit(1)
+			}
+		}
 
 		wsCfg := websocket.Config{
-			Address:         slot.cfg.Addr,
-			Path:            slot.cfg.Path,
-			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			TLSConfig:       tlsCfg,
-			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
-			AllowedOrigins:  slot.cfg.AllowedOrigins,
-			MaxPacketSize:   maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
-			ReadTimeout:     slot.cfg.ReadTimeout,
-			WriteTimeout:    slot.cfg.WriteTimeout,
-			MaxConnections:  slot.cfg.MaxConnections,
+			Address:                   slot.cfg.Addr,
+			Path:                      slot.cfg.Path,
+			ShutdownTimeout:           cfg.Server.ShutdownTimeout,
+			TLSConfig:                 tlsCfg,
+			ProtocolVersion:           protocolVersionForMode(slot.cfg.Protocol),
+			AllowedOrigins:            slot.cfg.AllowedOrigins,
+			MaxPacketSize:             maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			ReadTimeout:               slot.cfg.ReadTimeout,
+			WriteTimeout:              slot.cfg.WriteTimeout,
+			MaxConnections:            slot.cfg.MaxConnections,
+			CertificateAuthentication: certificateManager != nil && slot.name == listenerMTLS,
 		}
 		wsCfg.IPRateLimiter = rateLimitManager
 
@@ -1428,6 +1529,9 @@ func main() {
 		if qm != nil && queueLogStore != nil {
 			apiServer := api.New(apiCfg, b, amqp091Broker, cl, qm, qm.QueueStore(), qm.GroupStore(), logger)
 			apiServer.SetReloadManager(reloadManager)
+			if certificateManager != nil {
+				apiServer.SetCertificateMetricsProvider(certificateManager)
+			}
 
 			wg.Add(1)
 			go func() {
