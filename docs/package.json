@@ -22,22 +22,22 @@
     "@scalar/openapi-upgrader": "0.2.13",
     "ajv": "^8.20.0",
     "fast-content-type-parse": "^3.0.0",
-    "fumadocs-core": "16.14.2",
-    "fumadocs-mdx": "15.2.2",
+    "fumadocs-core": "16.14.4",
+    "fumadocs-mdx": "15.2.3",
     "fumadocs-openapi": "11.0.6",
     "fumadocs-ui": "16.10.7",
-    "lucide-react": "^1.30.0",
+    "lucide-react": "^1.31.0",
     "mermaid": "^11.16.1",
-    "next": "16.3.0",
+    "next": "16.3.1",
     "next-themes": "^0.4.6",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-medium-image-zoom": "5.4.8",
+    "react-medium-image-zoom": "5.4.9",
     "xml-js": "^1.6.11",
-    "zbsearch": "^3.3.4"
+    "zbsearch": "^4.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.7",
+    "@biomejs/biome": "^2.5.8",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/mdx": "^2.0.14",
     "@types/node": "^26.2.0",
@@ -46,9 +46,9 @@
     "postcss": "^8.5.26",
     "serve": "^14.2.5",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.23.11",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.3",
-    "wrangler": "^4.120.0"
+    "wrangler": "^4.123.0"
   },
   "packageManager": "pnpm@10.33.0"
 }
