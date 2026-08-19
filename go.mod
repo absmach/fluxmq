@@ -1,8 +1,6 @@
 module github.com/absmach/fluxmq
 
-go 1.26.3
-
-toolchain go1.26.5
+go 1.26.6
 
 require (
 	connectrpc.com/connect v1.20.0
