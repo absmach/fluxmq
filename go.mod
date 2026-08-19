@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/raft v1.7.3
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.19.2
 	github.com/pion/dtls/v3 v3.1.5
 	github.com/plgd-dev/go-coap/v3 v3.5.4
 	github.com/rabbitmq/amqp091-go v1.13.0
