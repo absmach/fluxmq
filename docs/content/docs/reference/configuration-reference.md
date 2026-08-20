@@ -47,41 +47,42 @@ Durations use Go duration strings like `5s`, `1m`, `24h`.
 
 ```yaml
 server:
-  tcp:
-    v3:
-      addr: ":1883"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      protocol: "v3"
-    v5:
-      addr: ":1884"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      protocol: "v5"
-    tls: {}
-    mtls: {}
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        protocol: "v3"
+      v5:
+        addr: ":1884"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        protocol: "v5"
+      tls: {}
+      mtls: {}
 
-  websocket:
-    v3:
-      addr: ":8083"
-      path: "/mqtt"
-      protocol: "v3"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      allowed_origins: ["https://app.example.com"]
-    v5:
-      addr: ":8084"
-      path: "/mqtt"
-      protocol: "v5"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      allowed_origins: ["https://app.example.com"]
-    tls: {}
-    mtls: {}
+    websocket:
+      v3:
+        addr: ":8083"
+        path: "/mqtt"
+        protocol: "v3"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        allowed_origins: ["https://app.example.com"]
+      v5:
+        addr: ":8084"
+        path: "/mqtt"
+        protocol: "v5"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        allowed_origins: ["https://app.example.com"]
+      tls: {}
+      mtls: {}
 
   http:
     plain:
@@ -135,7 +136,7 @@ server:
 
 ### Listener Fields
 
-These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.local` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks. `server.amqp091.internal` and `server.amqp091.service` are deprecated aliases for it.
+These apply to listener blocks (for example `server.mqtt.tcp.v3`, `server.mqtt.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.local` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks. `server.amqp091.internal` and `server.amqp091.service` are deprecated aliases for it.
 
 | Field             | Description                                                                                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -143,7 +144,7 @@ These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v
 | `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on a local-principal listener, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
 | `read_timeout`    | Bounds the phase before an MQTT session starts (`time.Duration`, `>= 0`). On TCP that is the TLS handshake, protocol sniff and CONNECT; on WebSocket it also bounds the HTTP request and TLS handshake that precede the upgrade. Once the session starts it sets its own read deadlines from the negotiated keep-alive. TCP and WebSocket listeners. |
 | `write_timeout`   | Bounds a single socket write for the life of the connection (`time.Duration`, `>= 0`). TCP and WebSocket listeners.                            |
-| `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
+| `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.mqtt.tcp.v3` and `v5` on `server.mqtt.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
 | `path`            | HTTP path for MQTT-over-WebSocket endpoint.                                                                                                    |
 | `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production.                                               |
 

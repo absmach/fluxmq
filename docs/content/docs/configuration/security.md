@@ -455,17 +455,18 @@ Listeners share TLS fields across `tls` and `mtls` blocks.
 
 ```yaml
 server:
-  tcp:
-    tls:
-      addr: ":8883"
-      cert_file: "/path/server.crt"
-      key_file: "/path/server.key"
-    mtls:
-      addr: ":8884"
-      cert_file: "/path/server.crt"
-      key_file: "/path/server.key"
-      ca_file: "/path/clients-ca.crt"
-      client_auth: "require"
+  mqtt:
+    tcp:
+      tls:
+        addr: ":8883"
+        cert_file: "/path/server.crt"
+        key_file: "/path/server.key"
+      mtls:
+        addr: ":8884"
+        cert_file: "/path/server.crt"
+        key_file: "/path/server.key"
+        ca_file: "/path/clients-ca.crt"
+        client_auth: "require"
 ```
 
 ## Inter-Broker TLS

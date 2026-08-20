@@ -5,7 +5,9 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -583,12 +585,11 @@ type SubscribeRateLimitConfig struct {
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
-	TCP       TCPConfig       `yaml:"tcp"`
-	WebSocket WebSocketConfig `yaml:"websocket"`
-	HTTP      HTTPConfig      `yaml:"http"`
-	CoAP      CoAPConfig      `yaml:"coap"`
-	AMQP      AMQPConfig      `yaml:"amqp"`
-	AMQP091   AMQP091Config   `yaml:"amqp091"`
+	MQTT    MQTTConfig    `yaml:"mqtt"`
+	HTTP    HTTPConfig    `yaml:"http"`
+	CoAP    CoAPConfig    `yaml:"coap"`
+	AMQP    AMQPConfig    `yaml:"amqp"`
+	AMQP091 AMQP091Config `yaml:"amqp091"`
 
 	HealthAddr      string        `yaml:"health_addr"`
 	MetricsAddr     string        `yaml:"metrics_addr"` // Now used for OTLP endpoint
@@ -615,8 +616,8 @@ type ServerConfig struct {
 	AdminAPIAddr string `yaml:"admin_api_addr"`
 }
 
-// TCPListenerConfig holds TCP listener configuration.
-type TCPListenerConfig struct {
+// MQTTTCPListenerConfig holds TCP listener configuration.
+type MQTTTCPListenerConfig struct {
 	Addr           string         `yaml:"addr"`
 	MaxConnections int            `yaml:"max_connections"`
 	ReadTimeout    time.Duration  `yaml:"read_timeout"`
@@ -625,16 +626,25 @@ type TCPListenerConfig struct {
 	TLS            mqtttls.Config `yaml:",inline"`
 }
 
-// TCPConfig groups TCP listeners by mode.
-type TCPConfig struct {
-	V3   TCPListenerConfig `yaml:"v3"`
-	V5   TCPListenerConfig `yaml:"v5"`
-	TLS  TCPListenerConfig `yaml:"tls"`
-	MTLS TCPListenerConfig `yaml:"mtls"`
+// MQTTConfig groups every MQTT listener, by transport. AMQP 0.9.1 and AMQP 1.0
+// have their own sections on ServerConfig; keeping MQTT's transports together
+// under one key is what distinguishes `server.mqtt.tcp` from a generic TCP
+// listener that some other protocol might own.
+type MQTTConfig struct {
+	TCP       MQTTTCPConfig       `yaml:"tcp"`
+	WebSocket MQTTWebSocketConfig `yaml:"websocket"`
 }
 
-// WSListenerConfig holds WebSocket listener configuration.
-type WSListenerConfig struct {
+// MQTTTCPConfig groups MQTT-over-TCP listeners by mode.
+type MQTTTCPConfig struct {
+	V3   MQTTTCPListenerConfig `yaml:"v3"`
+	V5   MQTTTCPListenerConfig `yaml:"v5"`
+	TLS  MQTTTCPListenerConfig `yaml:"tls"`
+	MTLS MQTTTCPListenerConfig `yaml:"mtls"`
+}
+
+// MQTTWebSocketListenerConfig holds WebSocket listener configuration.
+type MQTTWebSocketListenerConfig struct {
 	Addr           string         `yaml:"addr"`
 	Path           string         `yaml:"path"`
 	Protocol       string         `yaml:"protocol"`
@@ -645,12 +655,12 @@ type WSListenerConfig struct {
 	TLS            mqtttls.Config `yaml:",inline"`
 }
 
-// WebSocketConfig groups WebSocket listeners by mode.
-type WebSocketConfig struct {
-	V3   WSListenerConfig `yaml:"v3"`
-	V5   WSListenerConfig `yaml:"v5"`
-	TLS  WSListenerConfig `yaml:"tls"`
-	MTLS WSListenerConfig `yaml:"mtls"`
+// MQTTWebSocketConfig groups WebSocket listeners by mode.
+type MQTTWebSocketConfig struct {
+	V3   MQTTWebSocketListenerConfig `yaml:"v3"`
+	V5   MQTTWebSocketListenerConfig `yaml:"v5"`
+	TLS  MQTTWebSocketListenerConfig `yaml:"tls"`
+	MTLS MQTTWebSocketListenerConfig `yaml:"mtls"`
 }
 
 // HTTPListenerConfig holds HTTP listener configuration.
@@ -1022,64 +1032,66 @@ type WebhookEndpoint struct {
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
-			TCP: TCPConfig{
-				V3: TCPListenerConfig{
-					Addr:           defaultTCPV3Addr,
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-					Protocol:       ProtocolModeV3,
+			MQTT: MQTTConfig{
+				TCP: MQTTTCPConfig{
+					V3: MQTTTCPListenerConfig{
+						Addr:           defaultTCPV3Addr,
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+						Protocol:       ProtocolModeV3,
+					},
+					V5: MQTTTCPListenerConfig{
+						Addr:           defaultTCPV5Addr,
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+						Protocol:       ProtocolModeV5,
+					},
+					TLS: MQTTTCPListenerConfig{
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+						Protocol:       ProtocolModeAuto,
+					},
+					MTLS: MQTTTCPListenerConfig{
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+						Protocol:       ProtocolModeAuto,
+					},
 				},
-				V5: TCPListenerConfig{
-					Addr:           defaultTCPV5Addr,
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-					Protocol:       ProtocolModeV5,
-				},
-				TLS: TCPListenerConfig{
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-					Protocol:       ProtocolModeAuto,
-				},
-				MTLS: TCPListenerConfig{
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-					Protocol:       ProtocolModeAuto,
-				},
-			},
-			WebSocket: WebSocketConfig{
-				V3: WSListenerConfig{
-					Addr:           ":8083",
-					Path:           defaultWSPath,
-					Protocol:       ProtocolModeV3,
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-				},
-				V5: WSListenerConfig{
-					Addr:           ":8084",
-					Path:           defaultWSPath,
-					Protocol:       ProtocolModeV5,
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-				},
-				TLS: WSListenerConfig{
-					Path:           defaultWSPath,
-					Protocol:       ProtocolModeAuto,
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
-				},
-				MTLS: WSListenerConfig{
-					Path:           defaultWSPath,
-					Protocol:       ProtocolModeAuto,
-					MaxConnections: 10000,
-					ReadTimeout:    60 * time.Second,
-					WriteTimeout:   60 * time.Second,
+				WebSocket: MQTTWebSocketConfig{
+					V3: MQTTWebSocketListenerConfig{
+						Addr:           ":8083",
+						Path:           defaultWSPath,
+						Protocol:       ProtocolModeV3,
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+					},
+					V5: MQTTWebSocketListenerConfig{
+						Addr:           ":8084",
+						Path:           defaultWSPath,
+						Protocol:       ProtocolModeV5,
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+					},
+					TLS: MQTTWebSocketListenerConfig{
+						Path:           defaultWSPath,
+						Protocol:       ProtocolModeAuto,
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+					},
+					MTLS: MQTTWebSocketListenerConfig{
+						Path:           defaultWSPath,
+						Protocol:       ProtocolModeAuto,
+						MaxConnections: 10000,
+						ReadTimeout:    60 * time.Second,
+						WriteTimeout:   60 * time.Second,
+					},
 				},
 			},
 			HTTP: HTTPConfig{
@@ -1272,9 +1284,40 @@ func Default() *Config {
 	}
 }
 
-// Load loads configuration from a YAML file.
-// If the file doesn't exist, returns default configuration.
+// ErrConfigNotFound reports a config file that was named but does not exist.
+// Callers that genuinely want defaults on a missing file use LoadOptional.
+var ErrConfigNotFound = errors.New("config file not found")
+
+// Load reads and validates a configuration file.
+//
+// A named file that does not exist is an error: silently falling back to
+// defaults turns a typo in a unit file or chart into a broker running with
+// none of the operator's settings, including their authentication and TLS
+// settings. Use LoadOptional for the opt-in fallback.
+//
+// Decoding is strict. An unknown, misspelled, or misplaced key fails the load
+// rather than being discarded, so a mistyped key can never silently drop the
+// protection it was meant to configure.
 func Load(filename string) (*Config, error) {
+	if filename == "" {
+		return Default(), nil
+	}
+
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrConfigNotFound, filename)
+		}
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	return parse(data)
+}
+
+// LoadOptional behaves like Load, except that a missing file yields the
+// default configuration instead of an error. Every other failure — unreadable
+// file, unknown key, invalid value — is still reported.
+func LoadOptional(filename string) (*Config, error) {
 	if filename == "" {
 		return Default(), nil
 	}
@@ -1287,12 +1330,19 @@ func Load(filename string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	return parse(data)
+}
+
+func parse(data []byte) (*Config, error) {
 	cfg := Default()
 	if err := rejectLegacyAuthKeys(data); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	// io.EOF means an empty document, which leaves the defaults in place.
+	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
@@ -1366,28 +1416,28 @@ func rejectLegacyAuthKeys(data []byte) error {
 func (c *Config) Validate() error {
 	tcpSlots := []struct {
 		name              string
-		cfg               TCPListenerConfig
+		cfg               MQTTTCPListenerConfig
 		requireClientAuth bool
 		requireTLS        bool
 		fixedProtocol     string
 	}{
-		{name: "v3", cfg: c.Server.TCP.V3, fixedProtocol: ProtocolModeV3},
-		{name: "v5", cfg: c.Server.TCP.V5, fixedProtocol: ProtocolModeV5},
-		{name: listenerNameTLS, cfg: c.Server.TCP.TLS, requireClientAuth: false, requireTLS: true},
-		{name: listenerNameMTLS, cfg: c.Server.TCP.MTLS, requireClientAuth: true, requireTLS: true},
+		{name: "v3", cfg: c.Server.MQTT.TCP.V3, fixedProtocol: ProtocolModeV3},
+		{name: "v5", cfg: c.Server.MQTT.TCP.V5, fixedProtocol: ProtocolModeV5},
+		{name: listenerNameTLS, cfg: c.Server.MQTT.TCP.TLS, requireClientAuth: false, requireTLS: true},
+		{name: listenerNameMTLS, cfg: c.Server.MQTT.TCP.MTLS, requireClientAuth: true, requireTLS: true},
 	}
 
 	wsSlots := []struct {
 		name              string
-		cfg               WSListenerConfig
+		cfg               MQTTWebSocketListenerConfig
 		requireTLS        bool
 		requireClientAuth bool
 		fixedProtocol     string
 	}{
-		{name: "v3", cfg: c.Server.WebSocket.V3, fixedProtocol: ProtocolModeV3},
-		{name: "v5", cfg: c.Server.WebSocket.V5, fixedProtocol: ProtocolModeV5},
-		{name: listenerNameTLS, cfg: c.Server.WebSocket.TLS, requireTLS: true},
-		{name: listenerNameMTLS, cfg: c.Server.WebSocket.MTLS, requireTLS: true, requireClientAuth: true},
+		{name: "v3", cfg: c.Server.MQTT.WebSocket.V3, fixedProtocol: ProtocolModeV3},
+		{name: "v5", cfg: c.Server.MQTT.WebSocket.V5, fixedProtocol: ProtocolModeV5},
+		{name: listenerNameTLS, cfg: c.Server.MQTT.WebSocket.TLS, requireTLS: true},
+		{name: listenerNameMTLS, cfg: c.Server.MQTT.WebSocket.MTLS, requireTLS: true, requireClientAuth: true},
 	}
 
 	httpSlots := []struct {
@@ -1403,70 +1453,70 @@ func (c *Config) Validate() error {
 	hasMessagingListener := false
 
 	for _, slot := range tcpSlots {
-		if err := validateListenerProtocol("server.tcp."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
+		if err := validateListenerProtocol("server.mqtt.tcp."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
 			return err
 		}
 		mode := NormalizeProtocolMode(slot.cfg.Protocol)
 		if slot.fixedProtocol != "" && mode != slot.fixedProtocol {
-			return fmt.Errorf("server.tcp.%s.protocol must be %q", slot.name, slot.fixedProtocol)
+			return fmt.Errorf("server.mqtt.tcp.%s.protocol must be %q", slot.name, slot.fixedProtocol)
 		}
 		if !hasAddr(slot.cfg.Addr) {
 			if tlsConfigured(slot.cfg.TLS) && !slot.requireTLS {
-				return fmt.Errorf("server.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
+				return fmt.Errorf("server.mqtt.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
 			}
 			continue
 		}
 
 		hasMessagingListener = true
 		if slot.cfg.MaxConnections < 0 {
-			return fmt.Errorf("server.tcp.%s.max_connections cannot be negative", slot.name)
+			return fmt.Errorf("server.mqtt.tcp.%s.max_connections cannot be negative", slot.name)
 		}
 		if slot.cfg.ReadTimeout < 0 {
-			return fmt.Errorf("server.tcp.%s.read_timeout cannot be negative", slot.name)
+			return fmt.Errorf("server.mqtt.tcp.%s.read_timeout cannot be negative", slot.name)
 		}
 		if slot.cfg.WriteTimeout < 0 {
-			return fmt.Errorf("server.tcp.%s.write_timeout cannot be negative", slot.name)
+			return fmt.Errorf("server.mqtt.tcp.%s.write_timeout cannot be negative", slot.name)
 		}
 		if slot.requireTLS {
-			if err := validateListenerTLS("server.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+			if err := validateListenerTLS("server.mqtt.tcp."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
 		} else if tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
+			return fmt.Errorf("server.mqtt.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
 		}
 	}
 
 	for _, slot := range wsSlots {
-		if err := validateListenerProtocol("server.websocket."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
+		if err := validateListenerProtocol("server.mqtt.websocket."+slot.name+".protocol", slot.cfg.Protocol); err != nil {
 			return err
 		}
 		mode := NormalizeProtocolMode(slot.cfg.Protocol)
 		if slot.fixedProtocol != "" && mode != slot.fixedProtocol {
-			return fmt.Errorf("server.websocket.%s.protocol must be %q", slot.name, slot.fixedProtocol)
+			return fmt.Errorf("server.mqtt.websocket.%s.protocol must be %q", slot.name, slot.fixedProtocol)
 		}
 		if !hasAddr(slot.cfg.Addr) {
 			if tlsConfigured(slot.cfg.TLS) && !slot.requireTLS {
-				return fmt.Errorf("server.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
+				return fmt.Errorf("server.mqtt.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
 			}
 			continue
 		}
 
 		hasMessagingListener = true
 		if slot.cfg.MaxConnections < 0 {
-			return fmt.Errorf("server.websocket.%s.max_connections cannot be negative", slot.name)
+			return fmt.Errorf("server.mqtt.websocket.%s.max_connections cannot be negative", slot.name)
 		}
 		if slot.cfg.ReadTimeout < 0 {
-			return fmt.Errorf("server.websocket.%s.read_timeout cannot be negative", slot.name)
+			return fmt.Errorf("server.mqtt.websocket.%s.read_timeout cannot be negative", slot.name)
 		}
 		if slot.cfg.WriteTimeout < 0 {
-			return fmt.Errorf("server.websocket.%s.write_timeout cannot be negative", slot.name)
+			return fmt.Errorf("server.mqtt.websocket.%s.write_timeout cannot be negative", slot.name)
 		}
 		if slot.requireTLS {
-			if err := validateListenerTLS("server.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
+			if err := validateListenerTLS("server.mqtt.websocket."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
 		} else if tlsConfigured(slot.cfg.TLS) {
-			return fmt.Errorf("server.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
+			return fmt.Errorf("server.mqtt.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
 		}
 	}
 
@@ -1600,6 +1650,10 @@ func (c *Config) Validate() error {
 	}
 	if !hasMessagingListener {
 		return fmt.Errorf("at least one messaging listener must be configured")
+	}
+
+	if err := c.validateNoDuplicateBinds(); err != nil {
+		return err
 	}
 
 	for proto := range c.Auth.External.Protocols {
@@ -2159,6 +2213,116 @@ func tlsConfigured(cfg mqtttls.Config) bool {
 
 func hasAddr(addr string) bool {
 	return strings.TrimSpace(addr) != ""
+}
+
+// listenerBinding is one configured listener, named by its config path.
+type listenerBinding struct {
+	path string
+	addr string
+}
+
+// validateNoDuplicateBinds rejects two listeners that would race for the same
+// socket. Without it the loser fails at startup with a bare "address already
+// in use" naming no config key, and a listener the operator never declared —
+// one left at its default — can silently shadow one they did.
+//
+// UDP and TCP are checked separately: CoAP may reuse a TCP port number.
+func (c *Config) validateNoDuplicateBinds() error {
+	tcp := []listenerBinding{
+		{"server.mqtt.tcp.v3.addr", c.Server.MQTT.TCP.V3.Addr},
+		{"server.mqtt.tcp.v5.addr", c.Server.MQTT.TCP.V5.Addr},
+		{"server.mqtt.tcp.tls.addr", c.Server.MQTT.TCP.TLS.Addr},
+		{"server.mqtt.tcp.mtls.addr", c.Server.MQTT.TCP.MTLS.Addr},
+		{"server.mqtt.websocket.v3.addr", c.Server.MQTT.WebSocket.V3.Addr},
+		{"server.mqtt.websocket.v5.addr", c.Server.MQTT.WebSocket.V5.Addr},
+		{"server.mqtt.websocket.tls.addr", c.Server.MQTT.WebSocket.TLS.Addr},
+		{"server.mqtt.websocket.mtls.addr", c.Server.MQTT.WebSocket.MTLS.Addr},
+		{"server.http.plain.addr", c.Server.HTTP.Plain.Addr},
+		{"server.http.tls.addr", c.Server.HTTP.TLS.Addr},
+		{"server.http.mtls.addr", c.Server.HTTP.MTLS.Addr},
+		{"server.amqp.plain.addr", c.Server.AMQP.Plain.Addr},
+		{"server.amqp.tls.addr", c.Server.AMQP.TLS.Addr},
+		{"server.amqp.mtls.addr", c.Server.AMQP.MTLS.Addr},
+		{"server.amqp091.plain.addr", c.Server.AMQP091.Plain.Addr},
+		{"server.amqp091.tls.addr", c.Server.AMQP091.TLS.Addr},
+		{"server.amqp091.mtls.addr", c.Server.AMQP091.MTLS.Addr},
+		{"server.amqp091.local.addr", c.Server.AMQP091.Local.Addr},
+		{"server.admin_api_addr", c.Server.AdminAPIAddr},
+		{"server.health_addr", c.Server.HealthAddr},
+	}
+	udp := []listenerBinding{
+		{"server.coap.plain.addr", c.Server.CoAP.Plain.Addr},
+		{"server.coap.dtls.addr", c.Server.CoAP.DTLS.Addr},
+		{"server.coap.mdtls.addr", c.Server.CoAP.MDTLS.Addr},
+	}
+
+	for _, set := range []struct {
+		network  string
+		bindings []listenerBinding
+	}{{"tcp", tcp}, {"udp", udp}} {
+		if err := checkBindConflicts(set.network, set.bindings); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkBindConflicts(network string, bindings []listenerBinding) error {
+	active := make([]listenerBinding, 0, len(bindings))
+	for _, b := range bindings {
+		if hasAddr(b.addr) {
+			active = append(active, b)
+		}
+	}
+
+	for i, a := range active {
+		for _, b := range active[i+1:] {
+			if bindsConflict(a.addr, b.addr) {
+				return fmt.Errorf(
+					"%s and %s both listen on %s (%s); give each listener its own address, or set one to \"\" to disable it",
+					a.path, b.path, b.addr, network)
+			}
+		}
+	}
+	return nil
+}
+
+// bindsConflict reports whether two listen addresses would contend for the
+// same socket. Ports must match; hosts conflict when they are equal or when
+// either side is a wildcard, since a wildcard bind covers every interface.
+func bindsConflict(a, b string) bool {
+	hostA, portA, okA := splitListenAddr(a)
+	hostB, portB, okB := splitListenAddr(b)
+	if !okA || !okB || portA != portB {
+		return false
+	}
+	if isWildcardHost(hostA) || isWildcardHost(hostB) {
+		return true
+	}
+	return strings.EqualFold(hostA, hostB)
+}
+
+func splitListenAddr(addr string) (host, port string, ok bool) {
+	addr = strings.TrimSpace(addr)
+	idx := strings.LastIndex(addr, ":")
+	if idx < 0 {
+		return "", "", false
+	}
+	host = strings.Trim(addr[:idx], "[]")
+	port = addr[idx+1:]
+	if port == "" {
+		return "", "", false
+	}
+	return host, port, true
+}
+
+func isWildcardHost(host string) bool {
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::", "*":
+		return true
+	default:
+		return false
+	}
 }
 
 // Save writes the configuration to a YAML file.

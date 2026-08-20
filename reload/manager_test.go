@@ -361,9 +361,10 @@ func TestReloadRestartRequired(t *testing.T) {
 	cfg := config.Default()
 
 	yamlContent := `server:
-  tcp:
-    v3:
-      addr: ":9999"
+  mqtt:
+    tcp:
+      v3:
+        addr: ":9999"
 `
 	path := writeConfig(t, dir, yamlContent)
 
@@ -379,8 +380,8 @@ func TestReloadRestartRequired(t *testing.T) {
 		t.Errorf("version should remain 1 when no runtime changes are applied, got %d", m.Version())
 	}
 	current := m.Current()
-	if current.Server.TCP.V3.Addr != cfg.Server.TCP.V3.Addr {
-		t.Errorf("runtime snapshot drifted; expected %q, got %q", cfg.Server.TCP.V3.Addr, current.Server.TCP.V3.Addr)
+	if current.Server.MQTT.TCP.V3.Addr != cfg.Server.MQTT.TCP.V3.Addr {
+		t.Errorf("runtime snapshot drifted; expected %q, got %q", cfg.Server.MQTT.TCP.V3.Addr, current.Server.MQTT.TCP.V3.Addr)
 	}
 }
 
@@ -389,9 +390,10 @@ func TestReloadRestartRequiredStaysPending(t *testing.T) {
 	cfg := config.Default()
 
 	yamlContent := `server:
-  tcp:
-    v3:
-      addr: ":9999"
+  mqtt:
+    tcp:
+      v3:
+        addr: ":9999"
 `
 	path := writeConfig(t, dir, yamlContent)
 
@@ -434,18 +436,27 @@ func TestReloadInvalidConfig(t *testing.T) {
 	}
 }
 
+// TestReloadMissingFile pins that a config file which has gone missing fails
+// the reload and leaves the running configuration untouched. Falling back to
+// defaults here would be worse than at startup: it would silently reset a live
+// broker — authentication, TLS, listeners and all — because someone renamed a
+// file.
 func TestReloadMissingFile(t *testing.T) {
 	cfg := config.Default()
 	m := New("/nonexistent/path/config.yaml", cfg)
 
-	// config.Load returns defaults for missing files, so this should succeed
-	// but produce no changes (since defaults == defaults).
-	result, err := m.Reload(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	_, err := m.Reload(context.Background())
+	if err == nil {
+		t.Fatal("reload must fail when the config file is missing")
 	}
-	if result.HasChanges() {
-		t.Error("expected no changes when loading defaults from missing file")
+	if !errors.Is(err, config.ErrConfigNotFound) {
+		t.Fatalf("expected ErrConfigNotFound, got %v", err)
+	}
+	if m.Version() != 1 {
+		t.Errorf("version must not advance on a failed reload, got %d", m.Version())
+	}
+	if m.Current().Server.MQTT.TCP.V3.Addr != cfg.Server.MQTT.TCP.V3.Addr {
+		t.Error("running configuration must be retained after a failed reload")
 	}
 }
 
@@ -697,9 +708,10 @@ func TestReloadMixedChanges(t *testing.T) {
 	yamlContent := `log:
   level: debug
 server:
-  tcp:
-    v3:
-      addr: ":9999"
+  mqtt:
+    tcp:
+      v3:
+        addr: ":9999"
 `
 	path := writeConfig(t, dir, yamlContent)
 

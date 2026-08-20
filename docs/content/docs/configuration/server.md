@@ -11,18 +11,19 @@ description: Configure listeners, WebSocket path, health checks, and OpenTelemet
 
 ```yaml
 server:
-  tcp:
-    v3:
-      addr: ":1883"
-      protocol: "v3"
-    v5:
-      addr: ":1884"
-      protocol: "v5"
-  websocket:
-    plain:
-      addr: ":8083"
-      path: "/mqtt"
-      protocol: "auto" # auto | v3 | v5
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+        protocol: "v3"
+      v5:
+        addr: ":1884"
+        protocol: "v5"
+    websocket:
+      plain:
+        addr: ":8083"
+        path: "/mqtt"
+        protocol: "auto" # auto | v3 | v5
   http:
     plain:
       addr: ":8080"

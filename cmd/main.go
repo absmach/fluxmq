@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -385,10 +386,23 @@ func releaseShutdownResources(
 
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
+	configOptional := flag.Bool("config-optional", false,
+		"Fall back to built-in defaults when --config names a file that does not exist")
 	flag.Parse()
 
-	cfg, err := config.Load(*configFile)
+	load := config.Load
+	if *configOptional {
+		load = config.LoadOptional
+	}
+
+	cfg, err := load(*configFile)
 	if err != nil {
+		if errors.Is(err, config.ErrConfigNotFound) {
+			slog.Error("Configuration file not found",
+				"path", *configFile,
+				"hint", "check the path, or pass --config-optional to start with built-in defaults")
+			os.Exit(1)
+		}
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
@@ -439,14 +453,14 @@ func main() {
 
 	slog.Info("Starting MQTT broker", "version", fluxmq.Version)
 	slog.Info("Configuration loaded",
-		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
-		"tcp_v5_listener", cfg.Server.TCP.V5.Addr,
-		"tcp_tls_listener", cfg.Server.TCP.TLS.Addr,
-		"tcp_mtls_listener", cfg.Server.TCP.MTLS.Addr,
-		"ws_v3_listener", cfg.Server.WebSocket.V3.Addr,
-		"ws_v5_listener", cfg.Server.WebSocket.V5.Addr,
-		"ws_tls_listener", cfg.Server.WebSocket.TLS.Addr,
-		"ws_mtls_listener", cfg.Server.WebSocket.MTLS.Addr,
+		"tcp_v3_listener", cfg.Server.MQTT.TCP.V3.Addr,
+		"tcp_v5_listener", cfg.Server.MQTT.TCP.V5.Addr,
+		"tcp_tls_listener", cfg.Server.MQTT.TCP.TLS.Addr,
+		"tcp_mtls_listener", cfg.Server.MQTT.TCP.MTLS.Addr,
+		"ws_v3_listener", cfg.Server.MQTT.WebSocket.V3.Addr,
+		"ws_v5_listener", cfg.Server.MQTT.WebSocket.V5.Addr,
+		"ws_tls_listener", cfg.Server.MQTT.WebSocket.TLS.Addr,
+		"ws_mtls_listener", cfg.Server.MQTT.WebSocket.MTLS.Addr,
 		"http_plain_listener", cfg.Server.HTTP.Plain.Addr,
 		"http_tls_listener", cfg.Server.HTTP.TLS.Addr,
 		"http_mtls_listener", cfg.Server.HTTP.MTLS.Addr,
@@ -1077,12 +1091,12 @@ func main() {
 
 	tcpSlots := []struct {
 		name string
-		cfg  config.TCPListenerConfig
+		cfg  config.MQTTTCPListenerConfig
 	}{
-		{name: "v3", cfg: cfg.Server.TCP.V3},
-		{name: "v5", cfg: cfg.Server.TCP.V5},
-		{name: listenerTLS, cfg: cfg.Server.TCP.TLS},
-		{name: listenerMTLS, cfg: cfg.Server.TCP.MTLS},
+		{name: "v3", cfg: cfg.Server.MQTT.TCP.V3},
+		{name: "v5", cfg: cfg.Server.MQTT.TCP.V5},
+		{name: listenerTLS, cfg: cfg.Server.MQTT.TCP.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.MQTT.TCP.MTLS},
 	}
 
 	for _, slot := range tcpSlots {
@@ -1124,12 +1138,12 @@ func main() {
 
 	wsSlots := []struct {
 		name string
-		cfg  config.WSListenerConfig
+		cfg  config.MQTTWebSocketListenerConfig
 	}{
-		{name: "v3", cfg: cfg.Server.WebSocket.V3},
-		{name: "v5", cfg: cfg.Server.WebSocket.V5},
-		{name: listenerTLS, cfg: cfg.Server.WebSocket.TLS},
-		{name: listenerMTLS, cfg: cfg.Server.WebSocket.MTLS},
+		{name: "v3", cfg: cfg.Server.MQTT.WebSocket.V3},
+		{name: "v5", cfg: cfg.Server.MQTT.WebSocket.V5},
+		{name: listenerTLS, cfg: cfg.Server.MQTT.WebSocket.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.MQTT.WebSocket.MTLS},
 	}
 
 	for _, slot := range wsSlots {

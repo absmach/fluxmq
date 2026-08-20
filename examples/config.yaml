@@ -3,22 +3,35 @@
 # Server Configuration
 server:
   # TCP listeners (MQTT over TCP)
-  tcp:
-    plain:
-      addr: ":1883"
-      max_connections: 10000
-      read_timeout: 60s
-      write_timeout: 60s
-    tls: {}
-    mtls: {}
+  # MQTT transports live under server.mqtt so that `tcp` is not mistaken
+  # for a generic listener; AMQP has its own sections below.
+  mqtt:
+    tcp:
+      # MQTT 3.1.1 and MQTT 5.0 get their own listeners; a single plaintext
+      # port cannot serve both, and each slot's protocol is fixed.
+      v3:
+        addr: ":1883"
+        max_connections: 10000
+        read_timeout: 60s
+        write_timeout: 60s
+      v5:
+        addr: ":1884"
+        max_connections: 10000
+        read_timeout: 60s
+        write_timeout: 60s
+      tls: {}
+      mtls: {}
 
   # WebSocket listeners (MQTT over WebSocket)
-  websocket:
-    plain:
-      addr: ":8083"
-      path: "/mqtt"
-    tls: {}
-    mtls: {}
+    websocket:
+      v3:
+        addr: ":8083"
+        path: "/mqtt"
+      v5:
+        addr: ":8084"
+        path: "/mqtt"
+      tls: {}
+      mtls: {}
 
   # HTTP-MQTT bridge listeners
   http:

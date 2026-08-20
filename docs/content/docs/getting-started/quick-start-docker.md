@@ -40,8 +40,8 @@ docker run --rm \
 ```
 
 The default Docker config uses dedicated TCP listeners:
-- `1883/tcp`: MQTT v3 (`server.tcp.v3`)
-- `1884/tcp`: MQTT v5 (`server.tcp.v5`)
+- `1883/tcp`: MQTT v3 (`server.mqtt.tcp.v3`)
+- `1884/tcp`: MQTT v5 (`server.mqtt.tcp.v5`)
 
 ## Next Steps
 

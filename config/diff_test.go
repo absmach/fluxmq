@@ -147,8 +147,8 @@ func TestDiffRestartRequiredFields(t *testing.T) {
 	}{
 		{
 			name:   "tcp listener addr",
-			modify: func(cfg *Config) { cfg.Server.TCP.V3.Addr = ":9999" },
-			path:   "Server.TCP.V3.Addr",
+			modify: func(cfg *Config) { cfg.Server.MQTT.TCP.V3.Addr = ":9999" },
+			path:   "Server.MQTT.TCP.V3.Addr",
 		},
 		{
 			name:   "storage type",
@@ -220,7 +220,7 @@ func TestDiffMixedChanges(t *testing.T) {
 	old := Default()
 	new := Default()
 	new.Log.Level = testLogLevelDebug
-	new.Server.TCP.V3.Addr = ":9999"
+	new.Server.MQTT.TCP.V3.Addr = ":9999"
 	new.RateLimit.Message.Rate = 500
 
 	result := Diff(old, new)

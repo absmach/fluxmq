@@ -1,21 +1,24 @@
 # Minimal single-instance configuration for Docker
 server:
-  tcp:
-    v3:
-      addr: ":1883"
-      protocol: "v3"
-    v5:
-      addr: ":1884"
-      protocol: "v5"
-  websocket:
-    v3:
-      addr: ":8083"
-      path: "/mqtt"
-      protocol: "v3"
-    v5:
-      addr: ":8084"
-      path: "/mqtt"
-      protocol: "v5"
+  # MQTT transports live under server.mqtt so that `tcp` is not mistaken
+  # for a generic listener; AMQP has its own sections below.
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+        protocol: "v3"
+      v5:
+        addr: ":1884"
+        protocol: "v5"
+    websocket:
+      v3:
+        addr: ":8083"
+        path: "/mqtt"
+        protocol: "v3"
+      v5:
+        addr: ":8084"
+        path: "/mqtt"
+        protocol: "v5"
   admin_api_addr: ":8082"
 
 cluster:

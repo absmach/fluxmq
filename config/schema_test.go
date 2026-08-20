@@ -1,0 +1,323 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	testWSSAddr        = ":8084"
+	testAuthCalloutKey = "auth.external.url"
+)
+
+// schemaKeys walks the Config struct and returns every accepted YAML key as a
+// dotted path. Inline structs contribute their fields to the parent path,
+// matching how yaml.v3 flattens `yaml:",inline"`.
+func schemaKeys(t *testing.T, typ reflect.Type, prefix string, seen map[reflect.Type]bool) []string {
+	t.Helper()
+
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil
+	}
+	// Guard against recursive types; a repeat visit adds no new key names.
+	if seen[typ] {
+		return nil
+	}
+	seen[typ] = true
+	defer delete(seen, typ)
+
+	var keys []string
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		tag := field.Tag.Get("yaml")
+		name, opts, _ := strings.Cut(tag, ",")
+		if name == "-" {
+			continue
+		}
+
+		if strings.Contains(opts, "inline") {
+			keys = append(keys, schemaKeys(t, field.Type, prefix, seen)...)
+			continue
+		}
+
+		if name == "" {
+			name = strings.ToLower(field.Name)
+		}
+
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		keys = append(keys, path)
+
+		ft := field.Type
+		for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice || ft.Kind() == reflect.Map {
+			ft = ft.Elem()
+		}
+		keys = append(keys, schemaKeys(t, ft, path, seen)...)
+	}
+	return keys
+}
+
+func configSchemaKeys(t *testing.T) []string {
+	t.Helper()
+	keys := schemaKeys(t, reflect.TypeOf(Config{}), "", map[reflect.Type]bool{})
+	sort.Strings(keys)
+	return slicesCompact(keys)
+}
+
+func slicesCompact(in []string) []string {
+	out := in[:0]
+	var prev string
+	for i, s := range in {
+		if i == 0 || s != prev {
+			out = append(out, s)
+		}
+		prev = s
+	}
+	return out
+}
+
+// TestSchemaTopLevelKeys pins the top-level key set. Adding a key here is a
+// compatible change and needs a line in this list. Renaming or removing one
+// breaks every deployed configuration, so this test must fail first.
+func TestSchemaTopLevelKeys(t *testing.T) {
+	want := []string{
+		"auth",
+		"broker",
+		"cluster",
+		"hooks",
+		"log",
+		"queue_manager",
+		"queues",
+		"ratelimit",
+		"server",
+		"session",
+		"storage",
+		"webhook",
+	}
+
+	var got []string
+	typ := reflect.TypeOf(Config{})
+	for i := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+		if name != "" && name != "-" {
+			got = append(got, name)
+		}
+	}
+	sort.Strings(got)
+
+	assert.Equal(t, want, got,
+		"top-level config keys changed; renaming or removing one breaks deployed configurations")
+}
+
+// TestSchemaListenerKeys pins the listener slot names. These are the keys that
+// silently changed from `plain` to `v3`/`v5` and left four shipped examples
+// declaring listeners the broker never opened.
+func TestSchemaListenerKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  reflect.Type
+		want []string
+	}{
+		{"server.mqtt.tcp", reflect.TypeOf(MQTTTCPConfig{}), []string{listenerNameMTLS, listenerNameTLS, "v3", "v5"}},
+		{"server.mqtt.websocket", reflect.TypeOf(MQTTWebSocketConfig{}), []string{listenerNameMTLS, listenerNameTLS, "v3", "v5"}},
+		{"server.http", reflect.TypeOf(HTTPConfig{}), []string{listenerNameMTLS, listenerNamePlain, listenerNameTLS}},
+		{"server.coap", reflect.TypeOf(CoAPConfig{}), []string{"dtls", "mdtls", listenerNamePlain}},
+		{"server.amqp", reflect.TypeOf(AMQPConfig{}), []string{listenerNameMTLS, listenerNamePlain, listenerNameTLS}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for i := range tc.typ.NumField() {
+				name, _, _ := strings.Cut(tc.typ.Field(i).Tag.Get("yaml"), ",")
+				if name != "" && name != "-" {
+					got = append(got, name)
+				}
+			}
+			sort.Strings(got)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestShippedConfigsDecodeStrictly is the regression guard for the discarded
+// `plain` listener blocks. Every config file this repository ships must
+// survive strict decoding; a file that fails here would, before strict
+// decoding, have started a broker that silently ignored the failing key.
+func TestShippedConfigsDecodeStrictly(t *testing.T) {
+	roots := []string{"../examples", "../deployments"}
+
+	var files []string
+	for _, root := range roots {
+		require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || filepath.Ext(path) != ".yaml" {
+				return nil
+			}
+			// Compose files are docker's schema, not the broker's.
+			if strings.Contains(filepath.Base(path), "compose") {
+				return nil
+			}
+			files = append(files, path)
+			return nil
+		}))
+	}
+	require.NotEmpty(t, files, "no shipped config files found")
+
+	for _, file := range files {
+		t.Run(filepath.ToSlash(file), func(t *testing.T) {
+			data, err := os.ReadFile(file)
+			require.NoError(t, err)
+
+			_, err = parse(data)
+			if err == nil {
+				return
+			}
+			// production.yaml references secret files that only exist on a
+			// deployed host. Unknown-key and bind-conflict failures are still
+			// real, so only the secret-file read is tolerated.
+			if strings.Contains(err.Error(), "failed to read secret file") {
+				t.Skipf("requires deployed secret material: %v", err)
+			}
+			t.Fatalf("shipped config must decode strictly: %v", err)
+		})
+	}
+}
+
+// TestLoadRejectsUnknownKey is the core promise of strict decoding: a
+// misspelled key fails the load instead of silently dropping the setting it
+// was meant to configure.
+func TestLoadRejectsUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+server:
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+      plain:
+        addr: ":1999"
+`), 0o600))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plain")
+}
+
+// TestLoadMissingFileIsError covers the other half: a config path that does
+// not exist must not quietly produce a default — and therefore unauthenticated
+// — broker.
+func TestLoadMissingFileIsError(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+
+	_, err := Load(missing)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrConfigNotFound)
+
+	cfg, err := LoadOptional(missing)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, Default(), cfg)
+}
+
+// TestValidateRejectsDuplicateBinds covers the collision that shipped in
+// examples/tls-server.yaml, where an undeclared default listener shadowed a
+// declared TLS one on the same port.
+func TestValidateRejectsDuplicateBinds(t *testing.T) {
+	t.Run("wildcard/same-port", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.MQTT.WebSocket.V5.Addr = testWSSAddr
+		cfg.Server.MQTT.WebSocket.TLS.Addr = testWSSAddr
+		cfg.Server.MQTT.WebSocket.TLS.TLS.CertFile = "cert.pem"
+		cfg.Server.MQTT.WebSocket.TLS.TLS.KeyFile = "key.pem"
+
+		err := cfg.validateNoDuplicateBinds()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "server.mqtt.websocket.v5.addr")
+		assert.Contains(t, err.Error(), "server.mqtt.websocket.tls.addr")
+	})
+
+	t.Run("explicit-host/shadowed-by-wildcard", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.MQTT.TCP.V3.Addr = "127.0.0.1" + defaultTCPV3Addr
+		cfg.Server.MQTT.TCP.V5.Addr = defaultTCPV3Addr
+
+		require.Error(t, cfg.validateNoDuplicateBinds())
+	})
+
+	t.Run("distinct-hosts/same-port", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.MQTT.TCP.V3.Addr = "127.0.0.1" + defaultTCPV3Addr
+		cfg.Server.MQTT.TCP.V5.Addr = "10.0.0.1" + defaultTCPV3Addr
+
+		assert.NoError(t, cfg.validateNoDuplicateBinds())
+	})
+
+	t.Run("disabled-listener-never-conflicts", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.MQTT.TCP.V3.Addr = defaultTCPV3Addr
+		cfg.Server.MQTT.TCP.V5.Addr = ""
+
+		assert.NoError(t, cfg.validateNoDuplicateBinds())
+	})
+
+	t.Run("udp-may-reuse-a-tcp-port", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.MQTT.TCP.V3.Addr = testInternalAddr
+		cfg.Server.CoAP.Plain.Addr = testInternalAddr
+
+		assert.NoError(t, cfg.validateNoDuplicateBinds())
+	})
+}
+
+// TestSchemaKeysAreStable guards the full dotted key set against silent
+// churn. The count is deliberately coarse: it catches a bulk rename or a
+// dropped section without turning every additive change into a merge conflict.
+func TestSchemaKeysAreStable(t *testing.T) {
+	keys := configSchemaKeys(t)
+	require.NotEmpty(t, keys)
+
+	for _, must := range []string{
+		"server.mqtt.tcp.v3.addr",
+		"server.mqtt.tcp.v5.addr",
+		"server.mqtt.websocket.v3.addr",
+		"server.http.plain.addr",
+		testAuthCalloutKey,
+		"cluster.raft.enabled",
+		"storage.type",
+		"session.max_sessions",
+		"ratelimit.enabled",
+	} {
+		assert.Contains(t, keys, must, "documented config key disappeared from the schema")
+	}
+
+	assert.NotContains(t, keys, "server.mqtt.tcp.plain",
+		"server.tcp.plain was replaced by v3/v5; reintroducing it would resurrect the silent-listener bug")
+	assert.NotContains(t, keys, "server.mqtt.websocket.plain")
+
+	// MQTT transports moved under server.mqtt so `tcp` cannot be read as a
+	// generic listener sitting beside server.amqp.
+	assert.NotContains(t, keys, "server.tcp",
+		"MQTT transports live under server.mqtt")
+	assert.NotContains(t, keys, "server.websocket")
+}
