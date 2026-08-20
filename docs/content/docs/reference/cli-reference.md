@@ -5,7 +5,7 @@ description: Command-line flags for starting FluxMQ
 
 # CLI Reference
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 ## fluxmq
 

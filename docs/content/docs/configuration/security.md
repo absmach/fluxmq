@@ -5,7 +5,7 @@ description: External auth, local principals, TLS/mTLS listeners, and rate limit
 
 # Security Configuration
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 1st August 2026
 
 ## External Auth Callout
 

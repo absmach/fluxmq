@@ -5,7 +5,7 @@ description: Creating queues, assigning replication policy/groups, and consumer-
 
 # Queue Service API
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 12th February 2026
 
 FluxMQ exposes a `QueueService` API for managing log-based queues (durable and stream) and consumer groups.
 

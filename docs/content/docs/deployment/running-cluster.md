@@ -5,7 +5,7 @@ description: Start a multi-node FluxMQ cluster with embedded etcd and transport 
 
 # Running Cluster
 
-**Last Updated:** 2026-02-25
+**Last Updated:** 25th February 2026
 
 FluxMQ clustering uses embedded etcd for metadata and gRPC transport for routing. The repo includes working 3-node examples.
 

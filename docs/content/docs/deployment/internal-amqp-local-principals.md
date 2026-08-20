@@ -6,7 +6,7 @@ description: Implemented production design for a dedicated mTLS AMQP 0.9.1 liste
 # Internal AMQP Local Principals
 
 **Status:** implemented
-**Last Updated:** 2026-08-01
+**Last Updated:** 1st August 2026
 
 This document describes the implementation and acceptance contract for letting a
 first-party service publish its domain events to FluxMQ without sending those

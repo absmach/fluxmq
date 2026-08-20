@@ -5,7 +5,7 @@ description: Change configuration at runtime without restarting the broker
 
 # Hot Reload
 
-**Last Updated:** 2026-07-29
+**Last Updated:** 29th July 2026
 
 FluxMQ supports changing a subset of configuration fields at runtime without restarting the broker. Changes are applied atomically per subsystem with automatic rollback on failure.
 

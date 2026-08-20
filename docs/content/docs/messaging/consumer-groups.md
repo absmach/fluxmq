@@ -5,7 +5,7 @@ description: Configure consumer groups and acknowledgments across MQTT and AMQP
 
 # Consumer Groups
 
-**Last Updated:** 2026-02-06
+**Last Updated:** 6th February 2026
 
 Consumer groups provide load-balanced, fault-tolerant consumption for durable queues.
 

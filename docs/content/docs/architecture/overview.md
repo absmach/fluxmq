@@ -5,7 +5,7 @@ description: High-level system design overview covering core components and how 
 
 # Architecture Overview
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 18th February 2026
 
 ## Overview
 

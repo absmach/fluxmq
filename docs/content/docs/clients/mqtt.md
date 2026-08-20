@@ -5,7 +5,7 @@ description: Connect using MQTT 3.1.1 or 5.0 over TCP
 
 # MQTT
 
-**Last Updated:** 2026-02-25
+**Last Updated:** 25th February 2026
 
 FluxMQ supports MQTT 3.1.1 and MQTT 5.0 over TCP.
 

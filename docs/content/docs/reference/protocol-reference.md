@@ -5,7 +5,7 @@ description: Supported protocols, transport options, and how each protocol adapt
 
 # Protocol Reference
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 10th February 2026
 
 FluxMQ supports multiple protocols and transports. Each protocol adapter translates protocol-specific concepts into FluxMQ's shared queue primitives. Delivery semantics depend on the [queue type](/concepts/queues), not the protocol.
 

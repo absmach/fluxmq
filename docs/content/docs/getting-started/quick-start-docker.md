@@ -5,7 +5,7 @@ description: Run FluxMQ with Docker Compose or docker run using the provided con
 
 # Quick Start (Docker)
 
-**Last Updated:** 2026-02-25
+**Last Updated:** 25th February 2026
 
 ## Option 1: Docker Compose (Recommended)
 

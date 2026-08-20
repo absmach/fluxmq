@@ -5,7 +5,7 @@ description: Configure broker storage backend and BadgerDB settings
 
 # Storage Configuration
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 18th February 2026
 
 Broker state (sessions, retained messages, offline queues) is stored in the backend defined by `storage`.
 

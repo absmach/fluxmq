@@ -5,7 +5,7 @@ description: Three queue types with distinct semantics — ephemeral, durable, a
 
 # Queue Types
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 10th February 2026
 
 FluxMQ supports three distinct queue types. They share the same routing layer and topic namespace (`$queue/`), but differ in persistence, delivery guarantees, and acknowledgment semantics.
 

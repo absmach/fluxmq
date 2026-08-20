@@ -5,7 +5,7 @@ description: Comprehensive YAML configuration reference for server, broker, stor
 
 # Configuration Reference
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 1st August 2026
 
 FluxMQ uses a single YAML configuration file. Start the broker with:
 

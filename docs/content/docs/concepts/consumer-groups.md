@@ -5,7 +5,7 @@ description: Load-balanced queue consumption and acknowledgment behavior
 
 # Consumer Groups
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 10th February 2026
 
 Consumer groups are how FluxMQ turns a queue log into a scalable worker pool. They apply to both durable and stream queues (ephemeral queues do not use consumer groups — delivery is best-effort with no progress tracking).
 

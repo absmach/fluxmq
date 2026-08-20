@@ -5,7 +5,7 @@ description: Publish messages over the HTTP bridge
 
 # HTTP
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 FluxMQ includes an HTTP publish bridge.
 

@@ -5,7 +5,7 @@ description: Production-ready MQTT broker development roadmap covering queue arc
 
 # Roadmap
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 *This project is under active development and our team is bringing new features and improves existing ones on a regular basis.*
 

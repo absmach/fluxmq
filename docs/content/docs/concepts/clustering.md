@@ -5,7 +5,7 @@ description: High availability and cross-node routing basics
 
 # Clustering
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 Clustering enables high availability and cross-node routing. FluxMQ uses embedded etcd for metadata coordination and a gRPC transport for inter-node message delivery.
 

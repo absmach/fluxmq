@@ -5,7 +5,7 @@ description: Storage layers for broker state, queue logs, and cluster metadata
 
 # Storage
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 FluxMQ separates storage concerns into three layers:
 

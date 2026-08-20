@@ -5,7 +5,7 @@ description: Subscribe with MQTT and receive messages from topics or queues
 
 # Consuming Messages
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 18th February 2026
 
 ## MQTT Subscribe
 

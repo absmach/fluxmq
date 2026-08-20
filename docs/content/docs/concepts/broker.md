@@ -5,7 +5,7 @@ description: What the broker does in FluxMQ and how protocol brokers fit togethe
 
 # Broker
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 18th February 2026
 
 FluxMQ runs multiple protocol brokers that share the same queue manager:
 

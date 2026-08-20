@@ -5,7 +5,7 @@ description: Synchronous broker hooks for allow, deny, and safe request mutation
 
 # Blocking Hooks
 
-**Last Updated:** 2026-07-03
+**Last Updated:** 3rd July 2026
 
 FluxMQ blocking hooks call an external service before selected broker
 operations continue. A hook service can allow an operation, deny it, or return

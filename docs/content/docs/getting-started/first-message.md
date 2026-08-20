@@ -5,7 +5,7 @@ description: Publish and subscribe to your first MQTT topic
 
 # First Message
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 This example uses `mosquitto_pub`/`mosquitto_sub` against the default MQTT TCP listener.
 

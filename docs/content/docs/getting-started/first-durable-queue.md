@@ -5,7 +5,7 @@ description: Send a message to a durable queue and consume it with a consumer gr
 
 # First Durable Queue
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 Durable queues use the `$queue/` topic prefix. The broker stores the message in the queue log and delivers it to consumers in a group.
 

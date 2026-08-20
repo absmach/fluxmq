@@ -5,7 +5,7 @@ description: Comprehensive comparison of FluxMQ against industry solutions inclu
 
 # Comparison Guide
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 This document provides a basic, evergreen comparison guide without hard claims about third‑party products. Vendor feature sets change frequently; verify details with official docs before making a decision.
 

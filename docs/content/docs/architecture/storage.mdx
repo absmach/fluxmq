@@ -5,7 +5,7 @@ description: Queue log storage internals, on-disk layout, indexes, and retention
 
 # Storage Internals
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 FluxMQ durable queues are backed by a file-based append-only log (AOL). Each queue has a **single log** (no partitions). This doc explains where the files live, how they are laid out, and how retention truncates data.
 

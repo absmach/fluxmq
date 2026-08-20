@@ -5,7 +5,7 @@ description: Production checklist covering performance, scaling, observability, 
 
 # Running in Production
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 5th February 2026
 
 Production readiness is workload-dependent. Use the benchmark suites in `benchmarks/` and validate on your target hardware and network before making production commitments.
 

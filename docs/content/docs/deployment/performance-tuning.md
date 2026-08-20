@@ -5,7 +5,7 @@ description: Go runtime tuning and GC configuration for low-latency workloads
 
 # Performance Tuning
 
-**Last Updated:** 2026-02-26
+**Last Updated:** 26th February 2026
 
 FluxMQ is written in Go and benefits from runtime tuning under high-throughput or latency-sensitive workloads. This page covers Go garbage collector configuration and memory limits.
 

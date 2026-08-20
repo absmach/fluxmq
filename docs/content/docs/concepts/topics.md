@@ -5,7 +5,7 @@ description: Topic names, filters, and wildcard matching rules
 
 # Topics
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 18th February 2026
 
 FluxMQ uses MQTT-style topics across protocols. Topics are hierarchical strings separated by `/`.
 

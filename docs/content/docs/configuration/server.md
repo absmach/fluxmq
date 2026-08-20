@@ -5,7 +5,7 @@ description: Configure listeners, WebSocket path, health checks, and OpenTelemet
 
 # Server Configuration
 
-**Last Updated:** 2026-07-29
+**Last Updated:** 29th July 2026
 
 `server` controls network listeners and telemetry endpoints. Example:
 
