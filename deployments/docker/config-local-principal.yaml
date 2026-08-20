@@ -61,7 +61,7 @@ broker:
 storage:
   type: "badger"
   badger_dir: "/var/lib/fluxmq/data"
-  sync_writes: true
+  badger_sync_writes: true
 
 cluster:
   enabled: false

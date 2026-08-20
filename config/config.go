@@ -872,9 +872,13 @@ type LogConfig struct {
 type StorageConfig struct {
 	Type string `yaml:"type"` // memory, badger
 
-	// BadgerDB settings
-	BadgerDir  string `yaml:"badger_dir"`
-	SyncWrites bool   `yaml:"sync_writes"`
+	// BadgerDB settings. BadgerSyncWrites fsyncs every write to the broker
+	// key-value store, which holds retained messages and sessions. It does not
+	// reach the queue append-only log: queue durability is a separate engine,
+	// and the acknowledgement policy for it is not configurable yet. The key is
+	// named for the engine it configures so the two cannot be confused.
+	BadgerDir        string `yaml:"badger_dir"`
+	BadgerSyncWrites bool   `yaml:"badger_sync_writes"`
 
 	// RecoverOnStartup runs segment recovery before loading queues.
 	// Corrupted segments are truncated at the last valid batch and indexes

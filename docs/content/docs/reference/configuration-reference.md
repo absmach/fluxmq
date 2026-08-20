@@ -382,7 +382,7 @@ rather than the events it named. Fix the filter rather than work around the erro
 storage:
   type: "badger"      # memory or badger
   badger_dir: "/tmp/fluxmq/data"
-  sync_writes: false
+  badger_sync_writes: false
   recover_on_startup: false
 ```
 
@@ -390,7 +390,7 @@ storage:
 | -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | `type`               | `badger`           | Storage backend: `memory` or `badger`.                                                                                 |
 | `badger_dir`         | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`).                                                       |
-| `sync_writes`        | `false`            | If `true`, fsync-like durability on write path; if `false`, better throughput.                                         |
+| `badger_sync_writes` | `false` | If `true`, fsync every write to the Badger key-value store holding retained messages and sessions. It does not reach the queue append-only log. |
 | `recover_on_startup` | `false`            | Run segment recovery before loading queues: truncate each corrupted segment at its last valid batch, sync, and rebuild indexes. See the note below on startup behaviour when this is `false`. |
 
 A corrupted segment fails startup when `recover_on_startup` is `false`. The

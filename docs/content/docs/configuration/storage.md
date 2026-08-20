@@ -13,14 +13,14 @@ Broker state (sessions, retained messages, offline queues) is stored in the back
 storage:
   type: "badger"   # "badger" or "memory"
   badger_dir: "/tmp/fluxmq/data"
-  sync_writes: false
+  badger_sync_writes: false
 ```
 
 ## Field Notes
 
 - `type`: storage backend (`memory` or `badger`).
 - `badger_dir`: required when `type=badger`.
-- `sync_writes`: durability/throughput tradeoff for Badger writes.
+- `badger_sync_writes`: durability/throughput tradeoff for Badger writes. It does not reach the queue append-only log; queue durability is a separate engine.
 
 Queue logs are stored under:
 

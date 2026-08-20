@@ -357,6 +357,11 @@ func TestSchemaKeysAreStable(t *testing.T) {
 		"server.tcp.plain was replaced by v3/v5; reintroducing it would resurrect the silent-listener bug")
 	assert.NotContains(t, keys, "server.mqtt.websocket.plain")
 
+	// The Badger fsync key names its engine: it does not reach the queue
+	// append-only log, and the old name read as if it fsynced all storage.
+	assert.Contains(t, keys, "storage.badger_sync_writes")
+	assert.NotContains(t, keys, "storage.sync_writes")
+
 	// MQTT transports moved under server.mqtt so `tcp` cannot be read as a
 	// generic listener sitting beside server.amqp.
 	assert.NotContains(t, keys, "server.tcp",

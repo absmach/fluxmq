@@ -492,7 +492,7 @@ func main() {
 	case "badger":
 		badgerStore, err := badger.New(badger.Config{
 			Dir:        cfg.Storage.BadgerDir,
-			SyncWrites: cfg.Storage.SyncWrites,
+			SyncWrites: cfg.Storage.BadgerSyncWrites,
 		})
 		if err != nil {
 			slog.Error("Failed to initialize BadgerDB storage", "error", err)
