@@ -101,12 +101,13 @@ type ExternalAuthConfig struct {
 	// Valid keys: "mqtt", "amqp", "amqp091", "http", "coap".
 	Protocols map[string]bool `yaml:"protocols"`
 
-	// IdentityCacheSize bounds the number of cached clientID→external-ID mappings.
-	// Zero or negative disables size-based eviction (entries still expire via TTL).
-	IdentityCacheSize int `yaml:"identity_cache_size"`
-	// IdentityCacheTTL bounds how long a cached identity may live without re-auth.
-	// Zero or negative disables TTL eviction.
-	IdentityCacheTTL time.Duration `yaml:"identity_cache_ttl"`
+	// IdentityCacheSize bounds the number of cached clientID→external-ID
+	// mappings. Omit it to take the built-in default; zero is rejected, because
+	// a cache holding nothing is not a setting anyone wants.
+	IdentityCacheSize *int `yaml:"identity_cache_size,omitempty"`
+	// IdentityCacheTTL bounds how long a cached identity may live without
+	// re-auth. Omit it to take the built-in default; zero is rejected.
+	IdentityCacheTTL *time.Duration `yaml:"identity_cache_ttl,omitempty"`
 
 	// TLS configures the outbound connection to the auth service. Setting
 	// cert_file/key_file makes it mutual, which is how a callout endpoint that
@@ -431,8 +432,10 @@ type HooksConfig struct {
 	URL string `yaml:"url"`
 	// Transport selects the callout wire format: "grpc" (default) or "http".
 	Transport string `yaml:"transport"`
-	// Timeout is the per-call timeout. Zero uses the hook client default.
-	Timeout time.Duration `yaml:"timeout"`
+	// Timeout is the per-call timeout. Omit it to take the hook client default;
+	// zero is rejected, because a blocking hook with no deadline would stall the
+	// connection path it gates.
+	Timeout *time.Duration `yaml:"timeout,omitempty"`
 	// FailMode controls behavior when a blocking hook errors: "deny" (default)
 	// blocks the operation; "allow" keeps the original topic/filter.
 	FailMode string `yaml:"fail_mode"`
@@ -545,14 +548,16 @@ type QueueManagerConfig struct {
 	AutoCommitInterval time.Duration `yaml:"auto_commit_interval"`
 
 	// Topic capture runs off the publish path so a stalled queue store cannot
-	// delay subscribers. These bound that machinery. Zero selects the default.
+	// delay subscribers. These bound that machinery. Omit one to take the
+	// built-in default; a written value is always used as written, and zero is
+	// rejected because none of the three has a coherent zero setting.
 	//
 	// CaptureQueueDepth counts jobs rather than bytes, so the memory ceiling is
 	// capture_workers x capture_queue_depth payloads. A deployment capturing
 	// large messages should lower it.
-	CaptureWorkers      int           `yaml:"capture_workers"`
-	CaptureQueueDepth   int           `yaml:"capture_queue_depth"`
-	CaptureDrainTimeout time.Duration `yaml:"capture_drain_timeout"`
+	CaptureWorkers      *int           `yaml:"capture_workers,omitempty"`
+	CaptureQueueDepth   *int           `yaml:"capture_queue_depth,omitempty"`
+	CaptureDrainTimeout *time.Duration `yaml:"capture_drain_timeout,omitempty"`
 }
 
 // RateLimitConfig holds rate limiting configuration.
@@ -1935,14 +1940,23 @@ func (c *Config) Validate() error {
 	if c.QueueManager.AutoCommitInterval < 0 {
 		return fmt.Errorf("queue_manager.auto_commit_interval must be >= 0")
 	}
-	if c.QueueManager.CaptureWorkers < 0 {
-		return fmt.Errorf("queue_manager.capture_workers must be >= 0")
+	if err := requirePositiveInt("queue_manager.capture_workers", c.QueueManager.CaptureWorkers); err != nil {
+		return err
 	}
-	if c.QueueManager.CaptureQueueDepth < 0 {
-		return fmt.Errorf("queue_manager.capture_queue_depth must be >= 0")
+	if err := requirePositiveInt("queue_manager.capture_queue_depth", c.QueueManager.CaptureQueueDepth); err != nil {
+		return err
 	}
-	if c.QueueManager.CaptureDrainTimeout < 0 {
-		return fmt.Errorf("queue_manager.capture_drain_timeout must be >= 0")
+	if err := requirePositiveDuration("queue_manager.capture_drain_timeout", c.QueueManager.CaptureDrainTimeout); err != nil {
+		return err
+	}
+	if err := requirePositiveInt("auth.external."+authIdentityCacheSizeField, c.Auth.External.IdentityCacheSize); err != nil {
+		return err
+	}
+	if err := requirePositiveDuration("auth.external."+authIdentityCacheTTLField, c.Auth.External.IdentityCacheTTL); err != nil {
+		return err
+	}
+	if err := requirePositiveDuration("hooks.timeout", c.Hooks.Timeout); err != nil {
+		return err
 	}
 
 	// Queue validation
@@ -2320,6 +2334,24 @@ func splitListenAddr(addr string) (host, port string, ok bool) {
 		return "", "", false
 	}
 	return host, port, true
+}
+
+// requirePositiveInt enforces the one rule the configuration keeps everywhere:
+// a value the operator writes is never replaced by a different one. Where zero
+// is not a coherent setting, it is refused with a message that says to omit the
+// key instead, which is what actually selects the built-in default.
+func requirePositiveInt(path string, value *int) error {
+	if value != nil && *value <= 0 {
+		return fmt.Errorf("%s must be greater than zero; omit the key to take the default", path)
+	}
+	return nil
+}
+
+func requirePositiveDuration(path string, value *time.Duration) error {
+	if value != nil && *value <= 0 {
+		return fmt.Errorf("%s must be greater than zero; omit the key to take the default", path)
+	}
+	return nil
 }
 
 func validPort(port int) bool {

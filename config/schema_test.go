@@ -10,14 +10,17 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	testWSSAddr        = ":8084"
-	testAuthCalloutKey = "auth.external.url"
+	testWSSAddr              = ":8084"
+	testAuthCalloutKey       = "auth.external.url"
+	testIdentityCacheSizeKey = "auth.external." + authIdentityCacheSizeField
+	testIdentityCacheTTLKey  = "auth.external." + authIdentityCacheTTLField
 )
 
 // schemaKeys walks the Config struct and returns every accepted YAML key as a
@@ -284,6 +287,67 @@ func TestValidateRejectsDuplicateBinds(t *testing.T) {
 	})
 }
 
+// TestZeroMeansOneThing pins the rule that a value the operator writes is
+// never replaced by a different one. Where zero is coherent — listener limits
+// and timeouts — it is honoured. Where it is not, it is refused with a message
+// saying to omit the key, which is what actually selects the default.
+func TestZeroMeansOneThing(t *testing.T) {
+	t.Run("zero is honoured where it is coherent", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.MQTT.TCP.V3.MaxConnections = 0 // unlimited
+		cfg.Server.MQTT.TCP.V3.ReadTimeout = 0    // no deadline
+
+		assert.NoError(t, cfg.Validate())
+	})
+
+	for _, tc := range []struct {
+		name    string
+		set     func(*Config)
+		wantKey string
+	}{
+		{
+			name:    "capture_workers",
+			set:     func(c *Config) { c.QueueManager.CaptureWorkers = ptr(0) },
+			wantKey: "queue_manager.capture_workers",
+		},
+		{
+			name:    "capture_queue_depth",
+			set:     func(c *Config) { c.QueueManager.CaptureQueueDepth = ptr(0) },
+			wantKey: "queue_manager.capture_queue_depth",
+		},
+		{
+			name:    "capture_drain_timeout",
+			set:     func(c *Config) { c.QueueManager.CaptureDrainTimeout = ptr(time.Duration(0)) },
+			wantKey: "queue_manager.capture_drain_timeout",
+		},
+		{
+			name:    "identity_cache_size",
+			set:     func(c *Config) { c.Auth.External.IdentityCacheSize = ptr(0) },
+			wantKey: testIdentityCacheSizeKey,
+		},
+		{
+			name:    "identity_cache_ttl",
+			set:     func(c *Config) { c.Auth.External.IdentityCacheTTL = ptr(time.Duration(0)) },
+			wantKey: testIdentityCacheTTLKey,
+		},
+		{
+			name:    "hooks.timeout",
+			set:     func(c *Config) { c.Hooks.Timeout = ptr(time.Duration(0)) },
+			wantKey: "hooks.timeout",
+		},
+	} {
+		t.Run("written zero rejected/"+tc.name, func(t *testing.T) {
+			cfg := Default()
+			tc.set(cfg)
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantKey)
+			assert.Contains(t, err.Error(), "omit the key to take the default")
+		})
+	}
+}
+
 // TestValidateListenAddress covers the shapes a listen address can take. The
 // host is deliberately not resolved, so a name that only exists in the
 // deployment's DNS still validates on a workstation.
@@ -293,10 +357,10 @@ func TestValidateListenAddress(t *testing.T) {
 		addr    string
 		wantErr string
 	}{
-		{name: "every interface", addr: ":1883"},
-		{name: "loopback", addr: "127.0.0.1:1883"},
+		{name: "every interface", addr: defaultTCPV3Addr},
+		{name: "loopback", addr: "127.0.0.1" + defaultTCPV3Addr},
 		{name: "ipv6 loopback", addr: "[::1]:1883"},
-		{name: "unresolved hostname", addr: "broker.internal:1883"},
+		{name: "unresolved hostname", addr: "broker.internal" + defaultTCPV3Addr},
 		{name: "highest port", addr: ":65535"},
 
 		{name: "no colon", addr: "1883", wantErr: "is not a host:port address"},
@@ -305,7 +369,7 @@ func TestValidateListenAddress(t *testing.T) {
 		{name: "port zero", addr: ":0", wantErr: "choose a fixed port"},
 		{name: "port above range", addr: ":65536", wantErr: "out of range"},
 		{name: "negative port", addr: ":-1", wantErr: "out of range"},
-		{name: "host with whitespace", addr: "my host:1883", wantErr: "contains whitespace"},
+		{name: "host with whitespace", addr: "my host" + defaultTCPV3Addr, wantErr: "contains whitespace"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateListenAddress("server.mqtt.tcp.v3.addr", tc.addr)

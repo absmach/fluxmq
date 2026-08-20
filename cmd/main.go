@@ -66,6 +66,16 @@ const (
 	listenerMTLS  = "mtls"
 )
 
+// valueOr returns what the operator wrote, or the built-in default when the
+// key was omitted. Configuration keeps absent and zero distinct so a written
+// value is never silently replaced by a different one.
+func valueOr[T any](configured *T, fallback T) T {
+	if configured == nil {
+		return fallback
+	}
+	return *configured
+}
+
 func protocolVersionForMode(mode string) int {
 	switch config.NormalizeProtocolMode(mode) {
 	case config.ProtocolModeV3:
@@ -739,14 +749,10 @@ func main() {
 			}
 		}
 
-		cacheSize := cfg.Auth.External.IdentityCacheSize
-		if cacheSize == 0 {
-			cacheSize = corebroker.DefaultIdentityCacheSize
-		}
-		cacheTTL := cfg.Auth.External.IdentityCacheTTL
-		if cacheTTL == 0 {
-			cacheTTL = corebroker.DefaultIdentityCacheTTL
-		}
+		// An omitted key takes the built-in default; a written one is used as
+		// written. Validation already refused a written zero.
+		cacheSize := valueOr(cfg.Auth.External.IdentityCacheSize, corebroker.DefaultIdentityCacheSize)
+		cacheTTL := valueOr(cfg.Auth.External.IdentityCacheTTL, corebroker.DefaultIdentityCacheTTL)
 		engineOpts := []corebroker.AuthEngineOption{
 			corebroker.WithIdentityCache(cacheSize, cacheTTL),
 		}
@@ -788,7 +794,7 @@ func main() {
 
 		newHookProvider := func() corebroker.BlockingHookProvider {
 			opts := []hook.Option{
-				hook.WithTimeout(cfg.Hooks.Timeout),
+				hook.WithTimeout(valueOr(cfg.Hooks.Timeout, 0)),
 				hook.WithLogger(logger),
 			}
 			switch transport {
@@ -809,7 +815,7 @@ func main() {
 		slog.Info("Blocking hooks configured",
 			"url", cfg.Hooks.URL,
 			"transport", transport,
-			"timeout", cfg.Hooks.Timeout,
+			"timeout", valueOr(cfg.Hooks.Timeout, 0),
 			"fail_mode", cfg.Hooks.FailMode,
 			"protocols", cfg.Hooks.Protocols,
 			"events", cfg.Hooks.Events)
@@ -861,16 +867,11 @@ func main() {
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
 		queueCfg.AutoCommitInterval = cfg.QueueManager.AutoCommitInterval
-		// Zero leaves the dispatcher default in place.
-		if cfg.QueueManager.CaptureWorkers > 0 {
-			queueCfg.CaptureWorkers = cfg.QueueManager.CaptureWorkers
-		}
-		if cfg.QueueManager.CaptureQueueDepth > 0 {
-			queueCfg.CaptureQueueDepth = cfg.QueueManager.CaptureQueueDepth
-		}
-		if cfg.QueueManager.CaptureDrainTimeout > 0 {
-			queueCfg.CaptureDrainTimeout = cfg.QueueManager.CaptureDrainTimeout
-		}
+		// An omitted key leaves the dispatcher default in place; a written one
+		// is used as written, and validation already refused a written zero.
+		queueCfg.CaptureWorkers = valueOr(cfg.QueueManager.CaptureWorkers, queueCfg.CaptureWorkers)
+		queueCfg.CaptureQueueDepth = valueOr(cfg.QueueManager.CaptureQueueDepth, queueCfg.CaptureQueueDepth)
+		queueCfg.CaptureDrainTimeout = valueOr(cfg.QueueManager.CaptureDrainTimeout, queueCfg.CaptureDrainTimeout)
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {

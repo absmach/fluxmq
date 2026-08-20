@@ -249,9 +249,9 @@ queue_manager:
 | Field                   | Default | Description                                                                 |
 | ----------------------- | ------- | --------------------------------------------------------------------------- |
 | `auto_commit_interval`  | `5s`    | Stream-group auto-commit cadence. `0` means commit on every delivery batch. |
-| `capture_workers`       | `4`     | Lanes writing captured publishes off the publish path. A queue is always handled by the same lane, so its appends keep publish order. Lanes are shared: queues are hashed onto them, so a stalled queue also stalls the unrelated queues sharing its lane until its backlog fills. Raise this where many queues bind ordinary topics and one may block. `0` selects the default. |
-| `capture_queue_depth`   | `1024`  | Per-lane backlog, counted in **jobs, not bytes**. The memory ceiling is `capture_workers × capture_queue_depth` payloads, so lower it when capturing large messages. When a lane fills, the newest job is dropped and counted in `queues.capture_dropped`. `0` selects the default. |
-| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. If a worker is still inside an append when it expires, shutdown is reported unclean and the cluster, queue log store and broker store are all left open, since the worker may still be using them — on `badger` that means the broker store is not flushed and the next start replays. Raise this if that becomes routine. `0` selects the default. |
+| `capture_workers`       | `4`     | Lanes writing captured publishes off the publish path. A queue is always handled by the same lane, so its appends keep publish order. Lanes are shared: queues are hashed onto them, so a stalled queue also stalls the unrelated queues sharing its lane until its backlog fills. Raise this where many queues bind ordinary topics and one may block. Omit the key to take the default; a written `0` is rejected. |
+| `capture_queue_depth`   | `1024`  | Per-lane backlog, counted in **jobs, not bytes**. The memory ceiling is `capture_workers × capture_queue_depth` payloads, so lower it when capturing large messages. When a lane fills, the newest job is dropped and counted in `queues.capture_dropped`. Omit the key to take the default; a written `0` is rejected. |
+| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. If a worker is still inside an append when it expires, shutdown is reported unclean and the cluster, queue log store and broker store are all left open, since the worker may still be using them — on `badger` that means the broker store is not flushed and the next start replays. Raise this if that becomes routine. Omit the key to take the default; a written `0` is rejected. |
 
 Capture never blocks the publish path: see [Capturing Ordinary Topics](/messaging/durable-queues#capturing-ordinary-topics).
 
@@ -768,8 +768,8 @@ auth:
 | `external.transport`                            | `grpc`  | Callout transport: `grpc` or `http`. |
 | `external.timeout`                              | `0`     | Per-call timeout. Zero uses the transport default. |
 | `external.protocols`                            | `{}`    | External-auth protocol toggle. Empty means every protocol. |
-| `external.identity_cache_size`                  | `0`     | Maximum cached external identities; zero selects the broker default (`10000`), while a negative value disables size eviction. |
-| `external.identity_cache_ttl`                   | `0`     | External identity cache TTL; zero selects the broker default (`24h`), while a negative value disables TTL eviction. |
+| `external.identity_cache_size`                  | `10000` | Maximum cached external identities. Omit the key to take the default; a written `0` or negative value is rejected. |
+| `external.identity_cache_ttl`                   | `24h`   | External identity cache TTL. Omit the key to take the default; a written `0` or negative value is rejected. |
 | `local_principals[].name`                       | —       | Unique SASL username for the local principal. |
 | `local_principals[].certificate_uri_san`        | —       | Exact URI SAN required on a CA-verified client certificate. |
 | `local_principals[].role`                       | `publisher` | Capability of the principal on every local listener: `publisher` may only publish; `service` may also consume and relay an origin identity. |

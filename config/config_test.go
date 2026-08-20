@@ -23,6 +23,10 @@ const (
 	testProfileHot    = "hot"
 )
 
+// ptr builds a pointer to a literal, for the configuration keys that keep
+// absent and zero distinct.
+func ptr[T any](v T) *T { return &v }
+
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
@@ -608,27 +612,37 @@ func TestValidateQueueManagerCaptureBounds(t *testing.T) {
 			configure: func(*QueueManagerConfig) {},
 		},
 		{
-			name:      "zero selects the default",
-			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth, q.CaptureDrainTimeout = 0, 0, 0 },
+			// Omitting a key is what selects the built-in default.
+			name: "omitted keys are valid",
+			configure: func(q *QueueManagerConfig) {
+				q.CaptureWorkers, q.CaptureQueueDepth, q.CaptureDrainTimeout = nil, nil, nil
+			},
 		},
 		{
 			name:      "explicit values are valid",
-			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth = 2, 64 },
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth = ptr(2), ptr(64) },
+		},
+		{
+			// A written zero used to select the default silently, so the same
+			// literal meant opposite things in different sections.
+			name:      "written zero rejected",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = ptr(0) },
+			wantError: "queue_manager.capture_workers must be greater than zero",
 		},
 		{
 			name:      "negative workers rejected",
-			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = -1 },
-			wantError: "queue_manager.capture_workers must be >= 0",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = ptr(-1) },
+			wantError: "queue_manager.capture_workers must be greater than zero",
 		},
 		{
 			name:      "negative depth rejected",
-			configure: func(q *QueueManagerConfig) { q.CaptureQueueDepth = -1 },
-			wantError: "queue_manager.capture_queue_depth must be >= 0",
+			configure: func(q *QueueManagerConfig) { q.CaptureQueueDepth = ptr(-1) },
+			wantError: "queue_manager.capture_queue_depth must be greater than zero",
 		},
 		{
 			name:      "negative drain timeout rejected",
-			configure: func(q *QueueManagerConfig) { q.CaptureDrainTimeout = -1 },
-			wantError: "queue_manager.capture_drain_timeout must be >= 0",
+			configure: func(q *QueueManagerConfig) { q.CaptureDrainTimeout = ptr(-1 * time.Second) },
+			wantError: "queue_manager.capture_drain_timeout must be greater than zero",
 		},
 	}
 
