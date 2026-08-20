@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2187,10 +2189,40 @@ type listenerBinding struct {
 	addr string
 }
 
-// validateNoDuplicateBinds rejects two listeners that would race for the same
-// socket. Without it the loser fails at startup with a bare "address already
-// in use" naming no config key, and a listener the operator never declared —
-// one left at its default — can silently shadow one they did.
+// validateListenAddress checks the shape of a "host:port" listen address. The
+// host may be empty, meaning every interface, and is deliberately not resolved:
+// validation has to work on a machine that cannot see the deployment's DNS, so
+// ":1883", "127.0.0.1:1883", "[::1]:1883" and "broker.internal:1883" all pass.
+//
+// Without this, every malformed form is accepted — a port above 65535, a
+// negative port, a non-numeric port, a bare "1883" with no colon — and the
+// first sign of the typo is a broker that logs a bind failure and exits.
+func validateListenAddress(path, address string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return fmt.Errorf("%s %q is not a host:port address; use \":1883\" for every interface or \"127.0.0.1:1883\" for loopback", path, address)
+	}
+	if host != "" && strings.ContainsAny(host, " \t") {
+		return fmt.Errorf("%s host %q contains whitespace", path, host)
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("%s port %q is not a number", path, port)
+	}
+	if number == 0 {
+		return fmt.Errorf("%s port 0 asks the kernel for an arbitrary free port, which no client can be told about; choose a fixed port", path)
+	}
+	if !validPort(number) {
+		return fmt.Errorf("%s port %d is out of range; ports run from 1 to 65535", path, number)
+	}
+	return nil
+}
+
+// validateNoDuplicateBinds checks every address the broker binds: each must be
+// a well-formed host:port, and no two may race for the same socket. Without the
+// second half the loser fails at startup with a bare "address already in use"
+// naming no config key, and a listener the operator never declared — one left
+// at its default — can silently shadow one they did.
 //
 // UDP and TCP are checked separately: CoAP may reuse a TCP port number.
 func (c *Config) validateNoDuplicateBinds() error {
@@ -2236,9 +2268,13 @@ func (c *Config) validateNoDuplicateBinds() error {
 func checkBindConflicts(network string, bindings []listenerBinding) error {
 	active := make([]listenerBinding, 0, len(bindings))
 	for _, b := range bindings {
-		if hasAddr(b.addr) {
-			active = append(active, b)
+		if !hasAddr(b.addr) {
+			continue
 		}
+		if err := validateListenAddress(b.path, b.addr); err != nil {
+			return err
+		}
+		active = append(active, b)
 	}
 
 	for i, a := range active {
@@ -2280,6 +2316,10 @@ func splitListenAddr(addr string) (host, port string, ok bool) {
 		return "", "", false
 	}
 	return host, port, true
+}
+
+func validPort(port int) bool {
+	return port > 0 && port <= 65535
 }
 
 func isWildcardHost(host string) bool {

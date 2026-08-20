@@ -284,6 +284,54 @@ func TestValidateRejectsDuplicateBinds(t *testing.T) {
 	})
 }
 
+// TestValidateListenAddress covers the shapes a listen address can take. The
+// host is deliberately not resolved, so a name that only exists in the
+// deployment's DNS still validates on a workstation.
+func TestValidateListenAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		addr    string
+		wantErr string
+	}{
+		{name: "every interface", addr: ":1883"},
+		{name: "loopback", addr: "127.0.0.1:1883"},
+		{name: "ipv6 loopback", addr: "[::1]:1883"},
+		{name: "unresolved hostname", addr: "broker.internal:1883"},
+		{name: "highest port", addr: ":65535"},
+
+		{name: "no colon", addr: "1883", wantErr: "is not a host:port address"},
+		{name: "prose", addr: "the mqtt port", wantErr: "is not a host:port address"},
+		{name: "non-numeric port", addr: ":mqtt", wantErr: "is not a number"},
+		{name: "port zero", addr: ":0", wantErr: "choose a fixed port"},
+		{name: "port above range", addr: ":65536", wantErr: "out of range"},
+		{name: "negative port", addr: ":-1", wantErr: "out of range"},
+		{name: "host with whitespace", addr: "my host:1883", wantErr: "contains whitespace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateListenAddress("server.mqtt.tcp.v3.addr", tc.addr)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			assert.Contains(t, err.Error(), "server.mqtt.tcp.v3.addr",
+				"every failure must name the key it came from")
+		})
+	}
+}
+
+// TestValidateRejectsMalformedListenerAddress checks that the shape rules are
+// reached through Validate, not only by calling the helper directly.
+func TestValidateRejectsMalformedListenerAddress(t *testing.T) {
+	cfg := Default()
+	cfg.Server.MQTT.TCP.V3.Addr = "1883"
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server.mqtt.tcp.v3.addr")
+}
+
 // TestSchemaKeysAreStable guards the full dotted key set against silent
 // churn. The count is deliberately coarse: it catches a bulk rename or a
 // dropped section without turning every additive change into a merge conflict.
