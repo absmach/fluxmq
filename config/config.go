@@ -42,6 +42,9 @@ const (
 	protocolAMQP    = "amqp"
 	protocolAMQP091 = "amqp091"
 
+	// nullTag marks a YAML document that carries no value.
+	nullTag = "!!null"
+
 	defaultHealthAddr = ":8081"
 
 	defaultTCPV3Addr = ":1883"
@@ -392,7 +395,7 @@ func validateLocalPrincipalYAML(node *yaml.Node, path string) error {
 }
 
 func validateYAMLMapping(node *yaml.Node, path string, fields map[string]func(*yaml.Node) error) error {
-	if node.Tag == "!!null" {
+	if node.Tag == nullTag {
 		return nil
 	}
 	if node.Kind != yaml.MappingNode {
@@ -414,7 +417,7 @@ func validateYAMLMapping(node *yaml.Node, path string, fields map[string]func(*y
 }
 
 func validateYAMLSequence(node *yaml.Node, path string, validate func(*yaml.Node, string) error) error {
-	if node.Tag == "!!null" {
+	if node.Tag == nullTag {
 		return nil
 	}
 	if node.Kind != yaml.SequenceNode {
@@ -1366,12 +1369,22 @@ func parse(data []byte) (*Config, error) {
 	// decoded. Silently dropping the rest is the same class of failure strict
 	// decoding exists to end: a `---` above an auth or TLS section would start
 	// the broker on defaults while the file plainly shows otherwise.
-	var trailing yaml.Node
-	switch err := dec.Decode(&trailing); {
-	case errors.Is(err, io.EOF):
-	case err != nil:
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
-	default:
+	//
+	// An empty trailing document is not that. A file ending in `---`, or in a
+	// separator followed only by comments, carries no settings to lose and is
+	// what plenty of templating emits.
+	for {
+		var trailing yaml.Node
+		err := dec.Decode(&trailing)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+		if isEmptyDocument(&trailing) {
+			continue
+		}
 		return nil, fmt.Errorf(
 			"failed to parse config file: line %d: configuration must be a single YAML document; everything after the first `---` would be ignored",
 			trailing.Line)
@@ -1418,6 +1431,19 @@ var legacyAuthKeys = map[string]string{
 	authProtocolsField:         "auth.external.protocols",
 	authIdentityCacheSizeField: "auth.external.identity_cache_size",
 	authIdentityCacheTTLField:  "auth.external.identity_cache_ttl",
+}
+
+// isEmptyDocument reports whether a decoded document carries no settings: a
+// bare separator, or one followed only by comments, both of which yaml.v3
+// reports as a null document rather than as the end of the stream.
+func isEmptyDocument(node *yaml.Node) bool {
+	if node == nil || node.Kind == 0 {
+		return true
+	}
+	if node.Kind == yaml.DocumentNode {
+		return len(node.Content) == 0 || isEmptyDocument(node.Content[0])
+	}
+	return node.Tag == nullTag && node.Value == ""
 }
 
 func rejectLegacyAuthKeys(data []byte) error {
@@ -2348,8 +2374,8 @@ func checkBindConflicts(network string, bindings []listenerBinding) error {
 		for _, b := range active[i+1:] {
 			if bindsConflict(a.addr, b.addr) {
 				return fmt.Errorf(
-					"%s and %s both listen on %s (%s); give each listener its own address, or set one to \"\" to disable it",
-					a.path, b.path, b.addr, network)
+					"%s (%s) and %s (%s) cannot both bind %s; give each listener its own address, or set one to \"\" to disable it",
+					a.path, a.addr, b.path, b.addr, network)
 			}
 		}
 	}
@@ -2365,10 +2391,36 @@ func bindsConflict(a, b string) bool {
 	if !okA || !okB || portA != portB {
 		return false
 	}
-	if isWildcardHost(hostA) || isWildcardHost(hostB) {
+
+	// A wildcard only collides with the address families it actually accepts.
+	// "0.0.0.0" takes IPv4, so it leaves an IPv6 listener on the same port
+	// alone — both bind, and refusing that combination would reject a working
+	// deployment.
+	wildA, wildB := isWildcardHost(hostA), isWildcardHost(hostB)
+	switch {
+	case wildA && wildB:
 		return true
+	case wildA:
+		return wildcardCovers(hostA, hostB)
+	case wildB:
+		return wildcardCovers(hostB, hostA)
 	}
 	return strings.EqualFold(hostA, hostB)
+}
+
+// wildcardCovers reports whether a wildcard host accepts connections that would
+// otherwise reach the given host. "::" is treated as dual-stack, which is the
+// default on Linux (net.ipv6.bindv6only=0) and the case that actually collides.
+func wildcardCovers(wildcard, host string) bool {
+	switch strings.TrimSpace(wildcard) {
+	case "", "*", "::":
+		return true
+	case "0.0.0.0":
+		ip := net.ParseIP(strings.Trim(strings.TrimSpace(host), "[]"))
+		return ip == nil || ip.To4() != nil
+	default:
+		return true
+	}
 }
 
 func splitListenAddr(addr string) (host, port string, ok bool) {

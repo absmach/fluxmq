@@ -20,6 +20,10 @@ import (
 )
 
 const (
+	testIPv4Wildcard = "0.0.0.0:1883"
+	testIPv4Loopback = "127.0.0.1:1883"
+	testIPv6Loopback = "[::1]:1883"
+
 	testWSSAddr              = ":8084"
 	testAuthCalloutKey       = "auth.external.url"
 	testIdentityCacheSizeKey = "auth.external." + authIdentityCacheSizeField
@@ -362,7 +366,7 @@ func TestValidateListenAddress(t *testing.T) {
 	}{
 		{name: "every interface", addr: defaultTCPV3Addr},
 		{name: "loopback", addr: "127.0.0.1" + defaultTCPV3Addr},
-		{name: "ipv6 loopback", addr: "[::1]:1883"},
+		{name: "ipv6 loopback", addr: testIPv6Loopback},
 		{name: "unresolved hostname", addr: "broker.internal" + defaultTCPV3Addr},
 		{name: "highest port", addr: ":65535"},
 
@@ -546,6 +550,25 @@ auth:
 	_, err := Load(path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single YAML document")
+
+	// An empty trailing document carries nothing to lose. Rejecting a file that
+	// merely ends in a separator, or in one followed by comments, would fail
+	// configurations that plenty of templating emits.
+	for name, body := range map[string]string{
+		"bare separator":      "log:\n  level: info\n---\n",
+		"separator + comment": "log:\n  level: info\n---\n# nothing here\n",
+		"several separators":  "log:\n  level: info\n---\n---\n",
+		"leading separator":   "---\nlog:\n  level: info\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+			cfg, err := Load(path)
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+		})
+	}
 }
 
 // TestLoadNamesTheReplacementForMovedListenerKeys keeps the schema cutover
@@ -617,6 +640,32 @@ func TestDuplicateBindsMatchTheListenersStartupOpens(t *testing.T) {
 			err := cfg.validateNoDuplicateBinds()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), alias)
+		})
+	}
+}
+
+// TestBindConflictsAreFamilyAware keeps duplicate-bind validation from refusing
+// a deployment that would start. A wildcard only collides with the address
+// families it accepts, so an IPv4 wildcard leaves an IPv6 listener on the same
+// port alone.
+func TestBindConflictsAreFamilyAware(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		a, b     string
+		conflict bool
+	}{
+		{name: "ipv4 wildcard vs ipv6 loopback", a: testIPv4Wildcard, b: testIPv6Loopback, conflict: false},
+		{name: "ipv4 wildcard vs ipv4 loopback", a: testIPv4Wildcard, b: testIPv4Loopback, conflict: true},
+		{name: "ipv6 wildcard is dual stack", a: "[::]:1883", b: testIPv4Loopback, conflict: true},
+		{name: "two wildcards", a: testIPv4Wildcard, b: "[::]:1883", conflict: true},
+		{name: "bare port is a wildcard", a: defaultTCPV3Addr, b: testIPv4Loopback, conflict: true},
+		{name: "same host", a: testIPv4Loopback, b: testIPv4Loopback, conflict: true},
+		{name: "different hosts", a: testIPv4Loopback, b: "10.0.0.1:1883", conflict: false},
+		{name: "different ports", a: testIPv4Wildcard, b: "0.0.0.0:1884", conflict: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.conflict, bindsConflict(tc.a, tc.b))
+			assert.Equal(t, tc.conflict, bindsConflict(tc.b, tc.a), "conflict must be symmetric")
 		})
 	}
 }
