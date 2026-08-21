@@ -2289,6 +2289,13 @@ func validateListenAddress(path, address string) error {
 	if host != "" && strings.ContainsAny(host, " \t") {
 		return fmt.Errorf("%s host %q contains whitespace", path, host)
 	}
+	// Go resolves the host before binding, and "*" is not a name it can
+	// resolve. Accepting it as a wildcard would defer a certain failure to
+	// startup. Every other host is left alone: validation does not resolve
+	// names, so a deployment's DNS is not a load-time dependency.
+	if strings.TrimSpace(host) == "*" {
+		return fmt.Errorf("%s host %q is not an address Go can bind; use \"\" or \":%s\" for every interface", path, host, port)
+	}
 	number, err := strconv.Atoi(port)
 	if err != nil {
 		return fmt.Errorf("%s port %q is not a number", path, port)
@@ -2388,7 +2395,16 @@ func checkBindConflicts(network string, bindings []listenerBinding) error {
 func bindsConflict(a, b string) bool {
 	hostA, portA, okA := splitListenAddr(a)
 	hostB, portB, okB := splitListenAddr(b)
-	if !okA || !okB || portA != portB {
+	if !okA || !okB {
+		return false
+	}
+
+	// Compare what the kernel will bind, not what the operator typed: ":01883"
+	// and ":1883" are the same port, and comparing the text lets the pair
+	// through validation to fail at startup instead.
+	numA, errA := strconv.Atoi(portA)
+	numB, errB := strconv.Atoi(portB)
+	if errA != nil || errB != nil || numA != numB {
 		return false
 	}
 
@@ -2413,7 +2429,7 @@ func bindsConflict(a, b string) bool {
 // default on Linux (net.ipv6.bindv6only=0) and the case that actually collides.
 func wildcardCovers(wildcard, host string) bool {
 	switch strings.TrimSpace(wildcard) {
-	case "", "*", "::":
+	case "", "::":
 		return true
 	case "0.0.0.0":
 		ip := net.ParseIP(strings.Trim(strings.TrimSpace(host), "[]"))
@@ -2461,7 +2477,7 @@ func validPort(port int) bool {
 
 func isWildcardHost(host string) bool {
 	switch strings.TrimSpace(host) {
-	case "", "0.0.0.0", "::", "*":
+	case "", "0.0.0.0", "::":
 		return true
 	default:
 		return false

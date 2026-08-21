@@ -662,10 +662,85 @@ func TestBindConflictsAreFamilyAware(t *testing.T) {
 		{name: "same host", a: testIPv4Loopback, b: testIPv4Loopback, conflict: true},
 		{name: "different hosts", a: testIPv4Loopback, b: "10.0.0.1:1883", conflict: false},
 		{name: "different ports", a: testIPv4Wildcard, b: "0.0.0.0:1884", conflict: false},
+		// The kernel binds the parsed port, so a zero-padded spelling is the
+		// same listener. Comparing the text let this pair through validation
+		// and failed at startup instead.
+		{name: "zero-padded port is the same port", a: ":01883", b: defaultTCPV3Addr, conflict: true},
+		{name: "padded host port matches", a: "127.0.0.1:01883", b: testIPv4Loopback, conflict: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.conflict, bindsConflict(tc.a, tc.b))
 			assert.Equal(t, tc.conflict, bindsConflict(tc.b, tc.a), "conflict must be symmetric")
 		})
 	}
+}
+
+// TestValidateRejectsUnbindableWildcardHost covers a spelling that reads like a
+// wildcard and is not one: Go resolves the host before binding and cannot
+// resolve "*", so accepting it would defer a certain startup failure. Ordinary
+// names are left alone — validation must not make a deployment's DNS a
+// load-time dependency.
+func TestValidateRejectsUnbindableWildcardHost(t *testing.T) {
+	err := validateListenAddress("server.mqtt.tcp.v3.addr", "*:1883")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not an address Go can bind")
+
+	for _, addr := range []string{defaultTCPV3Addr, testIPv4Wildcard, testIPv6Loopback, "broker.internal:1883"} {
+		assert.NoError(t, validateListenAddress("server.mqtt.tcp.v3.addr", addr), addr)
+	}
+}
+
+// TestLoadRejectsSettingsItCannotHonour gathers the cases a reviewer probed by
+// hand. Each one used to be checked by reading a log line; they are assertions
+// now, so a regression fails the suite instead of printing quietly.
+func TestLoadRejectsSettingsItCannotHonour(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "storage key that moved",
+			body: "storage:\n  type: badger\n  sync_writes: true\n",
+			want: "sync_writes",
+		},
+		{
+			name: "unknown key nested in a listener",
+			body: "server:\n  mqtt:\n    tcp:\n      v3:\n        addr: \":1883\"\n        maxconnections: 5\n",
+			want: "maxconnections",
+		},
+		{
+			name: "explicit zero where absent means default",
+			body: "auth:\n  external:\n    url: \"https://auth.internal:9090\"\n    identity_cache_ttl: \"0s\"\n",
+			want: "identity_cache_ttl",
+		},
+		{
+			// A duration is a duration string, so a bare 0 never reaches the
+			// rule above; it fails as a type error, which is still a refusal
+			// rather than a silent default.
+			name: "bare zero is a type error, not a default",
+			body: "auth:\n  external:\n    url: \"https://auth.internal:9090\"\n    identity_cache_ttl: 0\n",
+			want: "cannot unmarshal",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(write(t, tc.body))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	// An empty file is not a mistake: it asks for the defaults, and the loader
+	// says so rather than failing on an absent document.
+	cfg, err := Load(write(t, ""))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, Default(), cfg)
 }
