@@ -244,6 +244,13 @@ func (c *Connection) Close() error {
 	return c.conn.Close()
 }
 
+// SetDeadline sets the read and write deadline on the underlying connection.
+// The handshake runs under one, and clearing it is what hands the connection
+// over to the idle-timeout machinery.
+func (c *Connection) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+
 // RemoteAddr returns the remote network address.
 func (c *Connection) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()

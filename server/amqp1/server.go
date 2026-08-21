@@ -22,11 +22,15 @@ var ErrShutdownTimeout = errors.New("shutdown timeout exceeded")
 
 // Config holds the AMQP server configuration.
 type Config struct {
-	Address         string
-	TLSConfig       *tls.Config
-	Logger          *slog.Logger
-	ShutdownTimeout time.Duration
-	MaxConnections  int
+	Address   string
+	TLSConfig *tls.Config
+	Logger    *slog.Logger
+	// HandshakeTimeout bounds the transport, SASL, and AMQP OPEN exchange for
+	// one connection. A successful OPEN clears the deadline. Zero disables it,
+	// which lets a peer hold a connection slot indefinitely without speaking.
+	HandshakeTimeout time.Duration
+	ShutdownTimeout  time.Duration
+	MaxConnections   int
 }
 
 // Server is a TCP server that accepts AMQP 1.0 connections.
@@ -117,16 +121,6 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 				tcpConn.SetNoDelay(true)                     //nolint:errcheck // TCP socket options; fails only on closed connection
 			}
 
-			// TLS handshake
-			if tlsConn, ok := conn.(*tls.Conn); ok {
-				if err := tlsConn.Handshake(); err != nil {
-					s.config.Logger.Error("TLS handshake failed", slog.String("error", err.Error()))
-					s.releaseSlot()
-					conn.Close()
-					continue
-				}
-			}
-
 			s.wg.Add(1)
 			go func(c net.Conn) {
 				defer s.wg.Done()
@@ -135,11 +129,42 @@ func (s *Server) runAcceptLoop(ctx, connCtx context.Context, listener net.Listen
 				defer connguard.Recover(s.config.Logger, "amqp10", c.RemoteAddr().String())
 
 				s.config.Logger.Debug("AMQP connection accepted", slog.String("remote", c.RemoteAddr().String()))
+				if !s.handshake(connCtx, c) {
+					return
+				}
 				s.handler.HandleConnection(connCtx, c)
 			}(conn)
 		}
 	}()
 	return acceptDone
+}
+
+// handshake bounds everything that happens before the connection is
+// established and runs it on the connection's own goroutine. The TLS handshake
+// used to run inline in the accept loop, where one unresponsive peer stalled
+// every pending connection; the deadline covers TLS, SASL, and OPEN, and
+// amqp1/broker clears it once OPEN succeeds.
+func (s *Server) handshake(ctx context.Context, conn net.Conn) bool {
+	if s.config.HandshakeTimeout > 0 {
+		if err := conn.SetDeadline(time.Now().Add(s.config.HandshakeTimeout)); err != nil {
+			s.config.Logger.Warn("AMQP 1.0 handshake deadline failed",
+				slog.String("remote", conn.RemoteAddr().String()),
+				slog.String("error", err.Error()))
+			return false
+		}
+	}
+
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return true
+	}
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		s.config.Logger.Error("TLS handshake failed",
+			slog.String("remote", conn.RemoteAddr().String()),
+			slog.String("error", err.Error()))
+		return false
+	}
+	return true
 }
 
 func (s *Server) tryAcquireSlot(ctx context.Context, conn net.Conn) bool {

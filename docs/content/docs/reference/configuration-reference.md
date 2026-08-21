@@ -147,6 +147,7 @@ These apply to listener blocks (for example `server.mqtt.tcp.v3`, `server.mqtt.w
 | `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on a local-principal listener, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
 | `read_timeout`    | Bounds the phase before an MQTT session starts (`time.Duration`, `>= 0`). On TCP that is the TLS handshake, protocol sniff and CONNECT; on WebSocket it also bounds the HTTP request and TLS handshake that precede the upgrade. Once the session starts it sets its own read deadlines from the negotiated keep-alive. TCP and WebSocket listeners. |
 | `write_timeout`   | Bounds a single socket write for the life of the connection (`time.Duration`, `>= 0`). TCP and WebSocket listeners.                            |
+| `handshake_timeout` | Bounds everything before a connection is established — transport, TLS, SASL, and the AMQP open exchange — and is cleared once it is (`time.Duration`, `>= 0`, default `10s`). An explicit `"0s"` removes the deadline, letting a peer that never speaks hold a connection slot indefinitely. `server.amqp` and `server.amqp091` listeners; MQTT uses `read_timeout` for the same phase. |
 | `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.mqtt.tcp.v3` and `v5` on `server.mqtt.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
 | `path`            | HTTP path for MQTT-over-WebSocket endpoint.                                                                                                    |
 | `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production.                                               |
@@ -308,6 +309,7 @@ queues:
 | Field           | Description                                                                |
 | --------------- | -------------------------------------------------------------------------- |
 | `name`          | Unique queue name.                                                         |
+| `ack_durability` | Overrides `storage.queue_ack_durability` for this queue: `fsync` or `buffered`. Unset takes the broker-wide default. `fsync` costs roughly 5 ms per publish and does not amortize across concurrent publishers — see the storage page before enabling it on a busy queue. |
 | `topics`        | Topic filters routed into this queue (must be non-empty). MQTT wildcards: `+` matches one level, `#` matches zero or more and must be the final level. A `#` placed anywhere else is not a valid filter and matches nothing — see the note below. Patterns are matched against every publish, not only `$queue/` addresses. |
 | `reserved`      | Marks system-managed/builtin queue definitions.                            |
 | `type`          | Queue mode: `classic` or `stream`. Empty value falls back to default mode. |
@@ -387,6 +389,8 @@ storage:
   badger_dir: "/tmp/fluxmq/data"
   badger_sync_writes: false
   recover_on_startup: false
+  queue_ack_durability: "buffered" # buffered or fsync
+  queue_sync_interval: "1s"
 ```
 
 | Field                | Default            | Description                                                                                                            |
@@ -395,6 +399,8 @@ storage:
 | `badger_dir`         | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`).                                                       |
 | `badger_sync_writes` | `false` | If `true`, fsync every write to the Badger key-value store holding retained messages and sessions. It does not reach the queue append-only log. |
 | `recover_on_startup` | `false`            | Run segment recovery before loading queues: truncate each corrupted segment at its last valid batch, sync, and rebuild indexes. See the note below on startup behaviour when this is `false`. |
+| `queue_ack_durability` | `buffered` | Default acknowledgement policy for durable queues: `buffered` acknowledges from the page cache, `fsync` syncs the append first. Individual queues override it with `queues[].ack_durability`. Ephemeral queues never sync. Startup fails if anything asks for `fsync` and the queue log cannot sync a single append. |
+| `queue_sync_interval` | `1s` | How often the queue log syncs in the background, and therefore the loss window for anything acknowledged as `buffered`. An explicit `"0s"` syncs every write. |
 
 A corrupted segment fails startup when `recover_on_startup` is `false`. The
 scan position becomes the next append offset, so continuing past damage would

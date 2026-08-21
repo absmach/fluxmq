@@ -47,6 +47,22 @@ const (
 
 	defaultHealthAddr = ":8081"
 
+	// QueueAckDurabilityFsync and QueueAckDurabilityBuffered are the accepted
+	// values of storage.queue_ack_durability.
+	QueueAckDurabilityFsync    = "fsync"
+	QueueAckDurabilityBuffered = "buffered"
+
+	// DefaultQueueSyncInterval is how often the queue log syncs in the
+	// background. Under the default fsync acknowledgement policy it bounds
+	// exposure for data that was never acknowledged to a publisher.
+	DefaultQueueSyncInterval = time.Second
+
+	// DefaultHandshakeTimeout bounds a connection's handshake on both AMQP
+	// families: transport, SASL where present, and the connection open
+	// exchange. It is deliberately short — a peer that has not finished
+	// connecting is holding a connection slot without having proved anything.
+	DefaultHandshakeTimeout = 10 * time.Second
+
 	defaultTCPV3Addr = ":1883"
 	defaultTCPV5Addr = ":1884"
 	defaultWSPath    = "/mqtt"
@@ -493,16 +509,21 @@ func (c HooksConfig) EnabledFor(protocol string) bool {
 
 // QueueConfig defines configuration for a persistent queue.
 type QueueConfig struct {
-	Name         string           `yaml:"name"`
-	Topics       []string         `yaml:"topics"`
-	Reserved     bool             `yaml:"reserved"`
-	Type         string           `yaml:"type"`
-	PrimaryGroup string           `yaml:"primary_group"`
-	Retention    QueueRetention   `yaml:"retention"`
-	Limits       QueueLimits      `yaml:"limits"`
-	Retry        QueueRetry       `yaml:"retry"`
-	DLQ          QueueDLQ         `yaml:"dlq"`
-	Replication  QueueReplication `yaml:"replication"`
+	Name         string   `yaml:"name"`
+	Topics       []string `yaml:"topics"`
+	Reserved     bool     `yaml:"reserved"`
+	Type         string   `yaml:"type"`
+	PrimaryGroup string   `yaml:"primary_group"`
+	// AckDurability overrides storage.queue_ack_durability for this queue.
+	// Empty takes the broker-wide default. Durability is a property of what a
+	// queue carries, so a queue that must not lose an acknowledged message can
+	// ask for fsync without imposing its cost on every other queue.
+	AckDurability string           `yaml:"ack_durability"`
+	Retention     QueueRetention   `yaml:"retention"`
+	Limits        QueueLimits      `yaml:"limits"`
+	Retry         QueueRetry       `yaml:"retry"`
+	DLQ           QueueDLQ         `yaml:"dlq"`
+	Replication   QueueReplication `yaml:"replication"`
 }
 
 // QueueLimits defines resource limits for a queue.
@@ -706,9 +727,13 @@ type CoAPConfig struct {
 
 // AMQPListenerConfig holds AMQP listener configuration.
 type AMQPListenerConfig struct {
-	Addr           string         `yaml:"addr"`
-	MaxConnections int            `yaml:"max_connections"`
-	TLS            mqtttls.Config `yaml:",inline"`
+	Addr           string `yaml:"addr"`
+	MaxConnections int    `yaml:"max_connections"`
+	// HandshakeTimeout bounds the transport, SASL, and AMQP OPEN exchange. An
+	// omitted key takes the default; an explicit 0 means no deadline, which
+	// lets an unresponsive peer hold a connection slot indefinitely.
+	HandshakeTimeout time.Duration  `yaml:"handshake_timeout"`
+	TLS              mqtttls.Config `yaml:",inline"`
 }
 
 // AMQPConfig groups AMQP listeners by mode.
@@ -720,9 +745,14 @@ type AMQPConfig struct {
 
 // AMQP091ListenerConfig holds AMQP 0.9.1 listener configuration.
 type AMQP091ListenerConfig struct {
-	Addr           string         `yaml:"addr"`
-	MaxConnections int            `yaml:"max_connections"`
-	TLS            mqtttls.Config `yaml:",inline"`
+	Addr           string `yaml:"addr"`
+	MaxConnections int    `yaml:"max_connections"`
+	// HandshakeTimeout bounds the transport and AMQP handshake through
+	// Connection.Open. An omitted key takes the default; an explicit 0 means no
+	// deadline, which lets an unresponsive peer hold a connection slot
+	// indefinitely.
+	HandshakeTimeout time.Duration  `yaml:"handshake_timeout"`
+	TLS              mqtttls.Config `yaml:",inline"`
 }
 
 // AMQP091Config groups AMQP 0.9.1 listeners by mode.
@@ -887,11 +917,25 @@ type StorageConfig struct {
 
 	// BadgerDB settings. BadgerSyncWrites fsyncs every write to the broker
 	// key-value store, which holds retained messages and sessions. It does not
-	// reach the queue append-only log: queue durability is a separate engine,
-	// and the acknowledgement policy for it is not configurable yet. The key is
-	// named for the engine it configures so the two cannot be confused.
+	// reach the queue append-only log: that is a separate engine, configured by
+	// the two keys below. The key is named for the engine it configures so the
+	// two cannot be confused.
 	BadgerDir        string `yaml:"badger_dir"`
 	BadgerSyncWrites bool   `yaml:"badger_sync_writes"`
+
+	// QueueAckDurability is the default acknowledgement policy for durable
+	// queues that do not set their own: "buffered" (default) acknowledges from
+	// the page cache and can lose up to QueueSyncInterval on a crash, "fsync"
+	// syncs the append first. Individual queues override it with
+	// queues[].ack_durability, because durability is a property of what a queue
+	// carries rather than of the node.
+	QueueAckDurability string `yaml:"queue_ack_durability"`
+
+	// QueueSyncInterval is how often the queue log syncs in the background. It
+	// is the loss window for "buffered", and the bound on how long an unsynced
+	// non-durable queue's data sits in the page cache. An explicit 0 syncs
+	// every write.
+	QueueSyncInterval time.Duration `yaml:"queue_sync_interval"`
 
 	// RecoverOnStartup runs segment recovery before loading queues.
 	// Corrupted segments are truncated at the last valid batch and indexes
@@ -1125,30 +1169,36 @@ func Default() *Config {
 			},
 			AMQP: AMQPConfig{
 				Plain: AMQPListenerConfig{
-					Addr:           ":5672",
-					MaxConnections: 10000,
+					Addr:             ":5672",
+					MaxConnections:   10000,
+					HandshakeTimeout: DefaultHandshakeTimeout,
 				},
 				TLS: AMQPListenerConfig{
-					MaxConnections: 10000,
+					MaxConnections:   10000,
+					HandshakeTimeout: DefaultHandshakeTimeout,
 				},
 				MTLS: AMQPListenerConfig{
-					MaxConnections: 10000,
+					MaxConnections:   10000,
+					HandshakeTimeout: DefaultHandshakeTimeout,
 				},
 			},
 			AMQP091: AMQP091Config{
 				Plain: AMQP091ListenerConfig{
-					Addr:           ":5682",
-					MaxConnections: 10000,
+					Addr:             ":5682",
+					MaxConnections:   10000,
+					HandshakeTimeout: DefaultHandshakeTimeout,
 				},
 				TLS: AMQP091ListenerConfig{
-					MaxConnections: 10000,
+					MaxConnections:   10000,
+					HandshakeTimeout: DefaultHandshakeTimeout,
 				},
 				MTLS: AMQP091ListenerConfig{
-					MaxConnections: 10000,
+					MaxConnections:   10000,
+					HandshakeTimeout: DefaultHandshakeTimeout,
 				},
-				Local:    AMQP091ListenerConfig{},
-				Internal: AMQP091ListenerConfig{},
-				Service:  AMQP091ListenerConfig{},
+				Local:    AMQP091ListenerConfig{HandshakeTimeout: DefaultHandshakeTimeout},
+				Internal: AMQP091ListenerConfig{HandshakeTimeout: DefaultHandshakeTimeout},
+				Service:  AMQP091ListenerConfig{HandshakeTimeout: DefaultHandshakeTimeout},
 			},
 			HealthAddr:      defaultHealthAddr,
 			HealthEnabled:   true,
@@ -1189,8 +1239,10 @@ func Default() *Config {
 			Format: "text",
 		},
 		Storage: StorageConfig{
-			Type:      storageTypeBadger,
-			BadgerDir: "/tmp/fluxmq/data",
+			QueueAckDurability: QueueAckDurabilityBuffered,
+			QueueSyncInterval:  DefaultQueueSyncInterval,
+			Type:               storageTypeBadger,
+			BadgerDir:          "/tmp/fluxmq/data",
 		},
 		Cluster: ClusterConfig{
 			Enabled: true,
@@ -1402,6 +1454,34 @@ func parse(data []byte) (*Config, error) {
 // connection would be cleartext while the config advertises a client
 // certificate, so the operator would believe the callout is mutually
 // authenticated when nothing about it is authenticated at all.
+// validateQueueDurability checks the queue log's acknowledgement policy. The
+// engine is always the append-only log, never Badger, so these keys are
+// independent of storage.type.
+// validateQueueAckDurability accepts an empty value on a queue, which means
+// "take the broker-wide default".
+func validateQueueAckDurability(path, policy string) error {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case "", QueueAckDurabilityFsync, QueueAckDurabilityBuffered:
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of: %s, %s", path,
+			QueueAckDurabilityFsync, QueueAckDurabilityBuffered)
+	}
+}
+
+func validateQueueDurability(c StorageConfig) error {
+	switch strings.ToLower(strings.TrimSpace(c.QueueAckDurability)) {
+	case QueueAckDurabilityFsync, QueueAckDurabilityBuffered:
+	default:
+		return fmt.Errorf("storage.queue_ack_durability must be one of: %s, %s",
+			QueueAckDurabilityFsync, QueueAckDurabilityBuffered)
+	}
+	if c.QueueSyncInterval < 0 {
+		return fmt.Errorf("storage.queue_sync_interval cannot be negative")
+	}
+	return nil
+}
+
 func validateCalloutTLS(path, rawURL string, tlsConfig *mqtttls.ClientConfig) error {
 	if tlsConfig == nil || !tlsConfig.Configured() {
 		return nil
@@ -1673,6 +1753,9 @@ func (c *Config) Validate() error {
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.amqp.%s.max_connections cannot be negative", slot.name)
 		}
+		if slot.cfg.HandshakeTimeout < 0 {
+			return fmt.Errorf("server.amqp.%s.handshake_timeout cannot be negative", slot.name)
+		}
 		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.amqp.%s TLS fields are not supported for plain listeners", slot.name)
 		}
@@ -1712,6 +1795,9 @@ func (c *Config) Validate() error {
 		}
 		if slot.cfg.MaxConnections < 0 {
 			return fmt.Errorf("server.amqp091.%s.max_connections cannot be negative", slot.name)
+		}
+		if slot.cfg.HandshakeTimeout < 0 {
+			return fmt.Errorf("server.amqp091.%s.handshake_timeout cannot be negative", slot.name)
 		}
 		if slot.name == listenerNamePlain && tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.amqp091.%s TLS fields are not supported for plain listeners", slot.name)
@@ -1838,6 +1924,10 @@ func (c *Config) Validate() error {
 
 	if c.Storage.Type == storageTypeBadger && c.Storage.BadgerDir == "" {
 		return fmt.Errorf("storage.badger_dir required when type is badger")
+	}
+
+	if err := validateQueueDurability(c.Storage); err != nil {
+		return err
 	}
 
 	// OpenTelemetry validation (only if metrics enabled)
@@ -2037,6 +2127,9 @@ func (c *Config) Validate() error {
 		seenQueues[q.Name] = true
 		if len(q.Topics) == 0 {
 			return fmt.Errorf("queues[%d].topics cannot be empty", i)
+		}
+		if err := validateQueueAckDurability(fmt.Sprintf("queues[%d].ack_durability", i), q.AckDurability); err != nil {
+			return err
 		}
 		// A malformed filter is not a harmless typo: it never matches, so the
 		// queue is bound to nothing and silently receives no traffic. Refuse it
