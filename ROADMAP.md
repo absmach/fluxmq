@@ -326,12 +326,13 @@ occurrences twice. Everything else in Milestone 1 parallelizes.
 ```
 1.2 Authorizer ctx  ✅ done 2026-08-21
         └──────────▶  1.3 authz cache            4–5 d   ◀── critical path
-1.5 durability policy ─▶ 1.10 DLQ + replication ─▶ 3A crash drills   7–10 d
+1.5 durability policy ✅ ─▶ 1.10 DLQ + replication ─▶ 3A crash drills  6–9 d
+1.5b group commit           (parallel)            1–2 d
+1.11 AMQP 1.0 handshake ✅ done 2026-08-21
 1.9 admin API auth          (parallel)            5–7 d
 1.6 split-brain             (parallel)            4–6 d
 1.7 CRL/OCSP                (parallel)            4–5 d
 1.1 cluster transports      (parallel)          3.5–5 d
-1.11 AMQP 1.0 handshake     (parallel)          0.5–1 d
 1.8 audit pass              (parallel, feeds back)  5–8 d
 1.4 strict config           ✅ done 2026-08-20
                                     │
@@ -670,10 +671,10 @@ plaintext, while opening four plaintext ports, one of them racing its own WSS
 listener. **The spike paid for itself before the work started, and the
 duplicate-bind check paid for itself within an hour of being written.**
 
-### 1.5 Make queue durability configurable, correct by default, and documented
+### 1.5 Make queue durability configurable and documented — ✅ DONE 2026-08-21
 
-**Weight: S · 1–2 days** — the key is an hour; choosing and benchmarking the
-default is the rest.
+**Weight: S · 1–2 days.** The keys were an hour. Benchmarking the default was
+the rest, and it changed the answer — see below.
 
 `logstorage/types.go:168` sets `DefaultSyncInterval = time.Second` and
 `cmd/main.go:834` never overrides it. `sync_interval` does not exist in the
@@ -698,10 +699,63 @@ sync window on a process or host crash.
   corrected in the same change.
 - Revisit `sync_writes: false` in `deployments/cluster/config/node{1,2,3}.yaml:66`.
 
-Schema change *and* a default change — before the tag. The benchmark that
-matters is durable publish throughput at each setting; record it, because
-defaulting to fsync will cost throughput and the number belongs in the release
-notes rather than in a bug report.
+**What shipped**
+
+| Change | Where |
+| --- | --- |
+| `storage.queue_ack_durability` (`buffered` \| `fsync`) | `config/config.go` |
+| `storage.queue_sync_interval`, previously hardcoded at 1s and unreachable | `config/config.go`, wired into the adapter in `cmd/main.go` |
+| Per-queue `queues[].ack_durability` override | `config/config.go`, `queue/types/config.go` |
+| Ordinary durable publishes take `AppendAndSync` under fsync | `queue/manager.go` — `appendWithAckDurability` |
+| Startup fails if anything asks for fsync and the log cannot sync one append | `cmd/main.go` — `wantsDurableSync` |
+
+**The default stayed `buffered`, against the plan, because of a measurement.**
+Durable publish, 256-byte payload, ext4 on consumer NVMe:
+
+| | ns/op | msg/s |
+| --- | ---: | ---: |
+| `buffered` | ~7,700 | ~130,000 |
+| `fsync`, serial | ~4,930,000 | ~203 |
+| `fsync`, 16 goroutines | ~4,916,000 | ~203 |
+
+Concurrency buys nothing: `appendWithBarrier` (`logstorage/manager.go:198`)
+holds the segment manager's exclusive lock across `segment.Sync()`, so
+publishers to one queue serialize into one fsync each. **There is no group
+commit anywhere in `logstorage`.** A durable queue is therefore capped at the
+reciprocal of the device's fsync latency — around 200 messages a second —
+however many publishers it has.
+
+Making that the default would have cost every existing deployment ~640x
+throughput on upgrade, silently, with no way to get it back except changing the
+default they never set. So the policy is opt-in, and it is opt-in **per queue**
+rather than per broker: durability is a property of what a queue carries, and a
+global switch forces the strictest queue's cost onto every queue beside it. An
+audit stream asks for `fsync`; the telemetry queues next to it do not pay for
+it.
+
+Benchmarks live in `queue/durability_bench_test.go` and must run on a real
+filesystem — `/tmp` is tmpfs on most Linux workstations, where fsync is free and
+the comparison silently measures nothing. That mistake was made and caught here:
+the first run reported fsync and buffered within 3% of each other.
+
+**Follow-up: 1.5b, group commit.** Until it exists, `fsync` is only usable on
+low-volume queues, which is a real limit on what the 1.0 durability claim can
+say.
+
+### 1.5b Group commit for the queue log
+
+**Weight: M · 1–2 days** — storage hot path, so the risk is ordering and error
+propagation rather than volume.
+
+Coalesce appends waiting on the same segment into one fsync, the way every
+write-ahead log does: the first writer syncs, everyone who arrived while it was
+syncing rides that barrier, and each caller learns whether *its* record was
+covered. Throughput then scales with concurrent publishers instead of pinning to
+device latency, and `fsync` becomes defensible as a default rather than an
+expert setting.
+
+Blocked behind nothing. Revisit 1.5's default the day it lands, and say in the
+1.0 notes which of the two shipped.
 
 ### 1.6 Close the session-ownership split-brain
 
@@ -815,9 +869,22 @@ writes with a replication factor of one and report success.
 - `replication_factor` and `min_in_sync_replicas` are enforced or they are not
   accepted.
 
-### 1.11 Bound the AMQP 1.0 handshake
+### 1.11 Bound the AMQP 1.0 handshake — ✅ DONE 2026-08-21
 
-**Weight: S · 0.5–1 day** *(imported from `v1.md`; verified 2026-08-21)*
+**Weight: S · 0.5–1 day.** *(imported from `v1.md`; verified 2026-08-21)*
+
+**What shipped:** per-listener `handshake_timeout` on both AMQP families
+(default 10s, `"0s"` disables), covering transport, TLS, SASL, and OPEN, cleared
+in `amqp1/broker/connection.go` once OPEN succeeds. AMQP 0.9.1 previously
+hardcoded the same 10s in `cmd/main.go`; it now reads the key too.
+
+**Found while fixing it:** the TLS handshake ran *inline in the accept loop*
+(`server/amqp1/server.go`), so one unresponsive peer stalled every pending
+connection — worse than the unbounded-slot problem the item was written for. It
+now runs on the connection's own goroutine, under the deadline, via
+`HandshakeContext`.
+
+The original description follows.
 
 `server/amqp1/server.go:120-123` performs the TLS handshake with no deadline
 set, and nothing bounds SASL or AMQP `Open` afterwards, so a client that
@@ -1030,7 +1097,7 @@ Deferring these is the point of having a roadmap:
 - [x] Queue delivery address settled for MQTT 5.0 and both AMQP versions; origin in `types.PropSourceTopic` — *done 2026-08-20*
 - [x] MQTT 3.1.1 queue consumption decided: settle on PUBACK, no origin recovery — *done 2026-08-21*
 - [ ] Inflight properties survive a cluster takeover, so a settled delivery is not redelivered after a node move (additive `proto/cluster/v1` field)
-- [ ] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open
+- [x] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open — *done 2026-08-21*
 
 **Durability and correctness**
 

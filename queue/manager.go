@@ -77,15 +77,17 @@ type queueRaftCoordinator interface {
 // Manager is the queue-based queue manager.
 // It uses append-only logs with cursor-based consumer groups, NATS JetQueue-style.
 type Manager struct {
-	queueStore       storage.QueueStore
-	groupStore       storage.ConsumerGroupStore
-	raftGroupStore   *raftGroupStore
-	consumerManager  *consumer.Manager
-	deliveryTarget   Deliverer
-	logger           *slog.Logger
-	config           Config
-	writePolicy      WritePolicy
-	distributionMode DistributionMode
+	queueStore        storage.QueueStore
+	groupStore        storage.ConsumerGroupStore
+	raftGroupStore    *raftGroupStore
+	consumerManager   *consumer.Manager
+	deliveryTarget    Deliverer
+	logger            *slog.Logger
+	config            Config
+	ackDurability     AckDurability
+	storeSupportsSync bool
+	writePolicy       WritePolicy
+	distributionMode  DistributionMode
 
 	// protectedQueueContracts contains only queues that back exact internal
 	// publishers. Its lock spans both contract checks and queue mutations so a
@@ -166,6 +168,12 @@ type Config struct {
 	CaptureQueueDepth   int
 	CaptureDrainTimeout time.Duration
 
+	// AckDurability decides what an acknowledged publish to a durable queue
+	// guarantees. Fsync makes the append survive a crash before the publisher
+	// is told it succeeded; buffered acknowledges from the page cache and loses
+	// up to the store's sync interval.
+	AckDurability AckDurability
+
 	// Replication/distribution configuration
 	WritePolicy      WritePolicy
 	DistributionMode DistributionMode
@@ -201,6 +209,7 @@ func DefaultConfig() Config {
 		StealInterval:          5 * time.Second,
 		StealEnabled:           true,
 		RetentionCheckInterval: 5 * time.Minute,
+		AckDurability:          AckDurabilityBuffered,
 		WritePolicy:            WritePolicyLocal,
 		DistributionMode:       DistributionForward,
 		CaptureWorkers:         defaultCaptureWorkers,
@@ -217,6 +226,18 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	}
 
 	metrics := consumer.NewMetrics()
+
+	// A store that cannot make one append durable cannot honour fsync. In
+	// production the queue log always can, and cmd refuses to start when it
+	// cannot, so reaching this is an in-memory store in a test — say so rather
+	// than failing every durable publish.
+	storeSupportsSync := storeSupportsDurableSync(queueStore)
+	ackDurability := NormalizeAckDurability(config.AckDurability)
+	if ackDurability == AckDurabilityFsync && !storeSupportsSync {
+		logger.Warn("queue store does not support durable sync; acknowledging durable queue publishes from the page cache",
+			slog.String("ack_durability", string(AckDurabilityBuffered)))
+		ackDurability = AckDurabilityBuffered
+	}
 
 	// mgr is populated below; the DLQ closure captures it by pointer so that
 	// the consumer.Manager can call back into the queue.Manager for DLQ publishing.
@@ -288,6 +309,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 		logger:                  logger,
 		config:                  config,
+		ackDurability:           ackDurability,
+		storeSupportsSync:       storeSupportsSync,
 		writePolicy:             normalizeWritePolicy(config.WritePolicy),
 		distributionMode:        distMode,
 		protectedQueueContracts: protectedQueueContracts,
@@ -651,6 +674,13 @@ func (m *Manager) protectedQueueContract(queueName string) (types.QueueConfig, b
 		return types.QueueConfig{}, false
 	}
 	return cloneQueueConfig(contract), true
+}
+
+// storeSupportsDurableSync reports whether one append can be made durable on
+// its own, which is the barrier the fsync acknowledgement policy depends on.
+func storeSupportsDurableSync(queueStore storage.QueueStore) bool {
+	durableStore, ok := queueStore.(storage.DurableQueueStore)
+	return ok && durableStore.SupportsDurableSync()
 }
 
 // durableQueueStore returns the queue store only when it can actually make a
@@ -1303,9 +1333,42 @@ func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRe
 			m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
 				slog.String("queue", queueName))
 		}
-		offset, err = m.queueStore.Append(ctx, queueName, msg)
+		offset, err = m.appendWithAckDurability(ctx, queueName, queueConfig, msg)
 	}
 	return m.completeAppend(queueName, publish.Topic, offset, err)
+}
+
+// ackDurabilityFor resolves the policy for one queue: what the queue asks for,
+// falling back to the broker-wide default. A queue that carries records nobody
+// may lose can demand the barrier without taxing the queues beside it.
+//
+// A queue asking for fsync on a store that cannot sync one append is refused at
+// load, so the resolved policy here is always one the store can honour.
+func (m *Manager) ackDurabilityFor(queueConfig *types.QueueConfig) AckDurability {
+	if queueConfig.AckDurability == "" {
+		return m.ackDurability
+	}
+	if !m.storeSupportsSync {
+		return AckDurabilityBuffered
+	}
+	return NormalizeAckDurability(AckDurability(queueConfig.AckDurability))
+}
+
+// appendWithAckDurability writes one message under the configured
+// acknowledgement policy. Under fsync a durable queue's append reaches the disk
+// before completeAppend can report success, which is what makes the publisher's
+// acknowledgement mean something after a crash. Ephemeral queues are never
+// synced: they do not survive a restart either way, so paying for the barrier
+// would buy nothing.
+func (m *Manager) appendWithAckDurability(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *types.Message) (uint64, error) {
+	if m.ackDurabilityFor(queueConfig) != AckDurabilityFsync || !queueConfig.Durable {
+		return m.queueStore.Append(ctx, queueName, msg)
+	}
+	durableStore, err := m.durableQueueStore()
+	if err != nil {
+		return 0, err
+	}
+	return durableStore.AppendAndSync(ctx, queueName, msg)
 }
 
 func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConfig) *types.Message {
