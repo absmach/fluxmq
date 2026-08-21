@@ -38,9 +38,9 @@ is expensive or impossible to change afterward:
    receives an address that is deliberately not injective and no way to recover
    the origin. Decide before the tag whether that is the contract or a gap.
 
-   **Resolved 2026-08-21, branch `fmq-mqtt-queue-ack`, which targets `main`
-   directly rather than stacking here — the code depends on nothing in this
-   branch, and this one is gated behind the magistrala pinning:** the broker settles a
+   **Resolved 2026-08-21, merged to `main` as `4046c0b69` (#580).** It went in
+   ahead of this branch on purpose: the code depended on nothing here, and this
+   branch is gated behind pinning magistrala off the `latest` image tag. the broker settles a
    3.1.1 consumer's queue message on PUBACK/PUBCOMP, using identifiers it
    stamped itself, so 3.1.1 consumes classic queues at QoS 1 or 2. QoS 0
    subscriptions to a classic queue are refused. Origin recovery for a captured
@@ -201,9 +201,9 @@ table. It is pushed to `origin`, so nothing is at risk in the meantime.
 
 ### Next session
 
-1. Milestone 1's critical path: **1.2 + 1.3 as one change** (`Authorizer` context
-   plus the decision cache). 6–8 days, and nothing else in Milestone 1 is
-   serial behind it.
+1. **1.2 is done** on branch `fmq-authz-context`, so what remains of the critical
+   path is **1.3**, the authorization decision cache — 4–5 days, and nothing
+   else in Milestone 1 is serial behind it.
 2. In parallel, whoever is not on the critical path starts **1.8** — the second
    audit pass. It is the schedule risk, and it feeds work back late.
 3. **1.9** (admin API auth) is the highest-value non-serial item and the one
