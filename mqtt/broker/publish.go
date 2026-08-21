@@ -63,6 +63,12 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 	// Route queue topics and ack topics to queue manager
 	if b.queueManager != nil {
 		switch route.Kind {
+		case broker.RouteQueueMalformed:
+			msg.ReleasePayload()
+			b.logError("queue_control_verb_misplaced",
+				fmt.Errorf("%q must be the last level of a queue address", route.ControlVerb),
+				slog.String("topic", msg.Topic))
+			return fmt.Errorf("queue address %q: %s must be the last level", msg.Topic, route.ControlVerb)
 		case broker.RouteQueueAck:
 			msg.ReleasePayload()
 			return b.handleQueueAck(ctx, msg, route)

@@ -49,6 +49,19 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 			return b.queueManager.SubscribeWithCursor(ctx, queueName, pattern, s.ID, groupID, proxyNodeID, cursor)
 		}
 
+		// A classic queue tracks every delivery until the consumer settles it, and
+		// this broker settles on PUBACK. At QoS 0 the protocol sends none, so
+		// the subscription could only be honoured by discarding every message
+		// as it is delivered. Refuse it instead of accepting a subscription
+		// that quietly loses work.
+		if qos == 0 {
+			b.logOp("queue_subscribe_rejected",
+				slog.String("client_id", s.ID),
+				slog.String("queue", queueName),
+				slog.String("reason", "classic queue requires QoS 1 or 2"))
+			return ErrQueueSubscriptionRequiresQoS
+		}
+
 		return b.queueManager.Subscribe(ctx, queueName, pattern, s.ID, groupID, proxyNodeID)
 	}
 

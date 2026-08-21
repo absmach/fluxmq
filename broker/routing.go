@@ -17,6 +17,10 @@ const (
 	RouteQueueAck
 	// RouteQueueCommit routes a stream offset commit.
 	RouteQueueCommit
+	// RouteQueueMalformed marks an address that names a queue control verb
+	// somewhere other than the end. Treating it as an ordinary publish would
+	// enqueue the message into the queue the client was trying to control.
+	RouteQueueMalformed
 )
 
 // AckKind identifies the type of queue acknowledgment.
@@ -37,6 +41,10 @@ type RouteResult struct {
 
 	// Pattern is the topic pattern after the queue name (e.g., "images/#").
 	Pattern string
+
+	// ControlVerb names the misplaced segment on RouteQueueMalformed, so the
+	// error can say which one was meant.
+	ControlVerb string
 
 	// PublishTopic is the full topic to use when publishing to the queue manager
 	// (e.g., "$queue/tasks/images"). For RouteQueueAck, this is the base queue topic
@@ -73,6 +81,18 @@ func (r *RoutingResolver) Resolve(topic string) RouteResult {
 			Pattern:      pattern,
 			PublishTopic: baseTopic,
 			AckKind:      ackKind,
+		}
+	}
+
+	// A control verb anywhere but the end is a mistake, not a message. Without
+	// this, `$queue/m/$ack/some-id` — the shape a client reaches for when it
+	// cannot send properties — silently publishes into queue m instead of
+	// acknowledging anything, and a typo like `$acks` does the same.
+	if segment, ok := misplacedControlSegment(topic); ok {
+		return RouteResult{
+			Kind:         RouteQueueMalformed,
+			PublishTopic: topic,
+			ControlVerb:  segment,
 		}
 	}
 
@@ -145,6 +165,26 @@ func EffectiveConsumerGroupID(groupID, pattern string) string {
 		return groupID
 	}
 	return groupID + "@" + pattern
+}
+
+// queueControlSegments are the verbs that may only appear as the final level of
+// a queue address.
+var queueControlSegments = map[string]bool{
+	"$ack":    true,
+	"$nack":   true,
+	"$reject": true,
+	"$commit": true,
+}
+
+// misplacedControlSegment reports a control verb that is not the last level.
+func misplacedControlSegment(topic string) (string, bool) {
+	levels := strings.Split(topic, "/")
+	for _, level := range levels[:max(len(levels)-1, 0)] {
+		if queueControlSegments[level] {
+			return level, true
+		}
+	}
+	return "", false
 }
 
 func parseAckSuffix(topic string) (AckKind, string, bool) {
