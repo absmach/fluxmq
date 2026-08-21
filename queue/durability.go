@@ -12,7 +12,10 @@ type AckDurability string
 const (
 	// AckDurabilityFsync syncs the append before the publisher is
 	// acknowledged, so an acknowledged message survives a process or host
-	// crash. It is not the default, and the reason is measured rather than
+	// crash. The queue log coalesces concurrent barriers, so publishers to one
+	// queue share an fsync rather than each paying for one: measured on
+	// consumer NVMe at ~185 messages a second with a single publisher and
+	// ~3,100 with sixty-four. See BenchmarkAckDurability*. It is not the default, and the reason is measured rather than
 	// assumed: appendWithBarrier holds the segment manager's lock across the
 	// sync, so concurrent publishers to one queue serialize into one fsync
 	// each. That caps a durable queue at the reciprocal of the device's fsync
@@ -25,8 +28,8 @@ const (
 	// store's background sync catch up. An acknowledged message can be lost up
 	// to storage.queue_sync_interval before a crash. This is the default,
 	// because it is what the broker has always done; making fsync the default
-	// before the log has group commit would cost every deployment ~640x
-	// throughput on upgrade.
+	// would cost every deployment throughput it did not
+	// ask for; even with barriers shared, fsync stays far behind buffered.
 	AckDurabilityBuffered AckDurability = "buffered"
 )
 

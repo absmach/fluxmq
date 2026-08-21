@@ -72,9 +72,17 @@ func TestSegmentManager_RotateAndRead(t *testing.T) {
 	assert.Equal(t, []byte("b"), rangeMsgs[1].Value)
 }
 
-func TestSegmentManager_DurableAppendSerializesConcurrentRotation(t *testing.T) {
+// TestSegmentManager_DurableAppendSyncsTheSegmentHoldingIt covers the hazard
+// the old atomic append-and-sync path guarded by holding the manager lock
+// across the fsync: a rotation racing the barrier must not leave a record
+// acknowledged but unsynced.
+//
+// The lock is no longer held — that is what lets concurrent publishers share
+// one fsync — so the guarantee comes from capturing the segment before the
+// lock is released and syncing that one, readonly or not.
+func TestSegmentManager_DurableAppendSyncsTheSegmentHoldingIt(t *testing.T) {
 	cfg := DefaultManagerConfig()
-	cfg.MaxSegmentSize = 1
+	cfg.MaxSegmentSize = 1 // rotate on every append
 	cfg.MaxSegmentAge = 0
 	cfg.SyncInterval = 0
 	cfg.Compression = CompressionNone
@@ -84,40 +92,23 @@ func TestSegmentManager_DurableAppendSerializesConcurrentRotation(t *testing.T) 
 
 	batch := NewBatch(0)
 	batch.Append([]byte("durable"), nil, nil)
-
-	rotationAttempted := make(chan struct{})
-	rotationResult := make(chan error, 1)
-	var syncedSegment *Segment
-	offset, err := mgr.appendWithBarrier(batch, func(target *Segment) error {
-		syncedSegment = target
-
-		// The old two-call Append/SyncQueue path released this lock here,
-		// allowing the concurrent append to rotate target to readonly before
-		// Sync selected the active segment. The atomic path must retain it.
-		if mgr.mu.TryLock() {
-			mgr.mu.Unlock()
-			t.Fatal("segment manager lock was released before durability barrier")
-		}
-		if mgr.activeSegment != target {
-			t.Fatal("active segment changed before durability barrier")
-		}
-
-		rotationBatch := NewBatch(0)
-		rotationBatch.Append([]byte("rotate"), nil, nil)
-		go func() {
-			close(rotationAttempted)
-			_, appendErr := mgr.Append(rotationBatch)
-			rotationResult <- appendErr
-		}()
-		<-rotationAttempted
-		return target.Sync()
-	})
+	offset, target, through, err := mgr.appendLocked(batch)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(0), offset)
-	require.NoError(t, <-rotationResult)
 
-	require.NotNil(t, syncedSegment)
-	assert.Equal(t, uint64(0), syncedSegment.BaseOffset())
+	// Rotate underneath the pending barrier, exactly as a concurrent publisher
+	// would: target becomes readonly while its record still needs syncing.
+	rotationBatch := NewBatch(0)
+	rotationBatch.Append([]byte("rotate"), nil, nil)
+	_, err = mgr.Append(rotationBatch)
+	require.NoError(t, err)
+	require.NotSame(t, target, mgr.activeSegment, "test did not actually rotate")
+
+	before := target.commit.syncs.Load()
+	require.NoError(t, target.SyncThrough(through))
+	assert.Greater(t, target.commit.syncs.Load(), before,
+		"the retired segment holding the record was never synced")
+
 	segments := mgr.Segments()
 	require.Len(t, segments, 2)
 	assert.Equal(t, uint64(0), segments[0].BaseOffset)
