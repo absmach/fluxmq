@@ -56,6 +56,9 @@ func BenchmarkAckDurabilityFsync(b *testing.B) {
 	benchmarkAckDurability(b, AckDurabilityFsync)
 }
 
+// Run with -cpu to vary the publisher count: barriers coalesce, so throughput
+// rises with concurrency instead of pinning to the device's fsync latency.
+//
 // BenchmarkAckDurabilityFsyncParallel measures whether concurrency amortizes
 // the barrier. It does not: appendWithBarrier holds the segment manager's
 // exclusive lock across the fsync, so concurrent publishers to one queue

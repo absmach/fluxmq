@@ -328,7 +328,6 @@ occurrences twice. Everything else in Milestone 1 parallelizes.
 1.2 Authorizer ctx  ✅ done 2026-08-21
         └──────────▶  1.3 authz cache            4–5 d   ◀── critical path
 1.5 durability policy ✅ ─▶ 1.10 DLQ + replication ─▶ 3A crash drills  6–9 d
-1.5b group commit           (parallel)            1–2 d
 1.11 AMQP 1.0 handshake ✅ done 2026-08-21
 1.9 admin API auth          (parallel)            5–7 d
 1.6 split-brain             (parallel)            4–6 d
@@ -743,10 +742,33 @@ the first run reported fsync and buffered within 3% of each other.
 low-volume queues, which is a real limit on what the 1.0 durability claim can
 say.
 
-### 1.5b Group commit for the queue log
+### 1.5b Group commit for the queue log — ✅ DONE 2026-08-21
 
-**Weight: M · 1–2 days** — storage hot path, so the risk is ordering and error
-propagation rather than volume.
+**Weight: M · 1–2 days.**
+
+Barriers on one segment coalesce: the first caller fsyncs, everyone who arrived
+before it captured its coverage rides that barrier, and a caller whose append
+landed later takes the next one rather than trusting someone else's. The fsync
+runs with no segment lock held, which is what lets appends continue while it is
+in flight.
+
+Durable publish, 256-byte messages, ext4 on consumer NVMe: ~185 msg/s at one
+publisher, ~1,260 at sixteen, ~3,100 at sixty-four, against a flat ~200 at every
+concurrency before. A single publisher is unchanged and always will be — it has
+nobody to share a barrier with.
+
+**1.5's default stays `buffered`.** Sharing the barrier makes `fsync` usable on
+a busy queue rather than unusable, but two orders of magnitude still separate
+them, so it remains something a queue asks for.
+
+**Built on the sync-failure handling from #578 rather than replacing it.** A
+failed barrier still sticks, and the next append retries it under the lock. The
+one behaviour change: because the barrier now runs outside the lock, an append
+can be accepted between a barrier failing and that failure being recorded. It is
+not acknowledged on a broken device — in fsync mode it takes its own barrier and
+fails the same way — and the stickiness still stops the one after it.
+
+The original description follows.
 
 Coalesce appends waiting on the same segment into one fsync, the way every
 write-ahead log does: the first writer syncs, everyone who arrived while it was

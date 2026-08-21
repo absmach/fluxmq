@@ -72,13 +72,21 @@ queues:
     topics: ["telemetry/#"]   # takes the broker-wide default
 ```
 
-**The cost is large and does not amortize.** The queue log syncs one append at a
-time while holding the segment lock, so concurrent publishers to one queue
-serialize, one fsync each. On a consumer NVMe with ext4 that measured roughly
-5 ms per publish — about 200 messages a second per queue, against ~130,000
-buffered — and adding publishers did not improve it. Reproduce with
-`go test ./queue -bench BenchmarkAckDurability`, on a real filesystem: `/tmp` is
-often tmpfs, where fsync costs nothing and the comparison is meaningless.
+**The cost depends on how many publishers share the queue.** The queue log
+coalesces durability barriers: one publisher performs the fsync and everyone who
+arrived before it started rides the same one. A lone publisher has nobody to
+share with and pays the device's full fsync latency; a busy queue amortizes it.
+Measured on ext4 over consumer NVMe, 256-byte messages:
+
+| Concurrent publishers | `fsync` | `buffered` |
+| ---: | ---: | ---: |
+| 1  | ~185 msg/s   | ~125,000 msg/s |
+| 16 | ~1,260 msg/s | ~104,000 msg/s |
+| 64 | ~3,100 msg/s | ~102,000 msg/s |
+
+Reproduce with `go test ./queue -bench BenchmarkAckDurability -cpu 1,16,64`, on
+a real filesystem: `/tmp` is often tmpfs, where fsync costs nothing and the
+comparison silently measures nothing.
 
 `buffered` is the default because it is what the broker has always done, so
 upgrading does not silently change throughput. Choose `fsync` for the queues

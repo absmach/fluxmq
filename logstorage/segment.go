@@ -31,6 +31,9 @@ type Segment struct {
 	closed   bool
 	readonly bool
 
+	// commit coalesces durability barriers from concurrent publishers.
+	commit segmentCommit
+
 	// Write buffer for batching small writes
 	writeBuf []byte
 
@@ -504,6 +507,56 @@ func (s *Segment) Sync() error {
 	}
 
 	return nil
+}
+
+// SyncThrough makes every batch appended before offset durable and returns
+// once it is. Concurrent callers share one fsync, so a queue's durable
+// throughput is no longer one message per fsync.
+//
+// A readonly segment is still synced. Rotation marks the outgoing segment
+// readonly without closing it, and a publisher whose append landed just before
+// that is owed the barrier just the same — Sync's habit of skipping readonly
+// segments would silently drop it.
+// onFailure, when non-nil, records a failed barrier before its waiters wake.
+func (s *Segment) SyncThrough(offset uint64, onFailure func(error)) error {
+	return s.commit.syncThrough(offset, func() (uint64, error) {
+		// Take the state under the lock, then release it: holding it across the
+		// fsync would block every append for the duration of the barrier, which
+		// is the serialization this exists to remove.
+		s.mu.RLock()
+		file, index, timeIndex := s.file, s.index, s.timeIndex
+		covered, closed := s.nextOffset, s.closed
+		s.mu.RUnlock()
+
+		// A closed segment cannot be synced, and reporting success would
+		// acknowledge a publish whose bytes may never have left the page cache.
+		if closed {
+			return 0, ErrSegmentClosed
+		}
+
+		// Coverage is now fixed: everything written before this point is what
+		// the barrier promises. Appends landing from here on take the next one.
+		if beforeSegmentSync != nil {
+			if err := beforeSegmentSync(); err != nil {
+				return 0, err
+			}
+		}
+
+		if err := file.Sync(); err != nil {
+			return 0, err
+		}
+		if index != nil {
+			if err := index.Sync(); err != nil {
+				return 0, err
+			}
+		}
+		if timeIndex != nil {
+			if err := timeIndex.Sync(); err != nil {
+				return 0, err
+			}
+		}
+		return covered, nil
+	}, onFailure)
 }
 
 // Close closes the segment file.

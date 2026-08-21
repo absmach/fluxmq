@@ -196,12 +196,15 @@ func (m *SegmentManager) createSegment(baseOffset uint64) error {
 // the manager lock. Keeping the lock across both operations prevents another
 // append from rotating the active segment between the write and its durability
 // barrier.
-func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) error) (uint64, error) {
+// appendLocked appends a batch and reports where it landed: the segment holding
+// it and the tail offset after it. The caller runs any durability barrier after
+// this returns, with no lock held, so appends continue while one is in flight.
+func (m *SegmentManager) appendLocked(batch *Batch) (offset uint64, target *Segment, through uint64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.closed {
-		return 0, ErrSegmentClosed
+		return 0, nil, 0, ErrSegmentClosed
 	}
 	// A failed background sync means the configured crash-loss window was not
 	// established. Before accepting another append, retry that barrier while
@@ -209,7 +212,7 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 	if m.syncErr != nil {
 		if err := m.activeSegment.Sync(); err != nil {
 			m.syncErr = err
-			return 0, fmt.Errorf("previous queue log sync failure persists: %w", err)
+			return 0, nil, 0, fmt.Errorf("previous queue log sync failure persists: %w", err)
 		}
 		m.syncErr = nil
 	}
@@ -217,7 +220,7 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 	// Check if we need to rotate
 	if m.shouldRotate() {
 		if err := m.rotate(); err != nil {
-			return 0, fmt.Errorf("failed to rotate segment: %w", err)
+			return 0, nil, 0, fmt.Errorf("failed to rotate segment: %w", err)
 		}
 	}
 
@@ -227,21 +230,51 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 
 	// Capture the target so a durability barrier always applies to the segment
 	// containing this batch, even if rotation behavior changes in the future.
-	target := m.activeSegment
-	offset, err := target.Append(batch)
+	target = m.activeSegment
+	offset, err = target.Append(batch)
+	if err != nil {
+		return 0, nil, 0, err
+	}
+
+	m.tailOffset = batch.NextOffset()
+	return offset, target, m.tailOffset, nil
+}
+
+// appendDurable appends a batch and returns once it is on disk.
+//
+// The barrier runs after the manager lock is released, so concurrent
+// publishers share one fsync instead of queueing for their own. The segment is
+// captured before the lock is released, so a rotation racing this still leaves
+// the batch synced in the segment that holds it.
+func (m *SegmentManager) appendDurable(batch *Batch) (uint64, error) {
+	offset, target, through, err := m.appendLocked(batch)
 	if err != nil {
 		return 0, err
 	}
 
-	m.tailOffset = batch.NextOffset()
-	if barrier != nil {
-		if err := barrier(target); err != nil {
-			m.syncErr = err
-			return offset, fmt.Errorf("durability barrier for offset %d: %w", offset, err)
-		}
+	// The barrier records its own failure before waking anyone, so the append
+	// that follows a broken fsync is refused by the retry above rather than
+	// racing this return.
+	if err := target.SyncThrough(through, m.recordSyncFailure); err != nil {
+		return offset, fmt.Errorf("durability barrier for offset %d: %w", offset, err)
 	}
-
 	return offset, nil
+}
+
+// recordSyncFailure makes a failed barrier stick, so the next append retries it
+// under the lock rather than accepting a write on top of an unestablished
+// crash-loss window. It runs inside the barrier, before its waiters wake, which
+// is what keeps the failure visible to every publisher that shared it.
+//
+// An append can still be accepted while a barrier is in flight — that is the
+// point of sharing one — but acceptance is not acknowledgement: in fsync mode
+// that append takes a barrier of its own and fails the same way, and in
+// buffered mode it was never promised more than the sync interval.
+// TestAppendNeverReportsSuccessOnAFailingDevice holds that line.
+func (m *SegmentManager) recordSyncFailure(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncErr = err
 }
 
 // Append appends a batch to the log and returns the base offset. A zero sync
@@ -250,15 +283,17 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 // ticker instead.
 func (m *SegmentManager) Append(batch *Batch) (uint64, error) {
 	if m.config.SyncInterval == 0 {
-		return m.appendWithBarrier(batch, (*Segment).Sync)
+		return m.appendDurable(batch)
 	}
-	return m.appendWithBarrier(batch, nil)
+	offset, _, _, err := m.appendLocked(batch)
+	return offset, err
 }
 
-// AppendAndSync appends a batch and syncs the exact segment containing it
-// before returning. Segment rotation is serialized with the entire operation.
+// AppendAndSync appends a batch and returns once the segment containing it is
+// durable, sharing that barrier with any concurrent publisher waiting on the
+// same segment.
 func (m *SegmentManager) AppendAndSync(batch *Batch) (uint64, error) {
-	return m.appendWithBarrier(batch, (*Segment).Sync)
+	return m.appendDurable(batch)
 }
 
 // AppendMessage appends a single message and returns its offset.
