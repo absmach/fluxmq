@@ -20,10 +20,12 @@ server:
         addr: ":1884"
         protocol: "v5"
     websocket:
-      plain:
+      v3:
         addr: ":8083"
         path: "/mqtt"
-        protocol: "auto" # auto | v3 | v5
+      v5:
+        addr: ":8084"
+        path: "/mqtt"
   http:
     plain:
       addr: ":8080"
@@ -52,6 +54,20 @@ server:
   otel_trace_sample_rate: 0.1
 
   admin_api_addr: ":8082"
+
+# server.amqp091.local is meaningless without the principals it serves, so the
+# two are always configured together. See the security page for the full model.
+auth:
+  local_principals:
+    - name: "audit-publisher"
+      certificate_uri_san: "spiffe://example.org/audit-publisher"
+      role: "publisher"
+      current_secret_file: "/run/secrets/audit_secret_current"
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key_prefix: "audit."
+        subscribe: []
 ```
 
 ## Key Fields

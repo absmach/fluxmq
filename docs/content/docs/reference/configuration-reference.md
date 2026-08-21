@@ -45,6 +45,9 @@ Durations use Go duration strings like `5s`, `1m`, `24h`.
 
 `server` controls network listeners and telemetry endpoints.
 
+<!-- fluxmq:config-skip: one section in isolation; server.amqp091.local is only
+     valid alongside the auth.local_principals section documented below -->
+
 ```yaml
 server:
   mqtt:

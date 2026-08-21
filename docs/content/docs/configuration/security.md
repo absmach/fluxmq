@@ -78,6 +78,11 @@ identity here, and each entry grants exactly the targets it names. Remote
 clients, devices, and tenants authenticate through `auth.external`.
 
 ```yaml
+# An exact publish target is single-node only, so this deployment turns
+# clustering off explicitly. See the note below the example.
+cluster:
+  enabled: false
+
 server:
   amqp091:
     local:

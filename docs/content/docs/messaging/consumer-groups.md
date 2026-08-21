@@ -365,15 +365,27 @@ func main() {
 
 Queue manager settings that affect consumer groups:
 
+One consumer-group setting is configurable:
+
 ```yaml
 queue_manager:
-  visibility_timeout: "30s"      # Time before unacked message is redelivered
-  max_delivery_count: 5          # Max retries before giving up
-  auto_commit_interval: "5s"     # Cursor commit frequency (stream mode)
-  consumer_timeout: "2m"         # Disconnect stale consumers
-  steal_enabled: true            # Enable work stealing
-  steal_interval: "5s"           # Work stealing check interval
+  auto_commit_interval: "5s" # Cursor commit frequency (stream mode).
+                             # Zero commits on every delivery batch.
 ```
+
+The rest of the consumer-group behaviour is fixed in this release. The values
+below are the built-in defaults (`queue/consumer.DefaultConfig`); they have no
+YAML keys, and writing one is a startup error under strict decoding:
+
+| Behaviour                                    | Value    |
+| -------------------------------------------- | -------- |
+| Visibility timeout before an entry is stealable | 30s      |
+| Max delivery attempts before DLQ              | 5        |
+| Claim batch size                              | 10       |
+| Steal batch size                              | 5        |
+| Max pending entries per group                 | 100,000  |
+
+Work stealing is always on; there is no switch for it.
 
 ## Best Practices
 

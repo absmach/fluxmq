@@ -4,9 +4,11 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -431,4 +434,93 @@ func TestSchemaKeysAreStable(t *testing.T) {
 	assert.NotContains(t, keys, "server.tcp",
 		"MQTT transports live under server.mqtt")
 	assert.NotContains(t, keys, "server.websocket")
+}
+
+// docsConfigSkipMarker lets one documentation block opt out of
+// TestDocumentedConfigsLoad. It is for blocks that must not load: a removed
+// key shown as a negative example, or a reference section quoted in isolation
+// whose siblings live in neighbouring blocks.
+const docsConfigSkipMarker = "fluxmq:config-skip"
+
+var docsYAMLBlock = regexp.MustCompile("(?s)```ya?ml\n(.*?)```")
+
+// TestDocumentedConfigsLoad extends TestShippedConfigsDecodeStrictly to the
+// documentation. Strict decoding turned every stale example into a broker that
+// refuses to start, so a documented key that no longer exists is now a
+// production incident waiting for the first operator who copies it — which is
+// how `server.mqtt.websocket.plain` survived the listener rename on the very
+// page that documented it.
+//
+// A fenced yaml block counts as broker configuration when at least one of its
+// top-level keys is a top-level config key. That leaves Compose files,
+// manifests, and payload samples alone without needing a marker on each.
+func TestDocumentedConfigsLoad(t *testing.T) {
+	topLevel := map[string]bool{}
+	typ := reflect.TypeOf(Config{})
+	for i := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+		if name != "" && name != "-" {
+			topLevel[name] = true
+		}
+	}
+
+	files := []string{"../README.md"}
+	require.NoError(t, filepath.WalkDir("../docs/content/docs", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && filepath.Ext(path) == ".md" {
+			files = append(files, path)
+		}
+		return nil
+	}))
+
+	checked := 0
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		require.NoError(t, err)
+		page := string(data)
+
+		for _, match := range docsYAMLBlock.FindAllStringSubmatchIndex(page, -1) {
+			preamble, block := page[:match[0]], page[match[2]:match[3]]
+			if skippedByMarker(preamble) || !isBrokerConfigBlock(block, topLevel) {
+				continue
+			}
+
+			checked++
+			line := strings.Count(preamble, "\n") + 1
+			t.Run(fmt.Sprintf("%s:%d", filepath.ToSlash(file), line), func(t *testing.T) {
+				if _, err := parse([]byte(block)); err != nil {
+					t.Fatalf("documented configuration must load: %v", err)
+				}
+			})
+		}
+	}
+	require.NotZero(t, checked, "no documented configuration blocks found")
+}
+
+// skippedByMarker reports whether a skip marker sits immediately above a
+// fenced block. The window is deliberately short: a marker further up the page
+// must not silence an unrelated example below it.
+func skippedByMarker(preamble string) bool {
+	lines := strings.Split(strings.TrimRight(preamble, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0 && i > len(lines)-5; i-- {
+		if strings.Contains(lines[i], docsConfigSkipMarker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBrokerConfigBlock(block string, topLevel map[string]bool) bool {
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(block), &document); err != nil {
+		return false
+	}
+	for key := range document {
+		if topLevel[key] {
+			return true
+		}
+	}
+	return false
 }
