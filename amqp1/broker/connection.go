@@ -112,6 +112,13 @@ func (c *Connection) run() error {
 		return fmt.Errorf("OPEN exchange: %w", err)
 	}
 
+	// The connection is established, so the handshake deadline comes off and
+	// liveness becomes the idle timeout's job. Until this point a peer that
+	// stops talking is holding a connection slot for nothing.
+	if err := c.conn.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clearing handshake deadline: %w", err)
+	}
+
 	c.broker.registerConnection(c.containerID, c)
 	c.broker.stats.IncrementConnections()
 	if m := c.broker.metrics; m != nil {

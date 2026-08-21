@@ -125,6 +125,64 @@ func TestSegmentManager_DurableAppendSerializesConcurrentRotation(t *testing.T) 
 	assert.Equal(t, uint64(2), mgr.Tail())
 }
 
+func TestSegmentManager_ZeroSyncIntervalSyncsEveryAppend(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.SyncInterval = 0
+	cfg.Compression = CompressionNone
+
+	mgr := newTestManager(t, cfg)
+	defer mgr.Close() //nolint:errcheck // the test deliberately breaks the index file
+
+	// Segment.Append treats the index as rebuildable and therefore does not
+	// fail when its write does. Segment.Sync does fail, so this distinguishes a
+	// real sync-on-write path from the old zero-means-no-ticker behavior.
+	require.NoError(t, mgr.activeSegment.index.file.Close())
+
+	_, err := mgr.AppendMessage([]byte("must sync"), nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durability barrier")
+}
+
+func TestSegmentManager_RotationSyncsSegmentBeforeSealingIt(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.MaxSegmentSize = 1
+	cfg.MaxSegmentAge = 0
+	cfg.SyncInterval = time.Hour
+	cfg.Compression = CompressionNone
+
+	mgr := newTestManager(t, cfg)
+	defer mgr.Close() //nolint:errcheck // the test deliberately breaks the index file
+
+	_, err := mgr.AppendMessage([]byte("first"), nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, mgr.activeSegment.index.file.Close())
+
+	_, err = mgr.AppendMessage([]byte("rotate"), nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "syncing segment 0 before rotation")
+	assert.Equal(t, 1, mgr.SegmentCount(), "a segment whose sync failed must remain active")
+	assert.Equal(t, uint64(1), mgr.Tail(), "the rejected append must not advance the log")
+}
+
+func TestSegmentManager_FailedPeriodicSyncBlocksNextAppend(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.SyncInterval = time.Hour
+	cfg.Compression = CompressionNone
+
+	mgr := newTestManager(t, cfg)
+	defer mgr.Close() //nolint:errcheck // the test deliberately breaks the index file
+
+	_, err := mgr.AppendMessage([]byte("buffered"), nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, mgr.activeSegment.index.file.Close())
+	require.Error(t, mgr.Sync())
+
+	_, err = mgr.AppendMessage([]byte("must not be accepted"), nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "previous queue log sync failure persists")
+	assert.Equal(t, uint64(1), mgr.Tail(), "a failed background barrier must block the next append")
+}
+
 func TestSegmentManager_Truncate(t *testing.T) {
 	cfg := DefaultManagerConfig()
 	cfg.MaxSegmentSize = 1

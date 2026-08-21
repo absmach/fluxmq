@@ -854,11 +854,21 @@ func main() {
 		adapterCfg := logStorage.DefaultAdapterConfig()
 		adapterCfg.RecoverOnStartup = cfg.Storage.RecoverOnStartup
 		adapterCfg.RecoveryLogger = slog.Warn
+		adapterCfg.SyncInterval = cfg.Storage.QueueSyncInterval
 		queueLogStore, err = logStorage.NewAdapter(queueDir, adapterCfg)
 		if err != nil {
 			slog.Error("Failed to initialize queue log storage", "error", err)
 			os.Exit(1)
 		}
+		if wantsDurableSync(cfg) {
+			durableStore, ok := any(queueLogStore).(queueStorage.DurableQueueStore)
+			if !ok || !durableStore.SupportsDurableSync() {
+				slog.Error("a queue asks for fsync acknowledgement but the queue log cannot sync a single append",
+					"hint", "set ack_durability: buffered, or use a queue log that supports durable sync")
+				os.Exit(1)
+			}
+		}
+
 		// The store is released by the deferred teardown registered before
 		// b.Close, so that it runs after the broker has stopped the queue
 		// manager. Registering it here would run it first: defers are LIFO, and
@@ -872,6 +882,7 @@ func main() {
 		queueCfg.CaptureWorkers = valueOr(cfg.QueueManager.CaptureWorkers, queueCfg.CaptureWorkers)
 		queueCfg.CaptureQueueDepth = valueOr(cfg.QueueManager.CaptureQueueDepth, queueCfg.CaptureQueueDepth)
 		queueCfg.CaptureDrainTimeout = valueOr(cfg.QueueManager.CaptureDrainTimeout, queueCfg.CaptureDrainTimeout)
+		queueCfg.AckDurability = queue.AckDurability(cfg.Storage.QueueAckDurability)
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {
@@ -935,6 +946,7 @@ func main() {
 				Reserved:       qc.Reserved,
 				Type:           queueTypes.QueueType(qc.Type),
 				PrimaryGroup:   qc.PrimaryGroup,
+				AckDurability:  qc.AckDurability,
 				MaxMessageSize: qc.Limits.MaxMessageSize,
 				MaxDepth:       qc.Limits.MaxDepth,
 				MessageTTL:     qc.Limits.MessageTTL,
@@ -1288,11 +1300,12 @@ func main() {
 		}
 
 		amqpCfg := amqp1server.Config{
-			Address:         slot.cfg.Addr,
-			TLSConfig:       tlsCfg,
-			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			MaxConnections:  slot.cfg.MaxConnections,
-			Logger:          logger,
+			Address:          slot.cfg.Addr,
+			TLSConfig:        tlsCfg,
+			HandshakeTimeout: slot.cfg.HandshakeTimeout,
+			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
+			MaxConnections:   slot.cfg.MaxConnections,
+			Logger:           logger,
 		}
 		amqpSrv := amqp1server.New(amqpCfg, amqpBroker)
 
@@ -1365,13 +1378,14 @@ func main() {
 		}
 
 		amqp091Cfg := amqpserver.Config{
-			Address:          slot.cfg.Addr,
-			TLSConfig:        tlsCfg,
-			HandshakeTimeout: 10 * time.Second,
-			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
-			MaxConnections:   slot.cfg.MaxConnections,
-			ConnectionPolicy: slot.policy,
-			Logger:           logger,
+			Address:                 slot.cfg.Addr,
+			TLSConfig:               tlsCfg,
+			HandshakeTimeout:        slot.cfg.HandshakeTimeout,
+			DisableHandshakeTimeout: slot.cfg.HandshakeTimeout == 0,
+			ShutdownTimeout:         cfg.Server.ShutdownTimeout,
+			MaxConnections:          slot.cfg.MaxConnections,
+			ConnectionPolicy:        slot.policy,
+			Logger:                  logger,
 		}
 		amqp091Srv := amqpserver.New(amqp091Cfg, amqp091Broker)
 		amqp091Ready = append(amqp091Ready, amqp091Srv.Ready())
@@ -1520,4 +1534,26 @@ func main() {
 
 	wg.Wait()
 	slog.Info("MQTT broker stopped")
+}
+
+// wantsDurableSync reports whether any queue will acknowledge publishes only
+// after an fsync, either through its own policy or the broker-wide default.
+// Promising that on a store that cannot sync one append is a promise the broker
+// cannot keep, so startup refuses it rather than quietly acknowledging from the
+// page cache.
+func wantsDurableSync(cfg *config.Config) bool {
+	brokerWide := queue.NormalizeAckDurability(queue.AckDurability(cfg.Storage.QueueAckDurability))
+	for _, q := range cfg.Queues {
+		policy := q.AckDurability
+		if strings.TrimSpace(policy) == "" {
+			if brokerWide == queue.AckDurabilityFsync {
+				return true
+			}
+			continue
+		}
+		if queue.NormalizeAckDurability(queue.AckDurability(policy)) == queue.AckDurabilityFsync {
+			return true
+		}
+	}
+	return brokerWide == queue.AckDurabilityFsync
 }

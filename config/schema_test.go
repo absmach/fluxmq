@@ -424,6 +424,14 @@ func TestSchemaKeysAreStable(t *testing.T) {
 		assert.Contains(t, keys, must, "documented config key disappeared from the schema")
 	}
 
+	// Both AMQP families bound their handshake; the key is per listener because
+	// a public listener and a private one do not deserve the same patience.
+	assert.Contains(t, keys, "server.amqp.plain.handshake_timeout")
+	assert.Contains(t, keys, "storage.queue_ack_durability")
+	assert.Contains(t, keys, "storage.queue_sync_interval")
+	assert.Contains(t, keys, "queues.ack_durability")
+	assert.Contains(t, keys, "server.amqp091.local.handshake_timeout")
+
 	assert.NotContains(t, keys, "server.mqtt.tcp.plain",
 		"server.tcp.plain was replaced by v3/v5; reintroducing it would resurrect the silent-listener bug")
 	assert.NotContains(t, keys, "server.mqtt.websocket.plain")
@@ -743,4 +751,186 @@ func TestLoadRejectsSettingsItCannotHonour(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.Equal(t, Default(), cfg)
+}
+
+// TestHandshakeTimeoutZeroSemantics pins the absent-versus-zero rule for the
+// key added with the AMQP 1.0 handshake bound. An omitted key must not read as
+// "no deadline", because that is the state the bound exists to end.
+func TestHandshakeTimeoutZeroSemantics(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	t.Run("absent takes the default", func(t *testing.T) {
+		cfg, err := Load(write(t, `
+server:
+  amqp:
+    plain:
+      addr: ":5672"
+  amqp091:
+    plain:
+      addr: ":5682"
+`))
+		require.NoError(t, err)
+		assert.Equal(t, DefaultHandshakeTimeout, cfg.Server.AMQP.Plain.HandshakeTimeout)
+		assert.Equal(t, DefaultHandshakeTimeout, cfg.Server.AMQP091.Plain.HandshakeTimeout)
+	})
+
+	// Durations are duration strings, so an explicit zero is "0s"; a bare 0 is
+	// a type error rather than a silent default.
+	t.Run("explicit zero disables the deadline", func(t *testing.T) {
+		cfg, err := Load(write(t, `
+server:
+  amqp:
+    plain:
+      addr: ":5672"
+      handshake_timeout: "0s"
+`))
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(0), cfg.Server.AMQP.Plain.HandshakeTimeout)
+	})
+
+	t.Run("negative is rejected", func(t *testing.T) {
+		_, err := Load(write(t, `
+server:
+  amqp:
+    plain:
+      addr: ":5672"
+      handshake_timeout: -1s
+`))
+		require.Error(t, err)
+	})
+}
+
+// TestQueueAckDurabilityDefault pins the default that decides what an
+// acknowledged durable-queue publish means. It is buffered, matching what the
+// broker did before the policy existed: fsync costs roughly 640x throughput
+// while the queue log has no group commit, so it is opted into per queue.
+// Changing this default changes the durability of every deployment that never
+// wrote the key.
+func TestQueueAckDurabilityDefault(t *testing.T) {
+	assert.Equal(t, QueueAckDurabilityBuffered, Default().Storage.QueueAckDurability)
+	assert.Equal(t, DefaultQueueSyncInterval, Default().Storage.QueueSyncInterval)
+}
+
+func TestQueueAckDurabilityOverrideValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+queues:
+  - name: audit
+    topics: ["audit/#"]
+    ack_durability: fsync
+  - name: telemetry
+    topics: ["telemetry/#"]
+`), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, QueueAckDurabilityFsync, cfg.Queues[0].AckDurability)
+	assert.Empty(t, cfg.Queues[1].AckDurability, "an unset queue takes the broker-wide default")
+
+	require.NoError(t, os.WriteFile(path, []byte(`
+queues:
+  - name: audit
+    topics: ["audit/#"]
+    ack_durability: sometimes
+`), 0o600))
+	_, err = Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "queues[0].ack_durability")
+}
+
+func TestQueueDurabilityValidation(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	t.Run("buffered is accepted", func(t *testing.T) {
+		cfg, err := Load(write(t, "storage:\n  queue_ack_durability: buffered\n  queue_sync_interval: \"5s\"\n"))
+		require.NoError(t, err)
+		assert.Equal(t, QueueAckDurabilityBuffered, cfg.Storage.QueueAckDurability)
+		assert.Equal(t, 5*time.Second, cfg.Storage.QueueSyncInterval)
+	})
+
+	t.Run("unknown policy is rejected", func(t *testing.T) {
+		_, err := Load(write(t, "storage:\n  queue_ack_durability: sometimes\n"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "storage.queue_ack_durability")
+	})
+
+	t.Run("negative sync interval is rejected", func(t *testing.T) {
+		_, err := Load(write(t, "storage:\n  queue_sync_interval: \"-1s\"\n"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "storage.queue_sync_interval")
+	})
+
+	// An explicit zero syncs every write, which is a stronger setting than the
+	// default rather than a disabled one; it must survive as written.
+	t.Run("explicit zero is kept", func(t *testing.T) {
+		cfg, err := Load(write(t, "storage:\n  queue_sync_interval: \"0s\"\n"))
+		require.NoError(t, err)
+		assert.Equal(t, time.Duration(0), cfg.Storage.QueueSyncInterval)
+	})
+
+	t.Run("replicated queue cannot override to fsync", func(t *testing.T) {
+		_, err := Load(write(t, `
+storage:
+  queue_ack_durability: buffered
+queues:
+  - name: replicated
+    topics: ["events/#"]
+    ack_durability: fsync
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: sync
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be fsync when replication is enabled")
+	})
+
+	t.Run("replicated queue cannot inherit fsync", func(t *testing.T) {
+		_, err := Load(write(t, `
+storage:
+  queue_ack_durability: fsync
+queues:
+  - name: replicated
+    topics: ["events/#"]
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: sync
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be fsync when replication is enabled")
+	})
+
+	t.Run("replicated queue can override fsync default to buffered", func(t *testing.T) {
+		cfg, err := Load(write(t, `
+storage:
+  queue_ack_durability: fsync
+queues:
+  - name: replicated
+    topics: ["events/#"]
+    ack_durability: buffered
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: sync
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+`))
+		require.NoError(t, err)
+		assert.Equal(t, QueueAckDurabilityBuffered, cfg.Queues[0].AckDurability)
+	})
 }

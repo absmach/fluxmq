@@ -66,7 +66,15 @@ type QueueConfig struct {
 	PrimaryGroup string
 
 	// Durability
-	Durable                bool          // true = persists indefinitely, false = ephemeral (cleaned up when no consumers remain)
+	Durable bool // true = persists indefinitely, false = ephemeral (cleaned up when no consumers remain)
+
+	// AckDurability overrides the broker-wide acknowledgement policy for this
+	// queue: "fsync" syncs the append before the publisher is acknowledged,
+	// "buffered" acknowledges from the page cache. Empty takes the broker-wide
+	// default. It has no effect on an ephemeral queue, which does not survive a
+	// restart either way.
+	AckDurability string
+
 	ExpiresAfter           time.Duration // Grace period before ephemeral queue deletion (default 5m)
 	LastConsumerDisconnect time.Time     // Zero value = has active consumers; set when last consumer leaves
 
@@ -208,6 +216,7 @@ type QueueConfigInput struct {
 	Reserved       bool
 	Type           QueueType
 	PrimaryGroup   string
+	AckDurability  string
 	MaxMessageSize int64
 	MaxDepth       int64
 	MessageTTL     time.Duration
@@ -230,6 +239,7 @@ func FromInput(input QueueConfigInput) QueueConfig {
 		cfg.Type = input.Type
 	}
 	cfg.PrimaryGroup = input.PrimaryGroup
+	cfg.AckDurability = input.AckDurability
 	cfg.Retention = input.Retention
 	if input.Replication.Enabled {
 		cfg.Replication = input.Replication

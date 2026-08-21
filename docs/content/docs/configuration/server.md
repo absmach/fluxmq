@@ -5,7 +5,7 @@ description: Configure listeners, WebSocket path, health checks, and OpenTelemet
 
 # Server Configuration
 
-**Last Updated:** 29th July 2026
+**Last Updated:** 21st August 2026
 
 `server` controls network listeners and telemetry endpoints. Example:
 
@@ -81,6 +81,10 @@ auth:
 - Listener addresses: `addr` (empty disables the specific listener).
 - MQTT parser mode per listener: TCP `v3`/`v5` listeners are protocol-pinned; WebSocket listeners can use `protocol` (`auto`, `v3`, `v5`).
 - Listener limits/timeouts: `max_connections`, `read_timeout`, `write_timeout`.
+- AMQP handshake bound: `handshake_timeout` on `server.amqp` and `server.amqp091`
+  listeners (default `10s`) covers transport, TLS, SASL, and the connection open
+  exchange, and is cleared once the connection is established. `"0s"` disables
+  it, which lets a peer that connects and never speaks hold a connection slot.
 - WebSocket specifics: `path`, `allowed_origins`.
 - Health/observability: `health_enabled`, `health_addr`, `metrics_enabled`, `metrics_addr`.
 - OpenTelemetry identity/tuning: `otel_service_name`, `otel_service_version`, `otel_metrics_enabled`, `otel_traces_enabled`, `otel_trace_sample_rate`.
