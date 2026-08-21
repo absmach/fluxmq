@@ -22,7 +22,7 @@ type externalIDAuthenticator struct {
 	err    error
 }
 
-func (a *externalIDAuthenticator) Authenticate(clientID, username, secret string) (*corebroker.AuthnResult, error) {
+func (a *externalIDAuthenticator) Authenticate(_ context.Context, clientID, username, secret string) (*corebroker.AuthnResult, error) {
 	return a.result, a.err
 }
 
@@ -30,13 +30,13 @@ type captureAuthorizer struct {
 	publishID string
 }
 
-func (a *captureAuthorizer) CanPublish(clientID string, _ string) bool {
+func (a *captureAuthorizer) CanPublish(_ context.Context, clientID string, _ string) bool {
 	a.publishID = clientID
 	return true
 }
 
-func (a *captureAuthorizer) CanSubscribe(clientID string, _ string) bool {
-	return a.CanPublish(clientID, "")
+func (a *captureAuthorizer) CanSubscribe(ctx context.Context, clientID string, _ string) bool {
+	return a.CanPublish(ctx, clientID, "")
 }
 
 type normalizingHookProvider struct {
@@ -98,7 +98,7 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 		Password:        []byte("pass"),
 	}
 
-	err := handler.HandleConnect(conn, connect)
+	err := handler.HandleConnect(context.Background(), conn, connect)
 	require.True(t, err == nil || err == io.EOF, "unexpected connect error: %v", err)
 
 	s := b.Get("test-client")
@@ -118,7 +118,7 @@ func TestRegisterHookExternalIDOverridesAuthzIdentity(t *testing.T) {
 		externalID: "hook-id",
 	}, corebroker.HookFailDeny, nil, nil, nil))
 
-	authenticated, externalID, err := b.Authenticate("client-1", "user", "pass")
+	authenticated, externalID, err := b.Authenticate(context.Background(), "client-1", "user", "pass")
 	require.NoError(t, err)
 	require.True(t, authenticated)
 	require.Equal(t, "auth-id", externalID)
@@ -126,7 +126,7 @@ func TestRegisterHookExternalIDOverridesAuthzIdentity(t *testing.T) {
 	hookID, ok := b.ApplyRegisterHooks(context.Background(), "client-1", externalID, "user", "pass", corebroker.HookProtocolMQTT)
 	require.True(t, ok)
 	require.Equal(t, "hook-id", hookID)
-	require.True(t, b.CanPublish("client-1", "topic"))
+	require.True(t, b.CanPublish(context.Background(), "client-1", "topic"))
 	require.Equal(t, "hook-id", authz.publishID)
 }
 

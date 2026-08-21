@@ -258,29 +258,29 @@ func (b *Broker) SetAuthEngine(auth *broker.AuthEngine) {
 // Returns true when auth is not configured. The second return value is the
 // resolved external identity (empty when no authenticator is configured or
 // when the authenticator did not return one).
-func (b *Broker) Authenticate(clientID, username, password string) (bool, string, error) {
+func (b *Broker) Authenticate(ctx context.Context, clientID, username, password string) (bool, string, error) {
 	if b.auth == nil {
 		return true, "", nil
 	}
-	return b.auth.Authenticate(clientID, username, password)
+	return b.auth.Authenticate(ctx, clientID, username, password)
 }
 
 // CanPublish checks publish authorization for a client/topic pair.
 // Returns true when authz is not configured.
-func (b *Broker) CanPublish(clientID, topic string) bool {
+func (b *Broker) CanPublish(ctx context.Context, clientID, topic string) bool {
 	if b.auth == nil {
 		return true
 	}
-	return b.auth.CanPublish(clientID, topic)
+	return b.auth.CanPublish(ctx, clientID, topic)
 }
 
 // CanSubscribe checks subscribe authorization for a client/filter pair.
 // Returns true when authz is not configured.
-func (b *Broker) CanSubscribe(clientID, filter string) bool {
+func (b *Broker) CanSubscribe(ctx context.Context, clientID, filter string) bool {
 	if b.auth == nil {
 		return true
 	}
-	return b.auth.CanSubscribe(clientID, filter)
+	return b.auth.CanSubscribe(ctx, clientID, filter)
 }
 
 // ApplyRegisterHooks runs the optional auth_on_register hook.
@@ -376,9 +376,9 @@ func (b *Broker) MaxQoS() byte {
 
 // NotifyConnect fires the event hook for a successful client connection.
 // Should be called by protocol handlers after CONNACK is sent.
-func (b *Broker) NotifyConnect(clientID, username, protocol string) {
+func (b *Broker) NotifyConnect(ctx context.Context, clientID, username, protocol string) {
 	if b.eventHook != nil {
-		if err := b.eventHook.OnConnect(context.Background(), clientID, username, protocol); err != nil {
+		if err := b.eventHook.OnConnect(ctx, clientID, username, protocol); err != nil {
 			b.logError("event_hook_connect", err, slog.String("client_id", clientID))
 		}
 	}

@@ -45,7 +45,7 @@ func NewGRPCClient(httpClient *http.Client, baseURL string, opts ...Option) *GRP
 }
 
 // Authenticate calls the remote AuthService.Authenticate RPC.
-func (c *GRPCClient) Authenticate(clientID, username, secret string) (*broker.AuthnResult, error) {
+func (c *GRPCClient) Authenticate(ctx context.Context, clientID, username, secret string) (*broker.AuthnResult, error) {
 	req := connect.NewRequest(&authv1.AuthnReq{
 		ClientId: clientID,
 		Username: username,
@@ -53,11 +53,11 @@ func (c *GRPCClient) Authenticate(clientID, username, secret string) (*broker.Au
 		Protocol: c.Protocol,
 	})
 
-	result, err := c.retryWithBackoff(context.Background(), func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	result, err := c.retryWithBackoff(ctx, func() (any, error) {
+		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
 		return c.CB.Execute(func() (any, error) {
-			return c.svc.Authenticate(ctx, req)
+			return c.svc.Authenticate(attempt, req)
 		})
 	}, retriableError)
 	if err != nil {
@@ -82,27 +82,27 @@ func (c *GRPCClient) Authenticate(clientID, username, secret string) (*broker.Au
 }
 
 // CanPublish calls the remote AuthService.Authorize RPC for publish.
-func (c *GRPCClient) CanPublish(clientID string, topic string) bool {
-	return c.authorize(clientID, topic, authv1.Action_Publish)
+func (c *GRPCClient) CanPublish(ctx context.Context, clientID string, topic string) bool {
+	return c.authorize(ctx, clientID, topic, authv1.Action_Publish)
 }
 
 // CanSubscribe calls the remote AuthService.Authorize RPC for subscribe.
-func (c *GRPCClient) CanSubscribe(clientID string, filter string) bool {
-	return c.authorize(clientID, filter, authv1.Action_Subscribe)
+func (c *GRPCClient) CanSubscribe(ctx context.Context, clientID string, filter string) bool {
+	return c.authorize(ctx, clientID, filter, authv1.Action_Subscribe)
 }
 
-func (c *GRPCClient) authorize(externalID, topic string, action authv1.Action) bool {
+func (c *GRPCClient) authorize(ctx context.Context, externalID, topic string, action authv1.Action) bool {
 	req := connect.NewRequest(&authv1.AuthzReq{
 		ExternalId: externalID,
 		Topic:      topic,
 		Action:     action,
 	})
 
-	result, err := c.retryWithBackoff(context.Background(), func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	result, err := c.retryWithBackoff(ctx, func() (any, error) {
+		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
 		return c.CB.Execute(func() (any, error) {
-			return c.svc.Authorize(ctx, req)
+			return c.svc.Authorize(attempt, req)
 		})
 	}, retriableError)
 	if err != nil {

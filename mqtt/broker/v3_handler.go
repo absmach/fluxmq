@@ -34,7 +34,7 @@ func newV3Handler(broker *Broker) *v3Handler {
 }
 
 // HandleConnect handles CONNECT packets.
-func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacket) error {
+func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt packets.ControlPacket) error {
 	start := time.Now()
 	p, ok := pkt.(*v3.Connect)
 	if !ok {
@@ -83,7 +83,7 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		username := p.Username
 		password := string(p.Password)
 
-		authenticated, resolvedID, err := h.broker.auth.Authenticate(clientID, username, password)
+		authenticated, resolvedID, err := h.broker.auth.Authenticate(ctx, clientID, username, password)
 		if err != nil || !authenticated {
 			h.broker.telemetry.stats.IncrementAuthErrors()
 			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword) //nolint:errcheck // best-effort rejection reply before closing
@@ -92,7 +92,7 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		}
 		externalID = resolvedID
 	}
-	hookExternalID, ok := h.broker.ApplyRegisterHooks(context.Background(), clientID, externalID, p.Username, string(p.Password), corebroker.HookProtocolMQTT)
+	hookExternalID, ok := h.broker.ApplyRegisterHooks(ctx, clientID, externalID, p.Username, string(p.Password), corebroker.HookProtocolMQTT)
 	if !ok {
 		h.broker.telemetry.stats.IncrementAuthErrors()
 		sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
@@ -128,7 +128,7 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		Will:           will,
 	}
 
-	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts)
+	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts) //nolint:contextcheck // CreateSession has no context parameter yet; 73 call sites, tracked separately
 	if err != nil {
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing
@@ -153,7 +153,7 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		MaxQoS:         h.broker.MaxQoS(),
 	})
 	if superseded != nil {
-		go h.broker.drainSuperseded(context.WithoutCancel(context.Background()), superseded)
+		go h.broker.drainSuperseded(context.WithoutCancel(ctx), superseded)
 	}
 	h.broker.persistSessionInfo(s)
 
@@ -170,11 +170,11 @@ func (h *v3Handler) HandleConnect(conn core.Connection, pkt packets.ControlPacke
 		slog.Duration("duration", time.Since(start)),
 	)
 
-	h.broker.NotifyConnect(clientID, p.Username, "mqtt3")
+	h.broker.NotifyConnect(ctx, clientID, p.Username, "mqtt3")
 
-	h.deliverOfflineMessages(s)
+	h.deliverOfflineMessages(ctx, s)
 
-	return h.broker.runSession(h, s, conn, epoch, time.Duration(p.KeepAlive)*time.Second)
+	return h.broker.runSession(ctx, h, s, conn, epoch, time.Duration(p.KeepAlive)*time.Second)
 }
 
 // HandlePublish handles PUBLISH packets.
@@ -288,7 +288,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 			return ErrTopicInvalid
 		}
 	}
-	if h.broker.auth != nil && !h.broker.CanPublish(s.ID, topic) {
+	if h.broker.auth != nil && !h.broker.CanPublish(s.ctx, s.ID, topic) {
 		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
@@ -503,7 +503,7 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 			}
 			s.AddSubscriptionAlias(t.Name, filter)
 		}
-		if h.broker.auth != nil && !h.broker.CanSubscribe(s.ID, filter) {
+		if h.broker.auth != nil && !h.broker.CanSubscribe(s.ctx, s.ID, filter) {
 			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v3.SubAckFailure
 			continue
@@ -637,10 +637,10 @@ func (h *v3Handler) HandleAuth(s *connCtx, pkt packets.ControlPacket) error {
 }
 
 // deliverOfflineMessages sends queued messages to reconnected client.
-func (h *v3Handler) deliverOfflineMessages(s *session.Session) {
+func (h *v3Handler) deliverOfflineMessages(ctx context.Context, s *session.Session) {
 	msgs := s.OfflineQueue().Drain()
 	for _, msg := range msgs {
-		h.broker.DeliverToSession(context.Background(), s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
+		h.broker.DeliverToSession(ctx, s, msg) //nolint:errcheck // offline message delivery; errors are non-fatal
 	}
 }
 

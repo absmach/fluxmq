@@ -522,7 +522,7 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 	if policy.externalAuth == nil {
 		return nil
 	}
-	ok, _, err := policy.externalAuth.Authenticate(clientID, username, password)
+	ok, _, err := policy.externalAuth.Authenticate(c.ctx, clientID, username, password)
 	if err != nil || !ok {
 		_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 		return fmt.Errorf("%s auth rejected for user %q", mechanism, username)

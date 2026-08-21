@@ -4,6 +4,8 @@
 package broker
 
 import (
+	"context"
+
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -23,8 +25,15 @@ import (
 //
 // connCtx embeds *session.Session, so handlers transparently see the full
 // session API; only the connection-bound operations are overridden here.
+//
+// ctx is the connection's own context, carried here because the authorization
+// interfaces need it on every PUBLISH and SUBSCRIBE. It follows the connection
+// rather than the session: a superseded generation keeps the context it was
+// created with, and cancelling it releases only that generation's in-flight
+// callouts.
 type connCtx struct {
 	*session.Session
+	ctx   context.Context
 	conn  core.Connection
 	epoch uint64
 }

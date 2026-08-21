@@ -638,7 +638,7 @@ func (ch *Channel) completePublish() {
 		}
 		topic, body, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
 		if auth := policy.externalAuth; auth != nil {
-			if !auth.CanPublish(clientID, topic) {
+			if !auth.CanPublish(ch.conn.ctx, clientID, topic) {
 				ch.conn.logger.Warn("publish denied", "client_id", clientID, "topic", topic)
 				_ = ch.sendChannelClose(codec.AccessRefused, "publish not authorized", codec.ClassBasic, codec.MethodBasicPublish)
 				return
@@ -1438,7 +1438,7 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 	queueFilter = req.Topic
 
 	if auth := ch.conn.connectionPolicy().externalAuth; auth != nil {
-		if !auth.CanSubscribe(clientID, queueFilter) {
+		if !auth.CanSubscribe(ch.conn.ctx, clientID, queueFilter) {
 			ch.conn.logger.Warn("subscribe denied", "client_id", clientID, "filter", queueFilter)
 			return ch.sendChannelClose(codec.AccessRefused, "subscribe not authorized", codec.ClassBasic, codec.MethodBasicConsume)
 		}

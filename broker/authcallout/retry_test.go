@@ -63,7 +63,7 @@ func TestGRPCClient_RetriesTransientErrors(t *testing.T) {
 		WithRetryMaxBackoff(2*time.Millisecond),
 	)
 
-	result, err := client.Authenticate("c", "u", "p")
+	result, err := client.Authenticate(context.Background(), "c", "u", "p")
 	require.NoError(t, err)
 	assert.True(t, result.Authenticated)
 	assert.Equal(t, int32(3), fake.calls.Load(), "expected 2 failures + 1 success")
@@ -78,7 +78,7 @@ func TestGRPCClient_StopsRetryingWhenBudgetExhausted(t *testing.T) {
 		WithRetryBackoff(time.Millisecond),
 	)
 
-	_, err := client.Authenticate("c", "u", "p")
+	_, err := client.Authenticate(context.Background(), "c", "u", "p")
 	require.Error(t, err)
 	assert.Equal(t, int32(3), fake.calls.Load(), "initial + 2 retries")
 }
