@@ -877,4 +877,60 @@ func TestQueueDurabilityValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, time.Duration(0), cfg.Storage.QueueSyncInterval)
 	})
+
+	t.Run("replicated queue cannot override to fsync", func(t *testing.T) {
+		_, err := Load(write(t, `
+storage:
+  queue_ack_durability: buffered
+queues:
+  - name: replicated
+    topics: ["events/#"]
+    ack_durability: fsync
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: sync
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be fsync when replication is enabled")
+	})
+
+	t.Run("replicated queue cannot inherit fsync", func(t *testing.T) {
+		_, err := Load(write(t, `
+storage:
+  queue_ack_durability: fsync
+queues:
+  - name: replicated
+    topics: ["events/#"]
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: sync
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be fsync when replication is enabled")
+	})
+
+	t.Run("replicated queue can override fsync default to buffered", func(t *testing.T) {
+		cfg, err := Load(write(t, `
+storage:
+  queue_ack_durability: fsync
+queues:
+  - name: replicated
+    topics: ["events/#"]
+    ack_durability: buffered
+    replication:
+      enabled: true
+      replication_factor: 3
+      mode: sync
+      min_in_sync_replicas: 2
+      ack_timeout: "5s"
+`))
+		require.NoError(t, err)
+		assert.Equal(t, QueueAckDurabilityBuffered, cfg.Queues[0].AckDurability)
+	})
 }

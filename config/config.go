@@ -53,8 +53,8 @@ const (
 	QueueAckDurabilityBuffered = "buffered"
 
 	// DefaultQueueSyncInterval is how often the queue log syncs in the
-	// background. Under the default fsync acknowledgement policy it bounds
-	// exposure for data that was never acknowledged to a publisher.
+	// background. Under the default buffered acknowledgement policy it bounds
+	// the crash-loss window for messages already acknowledged to a publisher.
 	DefaultQueueSyncInterval = time.Second
 
 	// DefaultHandshakeTimeout bounds a connection's handshake on both AMQP
@@ -2130,6 +2130,13 @@ func (c *Config) Validate() error {
 		}
 		if err := validateQueueAckDurability(fmt.Sprintf("queues[%d].ack_durability", i), q.AckDurability); err != nil {
 			return err
+		}
+		effectiveAckDurability := strings.ToLower(strings.TrimSpace(q.AckDurability))
+		if effectiveAckDurability == "" {
+			effectiveAckDurability = strings.ToLower(strings.TrimSpace(c.Storage.QueueAckDurability))
+		}
+		if q.Replication.Enabled && effectiveAckDurability == QueueAckDurabilityFsync {
+			return fmt.Errorf("queues[%d].ack_durability cannot be fsync when replication is enabled: Raft apply does not use the queue log's per-append fsync barrier", i)
 		}
 		// A malformed filter is not a harmless typo: it never matches, so the
 		// queue is bound to nothing and silently receives no traffic. Refuse it

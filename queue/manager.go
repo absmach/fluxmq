@@ -60,6 +60,10 @@ var (
 	// ErrDurableReplicatedStreamUnsupported prevents a false durability ACK in
 	// clustered mode until the same barrier is carried through leader forwarding.
 	ErrDurableReplicatedStreamUnsupported = errors.New("durable exact stream publish does not support replication")
+	// ErrFsyncReplicatedQueueUnsupported prevents the ordinary Raft append path
+	// from claiming the local queue log was fsynced. Raft's synchronous mode
+	// waits for apply; it does not use DurableQueueStore.AppendAndSync.
+	ErrFsyncReplicatedQueueUnsupported = errors.New("fsync acknowledgement durability does not support replicated queues")
 )
 
 type queueCluster interface {
@@ -788,6 +792,9 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := types.ValidateTopicFilters(config.Topics); err != nil {
 		return err
 	}
+	if err := m.validateQueueAckDurability(config); err != nil {
+		return err
+	}
 
 	m.protectedQueuesMu.RLock()
 	defer m.protectedQueuesMu.RUnlock()
@@ -830,6 +837,9 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	// An update can introduce a filter that never matches just as a creation
 	// can, silently unbinding a queue that was working.
 	if err := types.ValidateTopicFilters(config.Topics); err != nil {
+		return err
+	}
+	if err := m.validateQueueAckDurability(config); err != nil {
 		return err
 	}
 
@@ -1345,13 +1355,32 @@ func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRe
 // A queue asking for fsync on a store that cannot sync one append is refused at
 // load, so the resolved policy here is always one the store can honour.
 func (m *Manager) ackDurabilityFor(queueConfig *types.QueueConfig) AckDurability {
-	if queueConfig.AckDurability == "" {
+	if strings.TrimSpace(queueConfig.AckDurability) == "" {
 		return m.ackDurability
 	}
 	if !m.storeSupportsSync {
 		return AckDurabilityBuffered
 	}
 	return NormalizeAckDurability(AckDurability(queueConfig.AckDurability))
+}
+
+func (m *Manager) validateQueueAckDurability(queueConfig types.QueueConfig) error {
+	configured := strings.ToLower(strings.TrimSpace(queueConfig.AckDurability))
+	switch configured {
+	case "", string(AckDurabilityFsync), string(AckDurabilityBuffered):
+	default:
+		return fmt.Errorf("queue %q ack_durability must be one of: %s, %s",
+			queueConfig.Name, AckDurabilityFsync, AckDurabilityBuffered)
+	}
+
+	effective := AckDurability(configured)
+	if configured == "" {
+		effective = NormalizeAckDurability(m.config.AckDurability)
+	}
+	if queueConfig.Durable && queueConfig.Replication.Enabled && effective == AckDurabilityFsync {
+		return fmt.Errorf("%w: %s", ErrFsyncReplicatedQueueUnsupported, queueConfig.Name)
+	}
+	return nil
 }
 
 // appendWithAckDurability writes one message under the configured

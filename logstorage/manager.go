@@ -26,6 +26,7 @@ type SegmentManager struct {
 	closed     bool
 	syncTicker *time.Ticker
 	closeCh    chan struct{}
+	syncErr    error
 }
 
 // ManagerConfig holds segment manager configuration.
@@ -202,6 +203,16 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 	if m.closed {
 		return 0, ErrSegmentClosed
 	}
+	// A failed background sync means the configured crash-loss window was not
+	// established. Before accepting another append, retry that barrier while
+	// holding the manager lock so no write can be acknowledged in between.
+	if m.syncErr != nil {
+		if err := m.activeSegment.Sync(); err != nil {
+			m.syncErr = err
+			return 0, fmt.Errorf("previous queue log sync failure persists: %w", err)
+		}
+		m.syncErr = nil
+	}
 
 	// Check if we need to rotate
 	if m.shouldRotate() {
@@ -225,6 +236,7 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 	m.tailOffset = batch.NextOffset()
 	if barrier != nil {
 		if err := barrier(target); err != nil {
+			m.syncErr = err
 			return offset, fmt.Errorf("durability barrier for offset %d: %w", offset, err)
 		}
 	}
@@ -232,17 +244,21 @@ func (m *SegmentManager) appendWithBarrier(batch *Batch, barrier func(*Segment) 
 	return offset, nil
 }
 
-// Append appends a batch to the log and returns the base offset.
+// Append appends a batch to the log and returns the base offset. A zero sync
+// interval means sync-on-write, so the append does not return until the exact
+// segment that accepted it is durable. Positive intervals use the background
+// ticker instead.
 func (m *SegmentManager) Append(batch *Batch) (uint64, error) {
+	if m.config.SyncInterval == 0 {
+		return m.appendWithBarrier(batch, (*Segment).Sync)
+	}
 	return m.appendWithBarrier(batch, nil)
 }
 
 // AppendAndSync appends a batch and syncs the exact segment containing it
 // before returning. Segment rotation is serialized with the entire operation.
 func (m *SegmentManager) AppendAndSync(batch *Batch) (uint64, error) {
-	return m.appendWithBarrier(batch, func(segment *Segment) error {
-		return segment.Sync()
-	})
+	return m.appendWithBarrier(batch, (*Segment).Sync)
 }
 
 // AppendMessage appends a single message and returns its offset.
@@ -279,6 +295,15 @@ func (m *SegmentManager) shouldRotate() bool {
 
 // rotate creates a new active segment.
 func (m *SegmentManager) rotate() error {
+	// A segment stops being the active target after rotation, and the periodic
+	// sync loop only visits the active segment. Seal the old segment durably
+	// before making it readonly or buffered appends could remain unsynced
+	// forever when a busy queue rotates faster than its sync interval.
+	if m.activeSegment != nil {
+		if err := m.activeSegment.Sync(); err != nil {
+			return fmt.Errorf("syncing segment %d before rotation: %w", m.activeSegment.BaseOffset(), err)
+		}
+	}
 	return m.createSegment(m.tailOffset)
 }
 
@@ -567,7 +592,7 @@ func (m *SegmentManager) syncLoop() {
 	for {
 		select {
 		case <-m.syncTicker.C:
-			m.Sync() //nolint:errcheck // background periodic sync; errors surfaced on next write
+			m.Sync() //nolint:errcheck // Sync records failures for the next append
 		case <-m.closeCh:
 			return
 		}
@@ -576,14 +601,16 @@ func (m *SegmentManager) syncLoop() {
 
 // Sync flushes all pending writes to disk.
 func (m *SegmentManager) Sync() error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if m.closed || m.activeSegment == nil {
 		return nil
 	}
 
-	return m.activeSegment.Sync()
+	err := m.activeSegment.Sync()
+	m.syncErr = err
+	return err
 }
 
 // Close closes all segments.
@@ -595,16 +622,21 @@ func (m *SegmentManager) Close() error {
 		return nil
 	}
 
-	m.closed = true
-
 	// Stop sync ticker
 	if m.syncTicker != nil {
 		m.syncTicker.Stop()
 		close(m.closeCh)
 	}
 
-	// Close all segments
+	// A graceful shutdown must not leave the active segment's last interval in
+	// the page cache. Older segments were synced when they rotated.
 	var lastErr error
+	if m.activeSegment != nil {
+		lastErr = m.activeSegment.Sync()
+	}
+	m.closed = true
+
+	// Close all segments
 	for _, seg := range m.segments {
 		if err := seg.Close(); err != nil {
 			lastErr = err

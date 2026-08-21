@@ -1378,13 +1378,14 @@ func main() {
 		}
 
 		amqp091Cfg := amqpserver.Config{
-			Address:          slot.cfg.Addr,
-			TLSConfig:        tlsCfg,
-			HandshakeTimeout: slot.cfg.HandshakeTimeout,
-			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
-			MaxConnections:   slot.cfg.MaxConnections,
-			ConnectionPolicy: slot.policy,
-			Logger:           logger,
+			Address:                 slot.cfg.Addr,
+			TLSConfig:               tlsCfg,
+			HandshakeTimeout:        slot.cfg.HandshakeTimeout,
+			DisableHandshakeTimeout: slot.cfg.HandshakeTimeout == 0,
+			ShutdownTimeout:         cfg.Server.ShutdownTimeout,
+			MaxConnections:          slot.cfg.MaxConnections,
+			ConnectionPolicy:        slot.policy,
+			Logger:                  logger,
 		}
 		amqp091Srv := amqpserver.New(amqp091Cfg, amqp091Broker)
 		amqp091Ready = append(amqp091Ready, amqp091Srv.Ready())
@@ -1544,7 +1545,7 @@ func wantsDurableSync(cfg *config.Config) bool {
 	brokerWide := queue.NormalizeAckDurability(queue.AckDurability(cfg.Storage.QueueAckDurability))
 	for _, q := range cfg.Queues {
 		policy := q.AckDurability
-		if policy == "" {
+		if strings.TrimSpace(policy) == "" {
 			if brokerWide == queue.AckDurabilityFsync {
 				return true
 			}

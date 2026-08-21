@@ -13,11 +13,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
 	"net"
 	"net/url"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,6 +191,36 @@ func TestServerBoundsAMQPHandshakeAfterTLS(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatalf("post-TLS AMQP handshake was not bounded; logs:\n%s", logs.String())
+	}
+}
+
+func TestServerExplicitZeroLeavesAMQPHandshakeOpen(t *testing.T) {
+	s := New(Config{
+		HandshakeTimeout:        0,
+		DisableHandshakeTimeout: true,
+		Logger:                  testLogger(),
+	}, amqpbroker.New(nil, testLogger()))
+	client, server := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		s.handleConnection(context.Background(), server)
+		close(done)
+	}()
+
+	if err := client.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	_, err := client.Read(make([]byte, 1))
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read error = %v, want client deadline while server leaves handshake open", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after client close")
 	}
 }
 

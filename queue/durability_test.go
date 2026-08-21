@@ -145,6 +145,63 @@ func TestQueueBufferedOverridesFsyncDefault(t *testing.T) {
 	require.Equal(t, int64(0), store.synced.Load(), "queue asking for buffered was synced anyway")
 }
 
+func TestQueueBlankAckDurabilityUsesBrokerDefault(t *testing.T) {
+	store := &syncRecordingStore{QueueStore: memlog.New()}
+	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
+
+	audit := types.DefaultQueueConfig("audit", "$queue/audit")
+	audit.AckDurability = " \t"
+	require.NoError(t, mgr.CreateQueue(context.Background(), audit))
+	publishTo(t, mgr, "audit")
+
+	require.Equal(t, int64(1), store.synced.Load(), "a blank override must inherit the fsync default")
+	require.Equal(t, int64(0), store.appends.Load())
+}
+
+func TestReplicatedQueueRejectsFsyncAckDurability(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		brokerPolicy  AckDurability
+		queueOverride string
+	}{
+		{name: "inherited", brokerPolicy: AckDurabilityFsync},
+		{name: "queue override", brokerPolicy: AckDurabilityBuffered, queueOverride: string(AckDurabilityFsync)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &syncRecordingStore{QueueStore: memlog.New()}
+			mgr := newDurabilityManager(t, store, tc.brokerPolicy)
+
+			cfg := types.DefaultQueueConfig("replicated", "$queue/replicated")
+			cfg.AckDurability = tc.queueOverride
+			cfg.Replication.Enabled = true
+			err := mgr.CreateQueue(context.Background(), cfg)
+
+			require.ErrorIs(t, err, ErrFsyncReplicatedQueueUnsupported)
+		})
+	}
+}
+
+func TestReplicatedEphemeralQueueIgnoresFsyncAckDurability(t *testing.T) {
+	store := &syncRecordingStore{QueueStore: memlog.New()}
+	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
+
+	cfg := types.DefaultEphemeralQueueConfig("replicated", "$queue/replicated")
+	cfg.Replication.Enabled = true
+	require.NoError(t, mgr.CreateQueue(context.Background(), cfg))
+}
+
+func TestCreateQueueRejectsUnknownAckDurability(t *testing.T) {
+	store := &syncRecordingStore{QueueStore: memlog.New()}
+	mgr := newDurabilityManager(t, store, AckDurabilityBuffered)
+
+	cfg := types.DefaultQueueConfig("audit", "$queue/audit")
+	cfg.AckDurability = "sometimes"
+	err := mgr.CreateQueue(context.Background(), cfg)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ack_durability must be one of")
+}
+
 func TestNormalizeAckDurability(t *testing.T) {
 	for _, tc := range []struct {
 		name string

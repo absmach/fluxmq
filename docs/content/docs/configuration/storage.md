@@ -26,7 +26,8 @@ storage:
 - `badger_dir`: required when `type=badger`.
 - `badger_sync_writes`: durability/throughput tradeoff for Badger writes. It does not reach the queue append-only log; queue durability is a separate engine.
 - `queue_ack_durability`: default acknowledgement policy for durable queues.
-- `queue_sync_interval`: how often the queue log syncs in the background.
+- `queue_sync_interval`: how often the queue log syncs in the background. An
+  explicit `"0s"` syncs every append before it returns.
 
 Queue logs are stored under:
 
@@ -40,10 +41,16 @@ Queue logs are stored under:
 accepted by a **durable** queue. Ephemeral queues never sync: they do not
 survive a restart either way.
 
-| Value      | Acknowledged after            | Loses on crash                          |
-| ---------- | ----------------------------- | --------------------------------------- |
+| Value                | Acknowledged after               | Loses on crash                                       |
+| -------------------- | -------------------------------- | ---------------------------------------------------- |
 | `buffered` (default) | the write reaches the page cache | up to `queue_sync_interval` of acknowledged messages |
-| `fsync`    | the append is on disk         | nothing that was acknowledged            |
+| `fsync`              | the append is on disk            | nothing that was acknowledged                        |
+
+Raft-replicated queues currently support only `buffered`. Synchronous Raft
+waits for the operation to be applied, but its queue-log apply path does not use
+the per-append fsync barrier. A replicated queue whose effective policy is
+`fsync` is therefore rejected at configuration load rather than making a false
+durability promise.
 
 Set it per queue where it matters, rather than broker-wide:
 
