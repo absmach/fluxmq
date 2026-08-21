@@ -16,16 +16,40 @@ production load, a replication transport with no transport security, stub RPCs
 inside a protobuf contract about to be declared stable, and a durability
 default that is not reachable from configuration.
 
-Eleven P0 items below, plus P0-5a — a live misconfiguration in four shipped
+Eleven P0 items below — four now resolved, see the next paragraph — plus P0-5a — a live misconfiguration in four shipped
 example files, found by a sizing spike run against P0-5 on 2026-08-20. Six of
 them are days of work. Two (auth caching, the audit backlog) are the real
 schedule risk.
 
+**Resolved so far**, all merged 2026-08-21: P0-4, P0-5 and P0-5a (#576, strict
+config decode, missing file is an error), P0-6 (#578 and #579, queue
+acknowledgement durability, configurable per queue, with barriers that share an
+fsync), P1-8 (#578, AMQP 1.0 handshake bound). P0-1 is half done
+(#577): the interface carries a context, the decision cache does not exist.
+
+**P0-9 — an admin API with no authentication at all — is untouched, and is the
+most serious finding in this document.**
+
+**Found by shipping, not by this audit.** Three defects surfaced while building
+the fixes above, none of them visible to the pass that produced this document:
+MQTT 3.1.1 could subscribe to a classic queue and never settle a message, so its
+work redelivered five times and went to the dead-letter queue (#580); a rotated
+queue segment was never fsynced by anything, because the periodic sync only
+visits the active segment (#578); and the AMQP 1.0 TLS handshake ran inline in
+the accept loop, where one unresponsive peer stalled every pending connection
+(#578). That ratio is the argument for starting 1.8 early rather than treating
+it as a final gate.
+
 P0-9 through P0-11 and P1-8 through P1-10 arrived on 2026-08-21, when the
 second v1 plan (`v1.md`) was reconciled into `ROADMAP.md`; each was re-verified
-against `fmq-config-strict` before being recorded. P0-9 — an admin API with no
-authentication, published to the host by the default Compose stack — is the
-most serious single finding in this document.
+against the tree before being recorded.
+
+Two defects were found by *building the fixes* rather than by review, and both
+are recorded under P0-6: a rotated queue segment was never fsynced by the broker
+at all, and the AMQP 1.0 TLS handshake ran inline in the accept loop where one
+unresponsive peer stalled every pending connection (P1-8). Neither was visible
+from the audit pass that produced this document — worth remembering when
+weighing 1.8, the second audit pass, against shipping the fixes it would gate.
 
 ---
 
@@ -66,7 +90,7 @@ shorten the unaudited list above.
 
 ## P0 — Blockers
 
-### P0-1. Authorization callout runs synchronously on every PUBLISH, uncached
+### P0-1. Authorization callout runs synchronously on every PUBLISH, uncached — partially addressed
 
 `mqtt/broker/v3_handler.go:291`, `mqtt/broker/v5_handler.go:362` call
 `CanPublish` per inbound PUBLISH packet. With the HTTP or gRPC callout
@@ -107,6 +131,18 @@ so it must land **before** 1.0). Drop the per-call `Info` log to `Debug`.
 
 *Note:* the authorize path correctly **fails closed** — `http.go:143` returns
 `false` on error. That part is right.
+
+> **Half of this is fixed, 2026-08-21**, #577. Both
+> authorization interfaces now take a `context.Context`, sourced from the
+> connection that triggered the decision, so a client disconnect or a shutdown
+> cancels an in-flight authorize and the cancellation branch at `options.go:155`
+> is live code. The breaking interface change is therefore done and off the
+> critical path to the tag.
+>
+> **The scalability defect is untouched.** Authorization is still one
+> synchronous callout per PUBLISH with no decision cache: the failure scenario
+> above stands exactly as written, and the 4.1s stall is now cancellable rather
+> than absent. Roadmap 1.3 is what closes it.
 
 ### There are two Raft tracks, and only one of them is real
 
@@ -193,7 +229,7 @@ removing them after 1.0 is not.
 
 ### P0-4. A missing config file silently starts a default broker
 
-> **FIXED 2026-08-20**, branch `fmq-config-strict`. `Load` now returns `ErrConfigNotFound`; the old
+> **FIXED 2026-08-20**, #576. `Load` now returns `ErrConfigNotFound`; the old
 > behaviour moved to `LoadOptional`, reachable via a new `--config-optional`
 > flag. Reload uses `Load`, so a config file that goes missing under a running
 > broker now fails the reload and retains the live configuration instead of
@@ -221,7 +257,7 @@ documents this as intentional; it should not survive 1.0. An explicit
 
 ### P0-5. Config decoding is not strict
 
-> **FIXED 2026-08-20**, branch `fmq-config-strict`. Decoding goes through `yaml.Decoder` with
+> **FIXED 2026-08-20**, #576. Decoding goes through `yaml.Decoder` with
 > `KnownFields(true)`. `config/schema_test.go` pins the top-level and listener
 > key sets and asserts every shipped config file decodes strictly.
 
@@ -260,7 +296,7 @@ schema was changed at some point and four example files still say `plain`.
 
 ### P0-5a. Five shipped examples silently open listeners they never declared
 
-> **FIXED 2026-08-20**, branch `fmq-config-strict`. All five files corrected. `Validate` additionally
+> **FIXED 2026-08-20**, #576. All five files corrected. `Validate` additionally
 > rejects two listeners bound to the same address, which is what caught the
 > `production.yaml` collision below. In the same pass the MQTT listener
 > sections moved under a `server.mqtt` parent — see the note at the end of this
@@ -335,7 +371,7 @@ transports). Breaking for every deployed configuration, and deliberately taken
 before the tag freezes the key names. All 10 shipped configs, 7 documentation
 pages, and the validation error paths were updated with it.
 
-### P0-6. Queue durability is 1-second async fsync, and not reachable from config
+### P0-6. Queue durability is 1-second async fsync, and not reachable from config — ✅ RESOLVED 2026-08-21
 
 `logstorage/types.go:168` — `DefaultSyncInterval = time.Second`.
 `cmd/main.go:834-837` constructs the queue store with
@@ -364,12 +400,33 @@ for Badger — the shipped cluster example is non-durable.
 conservatively, and document the durability guarantee explicitly against each
 setting. An operator must be able to choose fsync-per-append.
 
-> **Partially addressed 2026-08-21**, branch `fmq-config-strict`. The adjacent
-> key `storage.sync_writes` was renamed to `storage.badger_sync_writes`, because
-> it reads as "fsync all storage" while reaching only the broker key-value
-> store. That rename independently confirms this finding: the queue log's
-> acknowledgement policy remains unconfigurable. The `sync_interval` key itself
-> is still not exposed — this P0 stands.
+> **Resolved 2026-08-21**, #578 and #579. `storage.queue_ack_durability` selects the policy,
+> `queues[].ack_durability` overrides it per queue, and
+> `storage.queue_sync_interval` exposes the window that was hardcoded at one
+> second. Startup refuses `fsync` on a store that cannot sync a single append.
+>
+> **The default stayed `buffered`, deliberately.** Measurement, not preference:
+> the barrier costs the device's fsync latency, and at the time it was one fsync
+> per message — ~203 msg/s on consumer NVMe against ~130,000 buffered, flat at
+> any concurrency, because the fsync was held under the segment lock. Group
+> commit (roadmap 1.5b) fixed the scaling — ~175 msg/s at one publisher, ~3,300
+> at sixty-four — but ~40x still separates the two, so `fsync` is what a queue
+> asks for rather than what every deployment inherits. The failure scenario
+> above therefore still describes the default; what changed is that an operator
+> can now choose otherwise, per queue, and knows the price.
+>
+> Two older durability defects surfaced while building the barrier, both fixed
+> with it and neither previously known:
+>
+> - **A rotated segment was never fsynced by the broker at all.**
+>   `SegmentManager.Sync` — what the background sync loop calls — only touches
+>   the *active* segment, and rotation retired the previous one without syncing
+>   it. Its tail waited on OS writeback under every acknowledgement policy.
+> - **`Segment.Sync` skips readonly segments**, so a barrier owed to a publisher
+>   whose append landed just before a rotation would have been dropped silently.
+>
+> Still open from this finding's last paragraph: `badger_sync_writes: false` in
+> the three cluster reference deployments.
 
 ### P0-7. Session ownership can split-brain
 
@@ -438,7 +495,7 @@ is a security finding in its own right.
 ### P0-9. The admin API and the Connect queue service have no authentication
 
 *Imported from `v1.md` during the 2026-08-21 plan reconciliation; every line
-below was re-read on `fmq-config-strict` before being recorded here.*
+below was re-read against the tree before being recorded here.*
 
 `server/api/server.go:45-72` constructs its `http.ServeMux` and mounts every
 route with **no authentication middleware**:
@@ -599,7 +656,7 @@ context timeouts, synchronous event hooks.
 This misleads every contributor and every AI-assisted session. It is also the
 repo's only known-issue record.
 
-### P1-8. The AMQP 1.0 handshake is unbounded
+### P1-8. The AMQP 1.0 handshake is unbounded — ✅ RESOLVED 2026-08-21
 
 `server/amqp1/server.go:120-123` runs `tlsConn.Handshake()` with no deadline
 set on the connection, and nothing bounds SASL or AMQP `Open` after it. A
@@ -610,6 +667,16 @@ AMQP 0.9.1 already solved this: `server/amqp/server.go:24-26` documents a
 `HandshakeTimeout` covering the transport and AMQP handshake through
 `Connection.Open`, and `:155` sets the deadline, clearing it on success. The
 fix is to copy that model, not to invent one.
+
+> **Resolved 2026-08-21**, #578. Per-listener
+> `handshake_timeout` on both AMQP families, default 10s, covering transport,
+> TLS, SASL and OPEN, cleared once the connection is established. AMQP 0.9.1 had
+> the same 10s hardcoded in `cmd/main.go` and now reads the key too.
+>
+> **Worse than reported, and fixed with it:** the TLS handshake ran *inline in
+> the accept loop*, so one unresponsive peer stalled every connection waiting to
+> be accepted — not just its own slot. It now runs on the connection's own
+> goroutine, under the deadline, through `HandshakeContext`.
 
 ### P1-9. Images are published before they are scanned
 

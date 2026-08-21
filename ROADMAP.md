@@ -2,6 +2,7 @@
 
 **Current:** `v0.51.0`
 **Last updated:** 2026-08-21
+**State:** five pull requests merged (#576–#580); nothing outstanding on a branch
 **Companion document:** [`V1-READINESS.md`](./V1-READINESS.md) — findings, evidence, file:line references.
 
 This roadmap exists because the repository had no committed plan. `plan.md` was
@@ -9,9 +10,8 @@ deleted in `5101c90f2` and the three design documents that followed it were
 deleted over the next three weeks; release scope has since lived only in
 untracked working-tree files. This document is the tracked replacement.
 
-**This is the only release plan.** `v1.md` — the second, independently written
-v1 plan that shipped on this branch — was folded into this document on
-2026-08-21 and deleted. See [Reconciliation with `v1.md`](#reconciliation-with-v1md)
+**This is the only release plan.** `v1.md` — a second, independently written
+v1 plan — was folded into this document on 2026-08-21 and deleted. See [Reconciliation with `v1.md`](#reconciliation-with-v1md)
 for what was imported, what it had already delivered, and why the two
 estimates differed.
 
@@ -92,10 +92,38 @@ safe.
 
 ## Progress log
 
-### 2026-08-20 / 21 — branch `fmq-config-strict` (6 commits, all signed)
+### 2026-08-21 — what merged
 
-`make test` green across 63 packages, `make lint` at 0 issues. Pushed to
-`origin/fmq-config-strict`.
+| PR | Roadmap items | What it changed |
+| --- | --- | --- |
+| #576 | 1.4, 1.4b | Strict config decode, missing file is an error, MQTT listeners under `server.mqtt`, key-set and shipped/documented-config guards |
+| #577 | 1.2 | `context.Context` through both authorization interfaces, sourced from the connection |
+| #578 | 1.5, 1.11 | Queue acknowledgement durability per queue, AMQP 1.0 handshake bound, sync failures made sticky |
+| #579 | 1.5b | Durability barriers coalesced into one fsync |
+| #580 | — | MQTT 3.1.1 settles queue messages on PUBACK |
+
+Milestone 1 is five items lighter. What remains is 1.1, 1.3, 1.6, 1.7, 1.8, 1.9
+and 1.10 — see [Next](#next).
+
+**Three defects were found by building the fixes, not by the audit** that
+produced `V1-READINESS.md`: MQTT 3.1.1 silently losing queue work, a rotated
+segment nothing ever fsynced, and the AMQP 1.0 TLS handshake blocking the accept
+loop. None was visible to a reading pass. That is the case for starting 1.8
+early rather than saving it for the end.
+
+**Two review lessons worth keeping**, both from tests that passed when they
+should not have:
+
+- A cancellation test satisfied by any fast failure, not just cancellation, went
+  green against deliberately unfixed code. A test for "gives up early" needs a
+  peer that never answers on its own.
+- A durability benchmark that measured nothing, because `b.TempDir()` follows
+  `TMPDIR` and `/tmp` is tmpfs, where fsync is free. Any benchmark claiming to
+  measure durability states its filesystem.
+
+### 2026-08-20 / 21 — #576, strict configuration
+
+`make test` green across 63 packages, `make lint` at 0 issues.
 
 ```
 a334ad17f  Give zero one meaning across the whole document
@@ -155,7 +183,7 @@ this document and deleted.
   rerun. `make test` allows 3m, so this package is close enough to the limit to
   produce intermittent CI failures. Candidate for milestone 1.8.
 
-### 2026-08-21 — documentation fixes found by reviewing the branch
+### 2026-08-21 — #576, documentation fixes found in review
 
 Strict decoding (1.4) turned every stale documentation example into a broker
 that refuses to start. Sweeping all 29 fenced yaml blocks under `docs/` and
@@ -176,7 +204,7 @@ block as broker configuration when any top-level key is a config key, and takes
 an explicit `<!-- fluxmq:config-skip: reason -->` marker for blocks that must
 not load.
 
-### 2026-08-21 — branch `fmq-authz-context`: 1.2 landed
+### 2026-08-21 — #577, authorization context
 
 `context.Context` now reaches both authorization interfaces from the connection
 that triggered the decision. `make test` green, `make lint` at 0 issues. Details
@@ -197,7 +225,7 @@ Two things worth carrying forward from doing it:
 
 `v1.md` folded into this document and deleted; the `config` branch parked. Both
 of the previous session's open planning items are closed. Every finding
-imported from `v1.md` was re-verified against `fmq-config-strict` before being
+imported from `v1.md` was re-verified against the tree before being
 written down — the table in the reconciliation section records which ones
 survived.
 
@@ -217,18 +245,45 @@ schema, and the branch is the only record of them:
 Do not delete the branch until those three land on main; the tombstone is this
 table. It is pushed to `origin`, so nothing is at risk in the meantime.
 
-### Next session
+### Next
 
-1. **1.2 is merged** (#577), so what remains of the critical path is **1.3**,
-   the authorization decision cache — 4–5 days, and nothing else in Milestone 1
-   is serial behind it. Also merged: 1.4 and 1.4b (#576), and the MQTT 3.1.1
-   queue settlement work (#580).
-2. In parallel, whoever is not on the critical path starts **1.8** — the second
-   audit pass. It is the schedule risk, and it feeds work back late.
-3. **1.9** (admin API auth) is the highest-value non-serial item and the one
-   most likely to be discovered by someone else first: an unauthenticated
-   reload/purge/truncate surface published to the host by the default Compose
-   stack.
+Seven Milestone 1 items remain. Only one pair is serial.
+
+1. **1.9 — authenticate the admin API.** `[L · 5–7d]` The worst finding in
+   `V1-READINESS.md` and the only one an outsider can reach without
+   credentials: anyone who can open `:8082` can call `DeleteQueue` and
+   `reload`, and the default Compose stack publishes that port. Route paths and
+   role names freeze at the tag, so it cannot be deferred past 1.0 the way a bug
+   fix can.
+2. **1.3 — cache authorization decisions.** `[L · 4–5d]` What is left of the
+   critical path now that 1.2 has merged. Until it lands, a callout-configured
+   broker still performs one synchronous round-trip per published message; the
+   context added in #577 makes that cancellable, not cheap.
+3. **1.8 — second audit pass.** `[L · 5–8d]` Run it in parallel from day one.
+   Three of the defects fixed this week were found by building, not by reading,
+   which is exactly what this pass is for and exactly why its findings arrive
+   late.
+4. **1.10 — DLQ and replication failure-safety.** `[M · 4–6d]` Completes the
+   durability work: an acknowledged publish now reaches disk, but the consumer
+   path still drops the pending entry whether or not the dead-letter append
+   succeeded.
+
+1.1, 1.6 and 1.7 are genuinely parallel and get no cheaper or dearer by
+waiting.
+
+**Also open, cheap, unclaimed:** `badger_sync_writes: false` in the three
+cluster reference deployments — the shipped cluster example is non-durable —
+and an additive `proto/cluster/v1` field so inflight message properties survive
+a takeover, without which a settled MQTT 3.1.1 delivery redelivers after a node
+move (#580).
+
+**Working agreements** that held up across the five merges, worth keeping:
+
+- One branch per item, off the base it needs, never committed onto a branch
+  already under review.
+- A test that passes against deliberately broken code is rewritten or deleted,
+  not kept as reassurance. Four were caught that way.
+- Benchmarks that claim to measure durability state their filesystem.
 
 ---
 
@@ -260,7 +315,7 @@ than job count (Milestone 2), and revalidate the trie numbers on the Milestone 5
 reference profiles rather than a review workstation.
 
 **Re-verified on 2026-08-21 before import** — every row below was read in place
-on `fmq-config-strict`, not taken from `v1.md`:
+against the tree, not taken from `v1.md`:
 
 | `v1.md` finding                                | Verdict    | Where it went |
 | ---------------------------------------------- | ---------- | ------------- |
@@ -293,13 +348,13 @@ tests and review. They do **not** include remediation for anything 1.8 finds.
 
 | Milestone                     | Weight      | Serial          | 3 engineers   |
 | ----------------------------- | ----------- | --------------- | ------------- |
-| 1 — Contract freeze           | 32–49 d     | 7–10 weeks      | ~3 weeks      |
+| 1 — Contract freeze (7 items) | 29–42 d     | 6–9 weeks       | ~2.5 weeks    |
 | 2 — Correctness & honesty     | 9–13 d      | ~2–3 weeks      | ~4 days       |
 | 3A — Verification             | 11–15 d     | 2–3 weeks       | ~1 week       |
 | 3B — Coverage (may slip)      | 15–25 d     | 3–5 weeks       | ~2 weeks      |
 | 4 — Governance                | 3.5–6 d     | ~1 week         | ~2 days       |
 | 5 — Baselines & operations    | 9–14 d      | 2–3 weeks       | ~1.5 weeks    |
-| **To the tag (1+2+3A+4+5)**   | **65–97 d**  | **13–19 weeks** | **~5–7 weeks** |
+| **To the tag (1+2+3A+4+5)**   | **62–90 d**  | **12–18 weeks** | **~5–6 weeks** |
 
 Plus **7–11 days of reserve** for interoperability defects, performance
 regressions, and whatever the soak turns up. Milestone 1.8 carries its own
@@ -325,16 +380,17 @@ ten call sites, and doing them as one change avoids touching 113 test
 occurrences twice. Everything else in Milestone 1 parallelizes.
 
 ```
-1.2 Authorizer ctx  ✅ done 2026-08-21
+1.2 Authorizer ctx  ✅ #577
         └──────────▶  1.3 authz cache            4–5 d   ◀── critical path
-1.5 durability policy ✅ ─▶ 1.10 DLQ + replication ─▶ 3A crash drills  6–9 d
-1.11 AMQP 1.0 handshake ✅ done 2026-08-21
+1.5 durability ✅ #578 ─▶ 1.10 DLQ + replication ─▶ 3A crash drills   6–9 d
+1.5b group commit   ✅ #579
+1.11 AMQP 1.0 handshake ✅ #578
+1.4 strict config   ✅ #576
 1.9 admin API auth          (parallel)            5–7 d
 1.6 split-brain             (parallel)            4–6 d
 1.7 CRL/OCSP                (parallel)            4–5 d
 1.1 cluster transports      (parallel)          3.5–5 d
 1.8 audit pass              (parallel, feeds back)  5–8 d
-1.4 strict config           ✅ done 2026-08-20
                                     │
                    everything above ▼
                           5 soak + baselines     ◀── final gate, 3 days elapsed
@@ -1112,19 +1168,21 @@ Deferring these is the point of having a roadmap:
 
 - [ ] Raft transport secured (TLS `StreamLayer`); 3 stub RPCs removed from `proto/cluster/v1`
 - [ ] etcd peer and client traffic uses the cluster mTLS identity; clustering without TLS fails to start unless the explicit development-only opt-in is set
-- [x] `Authorizer` carries `context.Context` — *done 2026-08-21*
+- [x] `Authorizer` carries `context.Context` — *#577*
 - [ ] Authorization decisions cached; publish-throughput benchmark recorded
 - [ ] Admin API returns 401 without credentials and 403 for an insufficient role, on every route; destructive operations emit structured audit events; non-loopback binds without auth refuse to start
-- [x] Strict config decode; missing config file is a startup error — *done 2026-08-20*
-- [x] MQTT listeners moved under `server.mqtt`; types renamed — *done 2026-08-20*
-- [x] Queue delivery address settled for MQTT 5.0 and both AMQP versions; origin in `types.PropSourceTopic` — *done 2026-08-20*
-- [x] MQTT 3.1.1 queue consumption decided: settle on PUBACK, no origin recovery — *done 2026-08-21*
-- [ ] Inflight properties survive a cluster takeover, so a settled delivery is not redelivered after a node move (additive `proto/cluster/v1` field)
-- [x] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open — *done 2026-08-21*
+- [x] Strict config decode; missing config file is a startup error — *#576*
+- [x] MQTT listeners moved under `server.mqtt`; types renamed — *#576*
+- [x] Queue delivery address settled for MQTT 5.0 and both AMQP versions; origin in `types.PropSourceTopic` — *#576*
+- [x] MQTT 3.1.1 queue consumption decided: settle on PUBACK, no origin recovery — *#580*
+- [ ] Inflight properties survive a cluster takeover, so a settled MQTT 3.1.1 delivery is not redelivered after a node move (additive `proto/cluster/v1` field)
+- [x] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open — *#578*
 
 **Durability and correctness**
 
-- [ ] Queue acknowledgement durability configurable, defaulting to fsync; loss window documented per setting
+- [x] Queue acknowledgement durability configurable per queue and broker-wide; loss window and cost documented per setting — *#578*
+- [x] Durability barriers coalesce, so `fsync` scales with concurrent publishers — *#579*. The default stays `buffered`: sharing the barrier makes `fsync` usable on a busy queue, not free
+- [ ] Replicated queues can use `fsync` — today the combination is refused, because Raft apply never reaches the queue log's per-append barrier
 - [ ] Acknowledged fsync-mode messages survive `SIGKILL` and restart
 - [ ] Injected append/fsync/DLQ failures never remove the source PEL entry; crash-window DLQ duplicates share a stable transfer ID; `Reject` routes through DLQ
 - [ ] Replication-enabled queues refuse to start without the experimental gate and a healthy Raft manager; no silent local fallback remains
