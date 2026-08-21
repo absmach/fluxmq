@@ -52,6 +52,12 @@ the per-append fsync barrier. A replicated queue whose effective policy is
 `fsync` is therefore rejected at configuration load rather than making a false
 durability promise.
 
+**A replicated queue cannot use `fsync`.** Raft apply writes through its own
+path and never reaches the queue log's per-append barrier, so the setting would
+be accepted and silently ignored. A queue with `replication.enabled: true` and
+an effective `fsync` policy — its own or inherited from the broker default — is
+rejected at load rather than left to look durable.
+
 Set it per queue where it matters, rather than broker-wide:
 
 ```yaml

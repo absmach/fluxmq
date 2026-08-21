@@ -219,9 +219,10 @@ table. It is pushed to `origin`, so nothing is at risk in the meantime.
 
 ### Next session
 
-1. **1.2 is done** on branch `fmq-authz-context`, so what remains of the critical
-   path is **1.3**, the authorization decision cache — 4–5 days, and nothing
-   else in Milestone 1 is serial behind it.
+1. **1.2 is merged** (#577), so what remains of the critical path is **1.3**,
+   the authorization decision cache — 4–5 days, and nothing else in Milestone 1
+   is serial behind it. Also merged: 1.4 and 1.4b (#576), and the MQTT 3.1.1
+   queue settlement work (#580).
 2. In parallel, whoever is not on the critical path starts **1.8** — the second
    audit pass. It is the schedule risk, and it feeds work back late.
 3. **1.9** (admin API auth) is the highest-value non-serial item and the one
