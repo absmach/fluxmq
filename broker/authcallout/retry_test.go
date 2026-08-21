@@ -103,6 +103,33 @@ func TestRetriableError(t *testing.T) {
 	}
 }
 
+func TestExecuteWithBreakerDoesNotCountCallerCancellationAsFailure(t *testing.T) {
+	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 1
+		},
+	})
+	opts := Options{CB: cb}
+
+	for range 5 {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		_, err := opts.executeWithBreaker(ctx, func() (any, error) {
+			cancel()
+			return nil, errors.Join(errors.New("transport stopped"), ctx.Err())
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, gobreaker.StateClosed, cb.State())
+	}
+	assert.Zero(t, cb.Counts().TotalFailures)
+
+	_, err := opts.executeWithBreaker(context.Background(), func() (any, error) {
+		return nil, errors.New("auth service unavailable")
+	})
+	require.Error(t, err)
+	assert.Equal(t, gobreaker.StateOpen, cb.State(), "real service failures must still trip the breaker")
+}
+
 func TestOptions_BackoffDelay(t *testing.T) {
 	o := Options{RetryBackoff: 10 * time.Millisecond, RetryMaxBackoff: 100 * time.Millisecond}
 	// Full jitter means delay is in [0, base*2^attempt+1).

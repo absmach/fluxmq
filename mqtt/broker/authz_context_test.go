@@ -5,7 +5,10 @@ package broker
 
 import (
 	"context"
+	"io"
+	"sync"
 	"testing"
+	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -17,6 +20,44 @@ import (
 )
 
 type ctxProbeKey struct{}
+
+type blockingContextAuthorizer struct {
+	entered chan context.Context
+}
+
+func (a *blockingContextAuthorizer) CanPublish(ctx context.Context, _ string, _ string) bool {
+	a.entered <- ctx
+	<-ctx.Done()
+	return false
+}
+
+func (a *blockingContextAuthorizer) CanSubscribe(context.Context, string, string) bool {
+	return true
+}
+
+type authzScriptedConnection struct {
+	mockConnection
+	inbound   []packets.ControlPacket
+	next      int
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (c *authzScriptedConnection) ReadPacket() (packets.ControlPacket, error) {
+	if c.next < len(c.inbound) {
+		pkt := c.inbound[c.next]
+		c.next++
+		return pkt, nil
+	}
+
+	<-c.closed
+	return nil, io.EOF
+}
+
+func (c *authzScriptedConnection) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
 
 // ctxCapturingAuthorizer records the context each authorization decision was
 // made with, which is what distinguishes a plumbed context from a
@@ -97,6 +138,76 @@ func TestSubscribeCarriesConnectionContextToAuthorizer(t *testing.T) {
 	require.NotNil(t, authz.subscribeCtx, "authorizer was never called")
 	require.Equal(t, "connection", authz.subscribeCtx.Value(ctxProbeKey{}),
 		"subscribe authorization ran on a context the connection did not supply")
+}
+
+func TestConnectionContextCancellationIsGenerationScoped(t *testing.T) {
+	parent := context.Background()
+	firstCtx, first, cancelFirst := bindConnectionContext(parent, &captureConnection{})
+	secondCtx, _, cancelSecond := bindConnectionContext(parent, &captureConnection{})
+	t.Cleanup(cancelFirst)
+	t.Cleanup(cancelSecond)
+
+	require.NoError(t, first.Close())
+	require.ErrorIs(t, firstCtx.Err(), context.Canceled)
+	require.NoError(t, secondCtx.Err(), "closing one connection must not cancel another generation")
+}
+
+func TestHandleConnectionCloseCancelsInFlightAuthorization(t *testing.T) {
+	const clientID = "blocked-publisher"
+
+	b := NewBroker(memory.New(), nil)
+	t.Cleanup(func() { b.Close() })
+
+	authz := &blockingContextAuthorizer{entered: make(chan context.Context, 1)}
+	b.SetAuthEngine(corebroker.NewAuthEngine(nil, authz))
+
+	conn := &authzScriptedConnection{
+		inbound: []packets.ControlPacket{
+			&v5.Connect{
+				FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
+				ProtocolName:    protocolNameMQTT,
+				ProtocolVersion: 5,
+				ClientID:        clientID,
+				CleanStart:      true,
+			},
+			&v5.Publish{
+				FixedHeader: packets.FixedHeader{PacketType: packets.PublishType},
+				TopicName:   testTelemetryRoom,
+				Payload:     []byte("hello"),
+			},
+		},
+		closed: make(chan struct{}),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		HandleConnection(context.Background(), b, conn)
+		close(done)
+	}()
+
+	var authCtx context.Context
+	select {
+	case authCtx = <-authz.entered:
+	case <-time.After(time.Second):
+		t.Fatal("publish authorization was not reached")
+	}
+
+	s := b.Get(clientID)
+	require.NotNil(t, s)
+	require.NoError(t, s.Conn().Close())
+
+	select {
+	case <-authCtx.Done():
+		require.ErrorIs(t, authCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("closing the MQTT connection did not cancel the authorization context")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("connection handler remained blocked after the connection closed")
+	}
 }
 
 func connCtx2(s *session.Session, ctx context.Context) *connCtx {

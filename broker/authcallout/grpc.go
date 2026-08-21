@@ -56,7 +56,7 @@ func (c *GRPCClient) Authenticate(ctx context.Context, clientID, username, secre
 	result, err := c.retryWithBackoff(ctx, func() (any, error) {
 		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
-		return c.CB.Execute(func() (any, error) {
+		return c.executeWithBreaker(ctx, func() (any, error) {
 			return c.svc.Authenticate(attempt, req)
 		})
 	}, retriableError)
@@ -101,7 +101,7 @@ func (c *GRPCClient) authorize(ctx context.Context, externalID, topic string, ac
 	result, err := c.retryWithBackoff(ctx, func() (any, error) {
 		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
-		return c.CB.Execute(func() (any, error) {
+		return c.executeWithBreaker(ctx, func() (any, error) {
 			return c.svc.Authorize(attempt, req)
 		})
 	}, retriableError)

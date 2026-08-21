@@ -28,9 +28,8 @@ import (
 //
 // ctx is the connection's own context, carried here because the authorization
 // interfaces need it on every PUBLISH and SUBSCRIBE. It follows the connection
-// rather than the session: a superseded generation keeps the context it was
-// created with, and cancelling it releases only that generation's in-flight
-// callouts.
+// rather than the session: closing a superseded generation cancels only that
+// generation's in-flight callouts.
 type connCtx struct {
 	*session.Session
 	ctx   context.Context

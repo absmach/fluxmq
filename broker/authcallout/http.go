@@ -86,7 +86,7 @@ func (c *HTTPClient) Authenticate(ctx context.Context, clientID, username, secre
 	_, err := c.retryWithBackoff(ctx, func() (any, error) {
 		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
-		return c.CB.Execute(func() (any, error) {
+		return c.executeWithBreaker(ctx, func() (any, error) {
 			return nil, c.doPost(attempt, "/auth/authenticate", reqBody, &resp)
 		})
 	}, retriableError)
@@ -130,7 +130,7 @@ func (c *HTTPClient) authorize(ctx context.Context, externalID, topic, action st
 	_, err := c.retryWithBackoff(ctx, func() (any, error) {
 		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
-		return c.CB.Execute(func() (any, error) {
+		return c.executeWithBreaker(ctx, func() (any, error) {
 			return nil, c.doPost(attempt, "/auth/authorize", reqBody, &resp)
 		})
 	}, retriableError)

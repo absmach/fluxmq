@@ -87,7 +87,7 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 	handler := newV5Handler(b)
 	connect := &v5.Connect{
 		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    "MQTT",
+		ProtocolName:    protocolNameMQTT,
 		ProtocolVersion: 5,
 		ClientID:        "test-client",
 		CleanStart:      true,

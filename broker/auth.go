@@ -27,8 +27,8 @@ type AuthnResult struct {
 // Authenticator validates client credentials.
 //
 // The context carries the caller's cancellation: an implementation that talks
-// to a remote service must abandon the call when the connection it is
-// authenticating goes away or the broker shuts down.
+// to a remote service must abandon the call when the broker closes the
+// connection or shuts down.
 type Authenticator interface {
 	Authenticate(ctx context.Context, clientID, username, secret string) (*AuthnResult, error)
 }
@@ -38,7 +38,7 @@ type Authenticator interface {
 // available, otherwise the protocol-level client ID.
 //
 // The context carries the caller's cancellation, and on the publish path that
-// is the connection's own context: a client that disconnects mid-authorize
+// is the connection's own context: closing or superseding that connection
 // releases the callout instead of leaving the broker blocked on a decision
 // nobody is waiting for.
 type Authorizer interface {

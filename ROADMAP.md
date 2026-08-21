@@ -508,25 +508,29 @@ test call sites, all mechanical.
 | --- | --- |
 | `Authenticator` and `Authorizer` take a context | `broker/auth.go` |
 | Callouts derive their per-attempt deadline from the caller's context | `broker/authcallout/{http,grpc}.go` |
-| `connCtx` carries the connection's context | `mqtt/broker/conn_context.go`, set in `lifecycle.go` |
+| `connCtx` carries a context canceled with that connection | `mqtt/broker/connection.go`, `conn_context.go`, `lifecycle.go` |
 | `HandleConnect` and `runSession` take a context | `mqtt/broker/handler.go`, `v3_handler.go`, `v5_handler.go` |
 | Two `//nolint:contextcheck` suppressions deleted | `mqtt/broker/connection.go` |
 | `NotifyConnect` and `deliverOfflineMessages` take a context | `mqtt/broker/broker.go`, both handlers |
 | Superseded-connection drain inherits the connection's values | `context.WithoutCancel(ctx)` in both handlers |
 
-The AMQP paths needed no new plumbing: `Connection.ctx` was already in scope at
-all four call sites, which is what made the connection-context approach the
-codebase's own idiom rather than an import.
+The AMQP call sites already had `Connection.ctx` in scope. AMQP 1.0 already
+derived it per connection; AMQP 0.9.1 now does the same, so closing one client
+does not cancel another client's work.
 
-**Tests.** Four, each verified to fail when the plumbing is reverted:
+**Tests.** Nine cover the context and cancellation contract:
 `TestPublishCarriesConnectionContextToAuthorizer` and its subscribe twin assert
-the authorizer receives the *connection's* context — a value planted on it
-arrives, and cancelling the connection cancels what the authorizer holds — and
-three cancellation tests assert that HTTP and Connect callouts abandon a
-request when the caller walks away instead of waiting out a 30s timeout and a
-10s backoff. A first version of those passed against the unfixed code because a
-fast unrelated failure looks like a fast cancellation; they now run against a
-server that answers only when the caller gives up.
+the authorizer receives the *connection's* context. Generation-scoping tests
+assert that closing one MQTT or AMQP 0.9.1 connection cancels only its own
+context. The MQTT lifecycle test closes the session's real stored connection
+while authorization is blocked and proves both the call and connection handler
+exit. Three callout cancellation tests assert that HTTP and Connect clients
+abandon a request when the caller walks away instead of waiting out a 30s
+timeout and a 10s backoff. A first version of those passed against the unfixed
+code because a fast unrelated failure looks like a fast cancellation; they now
+run against a server that answers only when the caller gives up. The final test
+proves repeated caller cancellations do not open the shared circuit breaker,
+while a real service failure still does.
 
 **`contextcheck` is the regression guard.** With a context in scope, the linter
 flags any downstream call that invents its own — which is how the
@@ -541,8 +545,6 @@ it. Not on the tag's critical path.
 **This does not close P0-1.** Authorization is still one synchronous callout
 per PUBLISH; the context makes it cancellable, not cheap. 1.3 is what closes
 it.
-
-### 1.3 Cache authorization decisions
 
 ### 1.3 Cache authorization decisions
 
