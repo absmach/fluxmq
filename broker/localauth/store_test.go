@@ -197,6 +197,7 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 	current := writeSecret(t, dir, "current", currentSecret)
 	weak := writeSecret(t, dir, "weak", strings.Repeat("x", 31))
 	nul := writeSecret(t, dir, "nul", strings.Repeat("x", 16)+"\x00"+strings.Repeat("x", 16))
+	doubleNewline := writeSecret(t, dir, "double-newline", strings.Repeat("x", 32)+"\n\n")
 
 	tests := []struct {
 		name      string
@@ -234,6 +235,22 @@ func TestStoreRejectsInvalidConfiguration(t *testing.T) {
 				return []config.LocalPrincipalConfig{principalConfig(nul, "")}
 			},
 			wantError: "secret file must not contain NUL bytes",
+		},
+		{
+			// Secret contents are checked here rather than in configuration
+			// validation, which never opens the files.
+			name: "more than one terminal newline",
+			configs: func() []config.LocalPrincipalConfig {
+				return []config.LocalPrincipalConfig{principalConfig(doubleNewline, "")}
+			},
+			wantError: "may contain only one terminal newline",
+		},
+		{
+			name: "missing secret file",
+			configs: func() []config.LocalPrincipalConfig {
+				return []config.LocalPrincipalConfig{principalConfig(filepath.Join(dir, "absent"), "")}
+			},
+			wantError: "failed to read secret file",
 		},
 		{
 			name: "same current and previous secret",

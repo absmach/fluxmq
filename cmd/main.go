@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -64,6 +65,16 @@ const (
 	listenerTLS   = "tls"
 	listenerMTLS  = "mtls"
 )
+
+// valueOr returns what the operator wrote, or the built-in default when the
+// key was omitted. Configuration keeps absent and zero distinct so a written
+// value is never silently replaced by a different one.
+func valueOr[T any](configured *T, fallback T) T {
+	if configured == nil {
+		return fallback
+	}
+	return *configured
+}
 
 func protocolVersionForMode(mode string) int {
 	switch config.NormalizeProtocolMode(mode) {
@@ -385,10 +396,23 @@ func releaseShutdownResources(
 
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
+	configOptional := flag.Bool("config-optional", false,
+		"Fall back to built-in defaults when --config names a file that does not exist")
 	flag.Parse()
 
-	cfg, err := config.Load(*configFile)
+	load := config.Load
+	if *configOptional {
+		load = config.LoadOptional
+	}
+
+	cfg, err := load(*configFile)
 	if err != nil {
+		if errors.Is(err, config.ErrConfigNotFound) {
+			slog.Error("Configuration file not found",
+				"path", *configFile,
+				"hint", "check the path, or pass --config-optional to start with built-in defaults")
+			os.Exit(1)
+		}
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
@@ -439,14 +463,14 @@ func main() {
 
 	slog.Info("Starting MQTT broker", "version", fluxmq.Version)
 	slog.Info("Configuration loaded",
-		"tcp_v3_listener", cfg.Server.TCP.V3.Addr,
-		"tcp_v5_listener", cfg.Server.TCP.V5.Addr,
-		"tcp_tls_listener", cfg.Server.TCP.TLS.Addr,
-		"tcp_mtls_listener", cfg.Server.TCP.MTLS.Addr,
-		"ws_v3_listener", cfg.Server.WebSocket.V3.Addr,
-		"ws_v5_listener", cfg.Server.WebSocket.V5.Addr,
-		"ws_tls_listener", cfg.Server.WebSocket.TLS.Addr,
-		"ws_mtls_listener", cfg.Server.WebSocket.MTLS.Addr,
+		"tcp_v3_listener", cfg.Server.MQTT.TCP.V3.Addr,
+		"tcp_v5_listener", cfg.Server.MQTT.TCP.V5.Addr,
+		"tcp_tls_listener", cfg.Server.MQTT.TCP.TLS.Addr,
+		"tcp_mtls_listener", cfg.Server.MQTT.TCP.MTLS.Addr,
+		"ws_v3_listener", cfg.Server.MQTT.WebSocket.V3.Addr,
+		"ws_v5_listener", cfg.Server.MQTT.WebSocket.V5.Addr,
+		"ws_tls_listener", cfg.Server.MQTT.WebSocket.TLS.Addr,
+		"ws_mtls_listener", cfg.Server.MQTT.WebSocket.MTLS.Addr,
 		"http_plain_listener", cfg.Server.HTTP.Plain.Addr,
 		"http_tls_listener", cfg.Server.HTTP.TLS.Addr,
 		"http_mtls_listener", cfg.Server.HTTP.MTLS.Addr,
@@ -478,7 +502,7 @@ func main() {
 	case "badger":
 		badgerStore, err := badger.New(badger.Config{
 			Dir:        cfg.Storage.BadgerDir,
-			SyncWrites: cfg.Storage.SyncWrites,
+			SyncWrites: cfg.Storage.BadgerSyncWrites,
 		})
 		if err != nil {
 			slog.Error("Failed to initialize BadgerDB storage", "error", err)
@@ -725,14 +749,10 @@ func main() {
 			}
 		}
 
-		cacheSize := cfg.Auth.External.IdentityCacheSize
-		if cacheSize == 0 {
-			cacheSize = corebroker.DefaultIdentityCacheSize
-		}
-		cacheTTL := cfg.Auth.External.IdentityCacheTTL
-		if cacheTTL == 0 {
-			cacheTTL = corebroker.DefaultIdentityCacheTTL
-		}
+		// An omitted key takes the built-in default; a written one is used as
+		// written. Validation already refused a written zero.
+		cacheSize := valueOr(cfg.Auth.External.IdentityCacheSize, corebroker.DefaultIdentityCacheSize)
+		cacheTTL := valueOr(cfg.Auth.External.IdentityCacheTTL, corebroker.DefaultIdentityCacheTTL)
 		engineOpts := []corebroker.AuthEngineOption{
 			corebroker.WithIdentityCache(cacheSize, cacheTTL),
 		}
@@ -774,7 +794,7 @@ func main() {
 
 		newHookProvider := func() corebroker.BlockingHookProvider {
 			opts := []hook.Option{
-				hook.WithTimeout(cfg.Hooks.Timeout),
+				hook.WithTimeout(valueOr(cfg.Hooks.Timeout, 0)),
 				hook.WithLogger(logger),
 			}
 			switch transport {
@@ -795,7 +815,7 @@ func main() {
 		slog.Info("Blocking hooks configured",
 			"url", cfg.Hooks.URL,
 			"transport", transport,
-			"timeout", cfg.Hooks.Timeout,
+			"timeout", valueOr(cfg.Hooks.Timeout, 0),
 			"fail_mode", cfg.Hooks.FailMode,
 			"protocols", cfg.Hooks.Protocols,
 			"events", cfg.Hooks.Events)
@@ -847,16 +867,11 @@ func main() {
 		// Convert queue configs from main config to queue types
 		queueCfg := queue.DefaultConfig()
 		queueCfg.AutoCommitInterval = cfg.QueueManager.AutoCommitInterval
-		// Zero leaves the dispatcher default in place.
-		if cfg.QueueManager.CaptureWorkers > 0 {
-			queueCfg.CaptureWorkers = cfg.QueueManager.CaptureWorkers
-		}
-		if cfg.QueueManager.CaptureQueueDepth > 0 {
-			queueCfg.CaptureQueueDepth = cfg.QueueManager.CaptureQueueDepth
-		}
-		if cfg.QueueManager.CaptureDrainTimeout > 0 {
-			queueCfg.CaptureDrainTimeout = cfg.QueueManager.CaptureDrainTimeout
-		}
+		// An omitted key leaves the dispatcher default in place; a written one
+		// is used as written, and validation already refused a written zero.
+		queueCfg.CaptureWorkers = valueOr(cfg.QueueManager.CaptureWorkers, queueCfg.CaptureWorkers)
+		queueCfg.CaptureQueueDepth = valueOr(cfg.QueueManager.CaptureQueueDepth, queueCfg.CaptureQueueDepth)
+		queueCfg.CaptureDrainTimeout = valueOr(cfg.QueueManager.CaptureDrainTimeout, queueCfg.CaptureDrainTimeout)
 		queueCfg.WritePolicy = queue.WritePolicy(cfg.Cluster.Raft.WritePolicy)
 		queueCfg.DistributionMode = queue.DistributionMode(cfg.Cluster.Raft.DistributionMode)
 		for _, qc := range cfg.Queues {
@@ -1077,12 +1092,12 @@ func main() {
 
 	tcpSlots := []struct {
 		name string
-		cfg  config.TCPListenerConfig
+		cfg  config.MQTTTCPListenerConfig
 	}{
-		{name: "v3", cfg: cfg.Server.TCP.V3},
-		{name: "v5", cfg: cfg.Server.TCP.V5},
-		{name: listenerTLS, cfg: cfg.Server.TCP.TLS},
-		{name: listenerMTLS, cfg: cfg.Server.TCP.MTLS},
+		{name: "v3", cfg: cfg.Server.MQTT.TCP.V3},
+		{name: "v5", cfg: cfg.Server.MQTT.TCP.V5},
+		{name: listenerTLS, cfg: cfg.Server.MQTT.TCP.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.MQTT.TCP.MTLS},
 	}
 
 	for _, slot := range tcpSlots {
@@ -1124,12 +1139,12 @@ func main() {
 
 	wsSlots := []struct {
 		name string
-		cfg  config.WSListenerConfig
+		cfg  config.MQTTWebSocketListenerConfig
 	}{
-		{name: "v3", cfg: cfg.Server.WebSocket.V3},
-		{name: "v5", cfg: cfg.Server.WebSocket.V5},
-		{name: listenerTLS, cfg: cfg.Server.WebSocket.TLS},
-		{name: listenerMTLS, cfg: cfg.Server.WebSocket.MTLS},
+		{name: "v3", cfg: cfg.Server.MQTT.WebSocket.V3},
+		{name: "v5", cfg: cfg.Server.MQTT.WebSocket.V5},
+		{name: listenerTLS, cfg: cfg.Server.MQTT.WebSocket.TLS},
+		{name: listenerMTLS, cfg: cfg.Server.MQTT.WebSocket.MTLS},
 	}
 
 	for _, slot := range wsSlots {

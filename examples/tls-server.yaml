@@ -2,60 +2,72 @@
 # This configuration demonstrates how to enable TLS for secure MQTT connections
 
 server:
-  tcp:
-    plain:
-      addr: ":1883"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-    tls:
-      addr: ":8883"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      cert_file: "/etc/fluxmq/certs/server.crt"
-      key_file: "/etc/fluxmq/certs/server.key"
-      min_version: "TLS1.2"
-      prefer_server_cipher_suites: true
-      cipher_suites:
-        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-    mtls:
-      addr: ":8884"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      cert_file: "/etc/fluxmq/certs/server.crt"
-      key_file: "/etc/fluxmq/certs/server.key"
-      ca_file: "/etc/fluxmq/certs/ca.crt"
-      client_auth: "require"
-      min_version: "TLS1.2"
-      prefer_server_cipher_suites: true
-      cipher_suites:
-        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+  # MQTT transports live under server.mqtt so that `tcp` is not mistaken
+  # for a generic listener; AMQP has its own sections below.
+  mqtt:
+    tcp:
+      # Plaintext MQTT 3.1.1 alongside the TLS listeners below. The v5 slot is
+      # explicitly disabled: an empty addr skips the listener, and leaving it
+      # unset would silently inherit the default plaintext port :1884.
+      v3:
+        addr: ":1883"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+      v5:
+        addr: ""
+      tls:
+        addr: ":8883"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        cert_file: "/etc/fluxmq/certs/server.crt"
+        key_file: "/etc/fluxmq/certs/server.key"
+        min_version: "TLS1.2"
+        prefer_server_cipher_suites: true
+        cipher_suites:
+          - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+          - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+          - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+          - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+      mtls:
+        addr: ":8884"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        cert_file: "/etc/fluxmq/certs/server.crt"
+        key_file: "/etc/fluxmq/certs/server.key"
+        ca_file: "/etc/fluxmq/certs/ca.crt"
+        client_auth: "require"
+        min_version: "TLS1.2"
+        prefer_server_cipher_suites: true
+        cipher_suites:
+          - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+          - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+          - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+          - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
 
   # WebSocket with TLS (WSS)
-  websocket:
-    plain:
-      addr: ":8083"
-      path: "/mqtt"
-    tls:
-      addr: ":8084"
-      path: "/mqtt"
-      cert_file: "/etc/fluxmq/certs/server.crt"
-      key_file: "/etc/fluxmq/certs/server.key"
-    mtls:
-      addr: ":8085"
-      path: "/mqtt"
-      cert_file: "/etc/fluxmq/certs/server.crt"
-      key_file: "/etc/fluxmq/certs/server.key"
-      ca_file: "/etc/fluxmq/certs/ca.crt"
-      client_auth: "require"
+    websocket:
+      v3:
+        addr: ":8083"
+        path: "/mqtt"
+      # Disabled: the default v5 plaintext port is :8084, which is the WSS
+      # address declared below. Leaving it unset makes the two collide.
+      v5:
+        addr: ""
+      tls:
+        addr: ":8084"
+        path: "/mqtt"
+        cert_file: "/etc/fluxmq/certs/server.crt"
+        key_file: "/etc/fluxmq/certs/server.key"
+      mtls:
+        addr: ":8085"
+        path: "/mqtt"
+        cert_file: "/etc/fluxmq/certs/server.crt"
+        key_file: "/etc/fluxmq/certs/server.key"
+        ca_file: "/etc/fluxmq/certs/ca.crt"
+        client_auth: "require"
 
   http:
     plain:

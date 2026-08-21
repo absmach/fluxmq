@@ -4,16 +4,19 @@
 server:
   # This deployment is AMQP 0.9.1-only. These explicit empty addresses
   # override listeners that are enabled by FluxMQ defaults.
-  tcp:
-    v3:
-      addr: ""
-    v5:
-      addr: ""
-  websocket:
-    v3:
-      addr: ""
-    v5:
-      addr: ""
+  # MQTT transports live under server.mqtt so that `tcp` is not mistaken
+  # for a generic listener; AMQP has its own sections below.
+  mqtt:
+    tcp:
+      v3:
+        addr: ""
+      v5:
+        addr: ""
+    websocket:
+      v3:
+        addr: ""
+      v5:
+        addr: ""
   http:
     plain:
       addr: ""
@@ -58,7 +61,7 @@ broker:
 storage:
   type: "badger"
   badger_dir: "/var/lib/fluxmq/data"
-  sync_writes: true
+  badger_sync_writes: true
 
 cluster:
   enabled: false

@@ -17,10 +17,13 @@ type Message struct {
 // QueueMessage is a typed envelope for cross-node queue delivery.
 // It separates queue metadata from user-defined message properties.
 type QueueMessage struct {
-	MessageID      string
-	QueueName      string
-	GroupID        string
-	Topic          string
+	MessageID string
+	QueueName string
+	GroupID   string
+	Topic     string
+	// SourceTopic is the topic the message was published to, before queue
+	// addressing. Topic identifies the queue; only this recovers the origin.
+	SourceTopic    string
 	Payload        []byte
 	Sequence       int64
 	UserProperties map[string]string

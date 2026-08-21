@@ -78,6 +78,11 @@ identity here, and each entry grants exactly the targets it names. Remote
 clients, devices, and tenants authenticate through `auth.external`.
 
 ```yaml
+# An exact publish target is single-node only, so this deployment turns
+# clustering off explicitly. See the note below the example.
+cluster:
+  enabled: false
+
 server:
   amqp091:
     local:
@@ -455,17 +460,18 @@ Listeners share TLS fields across `tls` and `mtls` blocks.
 
 ```yaml
 server:
-  tcp:
-    tls:
-      addr: ":8883"
-      cert_file: "/path/server.crt"
-      key_file: "/path/server.key"
-    mtls:
-      addr: ":8884"
-      cert_file: "/path/server.crt"
-      key_file: "/path/server.key"
-      ca_file: "/path/clients-ca.crt"
-      client_auth: "require"
+  mqtt:
+    tcp:
+      tls:
+        addr: ":8883"
+        cert_file: "/path/server.crt"
+        key_file: "/path/server.key"
+      mtls:
+        addr: ":8884"
+        cert_file: "/path/server.crt"
+        key_file: "/path/server.key"
+        ca_file: "/path/clients-ca.crt"
+        client_auth: "require"
 ```
 
 ## Inter-Broker TLS

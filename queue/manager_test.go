@@ -2615,12 +2615,15 @@ func TestDeliverQueueMessage(t *testing.T) {
 	ctx := context.Background()
 
 	msg := &cluster.QueueMessage{
-		MessageID:      "msg-123",
-		QueueName:      testQueueTest,
-		GroupID:        testGroupWorkers,
-		Payload:        []byte("routed payload"),
-		Sequence:       42,
-		UserProperties: map[string]string{"custom": "prop"},
+		MessageID: "msg-123",
+		QueueName: testQueueTest,
+		GroupID:   testGroupWorkers,
+		Payload:   []byte("routed payload"),
+		Sequence:  42,
+		UserProperties: map[string]string{
+			"custom":              "prop",
+			types.PropSourceTopic: "forged/topic",
+		},
 	}
 
 	err := manager.DeliverQueueMessage(ctx, "target-client", msg)
@@ -2652,6 +2655,9 @@ func TestDeliverQueueMessage(t *testing.T) {
 	}
 	if deliveredMsg.Properties[types.PropQueueName] != testQueueTest {
 		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties[types.PropQueueName])
+	}
+	if sourceTopic, ok := deliveredMsg.Properties[types.PropSourceTopic]; !ok || sourceTopic != "" {
+		t.Errorf("Expected an explicit empty broker-owned source topic, got %q (present=%t)", sourceTopic, ok)
 	}
 }
 

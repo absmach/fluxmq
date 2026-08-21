@@ -78,6 +78,8 @@ the dashboard on the default container network but does not publish port
 The old flat auth form is removed. FluxMQ does not provide a compatibility
 period or silently translate it.
 
+<!-- fluxmq:config-skip: shows the removed flat auth form, which must not load -->
+
 ```yaml
 # Removed
 auth:

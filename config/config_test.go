@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,30 +23,34 @@ const (
 	testProfileHot    = "hot"
 )
 
+// ptr builds a pointer to a literal, for the configuration keys that keep
+// absent and zero distinct.
+func ptr[T any](v T) *T { return &v }
+
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
 	// Test server defaults
-	if cfg.Server.TCP.V3.Addr != ":1883" {
-		t.Errorf("expected default TCP v3 addr :1883, got %s", cfg.Server.TCP.V3.Addr)
+	if cfg.Server.MQTT.TCP.V3.Addr != ":1883" {
+		t.Errorf("expected default TCP v3 addr :1883, got %s", cfg.Server.MQTT.TCP.V3.Addr)
 	}
-	if cfg.Server.TCP.V5.Addr != ":1884" {
-		t.Errorf("expected default TCP v5 addr :1884, got %s", cfg.Server.TCP.V5.Addr)
+	if cfg.Server.MQTT.TCP.V5.Addr != ":1884" {
+		t.Errorf("expected default TCP v5 addr :1884, got %s", cfg.Server.MQTT.TCP.V5.Addr)
 	}
-	if cfg.Server.TCP.V3.MaxConnections != 10000 {
-		t.Errorf("expected default max connections 10000, got %d", cfg.Server.TCP.V3.MaxConnections)
+	if cfg.Server.MQTT.TCP.V3.MaxConnections != 10000 {
+		t.Errorf("expected default max connections 10000, got %d", cfg.Server.MQTT.TCP.V3.MaxConnections)
 	}
-	if cfg.Server.TCP.V3.Protocol != ProtocolModeV3 {
-		t.Errorf("expected default TCP v3 protocol %q, got %q", ProtocolModeV3, cfg.Server.TCP.V3.Protocol)
+	if cfg.Server.MQTT.TCP.V3.Protocol != ProtocolModeV3 {
+		t.Errorf("expected default TCP v3 protocol %q, got %q", ProtocolModeV3, cfg.Server.MQTT.TCP.V3.Protocol)
 	}
-	if cfg.Server.TCP.V5.Protocol != ProtocolModeV5 {
-		t.Errorf("expected default TCP v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.TCP.V5.Protocol)
+	if cfg.Server.MQTT.TCP.V5.Protocol != ProtocolModeV5 {
+		t.Errorf("expected default TCP v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.MQTT.TCP.V5.Protocol)
 	}
-	if cfg.Server.WebSocket.V3.Protocol != ProtocolModeV3 {
-		t.Errorf("expected default WebSocket v3 protocol %q, got %q", ProtocolModeV3, cfg.Server.WebSocket.V3.Protocol)
+	if cfg.Server.MQTT.WebSocket.V3.Protocol != ProtocolModeV3 {
+		t.Errorf("expected default WebSocket v3 protocol %q, got %q", ProtocolModeV3, cfg.Server.MQTT.WebSocket.V3.Protocol)
 	}
-	if cfg.Server.WebSocket.V5.Protocol != ProtocolModeV5 {
-		t.Errorf("expected default WebSocket v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.WebSocket.V5.Protocol)
+	if cfg.Server.MQTT.WebSocket.V5.Protocol != ProtocolModeV5 {
+		t.Errorf("expected default WebSocket v5 protocol %q, got %q", ProtocolModeV5, cfg.Server.MQTT.WebSocket.V5.Protocol)
 	}
 	if cfg.Server.AdminAPIAddr != ":8082" {
 		t.Errorf("expected default admin API addr :8082, got %q", cfg.Server.AdminAPIAddr)
@@ -101,44 +106,44 @@ func TestValidate(t *testing.T) {
 		{
 			name: "TCP TLS listener without cert",
 			modify: func(c *Config) {
-				c.Server.TCP.TLS.Addr = ":8883"
-				c.Server.TCP.TLS.TLS.CertFile = ""
-				c.Server.TCP.TLS.TLS.KeyFile = ""
+				c.Server.MQTT.TCP.TLS.Addr = ":8883"
+				c.Server.MQTT.TCP.TLS.TLS.CertFile = ""
+				c.Server.MQTT.TCP.TLS.TLS.KeyFile = ""
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative websocket max_connections",
 			modify: func(c *Config) {
-				c.Server.WebSocket.V3.MaxConnections = -1
+				c.Server.MQTT.WebSocket.V3.MaxConnections = -1
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative websocket read_timeout",
 			modify: func(c *Config) {
-				c.Server.WebSocket.V3.ReadTimeout = -time.Second
+				c.Server.MQTT.WebSocket.V3.ReadTimeout = -time.Second
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative websocket write_timeout",
 			modify: func(c *Config) {
-				c.Server.WebSocket.V3.WriteTimeout = -time.Second
+				c.Server.MQTT.WebSocket.V3.WriteTimeout = -time.Second
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative tcp read_timeout",
 			modify: func(c *Config) {
-				c.Server.TCP.V3.ReadTimeout = -time.Second
+				c.Server.MQTT.TCP.V3.ReadTimeout = -time.Second
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative tcp write_timeout",
 			modify: func(c *Config) {
-				c.Server.TCP.V3.WriteTimeout = -time.Second
+				c.Server.MQTT.TCP.V3.WriteTimeout = -time.Second
 			},
 			wantErr: true,
 		},
@@ -159,14 +164,14 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid tcp protocol mode",
 			modify: func(c *Config) {
-				c.Server.TCP.V3.Protocol = "v4"
+				c.Server.MQTT.TCP.V3.Protocol = "v4"
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid websocket protocol mode",
 			modify: func(c *Config) {
-				c.Server.WebSocket.V3.Protocol = "mqtt5"
+				c.Server.MQTT.WebSocket.V3.Protocol = "mqtt5"
 			},
 			wantErr: true,
 		},
@@ -345,14 +350,14 @@ func TestValidate(t *testing.T) {
 }
 
 func disableMessagingListeners(c *Config) {
-	c.Server.TCP.V3.Addr = ""
-	c.Server.TCP.V5.Addr = ""
-	c.Server.TCP.TLS.Addr = ""
-	c.Server.TCP.MTLS.Addr = ""
-	c.Server.WebSocket.V3.Addr = ""
-	c.Server.WebSocket.V5.Addr = ""
-	c.Server.WebSocket.TLS.Addr = ""
-	c.Server.WebSocket.MTLS.Addr = ""
+	c.Server.MQTT.TCP.V3.Addr = ""
+	c.Server.MQTT.TCP.V5.Addr = ""
+	c.Server.MQTT.TCP.TLS.Addr = ""
+	c.Server.MQTT.TCP.MTLS.Addr = ""
+	c.Server.MQTT.WebSocket.V3.Addr = ""
+	c.Server.MQTT.WebSocket.V5.Addr = ""
+	c.Server.MQTT.WebSocket.TLS.Addr = ""
+	c.Server.MQTT.WebSocket.MTLS.Addr = ""
 	c.Server.HTTP.Plain.Addr = ""
 	c.Server.HTTP.TLS.Addr = ""
 	c.Server.HTTP.MTLS.Addr = ""
@@ -368,20 +373,39 @@ func disableMessagingListeners(c *Config) {
 	c.Server.AMQP091.Internal.Addr = ""
 }
 
+// TestLoadNonExistent pins the fail-fast contract. A named config file that
+// does not exist must be an error: falling back to defaults would turn a typo
+// in a unit file or chart into a broker running with none of the operator's
+// settings, authentication included.
 func TestLoadNonExistent(t *testing.T) {
 	cfg, err := Load("nonexistent.yaml")
+	if err == nil {
+		t.Fatal("Load() must fail when the named config file does not exist")
+	}
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("Load() should report ErrConfigNotFound, got %v", err)
+	}
+	if cfg != nil {
+		t.Fatalf("Load() should return a nil config on error, got %+v", cfg)
+	}
+}
+
+// TestLoadOptionalNonExistent covers the opt-in fallback behind
+// --config-optional.
+func TestLoadOptionalNonExistent(t *testing.T) {
+	cfg, err := LoadOptional("nonexistent.yaml")
 	if err != nil {
-		t.Fatalf("Load() should return default config and no error when file doesn't exist, got error: %v", err)
+		t.Fatalf("LoadOptional() should return the default config when the file is missing, got error: %v", err)
 	}
 	if cfg == nil {
-		t.Fatal("Load() should return a default config, got nil")
+		t.Fatal("LoadOptional() should return a default config, got nil")
 	}
 
-	if cfg.Server.TCP.V3.Addr != ":1883" {
-		t.Errorf("expected default config, got TCP v3 addr %s", cfg.Server.TCP.V3.Addr)
+	if cfg.Server.MQTT.TCP.V3.Addr != ":1883" {
+		t.Errorf("expected default config, got TCP v3 addr %s", cfg.Server.MQTT.TCP.V3.Addr)
 	}
-	if cfg.Server.TCP.V5.Addr != ":1884" {
-		t.Errorf("expected default config, got TCP v5 addr %s", cfg.Server.TCP.V5.Addr)
+	if cfg.Server.MQTT.TCP.V5.Addr != ":1884" {
+		t.Errorf("expected default config, got TCP v5 addr %s", cfg.Server.MQTT.TCP.V5.Addr)
 	}
 }
 
@@ -390,8 +414,8 @@ func TestSaveLoad(t *testing.T) {
 
 	// Create custom config
 	cfg := Default()
-	cfg.Server.TCP.V3.Addr = ":2883"
-	cfg.Server.TCP.V5.Addr = ":2884"
+	cfg.Server.MQTT.TCP.V3.Addr = ":2883"
+	cfg.Server.MQTT.TCP.V5.Addr = ":2884"
 	cfg.Broker.RetryInterval = 30 * time.Second
 	cfg.Log.Level = testLogLevelDebug
 
@@ -407,11 +431,11 @@ func TestSaveLoad(t *testing.T) {
 	}
 
 	// Verify
-	if loaded.Server.TCP.V3.Addr != ":2883" {
-		t.Errorf("expected TCP v3 addr :2883, got %s", loaded.Server.TCP.V3.Addr)
+	if loaded.Server.MQTT.TCP.V3.Addr != ":2883" {
+		t.Errorf("expected TCP v3 addr :2883, got %s", loaded.Server.MQTT.TCP.V3.Addr)
 	}
-	if loaded.Server.TCP.V5.Addr != ":2884" {
-		t.Errorf("expected TCP v5 addr :2884, got %s", loaded.Server.TCP.V5.Addr)
+	if loaded.Server.MQTT.TCP.V5.Addr != ":2884" {
+		t.Errorf("expected TCP v5 addr :2884, got %s", loaded.Server.MQTT.TCP.V5.Addr)
 	}
 	if loaded.Broker.RetryInterval != 30*time.Second {
 		t.Errorf("expected retry interval 30s, got %v", loaded.Broker.RetryInterval)
@@ -588,27 +612,37 @@ func TestValidateQueueManagerCaptureBounds(t *testing.T) {
 			configure: func(*QueueManagerConfig) {},
 		},
 		{
-			name:      "zero selects the default",
-			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth, q.CaptureDrainTimeout = 0, 0, 0 },
+			// Omitting a key is what selects the built-in default.
+			name: "omitted keys are valid",
+			configure: func(q *QueueManagerConfig) {
+				q.CaptureWorkers, q.CaptureQueueDepth, q.CaptureDrainTimeout = nil, nil, nil
+			},
 		},
 		{
 			name:      "explicit values are valid",
-			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth = 2, 64 },
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers, q.CaptureQueueDepth = ptr(2), ptr(64) },
+		},
+		{
+			// A written zero used to select the default silently, so the same
+			// literal meant opposite things in different sections.
+			name:      "written zero rejected",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = ptr(0) },
+			wantError: "queue_manager.capture_workers must be greater than zero",
 		},
 		{
 			name:      "negative workers rejected",
-			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = -1 },
-			wantError: "queue_manager.capture_workers must be >= 0",
+			configure: func(q *QueueManagerConfig) { q.CaptureWorkers = ptr(-1) },
+			wantError: "queue_manager.capture_workers must be greater than zero",
 		},
 		{
 			name:      "negative depth rejected",
-			configure: func(q *QueueManagerConfig) { q.CaptureQueueDepth = -1 },
-			wantError: "queue_manager.capture_queue_depth must be >= 0",
+			configure: func(q *QueueManagerConfig) { q.CaptureQueueDepth = ptr(-1) },
+			wantError: "queue_manager.capture_queue_depth must be greater than zero",
 		},
 		{
 			name:      "negative drain timeout rejected",
-			configure: func(q *QueueManagerConfig) { q.CaptureDrainTimeout = -1 },
-			wantError: "queue_manager.capture_drain_timeout must be >= 0",
+			configure: func(q *QueueManagerConfig) { q.CaptureDrainTimeout = ptr(-1 * time.Second) },
+			wantError: "queue_manager.capture_drain_timeout must be greater than zero",
 		},
 	}
 

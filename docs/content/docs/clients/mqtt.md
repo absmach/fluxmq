@@ -91,7 +91,7 @@ mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
 - Use single quotes around `$queue/...` topics in shell commands to avoid `$` expansion.
 - Queue consumer groups require MQTT v5 (`-V mqttv5`) if you want explicit `consumer-group` assignment.
 - Reusing the same consumer group with different queue filters creates distinct internal groups per filter (`group@pattern` in logs).
-- TLS and mTLS listeners are configured via `server.tcp.tls` and `server.tcp.mtls`.
+- TLS and mTLS listeners are configured via `server.mqtt.tcp.tls` and `server.mqtt.tcp.mtls`.
 - Listener protocol mode can be pinned per TCP/WebSocket listener via `protocol: auto|v3|v5`.
 - Shared subscriptions are supported.
 

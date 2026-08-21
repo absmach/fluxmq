@@ -128,9 +128,6 @@ func TestValidateLocalPrincipals(t *testing.T) {
 	dir := t.TempDir()
 	current := writeSecret(t, dir, "current", strings.Repeat("a", 32)+"\n")
 	previous := writeSecret(t, dir, "previous", strings.Repeat("b", 32)+"\r\n")
-	weak := writeSecret(t, dir, "weak", strings.Repeat("c", 31)+"\n")
-	doubleNewline := writeSecret(t, dir, "double-newline", strings.Repeat("d", 32)+"\n\n")
-	nul := writeSecret(t, dir, "nul", strings.Repeat("e", 16)+"\x00"+strings.Repeat("e", 16))
 
 	valid := func() LocalPrincipalConfig {
 		return LocalPrincipalConfig{
@@ -179,42 +176,6 @@ func TestValidateLocalPrincipals(t *testing.T) {
 				return []LocalPrincipalConfig{principal}
 			},
 			wantError: ".current_secret_file cannot be empty",
-		},
-		{
-			name: "missing secret file",
-			principals: func() []LocalPrincipalConfig {
-				principal := valid()
-				principal.CurrentSecretFile = filepath.Join(dir, "missing")
-				return []LocalPrincipalConfig{principal}
-			},
-			wantError: "failed to read secret file",
-		},
-		{
-			name: "weak secret",
-			principals: func() []LocalPrincipalConfig {
-				principal := valid()
-				principal.CurrentSecretFile = weak
-				return []LocalPrincipalConfig{principal}
-			},
-			wantError: "must contain at least 32 bytes",
-		},
-		{
-			name: "more than one terminal newline",
-			principals: func() []LocalPrincipalConfig {
-				principal := valid()
-				principal.CurrentSecretFile = doubleNewline
-				return []LocalPrincipalConfig{principal}
-			},
-			wantError: "may contain only one terminal newline",
-		},
-		{
-			name: "NUL byte in secret",
-			principals: func() []LocalPrincipalConfig {
-				principal := valid()
-				principal.CurrentSecretFile = nul
-				return []LocalPrincipalConfig{principal}
-			},
-			wantError: "secret file must not contain NUL bytes",
 		},
 		{
 			name: "invalid URI SAN",
@@ -710,6 +671,76 @@ func runLocalListenerCase(
 	}
 	if err == nil || !strings.Contains(err.Error(), wantError) {
 		t.Fatalf("Validate() error = %v, want it to contain %q", err, wantError)
+	}
+}
+
+// Configuration validation names the secret files but never opens them, so an
+// operator or CI job can check a production configuration on a machine that has
+// no /run/secrets. The contents are enforced in broker/localauth, which runs at
+// startup and on every reload.
+func TestValidateDoesNotReadSecretFiles(t *testing.T) {
+	cfg := Default()
+	local := &cfg.Server.AMQP091.Local
+	local.Addr = testServiceAddr
+	local.MaxConnections = 32
+	local.TLS.CertFile = testServerCert
+	local.TLS.KeyFile = testServerKey
+	local.TLS.ClientCAFile = testClientCA
+	local.TLS.ClientAuth = clientAuthRequire
+	cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
+		Name:               testPrincipalName,
+		CertificateURISAN:  testPrincipalSAN,
+		CurrentSecretFile:  "/run/secrets/absent-current",
+		PreviousSecretFile: "/run/secrets/absent-previous",
+		Permissions: LocalPermissionsConfig{
+			Publish: []LocalPublishPermission{{RoutingKeyPrefix: "m."}},
+		},
+	}}
+
+	require.NoError(t, cfg.Validate(), "validation must not depend on secret files being present")
+}
+
+// The paths themselves are configuration, so a missing or blank one is still a
+// configuration error.
+func TestValidateRejectsUnnamedSecretFiles(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*LocalPrincipalConfig)
+		wantError string
+	}{
+		{
+			name:      "current omitted",
+			mutate:    func(p *LocalPrincipalConfig) { p.CurrentSecretFile = "" },
+			wantError: "current_secret_file cannot be empty",
+		},
+		{
+			name:      "current blank",
+			mutate:    func(p *LocalPrincipalConfig) { p.CurrentSecretFile = "   " },
+			wantError: "current_secret_file cannot be empty",
+		},
+		{
+			name:      "previous blank",
+			mutate:    func(p *LocalPrincipalConfig) { p.PreviousSecretFile = "   " },
+			wantError: "previous_secret_file cannot be empty",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			principal := LocalPrincipalConfig{
+				Name:              testPrincipalName,
+				CertificateURISAN: testPrincipalSAN,
+				CurrentSecretFile: "/run/secrets/current",
+				Permissions: LocalPermissionsConfig{
+					Publish: []LocalPublishPermission{{RoutingKeyPrefix: "m."}},
+				},
+			}
+			test.mutate(&principal)
+
+			err := ValidateLocalPrincipals([]LocalPrincipalConfig{principal})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.wantError)
+		})
 	}
 }
 

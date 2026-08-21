@@ -53,8 +53,8 @@ make build
 | gRPC transport | 7948   | 7949   | 7950   |
 
 Local cluster configs use dedicated listeners on each node:
-- `server.tcp.v3` for MQTT 3.1.1
-- `server.tcp.v5` for MQTT 5.0
+- `server.mqtt.tcp.v3` for MQTT 3.1.1
+- `server.mqtt.tcp.v5` for MQTT 5.0
 
 ## Key Cluster Settings
 

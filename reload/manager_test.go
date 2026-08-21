@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -57,6 +58,55 @@ func TestReloadNoChanges(t *testing.T) {
 	}
 	if m.Version() != 1 {
 		t.Errorf("version should remain 1, got %d", m.Version())
+	}
+}
+
+// The failure observer exists for the case where an active local-principal
+// configuration cannot be loaded at all, so the reload callback is never
+// reached and nothing else can report the miss.
+func TestReloadNotifiesWhenConfigCannotBeLoaded(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "local-secret")
+	if err := os.WriteFile(secretPath, []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, dir, fmt.Sprintf(`auth:
+  local_principals:
+    - name: audit-publisher
+      certificate_uri_san: spiffe://example.org/audit-publisher
+      current_secret_file: %q
+      permissions:
+        publish:
+          - exchange: ""
+            routing_key: audit.events
+        subscribe: []
+`, secretPath))
+	initial, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var reloadFailures atomic.Int64
+	var reloadCalls atomic.Int64
+	m := New(path, initial,
+		WithLocalPrincipalsReload(func([]config.LocalPrincipalConfig) (bool, error) {
+			reloadCalls.Add(1)
+			return true, nil
+		}),
+		WithLocalPrincipalsReloadFailure(func(error) { reloadFailures.Add(1) }),
+	)
+
+	if err := os.WriteFile(path, []byte("version: 1\nlisteners:\n  mqtt: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(context.Background()); err == nil {
+		t.Fatal("reload of an unparseable configuration succeeded")
+	}
+	if reloadFailures.Load() != 1 {
+		t.Fatalf("local reload failure notifications = %d, want 1", reloadFailures.Load())
+	}
+	if reloadCalls.Load() != 0 {
+		t.Fatalf("the reload callback ran %d times despite the configuration failing to load", reloadCalls.Load())
 	}
 }
 
@@ -175,11 +225,19 @@ func TestReloadLocalPrincipalSecretContent(t *testing.T) {
 	if err := os.WriteFile(secretPath, []byte("too-short"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Reload(context.Background()); err == nil {
+	invalidResult, invalidErr := m.Reload(context.Background())
+	if invalidErr == nil {
 		t.Fatal("invalid local secret reload succeeded")
 	}
-	if reloadFailures.Load() != 1 {
-		t.Fatalf("local reload failure notifications = %d, want 1", reloadFailures.Load())
+	if invalidResult == nil || !strings.Contains(strings.Join(invalidResult.Errors, " "), "at least 32 bytes") {
+		t.Fatalf("reload errors = %+v, want them to name the secret problem", invalidResult)
+	}
+	// Secret contents are checked where the credential material is loaded, so
+	// this failure comes back from the reload callback itself. The failure
+	// observer is for load failures that stop a configuration reaching that
+	// callback at all, which is covered separately.
+	if reloadFailures.Load() != 0 {
+		t.Fatalf("local reload failure notifications = %d, want 0", reloadFailures.Load())
 	}
 	if m.Version() != 2 || store.Generation() != 2 {
 		t.Fatalf("failed reload changed state: version=%d generation=%d", m.Version(), store.Generation())
@@ -361,9 +419,10 @@ func TestReloadRestartRequired(t *testing.T) {
 	cfg := config.Default()
 
 	yamlContent := `server:
-  tcp:
-    v3:
-      addr: ":9999"
+  mqtt:
+    tcp:
+      v3:
+        addr: ":9999"
 `
 	path := writeConfig(t, dir, yamlContent)
 
@@ -379,8 +438,8 @@ func TestReloadRestartRequired(t *testing.T) {
 		t.Errorf("version should remain 1 when no runtime changes are applied, got %d", m.Version())
 	}
 	current := m.Current()
-	if current.Server.TCP.V3.Addr != cfg.Server.TCP.V3.Addr {
-		t.Errorf("runtime snapshot drifted; expected %q, got %q", cfg.Server.TCP.V3.Addr, current.Server.TCP.V3.Addr)
+	if current.Server.MQTT.TCP.V3.Addr != cfg.Server.MQTT.TCP.V3.Addr {
+		t.Errorf("runtime snapshot drifted; expected %q, got %q", cfg.Server.MQTT.TCP.V3.Addr, current.Server.MQTT.TCP.V3.Addr)
 	}
 }
 
@@ -389,9 +448,10 @@ func TestReloadRestartRequiredStaysPending(t *testing.T) {
 	cfg := config.Default()
 
 	yamlContent := `server:
-  tcp:
-    v3:
-      addr: ":9999"
+  mqtt:
+    tcp:
+      v3:
+        addr: ":9999"
 `
 	path := writeConfig(t, dir, yamlContent)
 
@@ -434,18 +494,27 @@ func TestReloadInvalidConfig(t *testing.T) {
 	}
 }
 
+// TestReloadMissingFile pins that a config file which has gone missing fails
+// the reload and leaves the running configuration untouched. Falling back to
+// defaults here would be worse than at startup: it would silently reset a live
+// broker — authentication, TLS, listeners and all — because someone renamed a
+// file.
 func TestReloadMissingFile(t *testing.T) {
 	cfg := config.Default()
 	m := New("/nonexistent/path/config.yaml", cfg)
 
-	// config.Load returns defaults for missing files, so this should succeed
-	// but produce no changes (since defaults == defaults).
-	result, err := m.Reload(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	_, err := m.Reload(context.Background())
+	if err == nil {
+		t.Fatal("reload must fail when the config file is missing")
 	}
-	if result.HasChanges() {
-		t.Error("expected no changes when loading defaults from missing file")
+	if !errors.Is(err, config.ErrConfigNotFound) {
+		t.Fatalf("expected ErrConfigNotFound, got %v", err)
+	}
+	if m.Version() != 1 {
+		t.Errorf("version must not advance on a failed reload, got %d", m.Version())
+	}
+	if m.Current().Server.MQTT.TCP.V3.Addr != cfg.Server.MQTT.TCP.V3.Addr {
+		t.Error("running configuration must be retained after a failed reload")
 	}
 }
 
@@ -697,9 +766,10 @@ func TestReloadMixedChanges(t *testing.T) {
 	yamlContent := `log:
   level: debug
 server:
-  tcp:
-    v3:
-      addr: ":9999"
+  mqtt:
+    tcp:
+      v3:
+        addr: ":9999"
 `
 	path := writeConfig(t, dir, yamlContent)
 

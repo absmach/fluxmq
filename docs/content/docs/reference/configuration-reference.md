@@ -45,43 +45,47 @@ Durations use Go duration strings like `5s`, `1m`, `24h`.
 
 `server` controls network listeners and telemetry endpoints.
 
+<!-- fluxmq:config-skip: one section in isolation; server.amqp091.local is only
+     valid alongside the auth.local_principals section documented below -->
+
 ```yaml
 server:
-  tcp:
-    v3:
-      addr: ":1883"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      protocol: "v3"
-    v5:
-      addr: ":1884"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      protocol: "v5"
-    tls: {}
-    mtls: {}
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        protocol: "v3"
+      v5:
+        addr: ":1884"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        protocol: "v5"
+      tls: {}
+      mtls: {}
 
-  websocket:
-    v3:
-      addr: ":8083"
-      path: "/mqtt"
-      protocol: "v3"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      allowed_origins: ["https://app.example.com"]
-    v5:
-      addr: ":8084"
-      path: "/mqtt"
-      protocol: "v5"
-      max_connections: 10000
-      read_timeout: "60s"
-      write_timeout: "60s"
-      allowed_origins: ["https://app.example.com"]
-    tls: {}
-    mtls: {}
+    websocket:
+      v3:
+        addr: ":8083"
+        path: "/mqtt"
+        protocol: "v3"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        allowed_origins: ["https://app.example.com"]
+      v5:
+        addr: ":8084"
+        path: "/mqtt"
+        protocol: "v5"
+        max_connections: 10000
+        read_timeout: "60s"
+        write_timeout: "60s"
+        allowed_origins: ["https://app.example.com"]
+      tls: {}
+      mtls: {}
 
   http:
     plain:
@@ -135,7 +139,7 @@ server:
 
 ### Listener Fields
 
-These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.local` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks. `server.amqp091.internal` and `server.amqp091.service` are deprecated aliases for it.
+These apply to listener blocks (for example `server.mqtt.tcp.v3`, `server.mqtt.websocket.v3`, `server.amqp091.tls`, and so on). `server.amqp091.local` is reserved for `auth.local_principals`, requires mTLS, and never uses external auth or blocking hooks. `server.amqp091.internal` and `server.amqp091.service` are deprecated aliases for it.
 
 | Field             | Description                                                                                                                                    |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -143,7 +147,7 @@ These apply to listener blocks (for example `server.tcp.v3`, `server.websocket.v
 | `max_connections` | Connection cap for that listener (`>= 0`). `0` means no explicit cap except on a local-principal listener, where a positive cap is required. Applies to TCP/WebSocket/AMQP/AMQP091 listeners. Counted on accepted sockets, so a peer that connects without completing a handshake still consumes quota. |
 | `read_timeout`    | Bounds the phase before an MQTT session starts (`time.Duration`, `>= 0`). On TCP that is the TLS handshake, protocol sniff and CONNECT; on WebSocket it also bounds the HTTP request and TLS handshake that precede the upgrade. Once the session starts it sets its own read deadlines from the negotiated keep-alive. TCP and WebSocket listeners. |
 | `write_timeout`   | Bounds a single socket write for the life of the connection (`time.Duration`, `>= 0`). TCP and WebSocket listeners.                            |
-| `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.tcp.v3` and `v5` on `server.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
+| `protocol`        | MQTT parser mode. For TCP, use `v3` on `server.mqtt.tcp.v3` and `v5` on `server.mqtt.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`. |
 | `path`            | HTTP path for MQTT-over-WebSocket endpoint.                                                                                                    |
 | `allowed_origins` | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production.                                               |
 
@@ -248,9 +252,9 @@ queue_manager:
 | Field                   | Default | Description                                                                 |
 | ----------------------- | ------- | --------------------------------------------------------------------------- |
 | `auto_commit_interval`  | `5s`    | Stream-group auto-commit cadence. `0` means commit on every delivery batch. |
-| `capture_workers`       | `4`     | Lanes writing captured publishes off the publish path. A queue is always handled by the same lane, so its appends keep publish order. Lanes are shared: queues are hashed onto them, so a stalled queue also stalls the unrelated queues sharing its lane until its backlog fills. Raise this where many queues bind ordinary topics and one may block. `0` selects the default. |
-| `capture_queue_depth`   | `1024`  | Per-lane backlog, counted in **jobs, not bytes**. The memory ceiling is `capture_workers × capture_queue_depth` payloads, so lower it when capturing large messages. When a lane fills, the newest job is dropped and counted in `queues.capture_dropped`. `0` selects the default. |
-| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. If a worker is still inside an append when it expires, shutdown is reported unclean and the cluster, queue log store and broker store are all left open, since the worker may still be using them — on `badger` that means the broker store is not flushed and the next start replays. Raise this if that becomes routine. `0` selects the default. |
+| `capture_workers`       | `4`     | Lanes writing captured publishes off the publish path. A queue is always handled by the same lane, so its appends keep publish order. Lanes are shared: queues are hashed onto them, so a stalled queue also stalls the unrelated queues sharing its lane until its backlog fills. Raise this where many queues bind ordinary topics and one may block. Omit the key to take the default; a written `0` is rejected. |
+| `capture_queue_depth`   | `1024`  | Per-lane backlog, counted in **jobs, not bytes**. The memory ceiling is `capture_workers × capture_queue_depth` payloads, so lower it when capturing large messages. When a lane fills, the newest job is dropped and counted in `queues.capture_dropped`. Omit the key to take the default; a written `0` is rejected. |
+| `capture_drain_timeout` | `5s`    | How long shutdown waits for queued captures to be written. Anything still queued is counted in `queues.capture_dropped` rather than delaying shutdown. If a worker is still inside an append when it expires, shutdown is reported unclean and the cluster, queue log store and broker store are all left open, since the worker may still be using them — on `badger` that means the broker store is not flushed and the next start replays. Raise this if that becomes routine. Omit the key to take the default; a written `0` is rejected. |
 
 Capture never blocks the publish path: see [Capturing Ordinary Topics](/messaging/durable-queues#capturing-ordinary-topics).
 
@@ -381,7 +385,7 @@ rather than the events it named. Fix the filter rather than work around the erro
 storage:
   type: "badger"      # memory or badger
   badger_dir: "/tmp/fluxmq/data"
-  sync_writes: false
+  badger_sync_writes: false
   recover_on_startup: false
 ```
 
@@ -389,7 +393,7 @@ storage:
 | -------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | `type`               | `badger`           | Storage backend: `memory` or `badger`.                                                                                 |
 | `badger_dir`         | `/tmp/fluxmq/data` | Data directory for Badger backend (required when `type=badger`).                                                       |
-| `sync_writes`        | `false`            | If `true`, fsync-like durability on write path; if `false`, better throughput.                                         |
+| `badger_sync_writes` | `false` | If `true`, fsync every write to the Badger key-value store holding retained messages and sessions. It does not reach the queue append-only log. |
 | `recover_on_startup` | `false`            | Run segment recovery before loading queues: truncate each corrupted segment at its last valid batch, sync, and rebuild indexes. See the note below on startup behaviour when this is `false`. |
 
 A corrupted segment fails startup when `recover_on_startup` is `false`. The
@@ -596,7 +600,7 @@ flag, properties, or an MQTT register external identity.
 | ----------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `url`       | `""`    | Hook service base URL. Empty disables blocking hooks.                                                                 |
 | `transport` | `grpc`  | Wire format for callout: `grpc` or `http`. HTTP sends `POST {url}/hooks`.                                             |
-| `timeout`   | `0`     | Per-call timeout. Zero uses the hook client default (`500ms`).                                                        |
+| `timeout`   | `500ms` | Per-call timeout. Omit the key to take the default; an explicit `0` is rejected at load, because a blocking hook with no deadline stalls the operation it gates. |
 | `fail_mode` | `deny`  | Error behavior for hook timeouts/invalid responses: `deny` rejects the operation, `allow` keeps the original request. |
 | `protocols` | `{}`    | Per-protocol hook toggle. Empty map = all protocols run hooks when `url` is set.                                      |
 | `events`    | `{}`    | Per-hook event toggle. Empty map = all supported blocking hooks run when `url` is set.                                |
@@ -767,8 +771,8 @@ auth:
 | `external.transport`                            | `grpc`  | Callout transport: `grpc` or `http`. |
 | `external.timeout`                              | `0`     | Per-call timeout. Zero uses the transport default. |
 | `external.protocols`                            | `{}`    | External-auth protocol toggle. Empty means every protocol. |
-| `external.identity_cache_size`                  | `0`     | Maximum cached external identities; zero selects the broker default (`10000`), while a negative value disables size eviction. |
-| `external.identity_cache_ttl`                   | `0`     | External identity cache TTL; zero selects the broker default (`24h`), while a negative value disables TTL eviction. |
+| `external.identity_cache_size`                  | `10000` | Maximum cached external identities. Omit the key to take the default; a written `0` or negative value is rejected. |
+| `external.identity_cache_ttl`                   | `24h`   | External identity cache TTL. Omit the key to take the default; a written `0` or negative value is rejected. |
 | `local_principals[].name`                       | —       | Unique SASL username for the local principal. |
 | `local_principals[].certificate_uri_san`        | —       | Exact URI SAN required on a CA-verified client certificate. |
 | `local_principals[].role`                       | `publisher` | Capability of the principal on every local listener: `publisher` may only publish; `service` may also consume and relay an origin identity. |
