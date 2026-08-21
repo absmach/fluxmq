@@ -43,7 +43,7 @@ func newPayloadLimitBroker(t *testing.T, maxSize int, clientVersion byte) (*Brok
 		ReceiveMaximum: 65535,
 		MaxQoS:         b.MaxQoS(),
 	})
-	return b, &connCtx{Session: s, conn: conn, epoch: epoch}
+	return b, &connCtx{Session: s, ctx: context.Background(), conn: conn, epoch: epoch}
 }
 
 // TestPublishEnforcesMaxMessageSize guards the limit broker.max_message_size

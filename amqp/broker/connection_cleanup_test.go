@@ -154,6 +154,19 @@ func newTestConnection(t *testing.T, b *Broker, serverConn net.Conn) *Connection
 	}
 }
 
+func TestConnectionContextCancellationIsConnectionScoped(t *testing.T) {
+	b := New(nil, nil)
+	_, firstTransport := newTestConn(t)
+	_, secondTransport := newTestConn(t)
+	first := newConnection(context.Background(), b, firstTransport, nil)
+	second := newConnection(context.Background(), b, secondTransport, nil)
+
+	first.close()
+	require.ErrorIs(t, first.ctx.Err(), context.Canceled)
+	require.NoError(t, second.ctx.Err(), "closing one AMQP connection must not cancel another")
+	second.close()
+}
+
 func TestConnectionCleanupClusterCallsHaveDeadline(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(nil, logger)

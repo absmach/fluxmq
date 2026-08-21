@@ -154,6 +154,7 @@ this document and deleted.
 - `./cluster` took 294s standalone and failed once at 149s before passing on
   rerun. `make test` allows 3m, so this package is close enough to the limit to
   produce intermittent CI failures. Candidate for milestone 1.8.
+
 ### 2026-08-21 — documentation fixes found by reviewing the branch
 
 Strict decoding (1.4) turned every stale documentation example into a broker
@@ -174,6 +175,23 @@ these through: `TestShippedConfigsDecodeStrictly` covers `examples/` and
 block as broker configuration when any top-level key is a config key, and takes
 an explicit `<!-- fluxmq:config-skip: reason -->` marker for blocks that must
 not load.
+
+### 2026-08-21 — branch `fmq-authz-context`: 1.2 landed
+
+`context.Context` now reaches both authorization interfaces from the connection
+that triggered the decision. `make test` green, `make lint` at 0 issues. Details
+and the tests that pin it are under [1.2](#12-plumb-contextcontext-through-the-authorization-interfaces--done-2026-08-21).
+
+Two things worth carrying forward from doing it:
+
+- **`contextcheck` earns its place.** Adding a context in scope made the linter
+  point at every downstream call still inventing its own, which is how the
+  `NotifyConnect` and offline-delivery sites were found rather than guessed at.
+- **A cancellation test can pass for the wrong reason.** The first version
+  asserted only that the call returned quickly, which a fast unrelated failure
+  also satisfies; it passed against deliberately unfixed code. The rule that
+  came out of it: a test for "gives up early" needs a peer that never answers on
+  its own, so early return has exactly one explanation.
 
 ### 2026-08-21 — plan reconciliation, no code changes
 
@@ -274,13 +292,13 @@ tests and review. They do **not** include remediation for anything 1.8 finds.
 
 | Milestone                     | Weight      | Serial          | 3 engineers   |
 | ----------------------------- | ----------- | --------------- | ------------- |
-| 1 — Contract freeze           | 34–52 d     | 7–10 weeks      | ~3 weeks      |
+| 1 — Contract freeze           | 32–49 d     | 7–10 weeks      | ~3 weeks      |
 | 2 — Correctness & honesty     | 9–13 d      | ~2–3 weeks      | ~4 days       |
 | 3A — Verification             | 11–15 d     | 2–3 weeks       | ~1 week       |
 | 3B — Coverage (may slip)      | 15–25 d     | 3–5 weeks       | ~2 weeks      |
 | 4 — Governance                | 3.5–6 d     | ~1 week         | ~2 days       |
 | 5 — Baselines & operations    | 9–14 d      | 2–3 weeks       | ~1.5 weeks    |
-| **To the tag (1+2+3A+4+5)**   | **67–100 d** | **13–20 weeks** | **~5–7 weeks** |
+| **To the tag (1+2+3A+4+5)**   | **65–97 d**  | **13–19 weeks** | **~5–7 weeks** |
 
 Plus **7–11 days of reserve** for interoperability defects, performance
 regressions, and whatever the soak turns up. Milestone 1.8 carries its own
@@ -306,7 +324,8 @@ ten call sites, and doing them as one change avoids touching 113 test
 occurrences twice. Everything else in Milestone 1 parallelizes.
 
 ```
-1.2 Authorizer ctx  ──▶  1.3 authz cache          6–8 d   ◀── critical path
+1.2 Authorizer ctx  ✅ done 2026-08-21
+        └──────────▶  1.3 authz cache            4–5 d   ◀── critical path
 1.5 durability policy ─▶ 1.10 DLQ + replication ─▶ 3A crash drills   7–10 d
 1.9 admin API auth          (parallel)            5–7 d
 1.6 split-brain             (parallel)            4–6 d
@@ -403,10 +422,16 @@ Negative caching needs its own TTL, shorter than the positive one, so that a
 newly granted permission takes effect promptly while a denial still absorbs a
 flood. That interaction is where the correctness risk sits, not in the LRU.
 
-**Dependency note:** 1.3 without 1.2 is possible — you can cache against a
-context-free interface — but then the cache miss path still cannot be
-cancelled, which leaves the 4.1s stall in place for every cold key. Doing them
-as one change is both cheaper and the only version that actually closes P0-1.
+**Dependency note:** 1.2 shipped alone on 2026-08-21, which is the cheap
+direction to split: all the churn is in 1.2's call sites, and the cache is
+additive on top of an interface that already carries a context, so it needs no
+second pass over them. The reverse split would not have been: caching against a
+context-free interface leaves every cold key stalling uncancellably.
+
+**What that leaves.** P0-1 is open until 1.3 lands. A cache miss is now
+cancellable, so a disconnecting client releases its callout — but a
+callout-configured broker still performs one synchronous round-trip per
+published message.
 
 ---
 
@@ -470,18 +495,56 @@ transport, because clustering is a supported 1.0 feature and queue Raft is not.
 - Schema change, so it lands before the tag with the key named in
   `config/schema_test.go`.
 
-### 1.2 Plumb `context.Context` through the authorization interfaces
+### 1.2 Plumb `context.Context` through the authorization interfaces — ✅ DONE 2026-08-21
 
-**Weight: M · 2–3 days** — wide but shallow; see the critical-path breakdown.
+**Weight: M · 2–3 days — landed in one sitting**, against the estimate. The
+measurement in the critical-path breakdown held: 2 interfaces, 4 production
+implementations, 6 test mocks, 1 struct field, 10 production call sites, and 50
+test call sites, all mechanical.
 
-`broker.Authorizer.CanPublish(clientID, topic) bool` has no context, so
-`broker/authcallout/http.go:130` and `grpc.go:101` pass
-`context.Background()` and the cancellation branch at `options.go:155` is dead
-code. A client disconnect cannot cancel an in-flight authorize; neither can
-shutdown.
+**What shipped**
 
-Breaking interface change — must land before the tag. Do it together with 1.3,
-which touches the same call sites.
+| Change | Where |
+| --- | --- |
+| `Authenticator` and `Authorizer` take a context | `broker/auth.go` |
+| Callouts derive their per-attempt deadline from the caller's context | `broker/authcallout/{http,grpc}.go` |
+| `connCtx` carries a context canceled with that connection | `mqtt/broker/connection.go`, `conn_context.go`, `lifecycle.go` |
+| `HandleConnect` and `runSession` take a context | `mqtt/broker/handler.go`, `v3_handler.go`, `v5_handler.go` |
+| Two `//nolint:contextcheck` suppressions deleted | `mqtt/broker/connection.go` |
+| `NotifyConnect` and `deliverOfflineMessages` take a context | `mqtt/broker/broker.go`, both handlers |
+| Superseded-connection drain inherits the connection's values | `context.WithoutCancel(ctx)` in both handlers |
+
+The AMQP call sites already had `Connection.ctx` in scope. AMQP 1.0 already
+derived it per connection; AMQP 0.9.1 now does the same, so closing one client
+does not cancel another client's work.
+
+**Tests.** Nine cover the context and cancellation contract:
+`TestPublishCarriesConnectionContextToAuthorizer` and its subscribe twin assert
+the authorizer receives the *connection's* context. Generation-scoping tests
+assert that closing one MQTT or AMQP 0.9.1 connection cancels only its own
+context. The MQTT lifecycle test closes the session's real stored connection
+while authorization is blocked and proves both the call and connection handler
+exit. Three callout cancellation tests assert that HTTP and Connect clients
+abandon a request when the caller walks away instead of waiting out a 30s
+timeout and a 10s backoff. A first version of those passed against the unfixed
+code because a fast unrelated failure looks like a fast cancellation; they now
+run against a server that answers only when the caller gives up. The final test
+proves repeated caller cancellations do not open the shared circuit breaker,
+while a real service failure still does.
+
+**`contextcheck` is the regression guard.** With a context in scope, the linter
+flags any downstream call that invents its own — which is how the
+`NotifyConnect` and offline-delivery sites were found. It is enabled in
+`.golangci.yaml` and runs on every PR.
+
+**Left open, deliberately:** `Broker.CreateSession` still takes no context and
+carries a suppression at the two handler call sites. It has 73 call sites and
+its own conversion; `restoreSubscriptionsFromTakeover` is the path that wants
+it. Not on the tag's critical path.
+
+**This does not close P0-1.** Authorization is still one synchronous callout
+per PUBLISH; the context makes it cancellable, not cheap. 1.3 is what closes
+it.
 
 ### 1.3 Cache authorization decisions
 
@@ -959,7 +1022,7 @@ Deferring these is the point of having a roadmap:
 
 - [ ] Raft transport secured (TLS `StreamLayer`); 3 stub RPCs removed from `proto/cluster/v1`
 - [ ] etcd peer and client traffic uses the cluster mTLS identity; clustering without TLS fails to start unless the explicit development-only opt-in is set
-- [ ] `Authorizer` carries `context.Context`
+- [x] `Authorizer` carries `context.Context` — *done 2026-08-21*
 - [ ] Authorization decisions cached; publish-throughput benchmark recorded
 - [ ] Admin API returns 401 without credentials and 403 for an insufficient role, on every route; destructive operations emit structured audit events; non-loopback binds without auth refuse to start
 - [x] Strict config decode; missing config file is a startup error — *done 2026-08-20*

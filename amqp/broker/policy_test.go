@@ -114,7 +114,7 @@ type externalAuthenticatorStub struct {
 	calls int
 }
 
-func (s *externalAuthenticatorStub) Authenticate(_, _, _ string) (*corebroker.AuthnResult, error) {
+func (s *externalAuthenticatorStub) Authenticate(_ context.Context, _, _, _ string) (*corebroker.AuthnResult, error) {
 	s.calls++
 	return &corebroker.AuthnResult{Authenticated: true, ID: "external-principal"}, nil
 }

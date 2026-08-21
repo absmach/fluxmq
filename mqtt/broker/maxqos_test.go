@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -85,7 +86,7 @@ func newMaxQoSBroker(t *testing.T, maxQoS byte, clientVersion byte) (*Broker, *c
 		ReceiveMaximum: 65535,
 		MaxQoS:         b.MaxQoS(),
 	})
-	return b, &connCtx{Session: s, conn: conn, epoch: epoch}, conn
+	return b, &connCtx{Session: s, ctx: context.Background(), conn: conn, epoch: epoch}, conn
 }
 
 // ackTypes reports the acknowledgement packets written to the connection.
@@ -215,7 +216,7 @@ func TestMaxQoS_ReloadDoesNotAffectConnectedClients(t *testing.T) {
 		ReceiveMaximum: 65535,
 		MaxQoS:         b.MaxQoS(),
 	})
-	cc2 := &connCtx{Session: s2, conn: conn2, epoch: epoch2}
+	cc2 := &connCtx{Session: s2, ctx: context.Background(), conn: conn2, epoch: epoch2}
 
 	err = newV5Handler(b).HandlePublish(cc2, &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
@@ -250,7 +251,7 @@ func TestMaxQoS_SupersededConnectDoesNotOverwriteSnapshot(t *testing.T) {
 		"a reload must not reach a connection that was already admitted")
 
 	// The replacement keeps the QoS it was granted.
-	err := newV5Handler(b).HandlePublish(&connCtx{Session: s, conn: replacement, epoch: epoch}, &v5.Publish{
+	err := newV5Handler(b).HandlePublish(&connCtx{Session: s, ctx: context.Background(), conn: replacement, epoch: epoch}, &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 2},
 		TopicName:   testTopic,
 		Payload:     []byte("test data"),

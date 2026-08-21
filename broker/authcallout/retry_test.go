@@ -63,7 +63,7 @@ func TestGRPCClient_RetriesTransientErrors(t *testing.T) {
 		WithRetryMaxBackoff(2*time.Millisecond),
 	)
 
-	result, err := client.Authenticate("c", "u", "p")
+	result, err := client.Authenticate(context.Background(), "c", "u", "p")
 	require.NoError(t, err)
 	assert.True(t, result.Authenticated)
 	assert.Equal(t, int32(3), fake.calls.Load(), "expected 2 failures + 1 success")
@@ -78,7 +78,7 @@ func TestGRPCClient_StopsRetryingWhenBudgetExhausted(t *testing.T) {
 		WithRetryBackoff(time.Millisecond),
 	)
 
-	_, err := client.Authenticate("c", "u", "p")
+	_, err := client.Authenticate(context.Background(), "c", "u", "p")
 	require.Error(t, err)
 	assert.Equal(t, int32(3), fake.calls.Load(), "initial + 2 retries")
 }
@@ -101,6 +101,33 @@ func TestRetriableError(t *testing.T) {
 			assert.Equal(t, tc.want, retriableError(tc.err))
 		})
 	}
+}
+
+func TestExecuteWithBreakerDoesNotCountCallerCancellationAsFailure(t *testing.T) {
+	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.ConsecutiveFailures >= 1
+		},
+	})
+	opts := Options{CB: cb}
+
+	for range 5 {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		_, err := opts.executeWithBreaker(ctx, func() (any, error) {
+			cancel()
+			return nil, errors.Join(errors.New("transport stopped"), ctx.Err())
+		})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, gobreaker.StateClosed, cb.State())
+	}
+	assert.Zero(t, cb.Counts().TotalFailures)
+
+	_, err := opts.executeWithBreaker(context.Background(), func() (any, error) {
+		return nil, errors.New("auth service unavailable")
+	})
+	require.Error(t, err)
+	assert.Equal(t, gobreaker.StateOpen, cb.State(), "real service failures must still trip the breaker")
 }
 
 func TestOptions_BackoffDelay(t *testing.T) {

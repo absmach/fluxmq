@@ -3,7 +3,10 @@
 
 package broker
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Default bounds for the identity cache. These are deliberately conservative;
 // operators with large client populations should raise IdentityCacheSize.
@@ -22,16 +25,25 @@ type AuthnResult struct {
 }
 
 // Authenticator validates client credentials.
+//
+// The context carries the caller's cancellation: an implementation that talks
+// to a remote service must abandon the call when the broker closes the
+// connection or shuts down.
 type Authenticator interface {
-	Authenticate(clientID, username, secret string) (*AuthnResult, error)
+	Authenticate(ctx context.Context, clientID, username, secret string) (*AuthnResult, error)
 }
 
 // Authorizer checks topic permissions.
 // The clientID parameter receives the resolved external identity when
 // available, otherwise the protocol-level client ID.
+//
+// The context carries the caller's cancellation, and on the publish path that
+// is the connection's own context: closing or superseding that connection
+// releases the callout instead of leaving the broker blocked on a decision
+// nobody is waiting for.
 type Authorizer interface {
-	CanPublish(clientID string, topic string) bool
-	CanSubscribe(clientID string, filter string) bool
+	CanPublish(ctx context.Context, clientID string, topic string) bool
+	CanSubscribe(ctx context.Context, clientID string, filter string) bool
 }
 
 // AuthEngineOption configures an AuthEngine.
@@ -86,11 +98,11 @@ func NewAuthEngine(auth Authenticator, authz Authorizer, opts ...AuthEngineOptio
 // On success, also returns the resolved external identity (empty when the
 // authenticator did not provide one) and caches it for subsequent
 // authorization calls.
-func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, string, error) {
+func (e *AuthEngine) Authenticate(ctx context.Context, clientID, username, password string) (bool, string, error) {
 	if e.auth == nil {
 		return true, "", nil
 	}
-	result, err := e.auth.Authenticate(clientID, username, password)
+	result, err := e.auth.Authenticate(ctx, clientID, username, password)
 	if err != nil {
 		return false, "", err
 	}
@@ -106,20 +118,20 @@ func (e *AuthEngine) Authenticate(clientID, username, password string) (bool, st
 
 // CanPublish checks if a client is authorized to publish to a topic.
 // Returns true if authorized or if no authorizer is configured.
-func (e *AuthEngine) CanPublish(clientID, topic string) bool {
+func (e *AuthEngine) CanPublish(ctx context.Context, clientID, topic string) bool {
 	if e.authz == nil {
 		return true
 	}
-	return e.authz.CanPublish(e.resolveID(clientID), topic)
+	return e.authz.CanPublish(ctx, e.resolveID(clientID), topic)
 }
 
 // CanSubscribe checks if a client is authorized to subscribe to a topic filter.
 // Returns true if authorized or if no authorizer is configured.
-func (e *AuthEngine) CanSubscribe(clientID, filter string) bool {
+func (e *AuthEngine) CanSubscribe(ctx context.Context, clientID, filter string) bool {
 	if e.authz == nil {
 		return true
 	}
-	return e.authz.CanSubscribe(e.resolveID(clientID), filter)
+	return e.authz.CanSubscribe(ctx, e.resolveID(clientID), filter)
 }
 
 // Forget removes the cached identity mapping for a client.

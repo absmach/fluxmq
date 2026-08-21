@@ -9,11 +9,16 @@ import (
 	queueTypes "github.com/absmach/fluxmq/queue/types"
 )
 
+const (
+	testQueueMessageID  = "m:1"
+	testUserPropertyVal = "kept"
+)
+
 func TestRouteQueueMessageWirePreservesDeliveryTopic(t *testing.T) {
 	const deliveryTopic = "$queue/m/domain/c/channel/tst"
 
 	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
-		MessageID: "m:1",
+		MessageID: testQueueMessageID,
 		QueueName: "m",
 		GroupID:   "rules-engine",
 		Topic:     deliveryTopic,
@@ -37,14 +42,14 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 	const sourceTopic = "domain/c/channel/tst"
 
 	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
-		MessageID:      "m:1",
+		MessageID:      testQueueMessageID,
 		QueueName:      "m",
 		GroupID:        "rules-engine",
 		Topic:          "$queue/m/domain/c/channel/tst",
 		SourceTopic:    sourceTopic,
 		Payload:        []byte("payload"),
 		Sequence:       1,
-		UserProperties: map[string]string{"user": "kept"},
+		UserProperties: map[string]string{"user": testUserPropertyVal},
 	})
 
 	decoded := decodeRouteQueueMessage(wire)
@@ -56,7 +61,7 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 	if _, leaked := decoded.UserProperties[queueTypes.PropSourceTopic]; leaked {
 		t.Fatal("the source topic leaked into user properties")
 	}
-	if decoded.UserProperties["user"] != "kept" {
+	if decoded.UserProperties["user"] != testUserPropertyVal {
 		t.Fatalf("an ordinary user property was dropped: %v", decoded.UserProperties)
 	}
 }
@@ -66,7 +71,7 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 // reserved property into QueueMessage.SourceTopic.
 func TestRouteQueueMessageWireClearsForgedEmptySourceTopic(t *testing.T) {
 	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
-		MessageID:   "m:1",
+		MessageID:   testQueueMessageID,
 		QueueName:   "m",
 		Topic:       "$queue/m",
 		SourceTopic: "",
@@ -74,7 +79,7 @@ func TestRouteQueueMessageWireClearsForgedEmptySourceTopic(t *testing.T) {
 		Sequence:    1,
 		UserProperties: map[string]string{
 			queueTypes.PropSourceTopic: "forged/topic",
-			"user":                     "kept",
+			"user":                     testUserPropertyVal,
 		},
 	})
 
@@ -89,7 +94,7 @@ func TestRouteQueueMessageWireClearsForgedEmptySourceTopic(t *testing.T) {
 	if _, leaked := decoded.UserProperties[queueTypes.PropSourceTopic]; leaked {
 		t.Fatal("the source topic leaked into user properties")
 	}
-	if decoded.UserProperties["user"] != "kept" {
+	if decoded.UserProperties["user"] != testUserPropertyVal {
 		t.Fatalf("an ordinary user property was dropped: %v", decoded.UserProperties)
 	}
 }

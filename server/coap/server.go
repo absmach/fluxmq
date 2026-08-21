@@ -244,7 +244,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	// Placeholder bridge-level auth hook. A concrete SuperMQ-backed auth
 	// implementation will be wired in a follow-up step.
 	clientID, username, password := authFromQuery(r, remoteAddr)
-	authenticated, externalID, err := s.broker.Authenticate(clientID, username, password)
+	authenticated, externalID, err := s.broker.Authenticate(r.Context(), clientID, username, password)
 	if err != nil || !authenticated {
 		s.logger.Warn("coap_publish_auth_failed",
 			slog.String("client_id", clientID),
@@ -274,7 +274,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 	topic, payload, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
-	if !s.broker.CanPublish(clientID, topic) {
+	if !s.broker.CanPublish(r.Context(), clientID, topic) {
 		s.logger.Warn("coap_publish_forbidden",
 			slog.String("client_id", clientID),
 			slog.String("topic", topic))

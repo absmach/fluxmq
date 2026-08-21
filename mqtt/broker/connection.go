@@ -12,9 +12,31 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
+// cancelOnCloseConnection binds a cancellation function to the connection's
+// Close operation. Session takeover and broker-initiated disconnects close the
+// captured connection from another goroutine, so this is what releases an
+// authorization call that is still running on the superseded generation.
+type cancelOnCloseConnection struct {
+	core.Connection
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnCloseConnection) Close() error {
+	c.cancel()
+	return c.Connection.Close()
+}
+
+func bindConnectionContext(parent context.Context, conn core.Connection) (context.Context, core.Connection, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	return ctx, &cancelOnCloseConnection{Connection: conn, cancel: cancel}, cancel
+}
+
 // HandleConnection handles a new incoming connection from the TCP server.
 // It detects the MQTT protocol version and creates the appropriate handler.
 func HandleConnection(ctx context.Context, broker *Broker, conn core.Connection) {
+	ctx, conn, cancel := bindConnectionContext(ctx, conn)
+	defer cancel()
+
 	pkt, err := conn.ReadPacket()
 	if err != nil {
 		broker.telemetry.stats.IncrementPacketErrors()
@@ -37,7 +59,7 @@ func HandleConnection(ctx context.Context, broker *Broker, conn core.Connection)
 			return
 		}
 		handler := newV3Handler(broker)
-		handler.HandleConnect(conn, p3) //nolint:errcheck,contextcheck // handler manages connection lifecycle; disconnect cleanup uses background context
+		handler.HandleConnect(ctx, conn, p3) //nolint:errcheck // handler manages connection lifecycle
 		return
 	}
 
@@ -50,7 +72,7 @@ func HandleConnection(ctx context.Context, broker *Broker, conn core.Connection)
 			return
 		}
 		handler := newV5Handler(broker)
-		handler.HandleConnect(conn, p5) //nolint:errcheck,contextcheck // handler manages connection lifecycle; disconnect cleanup uses background context
+		handler.HandleConnect(ctx, conn, p5) //nolint:errcheck // handler manages connection lifecycle
 		return
 	}
 

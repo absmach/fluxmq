@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -95,7 +96,7 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 		FixedHeader: packets.FixedHeader{
 			PacketType: packets.ConnectType,
 		},
-		ProtocolName:    "MQTT",
+		ProtocolName:    protocolNameMQTT,
 		ProtocolVersion: 5,
 		ClientID:        "test-client",
 		CleanStart:      true,
@@ -104,7 +105,7 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 
 	t.Log("Calling HandleConnect via v5Handler")
 	handler := newV5Handler(b)
-	err := handler.HandleConnect(conn, connect)
+	err := handler.HandleConnect(context.Background(), conn, connect)
 	t.Logf("HandleConnect returned: %v", err)
 
 	// Expect nil or io.EOF (because runSession exits on EOF)

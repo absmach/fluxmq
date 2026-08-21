@@ -370,17 +370,19 @@ func testMutualTLSConfigs(t *testing.T) (*tls.Config, *tls.Config) {
 
 	caPool := x509.NewCertPool()
 	caPool.AddCert(caCertificate)
-	return &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{serverCertificate},
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			ClientCAs:    caPool,
-		}, &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			ServerName:   testServerName,
-			RootCAs:      caPool,
-			Certificates: []tls.Certificate{clientCertificate},
-		}
+	serverTLS := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{serverCertificate},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caPool,
+	}
+	clientTLS := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		ServerName:   testServerName,
+		RootCAs:      caPool,
+		Certificates: []tls.Certificate{clientCertificate},
+	}
+	return serverTLS, clientTLS
 }
 
 func issueTestCertificate(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, template *x509.Certificate) tls.Certificate {

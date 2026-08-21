@@ -161,7 +161,7 @@ func (l *Link) subscribe() {
 		l.logger.Warn("subscribe hook denied", "client", clientID, "address", address)
 		return
 	}
-	if auth != nil && !auth.CanSubscribe(clientID, address) {
+	if auth != nil && !auth.CanSubscribe(l.session.conn.ctx, clientID, address) {
 		l.logger.Warn("subscribe denied", "client", clientID, "address", address)
 		return
 	}
@@ -307,7 +307,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 		return
 	}
 	topic, data, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
-	if auth != nil && !auth.CanPublish(clientID, topic) {
+	if auth != nil && !auth.CanPublish(l.session.conn.ctx, clientID, topic) {
 		l.logger.Warn("publish denied", "client", clientID, "topic", topic)
 		return
 	}

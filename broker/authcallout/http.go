@@ -74,7 +74,7 @@ func NewHTTPClient(httpClient *http.Client, baseURL string, opts ...Option) *HTT
 }
 
 // Authenticate calls the remote auth service's authenticate endpoint.
-func (c *HTTPClient) Authenticate(clientID, username, secret string) (*broker.AuthnResult, error) {
+func (c *HTTPClient) Authenticate(ctx context.Context, clientID, username, secret string) (*broker.AuthnResult, error) {
 	reqBody := authnRequest{
 		ClientID: clientID,
 		Username: username,
@@ -83,11 +83,11 @@ func (c *HTTPClient) Authenticate(clientID, username, secret string) (*broker.Au
 	}
 
 	var resp authnResponse
-	_, err := c.retryWithBackoff(context.Background(), func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	_, err := c.retryWithBackoff(ctx, func() (any, error) {
+		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
-		return c.CB.Execute(func() (any, error) {
-			return nil, c.doPost(ctx, "/auth/authenticate", reqBody, &resp)
+		return c.executeWithBreaker(ctx, func() (any, error) {
+			return nil, c.doPost(attempt, "/auth/authenticate", reqBody, &resp)
 		})
 	}, retriableError)
 	if err != nil {
@@ -110,16 +110,16 @@ func (c *HTTPClient) Authenticate(clientID, username, secret string) (*broker.Au
 }
 
 // CanPublish calls the remote auth service's authorize endpoint for publish.
-func (c *HTTPClient) CanPublish(clientID string, topic string) bool {
-	return c.authorize(clientID, topic, "publish")
+func (c *HTTPClient) CanPublish(ctx context.Context, clientID string, topic string) bool {
+	return c.authorize(ctx, clientID, topic, "publish")
 }
 
 // CanSubscribe calls the remote auth service's authorize endpoint for subscribe.
-func (c *HTTPClient) CanSubscribe(clientID string, filter string) bool {
-	return c.authorize(clientID, filter, "subscribe")
+func (c *HTTPClient) CanSubscribe(ctx context.Context, clientID string, filter string) bool {
+	return c.authorize(ctx, clientID, filter, "subscribe")
 }
 
-func (c *HTTPClient) authorize(externalID, topic, action string) bool {
+func (c *HTTPClient) authorize(ctx context.Context, externalID, topic, action string) bool {
 	reqBody := authzRequest{
 		ExternalID: externalID,
 		Topic:      topic,
@@ -127,11 +127,11 @@ func (c *HTTPClient) authorize(externalID, topic, action string) bool {
 	}
 
 	var resp authzResponse
-	_, err := c.retryWithBackoff(context.Background(), func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	_, err := c.retryWithBackoff(ctx, func() (any, error) {
+		attempt, cancel := context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
-		return c.CB.Execute(func() (any, error) {
-			return nil, c.doPost(ctx, "/auth/authorize", reqBody, &resp)
+		return c.executeWithBreaker(ctx, func() (any, error) {
+			return nil, c.doPost(attempt, "/auth/authorize", reqBody, &resp)
 		})
 	}, retriableError)
 	if err != nil {

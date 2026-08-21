@@ -349,7 +349,7 @@ type mockAuth struct {
 	acceptPass string
 }
 
-func (m *mockAuth) Authenticate(clientID, username, password string) (*broker.AuthnResult, error) {
+func (m *mockAuth) Authenticate(_ context.Context, clientID, username, password string) (*broker.AuthnResult, error) {
 	return &broker.AuthnResult{
 		Authenticated: username == m.acceptUser && password == m.acceptPass,
 	}, nil
@@ -357,8 +357,8 @@ func (m *mockAuth) Authenticate(clientID, username, password string) (*broker.Au
 
 type mockAuthz struct{}
 
-func (m *mockAuthz) CanPublish(clientID, topic string) bool    { return true }
-func (m *mockAuthz) CanSubscribe(clientID, filter string) bool { return true }
+func (m *mockAuthz) CanPublish(_ context.Context, clientID, topic string) bool    { return true }
+func (m *mockAuthz) CanSubscribe(_ context.Context, clientID, filter string) bool { return true }
 
 func TestIntegrationSASLPlainAuth(t *testing.T) {
 	b := amqpbroker.New(nil, nil, nil)

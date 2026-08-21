@@ -168,7 +168,7 @@ func (c *Connection) handleSASL() error {
 			return fmt.Errorf("PLAIN auth failed: %w", err)
 		}
 		if auth := c.broker.auth; auth != nil {
-			ok, _, authErr := auth.Authenticate(username, username, password)
+			ok, _, authErr := auth.Authenticate(c.ctx, username, username, password)
 			if authErr != nil || !ok {
 				c.broker.stats.IncrementAuthErrors()
 				if m := c.broker.metrics; m != nil {

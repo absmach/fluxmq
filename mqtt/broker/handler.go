@@ -60,7 +60,7 @@ func maybeUpdateQueueHeartbeat(b *Broker, s *session.Session) {
 // to or disconnect the connection that replaced it.
 type protocolHandler interface {
 	// HandleConnect handles CONNECT packets.
-	HandleConnect(conn core.Connection, pkt packets.ControlPacket) error
+	HandleConnect(ctx context.Context, conn core.Connection, pkt packets.ControlPacket) error
 
 	// HandlePublish handles PUBLISH packets.
 	HandlePublish(s *connCtx, pkt packets.ControlPacket) error

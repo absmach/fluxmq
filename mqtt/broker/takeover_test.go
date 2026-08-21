@@ -245,7 +245,7 @@ func v5ConnectWillDelay(clientID, willTopic string, willPayload []byte, willDela
 // bindConn wraps a session in a connCtx bound to its current connection
 // generation, for tests that call Handle* methods directly.
 func bindConn(s *session.Session) *connCtx {
-	return &connCtx{Session: s, conn: s.Conn(), epoch: s.Epoch()}
+	return &connCtx{Session: s, ctx: context.Background(), conn: s.Conn(), epoch: s.Epoch()}
 }
 
 const protocolNameMQTT = "MQTT"
@@ -291,7 +291,7 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 	oldWG.Add(1)
 	go func() {
 		defer oldWG.Done()
-		h.HandleConnect(oldConn, v3Connect(clientID)) //nolint:errcheck // returns io.EOF on takeover
+		h.HandleConnect(context.Background(), oldConn, v3Connect(clientID)) //nolint:errcheck // returns io.EOF on takeover
 	}()
 
 	// Wait until the old connection's session is registered and reading.
@@ -308,7 +308,7 @@ func TestHandleConnect_LocalTakeoverHighLatencyReconnect(t *testing.T) {
 	newWG.Add(1)
 	go func() {
 		defer newWG.Done()
-		h.HandleConnect(newConn, v3Connect(clientID)) //nolint:errcheck // closed at cleanup
+		h.HandleConnect(context.Background(), newConn, v3Connect(clientID)) //nolint:errcheck // closed at cleanup
 	}()
 
 	// Old runSession goroutine unblocks (its socket was closed) and exits.
@@ -367,7 +367,7 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 	oldWG.Add(1)
 	go func() {
 		defer oldWG.Done()
-		h.HandleConnect(oldConn, v3Connect(clientID)) //nolint:errcheck
+		h.HandleConnect(context.Background(), oldConn, v3Connect(clientID)) //nolint:errcheck
 	}()
 
 	<-oldConn.reading
@@ -383,7 +383,7 @@ func TestHandleConnect_StaleDisconnectDoesNotCloseReplacement(t *testing.T) {
 	newWG.Add(1)
 	go func() {
 		defer newWG.Done()
-		h.HandleConnect(newConn, v3Connect(clientID)) //nolint:errcheck
+		h.HandleConnect(context.Background(), newConn, v3Connect(clientID)) //nolint:errcheck
 	}()
 
 	<-newConn.reading
@@ -435,7 +435,7 @@ func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
 	oldWG.Add(1)
 	go func() {
 		defer oldWG.Done()
-		h.HandleConnect(oldConn, v3Connect(clientID)) //nolint:errcheck
+		h.HandleConnect(context.Background(), oldConn, v3Connect(clientID)) //nolint:errcheck
 	}()
 
 	<-oldConn.reading
@@ -454,7 +454,7 @@ func TestHandleConnect_TakeoverNotBlockedByStalledWrite(t *testing.T) {
 	newWG.Add(1)
 	go func() {
 		defer newWG.Done()
-		h.HandleConnect(newConn, v3Connect(clientID)) //nolint:errcheck
+		h.HandleConnect(context.Background(), newConn, v3Connect(clientID)) //nolint:errcheck
 	}()
 
 	<-newConn.reading
@@ -498,7 +498,7 @@ func TestHandleConnect_RepeatedTakeoversDoNotLeakConnectionCount(t *testing.T) {
 		wg.Add(1)
 		go func(c *blockingConn) {
 			defer wg.Done()
-			h.HandleConnect(c, v3Connect(clientID)) //nolint:errcheck
+			h.HandleConnect(context.Background(), c, v3Connect(clientID)) //nolint:errcheck
 		}(conns[i])
 
 		<-conns[i].reading
@@ -554,7 +554,7 @@ func TestHandleConnect_StalePublishNotDispatched(t *testing.T) {
 	oldWG.Add(1)
 	go func() {
 		defer oldWG.Done()
-		h.HandleConnect(oldConn, v3Connect(pubID)) //nolint:errcheck
+		h.HandleConnect(context.Background(), oldConn, v3Connect(pubID)) //nolint:errcheck
 	}()
 
 	<-oldConn.reading
@@ -569,7 +569,7 @@ func TestHandleConnect_StalePublishNotDispatched(t *testing.T) {
 	newWG.Add(1)
 	go func() {
 		defer newWG.Done()
-		h.HandleConnect(newConn, v3Connect(pubID)) //nolint:errcheck
+		h.HandleConnect(context.Background(), newConn, v3Connect(pubID)) //nolint:errcheck
 	}()
 
 	<-newConn.reading
@@ -616,7 +616,7 @@ func TestHandleConnect_V5TakeoverNotifiesAndPublishesWill(t *testing.T) {
 	oldWG.Add(1)
 	go func() {
 		defer oldWG.Done()
-		h.HandleConnect(oldConn, v5Connect(clientID, willTopic, []byte("offline"))) //nolint:errcheck
+		h.HandleConnect(context.Background(), oldConn, v5Connect(clientID, willTopic, []byte("offline"))) //nolint:errcheck
 	}()
 
 	<-oldConn.reading
@@ -631,7 +631,7 @@ func TestHandleConnect_V5TakeoverNotifiesAndPublishesWill(t *testing.T) {
 	newWG.Add(1)
 	go func() {
 		defer newWG.Done()
-		h.HandleConnect(newConn, v5Connect(clientID, "", nil)) //nolint:errcheck
+		h.HandleConnect(context.Background(), newConn, v5Connect(clientID, "", nil)) //nolint:errcheck
 	}()
 
 	<-newConn.reading
@@ -690,7 +690,7 @@ func TestHandleConnect_V5TakeoverDelayedWillNotPublished(t *testing.T) {
 	oldWG.Add(1)
 	go func() {
 		defer oldWG.Done()
-		h.HandleConnect(oldConn, v5ConnectWillDelay(clientID, willTopic, []byte("offline"), 60)) //nolint:errcheck
+		h.HandleConnect(context.Background(), oldConn, v5ConnectWillDelay(clientID, willTopic, []byte("offline"), 60)) //nolint:errcheck
 	}()
 
 	<-oldConn.reading
@@ -704,7 +704,7 @@ func TestHandleConnect_V5TakeoverDelayedWillNotPublished(t *testing.T) {
 	newWG.Add(1)
 	go func() {
 		defer newWG.Done()
-		h.HandleConnect(newConn, v5Connect(clientID, "", nil)) //nolint:errcheck
+		h.HandleConnect(context.Background(), newConn, v5Connect(clientID, "", nil)) //nolint:errcheck
 	}()
 
 	<-newConn.reading
@@ -823,7 +823,7 @@ func TestConnAck_AdvertisesServerReceiveMaximum(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		h.HandleConnect(conn, v5Connect("c", "", nil)) //nolint:errcheck
+		h.HandleConnect(context.Background(), conn, v5Connect("c", "", nil)) //nolint:errcheck
 	}()
 
 	<-conn.reading

@@ -51,6 +51,7 @@ type Connection struct {
 	reader *bufio.Reader
 	writer *bufio.Writer
 	ctx    context.Context
+	cancel context.CancelFunc
 	policy *ConnectionPolicy
 	peer   VerifiedPeerIdentity
 
@@ -88,12 +89,14 @@ type queueRegistration struct {
 }
 
 func newConnection(ctx context.Context, b *Broker, netConn net.Conn, policy *ConnectionPolicy) *Connection {
+	connCtx, cancel := context.WithCancel(ctx)
 	c := &Connection{
 		broker:             b,
 		conn:               netConn,
 		reader:             bufio.NewReaderSize(netConn, 65536),
 		writer:             bufio.NewWriterSize(netConn, 65536),
-		ctx:                ctx,
+		ctx:                connCtx,
+		cancel:             cancel,
 		policy:             policy,
 		frameMax:           defaultFrameMax,
 		channelMax:         defaultChannelMax,
@@ -522,7 +525,7 @@ func (c *Connection) authenticateCredentials(mechanism, username, password strin
 	if policy.externalAuth == nil {
 		return nil
 	}
-	ok, _, err := policy.externalAuth.Authenticate(clientID, username, password)
+	ok, _, err := policy.externalAuth.Authenticate(c.ctx, clientID, username, password)
 	if err != nil || !ok {
 		_ = c.sendConnectionClose(codec.AccessRefused, "authentication failed", codec.ClassConnection, codec.MethodConnectionStartOk)
 		return fmt.Errorf("%s auth rejected for user %q", mechanism, username)
@@ -821,6 +824,9 @@ func (c *Connection) heartbeatMonitor() {
 
 func (c *Connection) close() {
 	c.closeOnce.Do(func() {
+		if c.cancel != nil {
+			c.cancel()
+		}
 		c.closed.Store(true)
 		close(c.closeCh)
 	})

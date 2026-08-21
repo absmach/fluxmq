@@ -4,6 +4,7 @@
 package authcallout
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -56,7 +57,7 @@ func TestHTTPClient_Authenticate_Success(t *testing.T) {
 		WithProtocol(ProtocolMQTT),
 	)
 
-	result, err := client.Authenticate("client-1", "user", "pass")
+	result, err := client.Authenticate(context.Background(), "client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, result.Authenticated)
 	assert.Equal(t, testExternalID, result.ID)
@@ -75,7 +76,7 @@ func TestHTTPClient_Authenticate_Denied(t *testing.T) {
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
 
-	result, err := client.Authenticate("client-1", "user", "wrong")
+	result, err := client.Authenticate(context.Background(), "client-1", "user", "wrong")
 	require.NoError(t, err)
 	assert.False(t, result.Authenticated)
 }
@@ -89,7 +90,7 @@ func TestHTTPClient_Authenticate_ServerError(t *testing.T) {
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
 
-	result, err := client.Authenticate("client-1", "user", "pass")
+	result, err := client.Authenticate(context.Background(), "client-1", "user", "pass")
 	require.Error(t, err)
 	assert.False(t, result.Authenticated)
 }
@@ -108,7 +109,7 @@ func TestHTTPClient_CanPublish_Allowed(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.True(t, client.CanPublish(testExternalID, "sensors/temp"))
+	assert.True(t, client.CanPublish(context.Background(), testExternalID, "sensors/temp"))
 }
 
 func TestHTTPClient_CanPublish_Denied(t *testing.T) {
@@ -123,7 +124,7 @@ func TestHTTPClient_CanPublish_Denied(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.False(t, client.CanPublish(testExternalID, "sensors/temp"))
+	assert.False(t, client.CanPublish(context.Background(), testExternalID, "sensors/temp"))
 }
 
 func TestHTTPClient_CanSubscribe_Allowed(t *testing.T) {
@@ -138,7 +139,7 @@ func TestHTTPClient_CanSubscribe_Allowed(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.True(t, client.CanSubscribe(testExternalID, "sensors/#"))
+	assert.True(t, client.CanSubscribe(context.Background(), testExternalID, "sensors/#"))
 }
 
 func TestHTTPClient_CanSubscribe_ServerError(t *testing.T) {
@@ -148,7 +149,7 @@ func TestHTTPClient_CanSubscribe_ServerError(t *testing.T) {
 		})
 
 	client := NewHTTPClient(srv.Client(), srv.URL, WithLogger(discardLogger()))
-	assert.False(t, client.CanSubscribe(testExternalID, "sensors/#"))
+	assert.False(t, client.CanSubscribe(context.Background(), testExternalID, "sensors/#"))
 }
 
 func TestHTTPClient_ProtocolStrings(t *testing.T) {
@@ -175,7 +176,7 @@ func TestHTTPClient_ProtocolStrings(t *testing.T) {
 			WithLogger(discardLogger()),
 			WithProtocol(tt.protocol),
 		)
-		_, err := client.Authenticate("c", "u", "p")
+		_, err := client.Authenticate(context.Background(), "c", "u", "p")
 		require.NoError(t, err)
 		assert.Equal(t, tt.expected, captured.Protocol, "protocol=%v", tt.protocol)
 	}

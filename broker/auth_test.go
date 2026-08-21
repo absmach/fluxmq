@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ type stubAuthenticator struct {
 	err    error
 }
 
-func (s *stubAuthenticator) Authenticate(clientID, username, secret string) (*AuthnResult, error) {
+func (s *stubAuthenticator) Authenticate(_ context.Context, clientID, username, secret string) (*AuthnResult, error) {
 	return s.result, s.err
 }
 
@@ -33,19 +34,19 @@ type stubAuthorizer struct {
 	allow            bool
 }
 
-func (s *stubAuthorizer) CanPublish(clientID, topic string) bool {
+func (s *stubAuthorizer) CanPublish(_ context.Context, clientID, topic string) bool {
 	s.receivedClientID = clientID
 	return s.allow
 }
 
-func (s *stubAuthorizer) CanSubscribe(clientID, filter string) bool {
+func (s *stubAuthorizer) CanSubscribe(_ context.Context, clientID, filter string) bool {
 	s.receivedClientID = clientID
 	return s.allow
 }
 
 func TestAuthEngine_Authenticate_NilAuth(t *testing.T) {
 	e := NewAuthEngine(nil, nil)
-	ok, externalID, err := e.Authenticate("c1", "user", "pass")
+	ok, externalID, err := e.Authenticate(context.Background(), "c1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, "", externalID)
@@ -56,13 +57,13 @@ func TestAuthEngine_Authenticate_Success_StoresIdentity(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
-	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "pass")
+	ok, externalID, err := e.Authenticate(context.Background(), "mqtt-client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, testExternalID, externalID)
 
 	// Authz should receive the resolved external ID, not the MQTT client ID
-	e.CanPublish("mqtt-client-1", "some/topic")
+	e.CanPublish(context.Background(), "mqtt-client-1", "some/topic")
 	assert.Equal(t, testExternalID, authz.receivedClientID)
 }
 
@@ -70,7 +71,7 @@ func TestAuthEngine_ExternalID_ReturnsStoredIdentity(t *testing.T) {
 	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: testExternalID}}
 	e := NewAuthEngine(authn, nil)
 
-	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "pass")
+	ok, externalID, err := e.Authenticate(context.Background(), "mqtt-client-1", "user", "pass")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, testExternalID, externalID)
@@ -84,24 +85,24 @@ func TestAuthEngine_Authenticate_Failure_NoIdentityStored(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
-	ok, externalID, err := e.Authenticate("mqtt-client-1", "user", "wrong")
+	ok, externalID, err := e.Authenticate(context.Background(), "mqtt-client-1", "user", "wrong")
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Equal(t, "", externalID)
 
 	// No identity mapping — authz receives the raw MQTT client ID
-	e.CanPublish("mqtt-client-1", "some/topic")
+	e.CanPublish(context.Background(), "mqtt-client-1", "some/topic")
 	assert.Equal(t, "mqtt-client-1", authz.receivedClientID)
 }
 
 func TestAuthEngine_CanPublish_NilAuthz(t *testing.T) {
 	e := NewAuthEngine(nil, nil)
-	assert.True(t, e.CanPublish("c1", "topic"))
+	assert.True(t, e.CanPublish(context.Background(), "c1", "topic"))
 }
 
 func TestAuthEngine_CanSubscribe_NilAuthz(t *testing.T) {
 	e := NewAuthEngine(nil, nil)
-	assert.True(t, e.CanSubscribe("c1", "filter"))
+	assert.True(t, e.CanSubscribe(context.Background(), "c1", "filter"))
 }
 
 func TestAuthEngine_Forget_RemovesMapping(t *testing.T) {
@@ -109,12 +110,12 @@ func TestAuthEngine_Forget_RemovesMapping(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(authn, authz)
 
-	_, _, err := e.Authenticate("mqtt-client-2", "user", "pass")
+	_, _, err := e.Authenticate(context.Background(), "mqtt-client-2", "user", "pass")
 	assert.Nil(t, err, "auth err")
 	e.Forget("mqtt-client-2")
 
 	// After Forget, authz receives the raw MQTT client ID
-	e.CanPublish("mqtt-client-2", "some/topic")
+	e.CanPublish(context.Background(), "mqtt-client-2", "some/topic")
 	assert.Equal(t, "mqtt-client-2", authz.receivedClientID)
 }
 
@@ -122,7 +123,7 @@ func TestAuthEngine_ResolveID_NoMapping(t *testing.T) {
 	authz := &stubAuthorizer{allow: true}
 	e := NewAuthEngine(nil, authz)
 
-	e.CanPublish("plain-client", "topic")
+	e.CanPublish(context.Background(), "plain-client", "topic")
 	assert.Equal(t, "plain-client", authz.receivedClientID)
 }
 
@@ -132,7 +133,7 @@ func TestAuthEngine_IdentityCacheBoundedBySize(t *testing.T) {
 
 	for i := range 10 {
 		// Each call inserts a fresh mapping; older ones must be evicted.
-		_, _, err := e.Authenticate("client-"+strconv.Itoa(i), "u", "p")
+		_, _, err := e.Authenticate(context.Background(), "client-"+strconv.Itoa(i), "u", "p")
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 3, e.IdentityCacheLen(), "cache must respect size cap")
@@ -142,7 +143,7 @@ func TestAuthEngine_IdentityCacheTTLExpires(t *testing.T) {
 	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: "ext-1"}}
 	e := NewAuthEngine(authn, nil, WithIdentityCache(10, 10*time.Millisecond))
 
-	_, _, err := e.Authenticate("c1", "u", "p")
+	_, _, err := e.Authenticate(context.Background(), "c1", "u", "p")
 	require.NoError(t, err)
 	assert.Equal(t, "ext-1", e.ExternalID("c1"))
 

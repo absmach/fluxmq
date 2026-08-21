@@ -159,6 +159,37 @@ func (o Options) retryWithBackoff(ctx context.Context, fn func() (any, error), s
 	return nil, lastErr
 }
 
+// executeWithBreaker runs one callout attempt through the configured circuit
+// breaker without treating caller cancellation as evidence that the auth
+// service is unhealthy. The breaker API determines success from the error
+// returned by its callback, so a cancellation has to travel in the result and
+// be restored after Execute returns. This also works for caller-provided
+// breakers whose IsSuccessful policy FluxMQ does not control.
+func (o Options) executeWithBreaker(ctx context.Context, fn func() (any, error)) (any, error) {
+	type canceledResult struct {
+		value any
+		err   error
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	result, err := o.CB.Execute(func() (any, error) {
+		value, callErr := fn()
+		if callErr != nil && ctx.Err() != nil && errors.Is(callErr, ctx.Err()) {
+			return canceledResult{value: value, err: callErr}, nil
+		}
+		return value, callErr
+	})
+	if err != nil {
+		return result, err
+	}
+	if canceled, ok := result.(canceledResult); ok {
+		return canceled.value, canceled.err
+	}
+	return result, nil
+}
+
 func (o Options) backoffDelay(attempt int) time.Duration {
 	base := o.RetryBackoff
 	if base <= 0 {
