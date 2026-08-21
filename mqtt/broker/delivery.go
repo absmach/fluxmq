@@ -15,6 +15,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/session"
+	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
@@ -194,12 +195,48 @@ func (b *Broker) deliverOffline(s *session.Session, msg *storage.Message) (uint1
 }
 
 // AckMessage acknowledges a message by packet ID and releases the buffer.
+// ackQueueDelivery settles a queue message whose delivery the client has just
+// acknowledged at the protocol level.
+//
+// A queue consumer normally acknowledges by publishing to <address>/$ack with
+// the message and group identifiers in message properties. MQTT 3.1.1 has no
+// property field, so a 3.1.1 consumer can neither read those identifiers nor
+// send them back, and its messages would sit in the pending list until they
+// exhausted their delivery budget. The broker already knows the identifiers —
+// it stamped them onto the delivery — so it settles the message on PUBACK or
+// PUBCOMP instead.
+//
+// This means "received", not "processed", which is exactly what QoS 1 means
+// everywhere else in this broker. A consumer that needs to reject or retry a
+// message explicitly needs properties, and therefore MQTT 5.0 or AMQP.
+func (b *Broker) ackQueueDelivery(msg *storage.Message) {
+	if b.queueManager == nil || msg == nil || msg.Properties == nil {
+		return
+	}
+
+	queueName := msg.Properties[types.PropQueueName]
+	messageID := msg.Properties[types.PropMessageID]
+	groupID := msg.Properties[types.PropGroupID]
+	if queueName == "" || messageID == "" || groupID == "" {
+		return
+	}
+
+	if err := b.queueManager.Ack(context.Background(), queueName, messageID, groupID); err != nil {
+		b.logError("queue_ack_on_delivery_ack", err,
+			slog.String("queue", queueName),
+			slog.String("message_id", messageID),
+			slog.String("group_id", groupID))
+	}
+}
+
 func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	msg, err := s.Inflight().Ack(packetID)
 	if err != nil {
 		return err
 	}
 	if msg != nil {
+		// Read the queue metadata before the message goes back to the pool.
+		b.ackQueueDelivery(msg)
 		msg.ReleasePayload()
 		storage.ReleaseMessage(msg)
 	}

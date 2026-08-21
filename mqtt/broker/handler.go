@@ -16,19 +16,23 @@ import (
 
 // Common handler errors.
 var (
-	ErrProtocolViolation   = errors.New("protocol violation")
-	ErrNotAuthorized       = errors.New("not authorized")
-	ErrBadUserOrPassword   = errors.New("bad username or password")
-	ErrClientIDRejected    = errors.New("client identifier rejected")
-	ErrClientIDRequired    = errors.New("client identifier required")
-	ErrServerUnavailable   = errors.New("server unavailable")
-	ErrTopicInvalid        = errors.New("topic name invalid")
-	ErrPacketTooLarge      = errors.New("packet too large")
-	ErrQuotaExceeded       = errors.New("quota exceeded")
-	ErrMaxSessionsExceeded = errors.New("maximum sessions exceeded")
-	ErrInvalidPacketType   = errors.New("invalid packet type")
-	ErrSessionNotFound     = errors.New("session not found")
-	ErrQoSNotSupported     = errors.New("QoS not supported")
+	ErrProtocolViolation = errors.New("protocol violation")
+	ErrNotAuthorized     = errors.New("not authorized")
+	ErrBadUserOrPassword = errors.New("bad username or password")
+	ErrClientIDRejected  = errors.New("client identifier rejected")
+	ErrClientIDRequired  = errors.New("client identifier required")
+	// ErrQueueSubscriptionRequiresQoS rejects a QoS 0 subscription to a classic
+	// queue: the broker settles a queue delivery when the client acknowledges
+	// it, and QoS 0 has no acknowledgement to settle on.
+	ErrQueueSubscriptionRequiresQoS = errors.New("classic queue subscription requires QoS 1 or 2")
+	ErrServerUnavailable            = errors.New("server unavailable")
+	ErrTopicInvalid                 = errors.New("topic name invalid")
+	ErrPacketTooLarge               = errors.New("packet too large")
+	ErrQuotaExceeded                = errors.New("quota exceeded")
+	ErrMaxSessionsExceeded          = errors.New("maximum sessions exceeded")
+	ErrInvalidPacketType            = errors.New("invalid packet type")
+	ErrSessionNotFound              = errors.New("session not found")
+	ErrQoSNotSupported              = errors.New("QoS not supported")
 )
 
 const (

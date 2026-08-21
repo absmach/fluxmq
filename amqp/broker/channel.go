@@ -690,6 +690,12 @@ func (ch *Channel) completePublish() {
 		case corebroker.RouteQueue:
 			ch.handleQueuePublish(route.PublishTopic, body, props, clientID)
 			return
+		case corebroker.RouteQueueMalformed:
+			// Publishing it would enqueue a message into the queue the client
+			// was trying to control.
+			ch.conn.logger.Warn("queue control verb is not the last level",
+				"topic", topic, "verb", route.ControlVerb)
+			return
 		case corebroker.RouteQueueAck:
 			// AMQP 0.9.1 does not use ack-via-publish; skip.
 		case corebroker.RoutePubSub:
