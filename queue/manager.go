@@ -2394,9 +2394,7 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 	props[types.PropGroupID] = msg.GroupID
 	props[types.PropQueueName] = queueName
 	props[types.PropOffset] = strconv.FormatInt(msg.Sequence, 10)
-	if msg.SourceTopic != "" {
-		props[types.PropSourceTopic] = msg.SourceTopic
-	}
+	props[types.PropSourceTopic] = msg.SourceTopic
 
 	if msg.Stream {
 		props[types.PropStreamOffset] = strconv.FormatInt(msg.StreamOffset, 10)

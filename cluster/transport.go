@@ -1327,9 +1327,10 @@ func encodeRouteQueueMessage(clientID, queueName string, msg *QueueMessage) *clu
 		properties[queueTypes.PropQueueName] = queueName
 	}
 	properties[queueTypes.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
-	if msg.SourceTopic != "" {
-		properties[queueTypes.PropSourceTopic] = msg.SourceTopic
-	}
+	// Source topic is broker-owned even when empty. Stamping the zero value is
+	// what clears a publisher-supplied property copied above instead of letting
+	// the decoder promote it into trusted queue metadata.
+	properties[queueTypes.PropSourceTopic] = msg.SourceTopic
 	if msg.Stream {
 		properties[queueTypes.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
 		if msg.StreamTimestamp != 0 {

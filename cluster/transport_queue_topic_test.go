@@ -60,3 +60,36 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 		t.Fatalf("an ordinary user property was dropped: %v", decoded.UserProperties)
 	}
 }
+
+// Source topic is broker-owned even when its real value is empty. The encoder
+// must overwrite a publisher-supplied value before the decoder promotes the
+// reserved property into QueueMessage.SourceTopic.
+func TestRouteQueueMessageWireClearsForgedEmptySourceTopic(t *testing.T) {
+	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
+		MessageID:   "m:1",
+		QueueName:   "m",
+		Topic:       "$queue/m",
+		SourceTopic: "",
+		Payload:     []byte("payload"),
+		Sequence:    1,
+		UserProperties: map[string]string{
+			queueTypes.PropSourceTopic: "forged/topic",
+			"user":                     "kept",
+		},
+	})
+
+	if sourceTopic, ok := wire.Properties[queueTypes.PropSourceTopic]; !ok || sourceTopic != "" {
+		t.Fatalf("wire source topic = %q, present=%t; want an explicit empty broker value", sourceTopic, ok)
+	}
+
+	decoded := decodeRouteQueueMessage(wire)
+	if decoded.SourceTopic != "" {
+		t.Fatalf("decoded source topic = %q, want the real empty source topic", decoded.SourceTopic)
+	}
+	if _, leaked := decoded.UserProperties[queueTypes.PropSourceTopic]; leaked {
+		t.Fatal("the source topic leaked into user properties")
+	}
+	if decoded.UserProperties["user"] != "kept" {
+		t.Fatalf("an ordinary user property was dropped: %v", decoded.UserProperties)
+	}
+}
