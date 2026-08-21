@@ -30,9 +30,23 @@ is expensive or impossible to change afterward:
 3. **The YAML configuration schema** — key names, and the absent-vs-zero
    semantics of every limit.
 4. **The queue delivery address** — what a consumer receives and how it
-   recovers the source topic. Settled in `9cceb7335`: the address is a queue
-   identifier, and the origin travels in the broker-owned
-   `types.PropSourceTopic` property (`queue/delivery_engine.go:624`).
+   recovers the source topic. `9cceb7335` settled it *for protocols that carry
+   message properties*: the address identifies the queue, and the origin travels
+   in the broker-owned `types.PropSourceTopic` property
+   (`queue/delivery_engine.go:624`). **MQTT 3.1.1 has no property field**
+   (`mqtt/session/encode.go:57-68`), so a 3.1.1 consumer of a captured message
+   receives an address that is deliberately not injective and no way to recover
+   the origin. Decide before the tag whether that is the contract or a gap.
+
+   **Making the address injective does not work.** Delivering every capture as
+   `$queue/<queue>/<source>` unconditionally leaves the collision intact: a
+   capture of `acme/temp` into queue `m` still renders as `$queue/m/acme/temp`,
+   which is exactly what an explicit publish to that address renders as.
+   Separating them needs an escape or a marker level imposed on every protocol
+   to serve the one that cannot read properties. **Recommendation: qualify the
+   claim in the support matrix — a 3.1.1 consumer of a *captured* message gets
+   the queue identity only — rather than complicate the wire.** Explicit queue
+   publishes are unaffected everywhere; their address is already canonical.
 5. **The admin API surface and its authentication model** — route paths, role
    names, and where the token comes from. Adding auth after 1.0 breaks every
    deployment that was relying on its absence.
@@ -83,6 +97,20 @@ a8d2eb5c7  refactor(config): keep the filesystem out of configuration validation
 
 Companion commit in magistrala, branch `fluxmq-server-mqtt`:
 `711da6912  NOISSUE - Move FluxMQ MQTT listeners under server.mqtt`.
+
+> **Blocking precondition for merging this branch, raised in review.** Every
+> push to FluxMQ `main` publishes `ghcr.io/absmach/fluxmq:latest`
+> (`.github/workflows/build.yml:4-7`), magistrala's `docker/.env` consumes that
+> tag, and its three node configs still write the removed `server.tcp` /
+> `server.websocket` keys. Merging first means all three brokers fail strict
+> decoding and restart-loop. `711da6912` exists only locally — no remote branch,
+> no PR.
+>
+> Order that works: pin magistrala to the last released tag → merge and publish
+> FluxMQ → update magistrala's configs → unpin. The load path now names the
+> replacement (`server.tcp is no longer supported; use server.mqtt.tcp`) instead
+> of reporting an unknown field, which makes the failure legible — **it does not
+> make it survivable.** Sequencing is the fix.
 
 **Decision taken:** the listener schema is `server.mqtt.tcp.v3`, not the
 unmerged `config` branch's `listeners.mqtt[]` document model. The `config`
@@ -194,7 +222,7 @@ genuinely differed and where the decision has already been taken and shipped.
 | ------------------------------- | -------------------------------------------------------------- |
 | Capture off the publish hot path | `queue/capture.go`, bounded per-queue lanes, `queues.capture_dropped` |
 | Topic matching by trie           | `queue/storage/patterntrie.go` — flat 37–325 ns from 8 to 8192 patterns |
-| Queue delivery address settled   | `types.PropSourceTopic`, `queue/delivery_engine.go:624`         |
+| Queue delivery address settled — for protocols with properties | `types.PropSourceTopic`, `queue/delivery_engine.go:624`. MQTT 3.1.1 cannot carry it |
 | AMQP 0.9.1 handshake deadline    | `server/amqp/server.go:155` — AMQP 1.0 still unbounded, now 1.11 |
 
 Two follow-ups ride along with those: bound the capture backlog by bytes rather
@@ -925,7 +953,8 @@ Deferring these is the point of having a roadmap:
 - [ ] Admin API returns 401 without credentials and 403 for an insufficient role, on every route; destructive operations emit structured audit events; non-loopback binds without auth refuse to start
 - [x] Strict config decode; missing config file is a startup error — *done 2026-08-20*
 - [x] MQTT listeners moved under `server.mqtt`; types renamed — *done 2026-08-20*
-- [x] Queue delivery address settled; source topic recoverable from `types.PropSourceTopic` — *done 2026-08-20*
+- [x] Queue delivery address settled for MQTT 5.0 and both AMQP versions; origin in `types.PropSourceTopic` — *done 2026-08-20*
+- [ ] MQTT 3.1.1 source-topic recovery decided: contract, or documented gap in the support matrix
 - [ ] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open
 
 **Durability and correctness**

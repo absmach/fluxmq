@@ -524,3 +524,99 @@ func isBrokerConfigBlock(block string, topLevel map[string]bool) bool {
 	}
 	return false
 }
+
+// TestLoadRejectsTrailingDocuments closes the hole a reviewer found in strict
+// decoding: only the first YAML document was decoded, so a `---` above an auth
+// or TLS section started the broker on defaults while the file plainly showed
+// otherwise. That is the failure mode strict decoding exists to end.
+func TestLoadRejectsTrailingDocuments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+server:
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+---
+auth:
+  external:
+    url: "https://auth.internal:9090"
+`), 0o600))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single YAML document")
+}
+
+// TestLoadNamesTheReplacementForMovedListenerKeys keeps the schema cutover
+// survivable. Every deployed configuration written against server.tcp fails
+// after the rename; the decoder alone would only say "field tcp not found",
+// which reports that something broke without saying what to write.
+func TestLoadNamesTheReplacementForMovedListenerKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: sectionMQTTTCP,
+			body: "server:\n  tcp:\n    v3:\n      addr: \":1883\"\n",
+			want: "server.tcp is no longer supported; use server.mqtt.tcp",
+		},
+		{
+			name: sectionMQTTWebSocket,
+			body: "server:\n  websocket:\n    v3:\n      addr: \":8083\"\n",
+			want: "server.websocket is no longer supported; use server.mqtt.websocket",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tc.body), 0o600))
+
+			_, err := Load(path)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// TestDuplicateBindsMatchTheListenersStartupOpens covers both halves of a
+// reviewer finding: a disabled health endpoint must not reserve its port, and
+// the deprecated local-listener aliases must be checked, since startup opens
+// every one of them that carries an address.
+func TestDuplicateBindsMatchTheListenersStartupOpens(t *testing.T) {
+	t.Run("disabled health endpoint frees its port", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.HealthEnabled = false
+		cfg.Server.HealthAddr = defaultHealthAddr
+		cfg.Server.AdminAPIAddr = defaultHealthAddr
+
+		require.NoError(t, cfg.validateNoDuplicateBinds())
+	})
+
+	t.Run("enabled health endpoint still conflicts", func(t *testing.T) {
+		cfg := Default()
+		cfg.Server.HealthEnabled = true
+		cfg.Server.HealthAddr = defaultHealthAddr
+		cfg.Server.AdminAPIAddr = defaultHealthAddr
+
+		require.Error(t, cfg.validateNoDuplicateBinds())
+	})
+
+	for _, alias := range []string{"internal", "service"} {
+		t.Run("alias "+alias+" is checked", func(t *testing.T) {
+			cfg := Default()
+			cfg.Server.AMQP091.Local.Addr = testInternalAddr
+			switch alias {
+			case "internal":
+				cfg.Server.AMQP091.Internal.Addr = testInternalAddr
+			case "service":
+				cfg.Server.AMQP091.Service.Addr = testInternalAddr
+			}
+
+			err := cfg.validateNoDuplicateBinds()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), alias)
+		})
+	}
+}

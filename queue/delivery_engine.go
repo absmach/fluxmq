@@ -673,6 +673,12 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 // equals the queue name. Consumers must not parse a source topic back out of
 // it; the v1 contract carries the origin in the types.PropSourceTopic property,
 // which the broker stamps and a publisher cannot forge.
+//
+// That contract reaches every protocol that can encode message properties —
+// MQTT 5.0, AMQP 0.9.1 and AMQP 1.0. MQTT 3.1.1 has no property field, so a
+// 3.1.1 consumer of a captured message receives the queue identity and nothing
+// about where the message came from. Explicit queue publishes are unaffected on
+// every protocol, since their address is already canonical.
 func queueDeliveryTopic(queueName, topic string) string {
 	queueName = strings.Trim(strings.TrimSpace(queueName), "/")
 	topic = strings.TrimPrefix(strings.TrimSpace(topic), "/")

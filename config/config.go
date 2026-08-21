@@ -29,6 +29,9 @@ const (
 	listenerNamePlain = "plain"
 	raftGroupDefault  = "default"
 
+	sectionMQTTTCP       = "tcp"
+	sectionMQTTWebSocket = "websocket"
+
 	listenerNameTLS      = "tls"
 	listenerNameMTLS     = "mtls"
 	listenerNameLocal    = "local"
@@ -38,6 +41,8 @@ const (
 	protocolMQTT    = "mqtt"
 	protocolAMQP    = "amqp"
 	protocolAMQP091 = "amqp091"
+
+	defaultHealthAddr = ":8081"
 
 	defaultTCPV3Addr = ":1883"
 	defaultTCPV5Addr = ":1884"
@@ -1142,7 +1147,7 @@ func Default() *Config {
 				Internal: AMQP091ListenerConfig{},
 				Service:  AMQP091ListenerConfig{},
 			},
-			HealthAddr:      ":8081",
+			HealthAddr:      defaultHealthAddr,
 			HealthEnabled:   true,
 			AdminAPIAddr:    ":8082",
 			MetricsAddr:     "localhost:4317",
@@ -1357,6 +1362,21 @@ func parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// A YAML stream may hold more than one document, and only the first was
+	// decoded. Silently dropping the rest is the same class of failure strict
+	// decoding exists to end: a `---` above an auth or TLS section would start
+	// the broker on defaults while the file plainly shows otherwise.
+	var trailing yaml.Node
+	switch err := dec.Decode(&trailing); {
+	case errors.Is(err, io.EOF):
+	case err != nil:
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	default:
+		return nil, fmt.Errorf(
+			"failed to parse config file: line %d: configuration must be a single YAML document; everything after the first `---` would be ignored",
+			trailing.Line)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -1382,6 +1402,15 @@ func validateCalloutTLS(path, rawURL string, tlsConfig *mqtttls.ClientConfig) er
 	return nil
 }
 
+// legacyServerKeys names sections that moved, so a configuration written
+// against the old schema fails with the replacement rather than with a decoder
+// message about an unknown field. The rename is breaking for every deployed
+// file; the least a broker can do is say where the setting went.
+var legacyServerKeys = map[string]string{
+	sectionMQTTTCP:       "server.mqtt." + sectionMQTTTCP,
+	sectionMQTTWebSocket: "server.mqtt." + sectionMQTTWebSocket,
+}
+
 var legacyAuthKeys = map[string]string{
 	authURLField:               "auth.external.url",
 	authTransportField:         "auth.external.transport",
@@ -1392,6 +1421,17 @@ var legacyAuthKeys = map[string]string{
 }
 
 func rejectLegacyAuthKeys(data []byte) error {
+	if err := rejectLegacyKeys(data, "auth", legacyAuthKeys); err != nil {
+		return err
+	}
+	return rejectLegacyKeys(data, "server", legacyServerKeys)
+}
+
+// rejectLegacyKeys reports a renamed key inside one top-level section by its
+// new name. It reads the document as a node tree because strict decoding would
+// otherwise reject the key with only "field not found", which tells an operator
+// that something is wrong but not what to write instead.
+func rejectLegacyKeys(data []byte, section string, replacements map[string]string) error {
 	var document yaml.Node
 	if err := yaml.Unmarshal(data, &document); err != nil {
 		return err
@@ -1405,17 +1445,17 @@ func rejectLegacyAuthKeys(data []byte) error {
 		return nil
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value != "auth" {
+		if root.Content[i].Value != section {
 			continue
 		}
-		auth := root.Content[i+1]
-		if auth.Kind != yaml.MappingNode {
+		body := root.Content[i+1]
+		if body.Kind != yaml.MappingNode {
 			return nil
 		}
-		for j := 0; j+1 < len(auth.Content); j += 2 {
-			key := auth.Content[j].Value
-			if replacement, ok := legacyAuthKeys[key]; ok {
-				return fmt.Errorf("auth.%s is no longer supported; use %s", key, replacement)
+		for j := 0; j+1 < len(body.Content); j += 2 {
+			key := body.Content[j].Value
+			if replacement, ok := replacements[key]; ok {
+				return fmt.Errorf("%s.%s is no longer supported; use %s", section, key, replacement)
 			}
 		}
 		return nil
@@ -2263,8 +2303,17 @@ func (c *Config) validateNoDuplicateBinds() error {
 		{"server.amqp091.tls.addr", c.Server.AMQP091.TLS.Addr},
 		{"server.amqp091.mtls.addr", c.Server.AMQP091.MTLS.Addr},
 		{"server.amqp091.local.addr", c.Server.AMQP091.Local.Addr},
+		// internal and service are deprecated aliases for local, and startup
+		// opens every one that carries an address.
+		{"server.amqp091.internal.addr", c.Server.AMQP091.Internal.Addr},
+		{"server.amqp091.service.addr", c.Server.AMQP091.Service.Addr},
 		{"server.admin_api_addr", c.Server.AdminAPIAddr},
-		{"server.health_addr", c.Server.HealthAddr},
+	}
+
+	// The health endpoint only binds when it is enabled, so a disabled one must
+	// not reserve its port against another listener that does bind.
+	if c.Server.HealthEnabled {
+		tcp = append(tcp, listenerBinding{"server.health_addr", c.Server.HealthAddr})
 	}
 	udp := []listenerBinding{
 		{"server.coap.plain.addr", c.Server.CoAP.Plain.Addr},

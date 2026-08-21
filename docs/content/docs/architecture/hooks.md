@@ -62,7 +62,7 @@ hook service.
 hooks:
   url: "https://hooks.internal:7017"
   transport: "grpc"       # "grpc" (default) or "http"
-  timeout: "500ms"        # per-call timeout; 0 uses the client default
+  timeout: "500ms"        # per-call timeout; omit for the default, 0 is rejected
   fail_mode: "deny"       # "deny" (default) or "allow"
 
   protocols:

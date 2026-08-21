@@ -600,7 +600,7 @@ flag, properties, or an MQTT register external identity.
 | ----------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `url`       | `""`    | Hook service base URL. Empty disables blocking hooks.                                                                 |
 | `transport` | `grpc`  | Wire format for callout: `grpc` or `http`. HTTP sends `POST {url}/hooks`.                                             |
-| `timeout`   | `0`     | Per-call timeout. Zero uses the hook client default (`500ms`).                                                        |
+| `timeout`   | `500ms` | Per-call timeout. Omit the key to take the default; an explicit `0` is rejected at load, because a blocking hook with no deadline stalls the operation it gates. |
 | `fail_mode` | `deny`  | Error behavior for hook timeouts/invalid responses: `deny` rejects the operation, `allow` keeps the original request. |
 | `protocols` | `{}`    | Per-protocol hook toggle. Empty map = all protocols run hooks when `url` is set.                                      |
 | `events`    | `{}`    | Per-hook event toggle. Empty map = all supported blocking hooks run when `url` is set.                                |
