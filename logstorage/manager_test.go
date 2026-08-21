@@ -105,7 +105,7 @@ func TestSegmentManager_DurableAppendSyncsTheSegmentHoldingIt(t *testing.T) {
 	require.NotSame(t, target, mgr.activeSegment, "test did not actually rotate")
 
 	before := target.commit.syncs.Load()
-	require.NoError(t, target.SyncThrough(through))
+	require.NoError(t, target.SyncThrough(through, nil))
 	assert.Greater(t, target.commit.syncs.Load(), before,
 		"the retired segment holding the record was never synced")
 

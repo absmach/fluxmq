@@ -252,8 +252,10 @@ func (m *SegmentManager) appendDurable(batch *Batch) (uint64, error) {
 		return 0, err
 	}
 
-	if err := target.SyncThrough(through); err != nil {
-		m.recordSyncFailure(err)
+	// The barrier records its own failure before waking anyone, so the append
+	// that follows a broken fsync is refused by the retry above rather than
+	// racing this return.
+	if err := target.SyncThrough(through, m.recordSyncFailure); err != nil {
 		return offset, fmt.Errorf("durability barrier for offset %d: %w", offset, err)
 	}
 	return offset, nil
@@ -261,15 +263,14 @@ func (m *SegmentManager) appendDurable(batch *Batch) (uint64, error) {
 
 // recordSyncFailure makes a failed barrier stick, so the next append retries it
 // under the lock rather than accepting a write on top of an unestablished
-// crash-loss window.
+// crash-loss window. It runs inside the barrier, before its waiters wake, which
+// is what keeps the failure visible to every publisher that shared it.
 //
-// The barrier runs without the lock — that is what lets publishers share one
-// fsync — so an append can be accepted in the moment between a barrier failing
-// and this recording it. That append is not acknowledged on a broken device: in
-// fsync mode it takes a barrier of its own and fails the same way, and in
-// buffered mode it was never promised more than the sync interval. The
-// stickiness is what stops the *next* one, which is where an operator's retry
-// loop would otherwise pile writes onto a log that cannot sync.
+// An append can still be accepted while a barrier is in flight — that is the
+// point of sharing one — but acceptance is not acknowledgement: in fsync mode
+// that append takes a barrier of its own and fails the same way, and in
+// buffered mode it was never promised more than the sync interval.
+// TestAppendNeverReportsSuccessOnAFailingDevice holds that line.
 func (m *SegmentManager) recordSyncFailure(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

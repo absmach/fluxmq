@@ -4,6 +4,7 @@
 package logstorage
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -21,11 +22,12 @@ func holdNextSync(t *testing.T) (entered <-chan struct{}, release func()) {
 	gate := make(chan struct{})
 	var once sync.Once
 
-	beforeSegmentSync = func() {
+	beforeSegmentSync = func() error {
 		once.Do(func() {
 			close(in)
 			<-gate
 		})
+		return nil
 	}
 	t.Cleanup(func() { beforeSegmentSync = nil })
 
@@ -55,10 +57,10 @@ func TestSyncThroughCoalescesConcurrentBarriers(t *testing.T) {
 	entered, release := holdNextSync(t)
 
 	errs := make(chan error, 2)
-	go func() { errs <- target.SyncThrough(throughFirst) }()
+	go func() { errs <- target.SyncThrough(throughFirst, nil) }()
 	<-entered // the first caller is inside the fsync
 
-	go func() { errs <- target.SyncThrough(throughSecond) }()
+	go func() { errs <- target.SyncThrough(throughSecond, nil) }()
 	require.Eventually(t, func() bool { return target.commit.waiting.Load() == 1 },
 		time.Second, time.Millisecond, "second caller never parked on the in-flight barrier")
 
@@ -83,10 +85,10 @@ func TestSyncThroughSkipsWorkAlreadyDurable(t *testing.T) {
 	_, target, through, err := mgr.appendLocked(batch)
 	require.NoError(t, err)
 
-	require.NoError(t, target.SyncThrough(through))
+	require.NoError(t, target.SyncThrough(through, nil))
 	require.Equal(t, uint64(1), target.commit.syncs.Load())
 
-	require.NoError(t, target.SyncThrough(through))
+	require.NoError(t, target.SyncThrough(through, nil))
 	assert.Equal(t, uint64(1), target.commit.syncs.Load(), "a covered offset must not re-sync")
 }
 
@@ -106,7 +108,7 @@ func TestSyncThroughRetriesWhenTheBarrierMissedTheRecord(t *testing.T) {
 	entered, release := holdNextSync(t)
 
 	syncing := make(chan error, 1)
-	go func() { syncing <- target.SyncThrough(1) }()
+	go func() { syncing <- target.SyncThrough(1, nil) }()
 	<-entered // the barrier has captured its coverage and is inside the fsync
 
 	// This record is written after that capture, so the in-flight fsync does
@@ -117,7 +119,7 @@ func TestSyncThroughRetriesWhenTheBarrierMissedTheRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	lateErr := make(chan error, 1)
-	go func() { lateErr <- target.SyncThrough(throughLate) }()
+	go func() { lateErr <- target.SyncThrough(throughLate, nil) }()
 	require.Eventually(t, func() bool { return target.commit.waiting.Load() == 1 },
 		time.Second, time.Millisecond, "late publisher never parked")
 
@@ -141,7 +143,7 @@ func TestSyncThroughOnClosedSegmentFails(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Close())
-	require.ErrorIs(t, target.SyncThrough(through+1), ErrSegmentClosed)
+	require.ErrorIs(t, target.SyncThrough(through+1, nil), ErrSegmentClosed)
 }
 
 func durableManagerConfig() ManagerConfig {
@@ -151,4 +153,56 @@ func durableManagerConfig() ManagerConfig {
 	cfg.SyncInterval = 0
 	cfg.Compression = CompressionNone
 	return cfg
+}
+
+// TestAppendNeverReportsSuccessOnAFailingDevice is the line that makes sharing
+// a barrier safe. Publishers are accepted while a barrier is in flight — that
+// is the point — so on a device that cannot sync, some appends land after the
+// fsync covering them has already failed. None of them may report success: an
+// acknowledged durable publish that is not on disk is the failure the fsync
+// policy exists to prevent.
+//
+// The writes themselves succeed here. Only the barrier fails, which is the case
+// that could otherwise be acknowledged.
+func TestAppendNeverReportsSuccessOnAFailingDevice(t *testing.T) {
+	mgr := newTestManager(t, durableManagerConfig())
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	errSyncFailed := errors.New("device cannot sync")
+	beforeSegmentSync = func() error { return errSyncFailed }
+	t.Cleanup(func() { beforeSegmentSync = nil })
+
+	const publishers = 16
+	var wg sync.WaitGroup
+	results := make([]error, publishers)
+	for i := range publishers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			batch := NewBatch(0)
+			batch.Append([]byte("durable"), nil, nil)
+			_, results[i] = mgr.AppendAndSync(batch)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range results {
+		require.Error(t, err, "publisher %d was told its message was durable on a device that cannot sync", i)
+	}
+
+	// The failure was recorded inside the barrier rather than after it, so it
+	// is already visible to whatever append comes next instead of racing it.
+	mgr.mu.Lock()
+	recorded := mgr.syncErr
+	mgr.mu.Unlock()
+	require.ErrorIs(t, recorded, errSyncFailed,
+		"a failed barrier must be recorded before its waiters wake")
+
+	// That append retries the barrier under the lock. Here the retry reaches a
+	// working fsync, so it clears and the append proceeds to a barrier of its
+	// own — which fails again, and is reported rather than acknowledged.
+	batch := NewBatch(0)
+	batch.Append([]byte("after"), nil, nil)
+	_, err := mgr.AppendAndSync(batch)
+	require.Error(t, err)
 }

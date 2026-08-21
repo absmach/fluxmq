@@ -517,7 +517,8 @@ func (s *Segment) Sync() error {
 // readonly without closing it, and a publisher whose append landed just before
 // that is owed the barrier just the same — Sync's habit of skipping readonly
 // segments would silently drop it.
-func (s *Segment) SyncThrough(offset uint64) error {
+// onFailure, when non-nil, records a failed barrier before its waiters wake.
+func (s *Segment) SyncThrough(offset uint64, onFailure func(error)) error {
 	return s.commit.syncThrough(offset, func() (uint64, error) {
 		// Take the state under the lock, then release it: holding it across the
 		// fsync would block every append for the duration of the barrier, which
@@ -536,7 +537,9 @@ func (s *Segment) SyncThrough(offset uint64) error {
 		// Coverage is now fixed: everything written before this point is what
 		// the barrier promises. Appends landing from here on take the next one.
 		if beforeSegmentSync != nil {
-			beforeSegmentSync()
+			if err := beforeSegmentSync(); err != nil {
+				return 0, err
+			}
 		}
 
 		if err := file.Sync(); err != nil {
@@ -553,7 +556,7 @@ func (s *Segment) SyncThrough(offset uint64) error {
 			}
 		}
 		return covered, nil
-	})
+	}, onFailure)
 }
 
 // Close closes the segment file.
