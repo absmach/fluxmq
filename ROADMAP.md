@@ -38,6 +38,16 @@ is expensive or impossible to change afterward:
    receives an address that is deliberately not injective and no way to recover
    the origin. Decide before the tag whether that is the contract or a gap.
 
+   **Resolved 2026-08-21, branch `fmq-mqtt-queue-ack`, which targets `main`
+   directly rather than stacking here — the code depends on nothing in this
+   branch, and this one is gated behind the magistrala pinning:** the broker settles a
+   3.1.1 consumer's queue message on PUBACK/PUBCOMP, using identifiers it
+   stamped itself, so 3.1.1 consumes classic queues at QoS 1 or 2. QoS 0
+   subscriptions to a classic queue are refused. Origin recovery for a captured
+   message still needs MQTT 5.0 or AMQP, and that is now stated in the support
+   matrix rather than implied. What follows is why the address was not changed
+   instead.
+
    **Making the address injective does not work.** Delivering every capture as
    `$queue/<queue>/<source>` unconditionally leaves the collision intact: a
    capture of `acme/temp` into queue `m` still renders as `$queue/m/acme/temp`,
@@ -62,7 +72,8 @@ list qualifies.
 
 | Area                                     | 1.0 status                                                  |
 | ---------------------------------------- | ----------------------------------------------------------- |
-| MQTT 3.1.1 / 5.0                         | Production-supported                                        |
+| MQTT 5.0                                 | Production-supported                                        |
+| MQTT 3.1.1                               | Production-supported. Consumes classic queues at QoS 1/2, settling on PUBACK — no explicit nack/reject, and no origin recovery for captured messages |
 | AMQP 0.9.1 / 1.0                         | Production-supported, **documented subset** — not every operation |
 | Durable queues, single node              | Production-supported                                        |
 | Broker clustering (etcd coordination)    | Production-supported, secure by default                     |
@@ -954,7 +965,8 @@ Deferring these is the point of having a roadmap:
 - [x] Strict config decode; missing config file is a startup error — *done 2026-08-20*
 - [x] MQTT listeners moved under `server.mqtt`; types renamed — *done 2026-08-20*
 - [x] Queue delivery address settled for MQTT 5.0 and both AMQP versions; origin in `types.PropSourceTopic` — *done 2026-08-20*
-- [ ] MQTT 3.1.1 source-topic recovery decided: contract, or documented gap in the support matrix
+- [x] MQTT 3.1.1 queue consumption decided: settle on PUBACK, no origin recovery — *done 2026-08-21*
+- [ ] Inflight properties survive a cluster takeover, so a settled delivery is not redelivered after a node move (additive `proto/cluster/v1` field)
 - [ ] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open
 
 **Durability and correctness**
