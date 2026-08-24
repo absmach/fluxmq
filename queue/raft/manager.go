@@ -432,7 +432,7 @@ func (m *Manager) Apply(ctx context.Context, op *Operation) (*ApplyResult, error
 // ApplyWithOptions submits an operation to Raft with per-call behavior overrides.
 func (m *Manager) ApplyWithOptions(ctx context.Context, op *Operation, opts ApplyOptions) (*ApplyResult, error) {
 	if !m.IsEnabled() {
-		return nil, nil
+		return nil, ErrRaftDisabled
 	}
 
 	if m.raft.State() != raft.Leader {
@@ -495,7 +495,7 @@ func (m *Manager) ApplyAppend(ctx context.Context, queueName string, msg *types.
 // ApplyAppendWithOptions submits an append operation to Raft with per-call options.
 func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error) {
 	if !m.IsEnabled() {
-		return 0, nil
+		return 0, ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -523,7 +523,7 @@ func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, 
 // ApplyCreateQueue submits a create queue config operation to Raft.
 func (m *Manager) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	cfgCopy := cfg
@@ -547,7 +547,7 @@ func (m *Manager) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) e
 // ApplyUpdateQueue submits an update queue config operation to Raft.
 func (m *Manager) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	cfgCopy := cfg
@@ -571,7 +571,7 @@ func (m *Manager) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) e
 // ApplyDeleteQueue submits a delete queue config operation to Raft.
 func (m *Manager) ApplyDeleteQueue(ctx context.Context, queueName string) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -593,7 +593,7 @@ func (m *Manager) ApplyDeleteQueue(ctx context.Context, queueName string) error 
 // ApplyTruncate submits a truncate operation to Raft.
 func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -617,7 +617,7 @@ func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, minOffset
 // ApplyCreateGroup submits a create consumer group operation to Raft.
 func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -642,7 +642,7 @@ func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group 
 // ApplyUpdateGroup submits a full consumer group state update operation to Raft.
 func (m *Manager) ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -667,7 +667,7 @@ func (m *Manager) ApplyUpdateGroup(ctx context.Context, queueName string, group 
 // ApplyDeleteGroup submits a delete consumer group operation to Raft.
 func (m *Manager) ApplyDeleteGroup(ctx context.Context, queueName, groupID string) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -691,7 +691,7 @@ func (m *Manager) ApplyDeleteGroup(ctx context.Context, queueName, groupID strin
 // ApplyUpdateCursor submits a cursor update operation to Raft.
 func (m *Manager) ApplyUpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -716,7 +716,7 @@ func (m *Manager) ApplyUpdateCursor(ctx context.Context, queueName, groupID stri
 // ApplyUpdateCommitted submits a committed-offset update operation to Raft.
 func (m *Manager) ApplyUpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -741,7 +741,7 @@ func (m *Manager) ApplyUpdateCommitted(ctx context.Context, queueName, groupID s
 // ApplyAddPending submits an add pending entry operation to Raft.
 func (m *Manager) ApplyAddPending(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -766,7 +766,7 @@ func (m *Manager) ApplyAddPending(ctx context.Context, queueName, groupID string
 // ApplyRemovePending submits a remove pending entry operation to Raft (ACK).
 func (m *Manager) ApplyRemovePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -792,7 +792,7 @@ func (m *Manager) ApplyRemovePending(ctx context.Context, queueName, groupID, co
 // ApplyTransferPending submits a pending transfer operation to Raft.
 func (m *Manager) ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -819,7 +819,7 @@ func (m *Manager) ApplyTransferPending(ctx context.Context, queueName, groupID s
 // ApplyRegisterConsumer submits a register consumer operation to Raft.
 func (m *Manager) ApplyRegisterConsumer(ctx context.Context, queueName string, groupID string, consumer *types.ConsumerInfo) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -844,7 +844,7 @@ func (m *Manager) ApplyRegisterConsumer(ctx context.Context, queueName string, g
 // ApplyUnregisterConsumer submits an unregister consumer operation to Raft.
 func (m *Manager) ApplyUnregisterConsumer(ctx context.Context, queueName string, groupID, consumerID string) error {
 	if !m.IsEnabled() {
-		return nil
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{

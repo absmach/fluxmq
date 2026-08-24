@@ -81,6 +81,14 @@ func StartQueueCoordinator(
 		started[runtime.GroupID] = rm
 		startedList = append(startedList, rm)
 	}
+	for _, runtime := range runtimes {
+		rm := started[runtime.GroupID]
+		leaderTimeout := 2*runtime.ManagerConfig.ElectionTimeout + runtime.ManagerConfig.AckTimeout
+		if err := rm.WaitForLeader(context.Background(), leaderTimeout); err != nil {
+			stopStarted()
+			return nil, nil, nil, fmt.Errorf("raft group %q has no usable leader: %w", runtime.GroupID, err)
+		}
+	}
 
 	defaultManager := started[DefaultGroupID]
 	if defaultManager == nil {
@@ -383,6 +391,11 @@ func (p *raftGroupProvisioner) startManager(ctx context.Context, gid string, run
 
 	if err := manager.Start(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start raft group %q: %w", gid, err)
+	}
+	leaderTimeout := 2*runtime.ManagerConfig.ElectionTimeout + runtime.ManagerConfig.AckTimeout
+	if err := manager.WaitForLeader(ctx, leaderTimeout); err != nil {
+		_ = manager.Stop()
+		return nil, fmt.Errorf("raft group %q has no usable leader: %w", gid, err)
 	}
 
 	return manager, nil

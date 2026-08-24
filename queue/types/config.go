@@ -337,6 +337,8 @@ func (c *QueueConfig) Validate() error {
 			return ErrInvalidConfig
 		case c.Replication.Mode != ReplicationSync && c.Replication.Mode != ReplicationAsync:
 			return ErrInvalidConfig
+		case c.Replication.Mode == ReplicationAsync && c.Replication.MinInSyncReplicas > 1:
+			return ErrInvalidConfig
 		case c.Replication.AckTimeout <= 0:
 			return ErrInvalidConfig
 		case c.Replication.Group != "" && strings.TrimSpace(c.Replication.Group) == "":

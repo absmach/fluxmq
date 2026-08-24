@@ -106,6 +106,10 @@ type GroupProvisioner interface {
 	TryReleaseGroup(ctx context.Context, groupID string) (bool, error)
 }
 
+type replicationConfigValidator interface {
+	ValidateReplicationConfig(cfg types.ReplicationConfig) error
+}
+
 // LogicalGroupCoordinator maps queues to logical Raft groups.
 //
 // Unknown groups fall back to the default replicator so callers can assign
@@ -238,6 +242,30 @@ func (c *LogicalGroupCoordinator) EnsureQueue(ctx context.Context, cfg types.Que
 	c.ensureQueueAssignment(cfg)
 	c.mu.Unlock()
 
+	return nil
+}
+
+// ValidateQueueReplication verifies the queue contract against the concrete
+// Raft group before queue metadata or messages are accepted.
+func (c *LogicalGroupCoordinator) ValidateQueueReplication(ctx context.Context, cfg types.QueueConfig) error {
+	if !cfg.Replication.Enabled {
+		return nil
+	}
+	replicator, err := c.ensureGroup(ctx, cfg.Replication.Group)
+	if err != nil {
+		return err
+	}
+	if !replicator.IsEnabled() {
+		return fmt.Errorf("raft group %q is disabled", normalizeGroupID(cfg.Replication.Group))
+	}
+	if validator, ok := replicator.(replicationConfigValidator); ok {
+		if err := validator.ValidateReplicationConfig(cfg.Replication); err != nil {
+			return err
+		}
+	}
+	if !replicator.IsLeader(ctx) && replicator.Leader() == "" && replicator.LeaderID() == "" {
+		return fmt.Errorf("raft group %q has no leader", normalizeGroupID(cfg.Replication.Group))
+	}
 	return nil
 }
 

@@ -1251,7 +1251,7 @@ func TestPublishToExistingQueueDoesNotForwardSecondAppend(t *testing.T) {
 	}
 }
 
-func TestStartPropagatesDistributionFallbackToDeliveryEngine(t *testing.T) {
+func TestStartRejectsReplicateDistributionWithoutRaft(t *testing.T) {
 	config := DefaultConfig()
 	config.DistributionMode = DistributionReplicate
 	mgr := NewManager(
@@ -1263,23 +1263,12 @@ func TestStartPropagatesDistributionFallbackToDeliveryEngine(t *testing.T) {
 		newMockCluster("node-1"),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := mgr.Start(ctx); err != nil {
-		t.Fatalf("Start failed: %v", err)
+	err := mgr.Start(context.Background())
+	if !errors.Is(err, ErrReplicationUnavailable) {
+		t.Fatalf("Start error = %v, want ErrReplicationUnavailable", err)
 	}
-	t.Cleanup(func() {
-		cancel()
-		if err := mgr.Stop(); err != nil {
-			t.Errorf("Stop failed: %v", err)
-		}
-	})
-
-	if mgr.distributionMode != DistributionForward {
-		t.Fatalf("manager distribution mode = %q, want %q", mgr.distributionMode, DistributionForward)
-	}
-	if mgr.delivery.distributionMode != DistributionForward {
-		t.Fatalf("delivery distribution mode = %q, want %q", mgr.delivery.distributionMode, DistributionForward)
+	if mgr.distributionMode != DistributionReplicate || mgr.delivery.distributionMode != DistributionReplicate {
+		t.Fatal("failed startup mutated distribution mode")
 	}
 }
 
@@ -2452,11 +2441,13 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 func TestSubscribeWithCursorReplicatedQueueRoutesStateThroughCoordinator(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
+	managerConfig := DefaultConfig()
+	managerConfig.WritePolicy = WritePolicyReject
 	manager := NewManager(
 		logStore,
 		groupStore,
 		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
-		DefaultConfig(),
+		managerConfig,
 		slog.Default(),
 		nil,
 	)
@@ -3665,8 +3656,10 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 	// refuses, alongside two ordinary queues that must still be appended to.
 	replicated := types.DefaultQueueConfig(testReplicatedQueue, "m/#")
 	replicated.Replication.Enabled = true
-	if err := mgr.CreateQueue(ctx, replicated); err != nil {
-		t.Fatalf("CreateQueue replicated failed: %v", err)
+	// Inject persisted legacy state so this test reaches the publish-time
+	// no-leader guard; new queue creation now rejects the same state earlier.
+	if err := logStore.CreateQueue(ctx, replicated); err != nil {
+		t.Fatalf("inject replicated queue failed: %v", err)
 	}
 	for _, name := range []string{"healthy-a", "healthy-b"} {
 		if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(name, "m/#")); err != nil {
@@ -3755,8 +3748,10 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 
 	replicated := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
 	replicated.Replication.Enabled = true
-	if err := mgr.CreateQueue(ctx, replicated); err != nil {
-		t.Fatalf("CreateQueue replicated failed: %v", err)
+	// Inject persisted legacy state so this test reaches the publish-time
+	// no-leader guard; new queue creation now rejects the same state earlier.
+	if err := logStore.CreateQueue(ctx, replicated); err != nil {
+		t.Fatalf("inject replicated queue failed: %v", err)
 	}
 	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig("local", "$queue/replicated/#")); err != nil {
 		t.Fatalf("CreateQueue local failed: %v", err)
@@ -3777,6 +3772,78 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("local queue stored %d messages; a rejected publish must write nothing", count)
 	}
+}
+
+func TestReplicatedQueueCreationFailsClosed(t *testing.T) {
+	queueCfg := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
+	queueCfg.Replication.Enabled = true
+	readyCoordinator := func() *mockQueueCoordinator {
+		return &mockQueueCoordinator{
+			enabled:           true,
+			replicatedByQueue: map[string]bool{testReplicatedQueue: true},
+			leaderByQueue:     map[string]bool{testReplicatedQueue: true},
+		}
+	}
+	tests := []struct {
+		name        string
+		policy      WritePolicy
+		coordinator *mockQueueCoordinator
+		want        error
+	}{
+		{name: "raft missing", policy: WritePolicyReject, want: ErrReplicationUnavailable},
+		{name: "raft disabled", policy: WritePolicyReject, coordinator: &mockQueueCoordinator{}, want: ErrReplicationUnavailable},
+		{name: "group missing", policy: WritePolicyReject, coordinator: &mockQueueCoordinator{enabled: true}, want: ErrReplicationUnavailable},
+		{name: "leader missing", policy: WritePolicyReject, coordinator: &mockQueueCoordinator{enabled: true, replicatedByQueue: map[string]bool{testReplicatedQueue: true}}, want: ErrReplicationUnavailable},
+		{name: "local policy", policy: WritePolicyLocal, coordinator: readyCoordinator(), want: ErrReplicationWritePolicy},
+		{name: "unknown policy", policy: WritePolicy("mystery"), coordinator: readyCoordinator(), want: ErrReplicationWritePolicy},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.WritePolicy = tt.policy
+			store := memlog.New()
+			mgr := NewManager(store, newMockGroupStore(), nil, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+			if tt.coordinator != nil {
+				mgr.SetRaftCoordinator(tt.coordinator)
+			}
+			err := mgr.CreateQueue(context.Background(), queueCfg)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("CreateQueue() error = %v, want %v", err, tt.want)
+			}
+			if _, getErr := store.GetQueue(context.Background(), queueCfg.Name); !errors.Is(getErr, storage.ErrQueueNotFound) {
+				t.Fatalf("failed creation persisted queue: %v", getErr)
+			}
+		})
+	}
+}
+
+func TestReplicatedPublishNeverFallsBackToLocalAppend(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	queueCfg := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
+	queueCfg.Replication.Enabled = true
+	require.NoError(t, store.CreateQueue(ctx, queueCfg))
+	cfg := DefaultConfig()
+	cfg.WritePolicy = WritePolicyReject
+	mgr := NewManager(store, newMockGroupStore(), nil, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	err := mgr.Publish(ctx, types.PublishRequest{Topic: "$queue/replicated/item", Payload: []byte("payload")})
+	require.ErrorIs(t, err, ErrReplicationUnavailable)
+	count, err := store.Count(ctx, testReplicatedQueue)
+	require.NoError(t, err)
+	require.Zero(t, count)
+}
+
+func TestStartupRejectsPersistedReplicatedQueueWithoutRaft(t *testing.T) {
+	store := memlog.New()
+	queueCfg := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
+	queueCfg.Replication.Enabled = true
+	require.NoError(t, store.CreateQueue(context.Background(), queueCfg))
+	cfg := DefaultConfig()
+	cfg.WritePolicy = WritePolicyReject
+	mgr := NewManager(store, newMockGroupStore(), nil, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	require.ErrorIs(t, mgr.Start(context.Background()), ErrReplicationUnavailable)
 }
 
 // Each matching queue a captured publish fails to reach counts. Capture jobs are

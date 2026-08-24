@@ -153,6 +153,26 @@ func TestLogicalGroupCoordinatorRejectsUnknownGroupWithoutProvisioner(t *testing
 	}
 }
 
+func TestLogicalGroupCoordinatorValidationRequiresEnabledGroupAndLeader(t *testing.T) {
+	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	cfg.Replication.Enabled = true
+
+	disabled := NewLogicalGroupCoordinator(&mockReplicator{}, nil)
+	if err := disabled.ValidateQueueReplication(context.Background(), cfg); err == nil {
+		t.Fatal("disabled raft group passed validation")
+	}
+
+	leaderless := NewLogicalGroupCoordinator(&mockReplicator{enabled: true}, nil)
+	if err := leaderless.ValidateQueueReplication(context.Background(), cfg); err == nil {
+		t.Fatal("leaderless raft group passed validation")
+	}
+
+	ready := NewLogicalGroupCoordinator(&mockReplicator{enabled: true, leader: true}, nil)
+	if err := ready.ValidateQueueReplication(context.Background(), cfg); err != nil {
+		t.Fatalf("ready raft group rejected: %v", err)
+	}
+}
+
 func TestLogicalGroupCoordinatorProvisionerCreatesMissingGroup(t *testing.T) {
 	hotReplicator := &mockReplicator{enabled: true, leader: true}
 	provisioner := &mockProvisioner{

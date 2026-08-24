@@ -163,6 +163,85 @@ func TestClusterTransportSecurityValidation(t *testing.T) {
 	}
 }
 
+func TestReplicatedQueueConfigurationFailsClosed(t *testing.T) {
+	configureRaft := func(c *Config) {
+		enableInsecureTestCluster(c)
+		c.Cluster.Raft.Enabled = true
+		c.Cluster.Raft.WritePolicy = writePolicyForward
+		c.Cluster.Raft.Peers = map[string]string{
+			"broker-2": "127.0.0.1:7101",
+			"broker-3": "127.0.0.1:7102",
+		}
+	}
+	enableQueueReplication := func(c *Config) {
+		c.Queues[0].Replication.Enabled = true
+	}
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		wantError string
+	}{
+		{
+			name: "raft disabled",
+			configure: func(c *Config) {
+				enableQueueReplication(c)
+			},
+			wantError: "requires cluster.raft.enabled",
+		},
+		{
+			name: "local write policy",
+			configure: func(c *Config) {
+				configureRaft(c)
+				c.Cluster.Raft.WritePolicy = writePolicyLocal
+				enableQueueReplication(c)
+			},
+			wantError: "requires cluster.raft.write_policy reject or forward",
+		},
+		{
+			name: "membership mismatch",
+			configure: func(c *Config) {
+				configureRaft(c)
+				delete(c.Cluster.Raft.Peers, "broker-3")
+				enableQueueReplication(c)
+			},
+			wantError: "must match configured membership",
+		},
+		{
+			name: "queue factor mismatch",
+			configure: func(c *Config) {
+				configureRaft(c)
+				enableQueueReplication(c)
+				c.Queues[0].Replication.ReplicationFactor = 2
+			},
+			wantError: "must match raft group factor",
+		},
+		{
+			name: "valid replicated queue",
+			configure: func(c *Config) {
+				configureRaft(c)
+				enableQueueReplication(c)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.configure(cfg)
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -270,13 +349,15 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid raft groups config",
 			modify: func(c *Config) {
+				enableInsecureTestCluster(c)
 				c.Cluster.Raft.Enabled = true
 				c.Cluster.Raft.Groups = map[string]RaftGroupConfig{
 					testProfileHot: {
 						BindAddr: testBindAddr,
 						DataDir:  "/tmp/fluxmq/raft-hot",
 						Peers: map[string]string{
-							"broker-1": testBindAddr,
+							"broker-2": testBindAddr,
+							"broker-3": "127.0.0.1:8101",
 						},
 						ReplicationFactor: 3,
 						MinInSyncReplicas: 2,
@@ -288,6 +369,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid raft group missing bind addr",
 			modify: func(c *Config) {
+				enableInsecureTestCluster(c)
 				c.Cluster.Raft.Enabled = true
 				c.Cluster.Raft.Groups = map[string]RaftGroupConfig{
 					testProfileHot: {
@@ -302,6 +384,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "queue group must exist when auto provision disabled",
 			modify: func(c *Config) {
+				enableInsecureTestCluster(c)
 				c.Cluster.Raft.Enabled = true
 				c.Cluster.Raft.AutoProvisionGroups = false
 				c.Queues = []QueueConfig{

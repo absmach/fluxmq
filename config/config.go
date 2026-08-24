@@ -2028,6 +2028,16 @@ func (c *Config) Validate() error {
 			if c.Cluster.Raft.MinInSyncReplicas < 1 || c.Cluster.Raft.MinInSyncReplicas > c.Cluster.Raft.ReplicationFactor {
 				return fmt.Errorf("cluster.raft.min_in_sync_replicas must be between 1 and replication_factor")
 			}
+			if members := len(c.Cluster.Raft.Peers) + 1; members != c.Cluster.Raft.ReplicationFactor {
+				return fmt.Errorf("cluster.raft.replication_factor %d must match configured membership %d", c.Cluster.Raft.ReplicationFactor, members)
+			}
+			quorum := c.Cluster.Raft.ReplicationFactor/2 + 1
+			if c.Cluster.Raft.MinInSyncReplicas > quorum {
+				return fmt.Errorf("cluster.raft.min_in_sync_replicas cannot exceed enforced raft quorum %d", quorum)
+			}
+			if !c.Cluster.Raft.SyncMode && c.Cluster.Raft.MinInSyncReplicas > 1 {
+				return fmt.Errorf("cluster.raft.min_in_sync_replicas above 1 requires sync_mode")
+			}
 			if c.Cluster.Raft.AckTimeout <= 0 {
 				return fmt.Errorf("cluster.raft.ack_timeout must be > 0")
 			}
@@ -2064,6 +2074,27 @@ func (c *Config) Validate() error {
 
 				if groupCfg.MinInSyncReplicas < 0 || groupCfg.MinInSyncReplicas > effectiveRF {
 					return fmt.Errorf("cluster.raft.groups.%s.min_in_sync_replicas must be between 0 and effective replication_factor", gid)
+				}
+				effectivePeers := groupCfg.Peers
+				if gid == raftGroupDefault && len(effectivePeers) == 0 {
+					effectivePeers = c.Cluster.Raft.Peers
+				}
+				if members := len(effectivePeers) + 1; members != effectiveRF {
+					return fmt.Errorf("cluster.raft.groups.%s replication_factor %d must match configured membership %d", gid, effectiveRF, members)
+				}
+				effectiveMinISR := c.Cluster.Raft.MinInSyncReplicas
+				if groupCfg.MinInSyncReplicas > 0 {
+					effectiveMinISR = groupCfg.MinInSyncReplicas
+				}
+				if effectiveMinISR > effectiveRF/2+1 {
+					return fmt.Errorf("cluster.raft.groups.%s min_in_sync_replicas exceeds enforced raft quorum", gid)
+				}
+				effectiveSync := c.Cluster.Raft.SyncMode
+				if groupCfg.SyncMode != nil {
+					effectiveSync = *groupCfg.SyncMode
+				}
+				if !effectiveSync && effectiveMinISR > 1 {
+					return fmt.Errorf("cluster.raft.groups.%s min_in_sync_replicas above 1 requires sync_mode", gid)
 				}
 				if groupCfg.AckTimeout < 0 {
 					return fmt.Errorf("cluster.raft.groups.%s.ack_timeout must be >= 0", gid)
@@ -2169,6 +2200,13 @@ func (c *Config) Validate() error {
 			}
 		}
 		if q.Replication.Enabled {
+			if !c.Cluster.Enabled || !c.Cluster.Raft.Enabled {
+				return fmt.Errorf("queues[%d].replication requires cluster.raft.enabled", i)
+			}
+			writePolicy := strings.ToLower(strings.TrimSpace(c.Cluster.Raft.WritePolicy))
+			if writePolicy != "reject" && writePolicy != writePolicyForward {
+				return fmt.Errorf("queues[%d].replication requires cluster.raft.write_policy reject or forward", i)
+			}
 			if q.Replication.Group != "" && strings.TrimSpace(q.Replication.Group) == "" {
 				return fmt.Errorf("queues[%d].replication.group cannot be only whitespace", i)
 			}
@@ -2195,6 +2233,23 @@ func (c *Config) Validate() error {
 			case queueModeSync, "async":
 			default:
 				return fmt.Errorf("queues[%d].replication.mode must be one of: sync, async", i)
+			}
+			if q.Replication.Mode == "async" && q.Replication.MinInSyncReplicas > 1 {
+				return fmt.Errorf("queues[%d].replication.min_in_sync_replicas above 1 requires sync mode", i)
+			}
+			effectiveGroupRF := c.Cluster.Raft.ReplicationFactor
+			groupID := strings.TrimSpace(q.Replication.Group)
+			if groupID == "" {
+				groupID = raftGroupDefault
+			}
+			if groupCfg, ok := c.Cluster.Raft.Groups[groupID]; ok && groupCfg.ReplicationFactor > 0 {
+				effectiveGroupRF = groupCfg.ReplicationFactor
+			}
+			if q.Replication.ReplicationFactor != effectiveGroupRF {
+				return fmt.Errorf("queues[%d].replication.replication_factor must match raft group factor %d", i, effectiveGroupRF)
+			}
+			if q.Replication.MinInSyncReplicas > effectiveGroupRF/2+1 {
+				return fmt.Errorf("queues[%d].replication.min_in_sync_replicas exceeds enforced raft quorum", i)
 			}
 			if q.Replication.AckTimeout <= 0 {
 				return fmt.Errorf("queues[%d].replication.ack_timeout must be > 0", i)

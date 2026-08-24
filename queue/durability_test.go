@@ -197,7 +197,15 @@ func TestReplicatedQueueRejectsFsyncAckDurability(t *testing.T) {
 
 func TestReplicatedEphemeralQueueIgnoresFsyncAckDurability(t *testing.T) {
 	store := &syncRecordingStore{QueueStore: memlog.New()}
-	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
+	managerConfig := DefaultConfig()
+	managerConfig.AckDurability = AckDurabilityFsync
+	managerConfig.WritePolicy = WritePolicyReject
+	mgr := NewManager(store, newMockGroupStore(), nil, managerConfig, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mgr.SetRaftCoordinator(&mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{"replicated": true},
+		leaderByQueue:     map[string]bool{"replicated": true},
+	})
 
 	cfg := types.DefaultEphemeralQueueConfig("replicated", "$queue/replicated")
 	cfg.Replication.Enabled = true

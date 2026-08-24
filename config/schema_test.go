@@ -919,6 +919,17 @@ queues:
 		cfg, err := Load(write(t, `
 storage:
   queue_ack_durability: fsync
+cluster:
+  enabled: true
+  allow_insecure: true
+  etcd:
+    initial_cluster: "broker-1=http://127.0.0.1:2380"
+  raft:
+    enabled: true
+    write_policy: forward
+    peers:
+      broker-2: "127.0.0.1:7101"
+      broker-3: "127.0.0.1:7102"
 queues:
   - name: replicated
     topics: ["events/#"]

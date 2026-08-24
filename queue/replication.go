@@ -23,11 +23,12 @@ const (
 )
 
 func normalizeWritePolicy(policy WritePolicy) WritePolicy {
-	switch WritePolicy(strings.ToLower(string(policy))) {
+	normalized := WritePolicy(strings.ToLower(strings.TrimSpace(string(policy))))
+	switch normalized {
 	case WritePolicyLocal, WritePolicyReject, WritePolicyForward:
-		return WritePolicy(strings.ToLower(string(policy)))
+		return normalized
 	default:
-		return WritePolicyLocal
+		return normalized
 	}
 }
 

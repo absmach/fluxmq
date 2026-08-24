@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	queueraft "github.com/absmach/fluxmq/queue/raft"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -28,6 +29,21 @@ const (
 	testConsumer1     = "consumer-1"
 	testQueueEvents   = "events"
 )
+
+type readyQueueCoordinator struct {
+	queueraft.QueueCoordinator
+	store qstorage.QueueStore
+}
+
+func (c *readyQueueCoordinator) IsEnabled() bool                                      { return true }
+func (c *readyQueueCoordinator) IsQueueReplicated(string) bool                        { return true }
+func (c *readyQueueCoordinator) IsLeaderForQueue(string) bool                         { return true }
+func (c *readyQueueCoordinator) LeaderForQueue(string) string                         { return "127.0.0.1:7100" }
+func (c *readyQueueCoordinator) LeaderIDForQueue(string) string                       { return "node-1" }
+func (c *readyQueueCoordinator) EnsureQueue(context.Context, types.QueueConfig) error { return nil }
+func (c *readyQueueCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	return c.store.CreateQueue(ctx, cfg)
+}
 
 func TestListQueuesFilteringAndPagination(t *testing.T) {
 	t.Parallel()
@@ -227,7 +243,10 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	ctx := context.Background()
 	store := memlog.New()
 	groupStore := noopGroupStore{}
-	manager := queuepkg.NewManager(store, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+	managerConfig := queuepkg.DefaultConfig()
+	managerConfig.WritePolicy = queuepkg.WritePolicyReject
+	manager := queuepkg.NewManager(store, groupStore, nil, managerConfig, nil, nil)
+	manager.SetRaftCoordinator(&readyQueueCoordinator{store: store})
 	h := NewHandler(manager, store, groupStore, nil)
 
 	createResp, err := h.CreateQueue(ctx, connect.NewRequest(&queuev1.CreateQueueRequest{
