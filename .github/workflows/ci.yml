@@ -46,6 +46,13 @@ jobs:
 
       - name: Set up Buf
         uses: bufbuild/buf-action@v1
+        with:
+          # Generated code is committed and verified by the next two steps, so
+          # nothing here needs the schema registry. Both of these default to
+          # running — push on every push to the default branch, archive on
+          # branch deletes — and both fail without a BSR token.
+          push: false
+          archive: false
 
       - name: Generate protobuf
         run: make proto
