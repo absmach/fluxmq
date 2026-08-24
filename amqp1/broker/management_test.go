@@ -33,7 +33,9 @@ func TestManagementHandlerNoQueueManager(t *testing.T) {
 	require.NotNil(t, resp)
 
 	code, _ := resp.ApplicationProperties["statusCode"].(int32)
-	assert.Equal(t, statusError, code)
+	assert.Equal(t, int32(503), code)
+	assert.Equal(t, "unavailable", resp.ApplicationProperties["errorCode"])
+	assert.Equal(t, true, resp.ApplicationProperties["retryable"])
 }
 
 func TestManagementHandlerMissingProperties(t *testing.T) {
@@ -48,7 +50,8 @@ func TestManagementHandlerMissingProperties(t *testing.T) {
 	require.NotNil(t, resp)
 
 	code, _ := resp.ApplicationProperties["statusCode"].(int32)
-	assert.Equal(t, statusError, code)
+	assert.Equal(t, int32(400), code)
+	assert.Equal(t, "invalid_argument", resp.ApplicationProperties["errorCode"])
 }
 
 func TestManagementHandlerUnsupportedType(t *testing.T) {
@@ -68,9 +71,10 @@ func TestManagementHandlerUnsupportedType(t *testing.T) {
 	require.NotNil(t, resp)
 
 	code, _ := resp.ApplicationProperties["statusCode"].(int32)
-	assert.Equal(t, statusError, code)
+	assert.Equal(t, int32(400), code)
 	desc, _ := resp.ApplicationProperties["statusDescription"].(string)
-	assert.Contains(t, desc, "unsupported type")
+	assert.Equal(t, "queue operation failed", desc)
+	assert.Equal(t, "invalid_argument", resp.ApplicationProperties["errorCode"])
 }
 
 func TestManagementHandlerUnsupportedOperation(t *testing.T) {
@@ -90,7 +94,7 @@ func TestManagementHandlerUnsupportedOperation(t *testing.T) {
 	require.NotNil(t, resp)
 
 	code, _ := resp.ApplicationProperties["statusCode"].(int32)
-	assert.Equal(t, statusError, code)
+	assert.Equal(t, int32(400), code)
 }
 
 func TestManagementResponseCorrelation(t *testing.T) {

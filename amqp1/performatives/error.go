@@ -106,6 +106,16 @@ func DecodeError(fields []any) *Error {
 	if len(fields) > 1 && fields[1] != nil {
 		e.Description = fields[1].(string)
 	}
+	if len(fields) > 2 && fields[2] != nil {
+		if info, ok := fields[2].(map[any]any); ok {
+			e.Info = make(map[types.Symbol]any, len(info))
+			for key, value := range info {
+				if symbol, ok := key.(types.Symbol); ok {
+					e.Info[symbol] = value
+				}
+			}
+		}
+	}
 	return e
 }
 

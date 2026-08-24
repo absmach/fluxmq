@@ -408,7 +408,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		msg.SetPayloadFromBuffer(buf)
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			storage.ReleaseMessage(msg)
-			return sendV5PubAck(s, packetID, v5.PubAckUnspecifiedError, "Unspecified error")
+			reasonCode, reason := mqtt5QueuePublishError(err)
+			return sendV5PubAck(s, packetID, reasonCode, reason)
 		}
 		storage.ReleaseMessage(msg)
 		h.broker.telemetry.logger.Debug("v5_publish_complete",

@@ -34,6 +34,7 @@ type mockChannelQueueManager struct {
 	lastCursor           *qtypes.CursorOption
 	lastPublish          qtypes.PublishRequest
 	publishCalls         int
+	publishErr           error
 	exactStreamName      string
 	exactPublish         qtypes.PublishRequest
 	exactPublishCalls    int
@@ -57,7 +58,7 @@ type mockChannelQueueManager struct {
 func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
 	m.lastPublish = publish
 	m.publishCalls++
-	return nil
+	return m.publishErr
 }
 
 func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error {

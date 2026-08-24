@@ -12,6 +12,7 @@ import (
 	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/absmach/fluxmq/amqp1/performatives"
 	corebroker "github.com/absmach/fluxmq/broker"
+	queuepkg "github.com/absmach/fluxmq/queue"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
@@ -314,6 +315,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 
 	resolver := l.session.conn.broker.routeResolver
 	topicRoute := resolver.Resolve(topic)
+	var queuePublishErr error
 	if l.isQueue || topicRoute.Kind == corebroker.RouteQueue {
 		qm := l.session.conn.broker.queueLinkManager
 		if qm != nil {
@@ -326,14 +328,20 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 				publishTopic = resolver.QueueTopic(l.queueName, subject)
 			}
 
-			if err := qm.Publish(l.session.conn.ctx, qtypes.PublishRequest{
+			queuePublishErr = qm.Publish(l.session.conn.ctx, qtypes.PublishRequest{
 				ClientID:   clientID,
 				Topic:      publishTopic,
 				Payload:    data,
 				Properties: props,
-			}); err != nil {
-				l.logger.Error("queue publish failed", "topic", publishTopic, "error", err)
+			})
+			if queuePublishErr != nil {
+				l.logger.Error("queue publish failed", "topic", publishTopic, "error", queuePublishErr)
 			}
+		} else {
+			queuePublishErr = queuepkg.WithFailure(
+				fmt.Errorf("queue manager unavailable"),
+				queuepkg.Failure{Code: queuepkg.ErrorCodeUnavailable, Retryable: true},
+			)
 		}
 	} else {
 		// Publish to shared router (pub/sub).
@@ -343,12 +351,15 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 
 	// Settle if pre-settled by sender
 	if !transfer.Settled && transfer.DeliveryID != nil {
-		// Send disposition with Accepted
+		state := any(&performatives.Accepted{})
+		if queuePublishErr != nil {
+			state = amqp1QueueOutcome(queuePublishErr)
+		}
 		disp := &performatives.Disposition{
 			Role:    performatives.RoleReceiver,
 			First:   *transfer.DeliveryID,
 			Settled: true,
-			State:   &performatives.Accepted{},
+			State:   state,
 		}
 		body, err := disp.Encode()
 		if err != nil {

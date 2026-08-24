@@ -18,6 +18,7 @@ import (
 	"github.com/absmach/fluxmq/amqp1/sasl"
 	"github.com/absmach/fluxmq/amqp1/types"
 	corebroker "github.com/absmach/fluxmq/broker"
+	queuepkg "github.com/absmach/fluxmq/queue"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +43,8 @@ func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 }
 
 type mockAMQP1QueueLinkManager struct {
-	publishCh chan qtypes.PublishRequest
+	publishCh  chan qtypes.PublishRequest
+	publishErr error
 }
 
 func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
@@ -56,7 +58,7 @@ func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, publish qtypes.Pu
 		}
 		m.publishCh <- cloned
 	}
-	return nil
+	return m.publishErr
 }
 
 func (m *mockAMQP1QueueLinkManager) Subscribe(context.Context, string, string, string, string, string) error {
@@ -1129,6 +1131,70 @@ func TestUnsettledTransferDisposition(t *testing.T) {
 	assert.Equal(t, uint32(0), disp.First)
 	_, isAccepted := disp.State.(*performatives.Accepted)
 	assert.True(t, isAccepted, "expected Accepted state")
+}
+
+func TestUnsettledQueueTransferFailureIsRejected(t *testing.T) {
+	failure := queuepkg.Failure{
+		Code:       queuepkg.ErrorCodeUnavailable,
+		Retryable:  true,
+		Leader:     queuepkg.LeaderNotLocal,
+		Durability: queuepkg.DurabilityNotAttempted,
+	}
+	b := New(nil, nil, nil)
+	b.queueLinkManager = &mockAMQP1QueueLinkManager{
+		publishErr: queuepkg.WithFailure(fmt.Errorf("backend detail"), failure),
+	}
+	serverConn, clientConn := net.Pipe()
+	go b.HandleConnection(context.Background(), serverConn)
+	c := amqpconn.NewConnection(clientConn)
+	defer b.Close()
+	defer c.Close()
+
+	doAMQPHandshake(t, c, "rejected-queue-client")
+	doBeginSession(t, c, 0)
+
+	const queueAddress = "$queue/orders/process"
+	attach := &performatives.Attach{
+		Name:                 testSendLink,
+		Handle:               0,
+		Role:                 performatives.RoleSender,
+		Target:               &performatives.Target{Address: queueAddress},
+		InitialDeliveryCount: 0,
+	}
+	body, err := attach.Encode()
+	require.NoError(t, err)
+	require.NoError(t, c.WritePerformative(0, body))
+	_, err = readDescriptor(t, c)
+	require.NoError(t, err)
+	_, err = readDescriptor(t, c)
+	require.NoError(t, err)
+
+	msgBytes, err := (&message.Message{
+		Properties: &message.Properties{To: queueAddress},
+		Data:       [][]byte{[]byte("payload")},
+	}).Encode()
+	require.NoError(t, err)
+	deliveryID := uint32(0)
+	messageFormat := uint32(0)
+	require.NoError(t, c.WriteTransfer(0, &performatives.Transfer{
+		Handle:        0,
+		DeliveryID:    &deliveryID,
+		DeliveryTag:   []byte{0x01},
+		MessageFormat: &messageFormat,
+		Settled:       false,
+	}, msgBytes))
+
+	_, descriptor, value, _, err := c.ReadPerformative()
+	require.NoError(t, err)
+	require.Equal(t, performatives.DescriptorDisposition, descriptor)
+	disposition := value.(*performatives.Disposition)
+	rejected, ok := disposition.State.(*performatives.Rejected)
+	require.True(t, ok)
+	require.Equal(t, performatives.ErrInternalError, rejected.Error.Condition)
+	require.Equal(t, string(failure.Code), rejected.Error.Info[amqp1QueueErrorCodeKey])
+	require.Equal(t, failure.Retryable, rejected.Error.Info[amqp1RetryableKey])
+	require.Equal(t, string(failure.Leader), rejected.Error.Info[amqp1LeaderStateKey])
+	require.Equal(t, string(failure.Durability), rejected.Error.Info[amqp1DurabilityStateKey])
 }
 
 func TestCreditExhaustion(t *testing.T) {

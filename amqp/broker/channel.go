@@ -1573,14 +1573,8 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 				_ = qm.Unsubscribe(context.Background(), queueName, pattern, clientID, subGroupID)
 			}
 			ch.conn.logger.Error("queue subscribe failed", "queue", queueName, "error", subscribeErr)
-			switch {
-			case errors.Is(subscribeErr, qstorage.ErrQueueNotFound):
-				return ch.sendChannelClose(codec.NotFound, "queue not found", codec.ClassBasic, codec.MethodBasicConsume)
-			case errors.Is(subscribeErr, queuepkg.ErrQueueNotStream):
-				return ch.sendChannelClose(codec.PreconditionFailed, "queue is not a stream", codec.ClassBasic, codec.MethodBasicConsume)
-			default:
-				return ch.sendChannelClose(codec.InternalError, "queue subscription failed", codec.ClassBasic, codec.MethodBasicConsume)
-			}
+			code, text := amqp091QueueError(subscribeErr)
+			return ch.sendChannelClose(code, text, codec.ClassBasic, codec.MethodBasicConsume)
 		}
 	}
 
@@ -1928,6 +1922,9 @@ func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[
 		} else {
 			ch.sendPublisherAck()
 		}
+	} else if err != nil {
+		code, text := amqp091QueueError(err)
+		_ = ch.sendChannelClose(code, text, codec.ClassBasic, codec.MethodBasicPublish)
 	}
 }
 
@@ -1999,8 +1996,8 @@ func (ch *Channel) rejectLocalStreamPublish(err error) {
 		ch.sendPublisherNack()
 		return
 	}
-	_ = ch.sendChannelClose(codec.InternalError,
-		"durable stream publish failed", codec.ClassBasic, codec.MethodBasicPublish)
+	code, text := amqp091QueueError(err)
+	_ = ch.sendChannelClose(code, text, codec.ClassBasic, codec.MethodBasicPublish)
 }
 
 // abandonLocalStreamPublish reports a publication whose outcome FluxMQ no

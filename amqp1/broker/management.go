@@ -9,16 +9,14 @@ import (
 	"log/slog"
 
 	"github.com/absmach/fluxmq/amqp1/message"
+	queuepkg "github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
 // Management status codes.
 const (
-	statusOK       = int32(200)
-	statusCreated  = int32(201)
-	statusNotFound = int32(404)
-	statusConflict = int32(409)
-	statusError    = int32(500)
+	statusOK      = int32(200)
+	statusCreated = int32(201)
 )
 
 // Management entity type and operation names.
@@ -43,7 +41,7 @@ func newManagementHandler(b *Broker) *managementHandler {
 // handleRequest processes a management request message and returns a response.
 func (h *managementHandler) handleRequest(msg *message.Message) *message.Message {
 	if msg.ApplicationProperties == nil {
-		return h.errorResponse(msg, statusError, "missing application-properties")
+		return h.queueErrorResponse(msg, managementFailure(queuepkg.ErrorCodeInvalidArgument, false, "missing application-properties"))
 	}
 
 	operation, _ := msg.ApplicationProperties["operation"].(string)
@@ -51,7 +49,7 @@ func (h *managementHandler) handleRequest(msg *message.Message) *message.Message
 	name, _ := msg.ApplicationProperties["name"].(string)
 
 	if entityType != entityTypeQueue {
-		return h.errorResponse(msg, statusError, fmt.Sprintf("unsupported type: %s", entityType))
+		return h.queueErrorResponse(msg, managementFailure(queuepkg.ErrorCodeInvalidArgument, false, "unsupported type"))
 	}
 
 	ctx := context.Background()
@@ -66,18 +64,18 @@ func (h *managementHandler) handleRequest(msg *message.Message) *message.Message
 	case "QUERY":
 		return h.handleQuery(ctx, msg)
 	default:
-		return h.errorResponse(msg, statusError, fmt.Sprintf("unsupported operation: %s", operation))
+		return h.queueErrorResponse(msg, managementFailure(queuepkg.ErrorCodeInvalidArgument, false, "unsupported operation"))
 	}
 }
 
 func (h *managementHandler) handleCreate(ctx context.Context, req *message.Message, name string) *message.Message {
 	if name == "" {
-		return h.errorResponse(req, statusError, "name is required for CREATE")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeInvalidArgument, false, "name is required for CREATE"))
 	}
 
 	qm := h.broker.queueAdminManager
 	if qm == nil {
-		return h.errorResponse(req, statusError, "queue manager not available")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeUnavailable, true, "queue manager not available"))
 	}
 
 	// Build queue config from request properties
@@ -93,11 +91,7 @@ func (h *managementHandler) handleCreate(ctx context.Context, req *message.Messa
 	cfg := types.DefaultQueueConfig(name, topicPatterns...)
 
 	if err := qm.CreateQueue(ctx, cfg); err != nil {
-		// Check if already exists
-		if err.Error() == "queue already exists" {
-			return h.statusResponse(req, statusConflict, "queue already exists")
-		}
-		return h.errorResponse(req, statusError, err.Error())
+		return h.queueErrorResponse(req, err)
 	}
 
 	h.logger.Info("queue created via management", slog.String(entityTypeQueue, name))
@@ -106,26 +100,26 @@ func (h *managementHandler) handleCreate(ctx context.Context, req *message.Messa
 
 func (h *managementHandler) handleDelete(ctx context.Context, req *message.Message, name string) *message.Message {
 	if name == "" {
-		return h.errorResponse(req, statusError, "name is required for DELETE")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeInvalidArgument, false, "name is required for DELETE"))
 	}
 
 	qm := h.broker.queueAdminManager
 	if qm == nil {
-		return h.errorResponse(req, statusError, "queue manager not available")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeUnavailable, true, "queue manager not available"))
 	}
 
 	// Check if queue exists
 	cfg, err := qm.GetQueue(ctx, name)
 	if err != nil {
-		return h.statusResponse(req, statusNotFound, "queue not found")
+		return h.queueErrorResponse(req, err)
 	}
 
 	if cfg.Reserved {
-		return h.errorResponse(req, statusError, "cannot delete reserved queue")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeFailedPrecondition, false, "cannot delete reserved queue"))
 	}
 
 	if err := qm.DeleteQueue(ctx, name); err != nil {
-		return h.errorResponse(req, statusError, err.Error())
+		return h.queueErrorResponse(req, err)
 	}
 
 	h.logger.Info("queue deleted via management", slog.String(entityTypeQueue, name))
@@ -134,17 +128,17 @@ func (h *managementHandler) handleDelete(ctx context.Context, req *message.Messa
 
 func (h *managementHandler) handleRead(ctx context.Context, req *message.Message, name string) *message.Message {
 	if name == "" {
-		return h.errorResponse(req, statusError, "name is required for READ")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeInvalidArgument, false, "name is required for READ"))
 	}
 
 	qm := h.broker.queueAdminManager
 	if qm == nil {
-		return h.errorResponse(req, statusError, "queue manager not available")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeUnavailable, true, "queue manager not available"))
 	}
 
 	cfg, err := qm.GetQueue(ctx, name)
 	if err != nil {
-		return h.statusResponse(req, statusNotFound, "queue not found")
+		return h.queueErrorResponse(req, err)
 	}
 
 	resp := h.statusResponse(req, statusOK, "OK")
@@ -164,12 +158,12 @@ func (h *managementHandler) handleRead(ctx context.Context, req *message.Message
 func (h *managementHandler) handleQuery(ctx context.Context, req *message.Message) *message.Message {
 	qm := h.broker.queueAdminManager
 	if qm == nil {
-		return h.errorResponse(req, statusError, "queue manager not available")
+		return h.queueErrorResponse(req, managementFailure(queuepkg.ErrorCodeUnavailable, true, "queue manager not available"))
 	}
 
 	queues, err := qm.ListQueues(ctx)
 	if err != nil {
-		return h.errorResponse(req, statusError, err.Error())
+		return h.queueErrorResponse(req, err)
 	}
 
 	resp := h.statusResponse(req, statusOK, "OK")
@@ -208,6 +202,17 @@ func (h *managementHandler) statusResponse(req *message.Message, code int32, des
 	return resp
 }
 
-func (h *managementHandler) errorResponse(req *message.Message, code int32, description string) *message.Message {
-	return h.statusResponse(req, code, description)
+func (h *managementHandler) queueErrorResponse(req *message.Message, err error) *message.Message {
+	failure := queuepkg.ClassifyError(err)
+	resp := h.statusResponse(req, amqp1ManagementStatus(failure.Code), "queue operation failed")
+	resp.ApplicationProperties["errorCode"] = string(failure.Code)
+	resp.ApplicationProperties["retryable"] = failure.Retryable
+	resp.ApplicationProperties["ownership"] = string(failure.Ownership)
+	resp.ApplicationProperties["leader"] = string(failure.Leader)
+	resp.ApplicationProperties["durability"] = string(failure.Durability)
+	return resp
+}
+
+func managementFailure(code queuepkg.ErrorCode, retryable bool, message string) error {
+	return queuepkg.WithFailure(fmt.Errorf("%s", message), queuepkg.Failure{Code: code, Retryable: retryable})
 }
