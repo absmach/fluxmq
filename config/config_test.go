@@ -27,6 +27,16 @@ const (
 // absent and zero distinct.
 func ptr[T any](v T) *T { return &v }
 
+func enableInsecureTestCluster(c *Config) {
+	c.Cluster.Enabled = true
+	c.Cluster.AllowInsecure = true
+	c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+	c.Cluster.Raft.Peers = map[string]string{
+		"broker-2": "127.0.0.1:7101",
+		"broker-3": "127.0.0.1:7102",
+	}
+}
+
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
@@ -75,6 +85,81 @@ func TestDefault(t *testing.T) {
 	// Test log defaults
 	if cfg.Log.Level != "info" {
 		t.Errorf("expected log level info, got %s", cfg.Log.Level)
+	}
+}
+
+func TestClusterTransportSecurityValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		wantError string
+	}{
+		{
+			name: "plaintext requires explicit opt-in",
+			configure: func(c *Config) {
+				c.Cluster.Enabled = true
+				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+			},
+			wantError: "cluster transport TLS required",
+		},
+		{
+			name: "explicit insecure loopback development cluster",
+			configure: func(c *Config) {
+				c.Cluster.Enabled = true
+				c.Cluster.AllowInsecure = true
+				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+			},
+		},
+		{
+			name: "etcd client cannot bind wildcard",
+			configure: func(c *Config) {
+				c.Cluster.Enabled = true
+				c.Cluster.AllowInsecure = true
+				c.Cluster.Etcd.ClientAddr = "0.0.0.0:2379"
+				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+			},
+			wantError: "cluster.etcd.client_addr must be loopback-only",
+		},
+		{
+			name: "secure cluster requires https etcd members",
+			configure: func(c *Config) {
+				c.Cluster.Enabled = true
+				c.Cluster.Transport.TLSEnabled = true
+				c.Cluster.Transport.TLSCertFile = "node.crt"
+				c.Cluster.Transport.TLSKeyFile = "node.key"
+				c.Cluster.Transport.TLSCAFile = "ca.crt"
+				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+			},
+			wantError: "must use https",
+		},
+		{
+			name: "secure cluster",
+			configure: func(c *Config) {
+				c.Cluster.Enabled = true
+				c.Cluster.Transport.TLSEnabled = true
+				c.Cluster.Transport.TLSCertFile = "node.crt"
+				c.Cluster.Transport.TLSKeyFile = "node.key"
+				c.Cluster.Transport.TLSCAFile = "ca.crt"
+				c.Cluster.Etcd.InitialCluster = "broker-1=https://127.0.0.1:2380"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.configure(cfg)
+			err := cfg.Validate()
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, tt.wantError)
+			}
+		})
 	}
 }
 

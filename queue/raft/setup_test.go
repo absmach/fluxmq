@@ -126,7 +126,7 @@ func TestRaftGroupProvisionerDerivesAutoGroupEndpoints(t *testing.T) {
 		},
 	}
 
-	p := newRaftGroupProvisioner(testRaftNode1, raftCfg, nil, nil, nil, nil, nil)
+	p := newRaftGroupProvisioner(testRaftNode1, raftCfg, nil, nil, nil, nil, nil, nil)
 	derived, err := p.deriveAutoGroupConfig(testGroupHot)
 	if err != nil {
 		t.Fatalf("deriveAutoGroupConfig failed: %v", err)
@@ -150,7 +150,7 @@ func TestRaftGroupProvisionerRejectsUnknownWhenAutoProvisionDisabled(t *testing.
 		DataDir:             testRaftDataDir,
 	}
 
-	p := newRaftGroupProvisioner(testRaftNode1, raftCfg, nil, nil, map[string]*Manager{
+	p := newRaftGroupProvisioner(testRaftNode1, raftCfg, nil, nil, nil, map[string]*Manager{
 		DefaultGroupID: {},
 	}, nil, nil)
 
@@ -167,6 +167,7 @@ func TestRaftGroupProvisionerTryReleaseGroupSkipsStaticGroups(t *testing.T) {
 	p := newRaftGroupProvisioner(
 		testRaftNode1,
 		config.RaftConfig{},
+		nil,
 		nil,
 		nil,
 		map[string]*Manager{
@@ -199,6 +200,7 @@ func TestRaftGroupProvisionerTryReleaseGroupRemovesDynamicTracking(t *testing.T)
 	p := newRaftGroupProvisioner(
 		testRaftNode1,
 		config.RaftConfig{},
+		nil,
 		nil,
 		nil,
 		map[string]*Manager{

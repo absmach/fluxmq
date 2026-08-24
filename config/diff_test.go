@@ -157,7 +157,7 @@ func TestDiffRestartRequiredFields(t *testing.T) {
 		},
 		{
 			name:   "cluster enabled",
-			modify: func(cfg *Config) { cfg.Cluster.Enabled = false },
+			modify: func(cfg *Config) { cfg.Cluster.Enabled = true },
 			path:   "Cluster.Enabled",
 		},
 		{

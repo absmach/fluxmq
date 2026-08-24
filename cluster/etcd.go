@@ -5,11 +5,13 @@ package cluster
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	etcdtransport "go.etcd.io/etcd/client/pkg/v3/transport"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.etcd.io/etcd/server/v3/embed"
@@ -35,8 +38,6 @@ const (
 	sessionsPrefix       = "/sessions/"
 	queueConsumersPrefix = "/queue-consumers/"
 	electionPrefix       = "/leader"
-
-	urlPrefix = "http://"
 
 	defaultRouteBatchFlushWorkers = 4
 )
@@ -159,6 +160,7 @@ type EtcdConfig struct {
 	TransportAddr               string
 	PeerTransports              map[string]string
 	Bootstrap                   bool
+	AllowInsecure               bool
 	HybridRetainedSizeThreshold int // Size threshold in bytes for hybrid retained storage (default 1024)
 	RouteBatchMaxSize           int
 	RouteBatchMaxDelay          time.Duration
@@ -177,13 +179,33 @@ type TransportTLSConfig struct {
 
 // NewEtcdCluster creates a new embedded etcd cluster.
 func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logger) (*EtcdCluster, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("etcd cluster configuration is required")
+	}
+	if !isLoopbackAddress(cfg.ClientAddr) {
+		return nil, fmt.Errorf("embedded etcd client address must be loopback-only")
+	}
+	if cfg.TransportTLS == nil && !cfg.AllowInsecure {
+		return nil, fmt.Errorf("cluster TLS is required unless allow_insecure is enabled")
+	}
+	scheme := "http"
+	var clientTLSConfig *tls.Config
+	if cfg.TransportTLS != nil {
+		scheme = "https"
+		_, loadedClientTLS, err := LoadMutualTLSConfigs(cfg.TransportTLS)
+		if err != nil {
+			return nil, err
+		}
+		clientTLSConfig = loadedClientTLS
+	}
+
 	// Create embedded etcd configuration
 	eCfg := embed.NewConfig()
 	eCfg.Name = cfg.NodeID
 	eCfg.Dir = cfg.DataDir
 
 	// Peer URLs (for Raft communication)
-	peerURL, err := url.Parse(urlPrefix + cfg.BindAddr)
+	peerURL, err := url.Parse(scheme + "://" + cfg.BindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid bind address: %w", err)
 	}
@@ -191,7 +213,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 
 	// Advertise URL (what other nodes use to contact this node)
 	if cfg.AdvertiseAddr != "" {
-		advertiseURL, err := url.Parse(urlPrefix + cfg.AdvertiseAddr)
+		advertiseURL, err := url.Parse(scheme + "://" + cfg.AdvertiseAddr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid advertise address: %w", err)
 		}
@@ -201,12 +223,24 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	}
 
 	// Client URLs (for KV operations)
-	clientURL, err := url.Parse(urlPrefix + cfg.ClientAddr)
+	clientURL, err := url.Parse(scheme + "://" + cfg.ClientAddr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid client address: %w", err)
 	}
 	eCfg.ListenClientUrls = []url.URL{*clientURL}
 	eCfg.AdvertiseClientUrls = []url.URL{*clientURL}
+	if cfg.TransportTLS != nil {
+		tlsInfo := etcdtransport.TLSInfo{
+			CertFile:       cfg.TransportTLS.CertFile,
+			KeyFile:        cfg.TransportTLS.KeyFile,
+			ClientCertFile: cfg.TransportTLS.CertFile,
+			ClientKeyFile:  cfg.TransportTLS.KeyFile,
+			TrustedCAFile:  cfg.TransportTLS.CAFile,
+			ClientCertAuth: true,
+		}
+		eCfg.PeerTLSInfo = tlsInfo
+		eCfg.ClientTLSInfo = tlsInfo
+	}
 
 	// Cluster configuration
 	eCfg.InitialCluster = cfg.InitialCluster
@@ -237,8 +271,9 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 
 	// Create etcd client
 	client, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.ClientAddr},
+		Endpoints:   []string{clientURL.String()},
 		DialTimeout: 5 * time.Second,
+		TLS:         clientTLSConfig,
 	})
 	if err != nil {
 		e.Close()
@@ -353,6 +388,19 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 	}
 
 	return c, nil
+}
+
+func isLoopbackAddress(address string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Start begins cluster participation (campaigns for leadership).

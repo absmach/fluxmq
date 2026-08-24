@@ -70,6 +70,7 @@ storage:
 
 cluster:
   enabled: true
+  allow_insecure: true # Development-only local cluster.
   node_id: "node3"
   etcd:
     data_dir: "/tmp/fluxmq/node3/etcd"

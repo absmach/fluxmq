@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 )
@@ -35,6 +36,7 @@ func StartQueueCoordinator(
 	raftCfg config.RaftConfig,
 	queueStore qstorage.QueueStore,
 	groupStore qstorage.ConsumerGroupStore,
+	tlsConfig *cluster.TransportTLSConfig,
 	logger *slog.Logger,
 ) (QueueCoordinator, *Manager, []RaftGroupRuntime, error) {
 	if logger == nil {
@@ -67,6 +69,7 @@ func StartQueueCoordinator(
 			groupStore,
 			runtime.Peers,
 			runtime.ManagerConfig,
+			tlsConfig,
 			groupLogger,
 		)
 
@@ -85,7 +88,7 @@ func StartQueueCoordinator(
 		return nil, nil, nil, fmt.Errorf("default raft group %q must be configured", DefaultGroupID)
 	}
 
-	provisioner := newRaftGroupProvisioner(nodeID, raftCfg, queueStore, groupStore, started, runtimes, logger)
+	provisioner := newRaftGroupProvisioner(nodeID, raftCfg, queueStore, groupStore, tlsConfig, started, runtimes, logger)
 	coordinator := NewLogicalGroupCoordinatorWithProvisioner(defaultManager, provisioner, logger)
 	for groupID, manager := range started {
 		if groupID == DefaultGroupID {
@@ -219,6 +222,7 @@ type raftGroupProvisioner struct {
 	raftCfg    config.RaftConfig
 	queueStore qstorage.QueueStore
 	groupStore qstorage.ConsumerGroupStore
+	tlsConfig  *cluster.TransportTLSConfig
 	logger     *slog.Logger
 
 	mu           sync.Mutex
@@ -234,6 +238,7 @@ func newRaftGroupProvisioner(
 	raftCfg config.RaftConfig,
 	queueStore qstorage.QueueStore,
 	groupStore qstorage.ConsumerGroupStore,
+	tlsConfig *cluster.TransportTLSConfig,
 	started map[string]*Manager,
 	runtimes []RaftGroupRuntime,
 	logger *slog.Logger,
@@ -262,6 +267,7 @@ func newRaftGroupProvisioner(
 		raftCfg:      raftCfg,
 		queueStore:   queueStore,
 		groupStore:   groupStore,
+		tlsConfig:    tlsConfig,
 		logger:       logger,
 		managers:     managers,
 		inflight:     make(map[string]chan struct{}),
@@ -371,6 +377,7 @@ func (p *raftGroupProvisioner) startManager(ctx context.Context, gid string, run
 		p.groupStore,
 		runtime.Peers,
 		runtime.ManagerConfig,
+		p.tlsConfig,
 		groupLogger,
 	)
 

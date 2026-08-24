@@ -5,7 +5,9 @@ package raft
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,11 +16,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 )
+
+var ErrRaftDisabled = errors.New("queue raft replication is disabled")
 
 // Manager manages a single Raft group for all queue operations.
 // All queues share one Raft consensus group per node.
@@ -30,6 +36,7 @@ type Manager struct {
 	groupStore storage.ConsumerGroupStore
 	logger     *slog.Logger
 	config     ManagerConfig
+	tlsConfig  *cluster.TransportTLSConfig
 
 	// Single Raft group for all queues
 	raft          *raft.Raft
@@ -92,6 +99,7 @@ func NewManager(
 	groupStore storage.ConsumerGroupStore,
 	peers map[string]string,
 	config ManagerConfig,
+	tlsConfig *cluster.TransportTLSConfig,
 	logger *slog.Logger,
 ) *Manager {
 	if logger == nil {
@@ -106,6 +114,7 @@ func NewManager(
 		groupStore: groupStore,
 		peers:      peers,
 		config:     config,
+		tlsConfig:  tlsConfig,
 		logger:     logger,
 		stopCh:     make(chan struct{}),
 	}
@@ -116,6 +125,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	if !m.config.Enabled {
 		m.logger.Info("raft replication disabled")
 		return nil
+	}
+	if err := m.validateReplicationTopology(); err != nil {
+		return err
 	}
 
 	m.logger.Info("starting raft manager",
@@ -146,7 +158,12 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Create snapshot store
 	snapshotDir := filepath.Join(raftDir, "snapshots")
-	snapStore, err := raft.NewFileSnapshotStore(snapshotDir, 3, os.Stderr)
+	raftLogger := hclog.New(&hclog.LoggerOptions{
+		Name:   "queue-raft",
+		Level:  hclog.Warn,
+		Output: &raftLogWriter{logger: m.logger},
+	})
+	snapStore, err := raft.NewFileSnapshotStore(snapshotDir, 3, &raftLogWriter{logger: m.logger})
 	if err != nil {
 		raftDB.Close()
 		return fmt.Errorf("failed to create snapshot store: %w", err)
@@ -163,10 +180,20 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to resolve bind address: %w", err)
 	}
 
-	transport, err := raft.NewTCPTransport(m.bindAddr, addr, 3, 10*time.Second, os.Stderr)
-	if err != nil {
-		raftDB.Close()
-		return fmt.Errorf("failed to create raft transport: %w", err)
+	var transport *raft.NetworkTransport
+	if m.tlsConfig != nil {
+		stream, streamErr := newTLSStreamLayer(m.bindAddr, addr, m.tlsConfig)
+		if streamErr != nil {
+			raftDB.Close()
+			return fmt.Errorf("failed to create TLS raft stream: %w", streamErr)
+		}
+		transport = raft.NewNetworkTransportWithLogger(stream, 3, 10*time.Second, raftLogger)
+	} else {
+		transport, err = raft.NewTCPTransportWithLogger(m.bindAddr, addr, 3, 10*time.Second, raftLogger)
+		if err != nil {
+			raftDB.Close()
+			return fmt.Errorf("failed to create raft transport: %w", err)
+		}
 	}
 	m.transport = transport
 
@@ -178,6 +205,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	raftCfg.SnapshotInterval = m.config.SnapshotInterval
 	raftCfg.SnapshotThreshold = m.config.SnapshotThreshold
 	raftCfg.LogLevel = "WARN"
+	raftCfg.Logger = raftLogger
 
 	// Create Raft instance
 	r, err := raft.NewRaft(raftCfg, m.fsm, m.raftLogStore, m.stableStore, m.snapshotStore, m.transport)
@@ -198,6 +226,52 @@ func (m *Manager) Start(ctx context.Context) error {
 		slog.String("node_id", m.nodeID),
 		slog.String("bind_addr", m.bindAddr))
 
+	return nil
+}
+
+func (m *Manager) validateReplicationTopology() error {
+	factor := m.config.ReplicationFactor
+	if factor < 1 || factor > 10 {
+		return fmt.Errorf("raft replication factor must be between 1 and 10")
+	}
+	members := len(m.peers) + 1
+	if members != factor {
+		return fmt.Errorf("raft replication factor %d does not match configured membership %d", factor, members)
+	}
+	minISR := m.config.MinInSyncReplicas
+	if minISR < 1 || minISR > factor {
+		return fmt.Errorf("raft minimum in-sync replicas must be between 1 and replication factor")
+	}
+	quorum := factor/2 + 1
+	if minISR > quorum {
+		return fmt.Errorf("raft minimum in-sync replicas %d exceeds the quorum %d enforced by this implementation", minISR, quorum)
+	}
+	if !m.config.SyncMode && minISR > 1 {
+		return fmt.Errorf("raft minimum in-sync replicas above 1 requires synchronous apply")
+	}
+	if m.config.AckTimeout <= 0 {
+		return fmt.Errorf("raft acknowledgement timeout must be greater than zero")
+	}
+	return nil
+}
+
+// ValidateReplicationConfig proves that a queue's declared guarantees fit the
+// actual Raft group. Values that merely look valid in isolation are rejected
+// when this group cannot provide them.
+func (m *Manager) ValidateReplicationConfig(cfg types.ReplicationConfig) error {
+	if err := m.validateReplicationTopology(); err != nil {
+		return err
+	}
+	if cfg.ReplicationFactor != m.config.ReplicationFactor {
+		return fmt.Errorf("queue replication factor %d does not match raft group factor %d", cfg.ReplicationFactor, m.config.ReplicationFactor)
+	}
+	quorum := m.config.ReplicationFactor/2 + 1
+	if cfg.MinInSyncReplicas < 1 || cfg.MinInSyncReplicas > quorum {
+		return fmt.Errorf("queue minimum in-sync replicas %d is not enforceable by raft quorum %d", cfg.MinInSyncReplicas, quorum)
+	}
+	if cfg.Mode == types.ReplicationAsync && cfg.MinInSyncReplicas > 1 {
+		return fmt.Errorf("queue minimum in-sync replicas above 1 requires synchronous replication")
+	}
 	return nil
 }
 
@@ -251,6 +325,16 @@ func (m *Manager) waitForPeers() {
 	if len(m.peers) == 0 {
 		return
 	}
+	var clientTLS *tls.Config
+	if m.tlsConfig != nil {
+		_, loadedClientTLS, err := cluster.LoadMutualTLSConfigs(m.tlsConfig)
+		if err != nil {
+			m.logger.Error("failed to load TLS for raft peer readiness checks", slog.String("error", err.Error()))
+			return
+		}
+		loadedClientTLS.NextProtos = nil
+		clientTLS = loadedClientTLS
+	}
 
 	m.logger.Info("waiting for raft peers to be reachable",
 		slog.Int("peer_count", len(m.peers)))
@@ -262,7 +346,7 @@ func (m *Manager) waitForPeers() {
 	for time.Now().Before(deadline) {
 		allReachable := true
 		for nodeID, addr := range m.peers {
-			conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+			conn, err := dialRaftPeer(addr, time.Second, clientTLS)
 			if err != nil {
 				allReachable = false
 				m.logger.Debug("peer not reachable yet",

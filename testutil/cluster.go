@@ -278,6 +278,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		TransportAddr:  node.GRPCAddr,
 		PeerTransports: peerTransports,
 		Bootstrap:      bootstrap,
+		AllowInsecure:  true,
 	}
 
 	clust, err := cluster.NewEtcdCluster(clusterCfg, store, nullLogger)

@@ -518,6 +518,7 @@ func main() {
 
 	var cl cluster.Cluster
 	var etcdCluster *cluster.EtcdCluster
+	var clusterTLS *cluster.TransportTLSConfig
 
 	// Declared here rather than beside their construction because the deferred
 	// teardown that releases them has to be registered before b.Close, which is
@@ -529,9 +530,8 @@ func main() {
 	)
 	if cfg.Cluster.Enabled {
 		// Build transport TLS config if enabled
-		var transportTLS *cluster.TransportTLSConfig
 		if cfg.Cluster.Transport.TLSEnabled {
-			transportTLS = &cluster.TransportTLSConfig{
+			clusterTLS = &cluster.TransportTLSConfig{
 				CertFile: cfg.Cluster.Transport.TLSCertFile,
 				KeyFile:  cfg.Cluster.Transport.TLSKeyFile,
 				CAFile:   cfg.Cluster.Transport.TLSCAFile,
@@ -546,13 +546,14 @@ func main() {
 			AdvertiseAddr:               cfg.Cluster.Etcd.BindAddr, // Use bind addr as advertise for now
 			InitialCluster:              cfg.Cluster.Etcd.InitialCluster,
 			Bootstrap:                   cfg.Cluster.Etcd.Bootstrap,
+			AllowInsecure:               cfg.Cluster.AllowInsecure,
 			TransportAddr:               cfg.Cluster.Transport.BindAddr,
 			PeerTransports:              cfg.Cluster.Transport.Peers,
 			HybridRetainedSizeThreshold: cfg.Cluster.Etcd.HybridRetainedSizeThreshold,
 			RouteBatchMaxSize:           cfg.Cluster.Transport.RouteBatchMaxSize,
 			RouteBatchMaxDelay:          cfg.Cluster.Transport.RouteBatchMaxDelay,
 			RouteBatchFlushWorkers:      cfg.Cluster.Transport.RouteBatchFlushWorkers,
-			TransportTLS:                transportTLS,
+			TransportTLS:                clusterTLS,
 		}
 
 		ec, err := cluster.NewEtcdCluster(etcdCfg, store, logger)
@@ -1004,6 +1005,7 @@ func main() {
 				cfg.Cluster.Raft,
 				queueLogStore,
 				queueLogStore,
+				clusterTLS,
 				logger,
 			)
 			if err != nil {

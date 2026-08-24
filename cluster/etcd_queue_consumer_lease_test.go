@@ -43,6 +43,7 @@ func newSingleNodeEtcdCluster(t *testing.T) *EtcdCluster {
 		AdvertiseAddr:  fmt.Sprintf("127.0.0.1:%d", peerPort),
 		InitialCluster: fmt.Sprintf("%s=http://127.0.0.1:%d", nodeID, peerPort),
 		Bootstrap:      true,
+		AllowInsecure:  true,
 	}
 
 	c, err := NewEtcdCluster(cfg, memory.New(), slog.New(slog.NewTextHandler(io.Discard, nil)))

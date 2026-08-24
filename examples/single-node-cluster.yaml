@@ -68,6 +68,7 @@ storage:
 
 cluster:
   enabled: true
+  allow_insecure: true # Development-only example.
   node_id: "node1"
 
   etcd:

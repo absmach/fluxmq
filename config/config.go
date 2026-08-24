@@ -945,8 +945,9 @@ type StorageConfig struct {
 
 // ClusterConfig holds clustering configuration.
 type ClusterConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	NodeID  string `yaml:"node_id"`
+	Enabled       bool   `yaml:"enabled"`
+	NodeID        string `yaml:"node_id"`
+	AllowInsecure bool   `yaml:"allow_insecure"` // Explicit development-only opt-in for plaintext inter-node traffic.
 
 	// Embedded etcd settings
 	Etcd EtcdConfig `yaml:"etcd"`
@@ -1245,13 +1246,13 @@ func Default() *Config {
 			BadgerDir:          "/tmp/fluxmq/data",
 		},
 		Cluster: ClusterConfig{
-			Enabled: true,
+			Enabled: false,
 			NodeID:  defaultNodeID,
 			Etcd: EtcdConfig{
 				DataDir:        "/tmp/fluxmq/etcd",
 				BindAddr:       "0.0.0.0:2380",
-				ClientAddr:     "0.0.0.0:2379",
-				InitialCluster: "broker-1=http://0.0.0.0:2380",
+				ClientAddr:     "127.0.0.1:2379",
+				InitialCluster: "broker-1=https://0.0.0.0:2380",
 				Bootstrap:      true,
 			},
 			Transport: TransportConfig{
@@ -1954,6 +1955,12 @@ func (c *Config) Validate() error {
 		if c.Cluster.Etcd.ClientAddr == "" {
 			return fmt.Errorf("cluster.etcd.client_addr required when clustering is enabled")
 		}
+		if !isLoopbackEndpoint(c.Cluster.Etcd.ClientAddr) {
+			return fmt.Errorf("cluster.etcd.client_addr must be loopback-only")
+		}
+		if strings.TrimSpace(c.Cluster.Etcd.InitialCluster) == "" {
+			return fmt.Errorf("cluster.etcd.initial_cluster required when clustering is enabled")
+		}
 		if c.Cluster.Transport.BindAddr == "" {
 			return fmt.Errorf("cluster.transport.bind_addr required when clustering is enabled")
 		}
@@ -1967,6 +1974,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("cluster.transport.route_batch_flush_workers must be >= 0")
 		}
 
+		// One cluster identity secures broker routing, embedded-etcd peer/client,
+		// and queue-Raft traffic. Plaintext requires an explicit development opt-in.
+		if !c.Cluster.Transport.TLSEnabled && !c.Cluster.AllowInsecure {
+			return fmt.Errorf("cluster transport TLS required unless cluster.allow_insecure is true")
+		}
+
 		// Transport TLS validation
 		if c.Cluster.Transport.TLSEnabled {
 			if c.Cluster.Transport.TLSCertFile == "" {
@@ -1978,6 +1991,13 @@ func (c *Config) Validate() error {
 			if c.Cluster.Transport.TLSCAFile == "" {
 				return fmt.Errorf("cluster.transport.tls_ca_file required when transport TLS is enabled")
 			}
+		}
+		wantEtcdScheme := "http"
+		if c.Cluster.Transport.TLSEnabled {
+			wantEtcdScheme = "https"
+		}
+		if err := validateInitialClusterScheme(c.Cluster.Etcd.InitialCluster, wantEtcdScheme); err != nil {
+			return err
 		}
 
 		if c.Cluster.Raft.WritePolicy != "" {
@@ -2365,6 +2385,36 @@ func tlsConfigured(cfg mqtttls.Config) bool {
 
 func hasAddr(addr string) bool {
 	return strings.TrimSpace(addr) != ""
+}
+
+func isLoopbackEndpoint(address string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func validateInitialClusterScheme(initialCluster, wantScheme string) error {
+	for _, member := range strings.Split(initialCluster, ",") {
+		parts := strings.SplitN(strings.TrimSpace(member), "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			return fmt.Errorf("cluster.etcd.initial_cluster member %q must be name=URL", member)
+		}
+		u, err := url.Parse(strings.TrimSpace(parts[1]))
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("cluster.etcd.initial_cluster member %q has an invalid URL", member)
+		}
+		if u.Scheme != wantScheme {
+			return fmt.Errorf("cluster.etcd.initial_cluster member %q must use %s", member, wantScheme)
+		}
+	}
+	return nil
 }
 
 // listenerBinding is one configured listener, named by its config path.

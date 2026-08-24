@@ -653,6 +653,10 @@ func runLocalListenerCase(
 	t.Helper()
 	cfg := Default()
 	cfg.Cluster.Enabled = clusterEnabled
+	if clusterEnabled {
+		cfg.Cluster.AllowInsecure = true
+		cfg.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+	}
 	configure(selector(cfg))
 	if withPrincipal {
 		cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
@@ -805,6 +809,10 @@ func TestValidateAgainstRuntimeRefusesExactTargetWhileClustered(t *testing.T) {
 	withPermission := func(clusterEnabled bool, permission LocalPublishPermission) *Config {
 		cfg := Default()
 		cfg.Cluster.Enabled = clusterEnabled
+		if clusterEnabled {
+			cfg.Cluster.AllowInsecure = true
+			cfg.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+		}
 		cfg.Server.AMQP091.Local.Addr = testInternalAddr
 		cfg.Auth.LocalPrincipals = []LocalPrincipalConfig{{
 			Name:              testPrincipalName,

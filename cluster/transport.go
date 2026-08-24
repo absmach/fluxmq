@@ -6,12 +6,10 @@ package cluster
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,37 +84,9 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 	}
 
 	if tlsCfg != nil {
-		// Load server certificate and key
-		cert, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile)
+		serverTLSConfig, clientTLSConfig, err := LoadMutualTLSConfigs(tlsCfg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load server certificate: %w", err)
-		}
-
-		// Load CA certificate for client verification
-		caCert, err := os.ReadFile(tlsCfg.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load CA certificate: %w", err)
-		}
-
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
-		}
-
-		// Server TLS config (for accepting connections)
-		serverTLSConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			ClientCAs:    caPool,
-			ClientAuth:   tls.RequireAndVerifyClientCert,
-			MinVersion:   tls.VersionTLS12,
-			NextProtos:   []string{"h2"},
-		}
-
-		// Client TLS config (for connecting to peers)
-		clientTLSConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			RootCAs:      caPool,
-			MinVersion:   tls.VersionTLS12,
+			return nil, err
 		}
 
 		// Create TLS listener

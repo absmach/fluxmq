@@ -424,12 +424,13 @@ For a “how it works” deep dive, see [Clustering internals](/architecture/clu
 ```yaml
 cluster:
   enabled: true
+  allow_insecure: true # Development-only plaintext opt-in; omit when TLS is configured.
   node_id: "broker-1"
 
   etcd:
     data_dir: "/tmp/fluxmq/etcd"
     bind_addr: "0.0.0.0:2380"
-    client_addr: "0.0.0.0:2379"
+    client_addr: "127.0.0.1:2379"
     initial_cluster: "broker-1=http://0.0.0.0:2380"
     bootstrap: true
     hybrid_retained_size_threshold: 1024
