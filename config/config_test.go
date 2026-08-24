@@ -86,6 +86,15 @@ func TestDefault(t *testing.T) {
 	if cfg.Log.Level != "info" {
 		t.Errorf("expected log level info, got %s", cfg.Log.Level)
 	}
+
+	// Queue distribution must remain usable when the optional Raft engine is
+	// disabled. Replicate without Raft is rejected at queue-manager startup.
+	if cfg.Cluster.Raft.Enabled {
+		t.Error("expected queue Raft default disabled")
+	}
+	if cfg.Cluster.Raft.DistributionMode != distributionModeForward {
+		t.Errorf("expected distribution mode default %q when Raft is disabled, got %q", distributionModeForward, cfg.Cluster.Raft.DistributionMode)
+	}
 }
 
 func TestClusterTransportSecurityValidation(t *testing.T) {

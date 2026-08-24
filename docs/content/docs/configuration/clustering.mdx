@@ -5,7 +5,7 @@ description: Configure embedded etcd, transport, and optional Raft replication
 
 # Clustering Configuration
 
-**Last Updated:** 18th February 2026
+**Last Updated:** 24th August 2026
 
 Clustering has three building blocks:
 
@@ -16,13 +16,14 @@ Clustering has three building blocks:
 ```yaml
 cluster:
   enabled: true
+  allow_insecure: true # Development-only plaintext opt-in; use TLS in production.
   node_id: "broker-1"
 
   etcd:
     data_dir: "/tmp/fluxmq/etcd"
     bind_addr: "0.0.0.0:2380"
-    client_addr: "0.0.0.0:2379"
-    initial_cluster: "broker-1=http://0.0.0.0:2380"
+    client_addr: "127.0.0.1:2379"
+    initial_cluster: "broker-1=http://127.0.0.1:2380"
     bootstrap: true
     hybrid_retained_size_threshold: 1024
 
@@ -39,7 +40,7 @@ cluster:
     enabled: false
     auto_provision_groups: true
     write_policy: "forward"
-    distribution_mode: "replicate"
+    distribution_mode: "forward"
 ```
 
 ## etcd (Metadata Plane)
@@ -80,6 +81,10 @@ Controls how messages reach consumers across nodes:
 
 - `forward`: append on one node, then route deliveries to remote consumers via transport.
 - `replicate`: replicate the queue log via Raft so nodes with consumers can deliver from local storage.
+
+`forward` is the default and works with or without queue Raft. `replicate` requires
+`cluster.raft.enabled: true`; startup fails instead of silently falling back when
+that requirement is not met.
 
 <Mermaid
 chart="

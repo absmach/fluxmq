@@ -79,6 +79,9 @@ const (
 	writePolicyLocal   = "local"
 	queueModeSync      = "sync"
 
+	distributionModeForward   = "forward"
+	distributionModeReplicate = "replicate"
+
 	authURLField               = "url"
 	authTransportField         = "transport"
 	authTimeoutField           = "timeout"
@@ -1271,7 +1274,7 @@ func Default() *Config {
 				MinInSyncReplicas:   2,
 				AckTimeout:          5 * time.Second,
 				WritePolicy:         writePolicyForward,
-				DistributionMode:    "replicate",
+				DistributionMode:    distributionModeForward,
 				BindAddr:            "127.0.0.1:7100",
 				DataDir:             "/tmp/fluxmq/raft",
 				Peers:               map[string]string{},
@@ -2009,7 +2012,7 @@ func (c *Config) Validate() error {
 		}
 		if c.Cluster.Raft.DistributionMode != "" {
 			switch strings.ToLower(c.Cluster.Raft.DistributionMode) {
-			case writePolicyForward, "replicate":
+			case distributionModeForward, distributionModeReplicate:
 			default:
 				return fmt.Errorf("cluster.raft.distribution_mode must be one of: forward, replicate")
 			}

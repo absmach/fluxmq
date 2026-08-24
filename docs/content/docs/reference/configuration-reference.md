@@ -306,14 +306,14 @@ queues:
 
 ### Queue Fields
 
-| Field            | Description                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`           | Unique queue name.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Field            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`           | Unique queue name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `ack_durability` | Overrides `storage.queue_ack_durability` for this queue: `fsync` or `buffered`. Unset takes the broker-wide default. Replicated queues currently accept only an effective `buffered` policy because Raft apply does not use the queue log's per-append fsync barrier. `fsync` costs the device's fsync latency, shared across publishers that overlap — roughly 185 msg/s at one publisher and 3,100 at sixty-four on a workstation SSD. See the storage page before enabling it on a busy queue. |
-| `topics`         | Topic filters routed into this queue (must be non-empty). MQTT wildcards: `+` matches one level, `#` matches zero or more and must be the final level. A `#` placed anywhere else is not a valid filter and matches nothing — see the note below. Patterns are matched against every publish, not only `$queue/` addresses.                                                                                                |
-| `reserved`       | Marks system-managed/builtin queue definitions.                                                                                                                                                                                                                                                                                                                                                                            |
-| `type`           | Queue mode: `classic` or `stream`. Empty value falls back to default mode.                                                                                                                                                                                                                                                                                                                                                 |
-| `primary_group`  | For stream queues: consumer group used for status reporting.                                                                                                                                                                                                                                                                                                                                                               |
+| `topics`         | Topic filters routed into this queue (must be non-empty). MQTT wildcards: `+` matches one level, `#` matches zero or more and must be the final level. A `#` placed anywhere else is not a valid filter and matches nothing — see the note below. Patterns are matched against every publish, not only `$queue/` addresses.                                                                                                                                                                       |
+| `reserved`       | Marks system-managed/builtin queue definitions.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `type`           | Queue mode: `classic` or `stream`. Empty value falls back to default mode.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `primary_group`  | For stream queues: consumer group used for status reporting.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 Queue patterns are validated wherever a queue is created. A malformed filter — a
 `#` that is not the final level, a wildcard sharing a level with other characters
@@ -455,7 +455,7 @@ cluster:
     min_in_sync_replicas: 2
     ack_timeout: "5s"
     write_policy: "forward"        # local, reject, forward
-    distribution_mode: "replicate" # forward, replicate
+    distribution_mode: "forward"   # forward, replicate
     bind_addr: "127.0.0.1:7100"
     data_dir: "/tmp/fluxmq/raft"
     peers: {}
@@ -477,10 +477,11 @@ cluster:
 
 ### Cluster Root Fields
 
-| Field     | Default    | Description                                                          |
-| --------- | ---------- | -------------------------------------------------------------------- |
-| `enabled` | `true`     | Enables clustering features. Use `false` for standalone deployments. |
-| `node_id` | `broker-1` | Unique node identifier in the cluster.                               |
+| Field            | Default    | Description                                                                      |
+| ---------------- | ---------- | -------------------------------------------------------------------------------- |
+| `enabled`        | `false`    | Enables clustering features.                                                     |
+| `allow_insecure` | `false`    | Development-only opt-in to plaintext inter-node traffic when TLS is not enabled. |
+| `node_id`        | `broker-1` | Unique node identifier in the cluster.                                           |
 
 ### `cluster.etcd`
 
@@ -488,7 +489,7 @@ cluster:
 | -------------------------------- | ----------------------------------------------------------------------------- |
 | `data_dir`                       | Local etcd data directory.                                                    |
 | `bind_addr`                      | etcd peer address (`:2380`) for member replication.                           |
-| `client_addr`                    | etcd client address (`:2379`) used by broker components.                      |
+| `client_addr`                    | Loopback-only etcd client address (`:2379`) used by broker components.        |
 | `initial_cluster`                | Comma-separated cluster map (`name=http://host:2380,...`).                    |
 | `bootstrap`                      | `true` when bootstrapping new cluster; `false` when joining existing cluster. |
 | `hybrid_retained_size_threshold` | Payload size threshold for retained/will hybrid storage strategy.             |
@@ -519,7 +520,7 @@ cluster:
 | `min_in_sync_replicas`  | `2`                | Minimum in-sync replicas required for sync behavior.                          |
 | `ack_timeout`           | `5s`               | Timeout for sync commit/apply acknowledgments.                                |
 | `write_policy`          | `forward`          | Follower write behavior: `local`, `reject`, `forward`.                        |
-| `distribution_mode`     | `replicate`        | Cross-node delivery strategy: `forward` or `replicate`.                       |
+| `distribution_mode`     | `forward`          | Cross-node delivery strategy; `replicate` requires Raft to be enabled.        |
 | `bind_addr`             | `127.0.0.1:7100`   | Base Raft bind address for default group runtime.                             |
 | `data_dir`              | `/tmp/fluxmq/raft` | Base Raft data directory.                                                     |
 | `peers`                 | `{}`               | Map of `node_id -> raft address`.                                             |
