@@ -14,17 +14,17 @@ import (
 func protocolToProto(protocol string) authv1.Protocol {
 	switch strings.ToLower(protocol) {
 	case broker.HookProtocolMQTT:
-		return authv1.Protocol_MQTT
+		return authv1.Protocol_PROTOCOL_MQTT
 	case broker.HookProtocolAMQP10:
-		return authv1.Protocol_AMQP_1_0
+		return authv1.Protocol_PROTOCOL_AMQP_1_0
 	case broker.HookProtocolAMQP091:
-		return authv1.Protocol_AMQP_0_9_1
+		return authv1.Protocol_PROTOCOL_AMQP_0_9_1
 	case broker.HookProtocolHTTP:
-		return authv1.Protocol_HTTP
+		return authv1.Protocol_PROTOCOL_HTTP
 	case broker.HookProtocolCoAP:
-		return authv1.Protocol_CoAP
+		return authv1.Protocol_PROTOCOL_COAP
 	default:
-		return authv1.Protocol_Unspecified
+		return authv1.Protocol_PROTOCOL_UNSPECIFIED
 	}
 }
 
@@ -35,15 +35,15 @@ func protocolToString(protocol string) string {
 func hookToProto(hook string) authv1.HookType {
 	switch strings.ToLower(hook) {
 	case broker.HookAuthOnRegister:
-		return authv1.HookType_AuthOnRegister
+		return authv1.HookType_HOOK_TYPE_AUTH_ON_REGISTER
 	case broker.HookAuthOnPublish:
-		return authv1.HookType_AuthOnPublish
+		return authv1.HookType_HOOK_TYPE_AUTH_ON_PUBLISH
 	case broker.HookAuthOnSubscribe:
-		return authv1.HookType_AuthOnSubscribe
+		return authv1.HookType_HOOK_TYPE_AUTH_ON_SUBSCRIBE
 	case broker.HookAuthOnUnsubscribe:
-		return authv1.HookType_AuthOnUnsubscribe
+		return authv1.HookType_HOOK_TYPE_AUTH_ON_UNSUBSCRIBE
 	default:
-		return authv1.HookType_HookTypeUnspecified
+		return authv1.HookType_HOOK_TYPE_UNSPECIFIED
 	}
 }
 
@@ -58,9 +58,9 @@ func resultFromProto(res *authv1.HookRes) (broker.BlockingHookResult, error) {
 
 	var allowed bool
 	switch res.GetResult() {
-	case authv1.HookResult_HookResultOk:
+	case authv1.HookResult_HOOK_RESULT_OK:
 		allowed = true
-	case authv1.HookResult_HookResultDeny:
+	case authv1.HookResult_HOOK_RESULT_DENY:
 		allowed = false
 	default:
 		return broker.BlockingHookResult{}, fmt.Errorf("unknown hook result %s", res.GetResult().String())

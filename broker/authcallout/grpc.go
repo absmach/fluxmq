@@ -83,12 +83,12 @@ func (c *GRPCClient) Authenticate(ctx context.Context, clientID, username, secre
 
 // CanPublish calls the remote AuthService.Authorize RPC for publish.
 func (c *GRPCClient) CanPublish(ctx context.Context, clientID string, topic string) bool {
-	return c.authorize(ctx, clientID, topic, authv1.Action_Publish)
+	return c.authorize(ctx, clientID, topic, authv1.Action_ACTION_PUBLISH)
 }
 
 // CanSubscribe calls the remote AuthService.Authorize RPC for subscribe.
 func (c *GRPCClient) CanSubscribe(ctx context.Context, clientID string, filter string) bool {
-	return c.authorize(ctx, clientID, filter, authv1.Action_Subscribe)
+	return c.authorize(ctx, clientID, filter, authv1.Action_ACTION_SUBSCRIBE)
 }
 
 func (c *GRPCClient) authorize(ctx context.Context, externalID, topic string, action authv1.Action) bool {

@@ -190,11 +190,11 @@ func (c *HTTPClient) doPost(ctx context.Context, path string, body, dest any) er
 
 func protocolToString(p authv1.Protocol) string {
 	switch p {
-	case authv1.Protocol_MQTT:
+	case authv1.Protocol_PROTOCOL_MQTT:
 		return "mqtt"
-	case authv1.Protocol_AMQP_1_0:
+	case authv1.Protocol_PROTOCOL_AMQP_1_0:
 		return "amqp_1_0"
-	case authv1.Protocol_AMQP_0_9_1:
+	case authv1.Protocol_PROTOCOL_AMQP_0_9_1:
 		return "amqp_0_9_1"
 	default:
 		return ""

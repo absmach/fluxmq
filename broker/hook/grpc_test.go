@@ -31,7 +31,7 @@ func (s *fakeHookServer) Handle(_ context.Context, req *connect.Request[authv1.H
 
 func TestGRPCClient_HandleHookParsesMutations(t *testing.T) {
 	handler := &fakeHookServer{result: &authv1.HookRes{
-		Result:     authv1.HookResult_HookResultOk,
+		Result:     authv1.HookResult_HOOK_RESULT_OK,
 		Topic:      "m/domain-id/c/channel-id/messages",
 		Payload:    []byte(`{"v":2}`),
 		PayloadSet: true,
@@ -54,8 +54,8 @@ func TestGRPCClient_HandleHookParsesMutations(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, authv1.HookType_AuthOnPublish, handler.req.GetHook())
-	require.Equal(t, authv1.Protocol_MQTT, handler.req.GetProtocol())
+	require.Equal(t, authv1.HookType_HOOK_TYPE_AUTH_ON_PUBLISH, handler.req.GetHook())
+	require.Equal(t, authv1.Protocol_PROTOCOL_MQTT, handler.req.GetProtocol())
 	require.Equal(t, "m/d1/c/ch1/messages", handler.req.GetTopic())
 	require.True(t, res.Allowed)
 	require.Equal(t, "m/domain-id/c/channel-id/messages", res.Topic)
@@ -67,7 +67,7 @@ func TestGRPCClient_HandleHookParsesMutations(t *testing.T) {
 }
 
 func TestGRPCClient_DefaultClientPlaintextH2C(t *testing.T) {
-	handler := &fakeHookServer{result: &authv1.HookRes{Result: authv1.HookResult_HookResultOk}}
+	handler := &fakeHookServer{result: &authv1.HookRes{Result: authv1.HookResult_HOOK_RESULT_OK}}
 	_, h := authv1connect.NewHookServiceHandler(handler)
 	srv := httptest.NewUnstartedServer(h)
 	protocols := new(http.Protocols)

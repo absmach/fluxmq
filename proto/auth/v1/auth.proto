@@ -38,12 +38,12 @@ service HookService {
 
 // Protocol identifies which messaging protocol the client connected with.
 enum Protocol {
-  Unspecified = 0;
-  MQTT = 1;
-  AMQP_1_0 = 2;
-  AMQP_0_9_1 = 3;
-  HTTP = 4;
-  CoAP = 5;
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_MQTT = 1;
+  PROTOCOL_AMQP_1_0 = 2;
+  PROTOCOL_AMQP_0_9_1 = 3;
+  PROTOCOL_HTTP = 4;
+  PROTOCOL_COAP = 5;
 }
 
 message AuthnReq {
@@ -79,9 +79,9 @@ message AuthzReq {
 }
 
 enum Action {
-  None = 0;
-  Publish = 1;
-  Subscribe = 2;
+  ACTION_UNSPECIFIED = 0;
+  ACTION_PUBLISH = 1;
+  ACTION_SUBSCRIBE = 2;
 }
 
 message AuthzRes {
@@ -94,17 +94,17 @@ message AuthzRes {
 }
 
 enum HookType {
-  HookTypeUnspecified = 0;
-  AuthOnRegister = 1;
-  AuthOnPublish = 2;
-  AuthOnSubscribe = 3;
-  AuthOnUnsubscribe = 4;
+  HOOK_TYPE_UNSPECIFIED = 0;
+  HOOK_TYPE_AUTH_ON_REGISTER = 1;
+  HOOK_TYPE_AUTH_ON_PUBLISH = 2;
+  HOOK_TYPE_AUTH_ON_SUBSCRIBE = 3;
+  HOOK_TYPE_AUTH_ON_UNSUBSCRIBE = 4;
 }
 
 enum HookResult {
-  HookResultUnspecified = 0;
-  HookResultOk = 1;
-  HookResultDeny = 2;
+  HOOK_RESULT_UNSPECIFIED = 0;
+  HOOK_RESULT_OK = 1;
+  HOOK_RESULT_DENY = 2;
 }
 
 message HookReq {

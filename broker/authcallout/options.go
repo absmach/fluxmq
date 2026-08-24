@@ -28,10 +28,10 @@ const (
 type Protocol = authv1.Protocol
 
 const (
-	ProtocolUnspecified = authv1.Protocol_Unspecified
-	ProtocolMQTT        = authv1.Protocol_MQTT
-	ProtocolAMQP10      = authv1.Protocol_AMQP_1_0
-	ProtocolAMQP091     = authv1.Protocol_AMQP_0_9_1
+	ProtocolUnspecified = authv1.Protocol_PROTOCOL_UNSPECIFIED
+	ProtocolMQTT        = authv1.Protocol_PROTOCOL_MQTT
+	ProtocolAMQP10      = authv1.Protocol_PROTOCOL_AMQP_1_0
+	ProtocolAMQP091     = authv1.Protocol_PROTOCOL_AMQP_0_9_1
 )
 
 // Options holds configuration shared by all callout transports.

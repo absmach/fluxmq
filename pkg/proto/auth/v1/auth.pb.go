@@ -36,31 +36,31 @@ const (
 type Protocol int32
 
 const (
-	Protocol_Unspecified Protocol = 0
-	Protocol_MQTT        Protocol = 1
-	Protocol_AMQP_1_0    Protocol = 2
-	Protocol_AMQP_0_9_1  Protocol = 3
-	Protocol_HTTP        Protocol = 4
-	Protocol_CoAP        Protocol = 5
+	Protocol_PROTOCOL_UNSPECIFIED Protocol = 0
+	Protocol_PROTOCOL_MQTT        Protocol = 1
+	Protocol_PROTOCOL_AMQP_1_0    Protocol = 2
+	Protocol_PROTOCOL_AMQP_0_9_1  Protocol = 3
+	Protocol_PROTOCOL_HTTP        Protocol = 4
+	Protocol_PROTOCOL_COAP        Protocol = 5
 )
 
 // Enum value maps for Protocol.
 var (
 	Protocol_name = map[int32]string{
-		0: "Unspecified",
-		1: "MQTT",
-		2: "AMQP_1_0",
-		3: "AMQP_0_9_1",
-		4: "HTTP",
-		5: "CoAP",
+		0: "PROTOCOL_UNSPECIFIED",
+		1: "PROTOCOL_MQTT",
+		2: "PROTOCOL_AMQP_1_0",
+		3: "PROTOCOL_AMQP_0_9_1",
+		4: "PROTOCOL_HTTP",
+		5: "PROTOCOL_COAP",
 	}
 	Protocol_value = map[string]int32{
-		"Unspecified": 0,
-		"MQTT":        1,
-		"AMQP_1_0":    2,
-		"AMQP_0_9_1":  3,
-		"HTTP":        4,
-		"CoAP":        5,
+		"PROTOCOL_UNSPECIFIED": 0,
+		"PROTOCOL_MQTT":        1,
+		"PROTOCOL_AMQP_1_0":    2,
+		"PROTOCOL_AMQP_0_9_1":  3,
+		"PROTOCOL_HTTP":        4,
+		"PROTOCOL_COAP":        5,
 	}
 )
 
@@ -94,22 +94,22 @@ func (Protocol) EnumDescriptor() ([]byte, []int) {
 type Action int32
 
 const (
-	Action_None      Action = 0
-	Action_Publish   Action = 1
-	Action_Subscribe Action = 2
+	Action_ACTION_UNSPECIFIED Action = 0
+	Action_ACTION_PUBLISH     Action = 1
+	Action_ACTION_SUBSCRIBE   Action = 2
 )
 
 // Enum value maps for Action.
 var (
 	Action_name = map[int32]string{
-		0: "None",
-		1: "Publish",
-		2: "Subscribe",
+		0: "ACTION_UNSPECIFIED",
+		1: "ACTION_PUBLISH",
+		2: "ACTION_SUBSCRIBE",
 	}
 	Action_value = map[string]int32{
-		"None":      0,
-		"Publish":   1,
-		"Subscribe": 2,
+		"ACTION_UNSPECIFIED": 0,
+		"ACTION_PUBLISH":     1,
+		"ACTION_SUBSCRIBE":   2,
 	}
 )
 
@@ -143,28 +143,28 @@ func (Action) EnumDescriptor() ([]byte, []int) {
 type HookType int32
 
 const (
-	HookType_HookTypeUnspecified HookType = 0
-	HookType_AuthOnRegister      HookType = 1
-	HookType_AuthOnPublish       HookType = 2
-	HookType_AuthOnSubscribe     HookType = 3
-	HookType_AuthOnUnsubscribe   HookType = 4
+	HookType_HOOK_TYPE_UNSPECIFIED         HookType = 0
+	HookType_HOOK_TYPE_AUTH_ON_REGISTER    HookType = 1
+	HookType_HOOK_TYPE_AUTH_ON_PUBLISH     HookType = 2
+	HookType_HOOK_TYPE_AUTH_ON_SUBSCRIBE   HookType = 3
+	HookType_HOOK_TYPE_AUTH_ON_UNSUBSCRIBE HookType = 4
 )
 
 // Enum value maps for HookType.
 var (
 	HookType_name = map[int32]string{
-		0: "HookTypeUnspecified",
-		1: "AuthOnRegister",
-		2: "AuthOnPublish",
-		3: "AuthOnSubscribe",
-		4: "AuthOnUnsubscribe",
+		0: "HOOK_TYPE_UNSPECIFIED",
+		1: "HOOK_TYPE_AUTH_ON_REGISTER",
+		2: "HOOK_TYPE_AUTH_ON_PUBLISH",
+		3: "HOOK_TYPE_AUTH_ON_SUBSCRIBE",
+		4: "HOOK_TYPE_AUTH_ON_UNSUBSCRIBE",
 	}
 	HookType_value = map[string]int32{
-		"HookTypeUnspecified": 0,
-		"AuthOnRegister":      1,
-		"AuthOnPublish":       2,
-		"AuthOnSubscribe":     3,
-		"AuthOnUnsubscribe":   4,
+		"HOOK_TYPE_UNSPECIFIED":         0,
+		"HOOK_TYPE_AUTH_ON_REGISTER":    1,
+		"HOOK_TYPE_AUTH_ON_PUBLISH":     2,
+		"HOOK_TYPE_AUTH_ON_SUBSCRIBE":   3,
+		"HOOK_TYPE_AUTH_ON_UNSUBSCRIBE": 4,
 	}
 )
 
@@ -198,22 +198,22 @@ func (HookType) EnumDescriptor() ([]byte, []int) {
 type HookResult int32
 
 const (
-	HookResult_HookResultUnspecified HookResult = 0
-	HookResult_HookResultOk          HookResult = 1
-	HookResult_HookResultDeny        HookResult = 2
+	HookResult_HOOK_RESULT_UNSPECIFIED HookResult = 0
+	HookResult_HOOK_RESULT_OK          HookResult = 1
+	HookResult_HOOK_RESULT_DENY        HookResult = 2
 )
 
 // Enum value maps for HookResult.
 var (
 	HookResult_name = map[int32]string{
-		0: "HookResultUnspecified",
-		1: "HookResultOk",
-		2: "HookResultDeny",
+		0: "HOOK_RESULT_UNSPECIFIED",
+		1: "HOOK_RESULT_OK",
+		2: "HOOK_RESULT_DENY",
 	}
 	HookResult_value = map[string]int32{
-		"HookResultUnspecified": 0,
-		"HookResultOk":          1,
-		"HookResultDeny":        2,
+		"HOOK_RESULT_UNSPECIFIED": 0,
+		"HOOK_RESULT_OK":          1,
+		"HOOK_RESULT_DENY":        2,
 	}
 )
 
@@ -313,7 +313,7 @@ func (x *AuthnReq) GetProtocol() Protocol {
 	if x != nil {
 		return x.Protocol
 	}
-	return Protocol_Unspecified
+	return Protocol_PROTOCOL_UNSPECIFIED
 }
 
 type AuthnRes struct {
@@ -449,7 +449,7 @@ func (x *AuthzReq) GetAction() Action {
 	if x != nil {
 		return x.Action
 	}
-	return Action_None
+	return Action_ACTION_UNSPECIFIED
 }
 
 type AuthzRes struct {
@@ -572,7 +572,7 @@ func (x *HookReq) GetHook() HookType {
 	if x != nil {
 		return x.Hook
 	}
-	return HookType_HookTypeUnspecified
+	return HookType_HOOK_TYPE_UNSPECIFIED
 }
 
 func (x *HookReq) GetClientId() string {
@@ -593,7 +593,7 @@ func (x *HookReq) GetProtocol() Protocol {
 	if x != nil {
 		return x.Protocol
 	}
-	return Protocol_Unspecified
+	return Protocol_PROTOCOL_UNSPECIFIED
 }
 
 func (x *HookReq) GetTopic() string {
@@ -700,7 +700,7 @@ func (x *HookRes) GetResult() HookResult {
 	if x != nil {
 		return x.Result
 	}
-	return HookResult_HookResultUnspecified
+	return HookResult_HOOK_RESULT_UNSPECIFIED
 }
 
 func (x *HookRes) GetTopic() string {
@@ -849,30 +849,29 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"externalId\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*W\n" +
-	"\bProtocol\x12\x0f\n" +
-	"\vUnspecified\x10\x00\x12\b\n" +
-	"\x04MQTT\x10\x01\x12\f\n" +
-	"\bAMQP_1_0\x10\x02\x12\x0e\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\x8d\x01\n" +
+	"\bProtocol\x12\x18\n" +
+	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rPROTOCOL_MQTT\x10\x01\x12\x15\n" +
+	"\x11PROTOCOL_AMQP_1_0\x10\x02\x12\x17\n" +
+	"\x13PROTOCOL_AMQP_0_9_1\x10\x03\x12\x11\n" +
+	"\rPROTOCOL_HTTP\x10\x04\x12\x11\n" +
+	"\rPROTOCOL_COAP\x10\x05*J\n" +
+	"\x06Action\x12\x16\n" +
+	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eACTION_PUBLISH\x10\x01\x12\x14\n" +
+	"\x10ACTION_SUBSCRIBE\x10\x02*\xa8\x01\n" +
+	"\bHookType\x12\x19\n" +
+	"\x15HOOK_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aHOOK_TYPE_AUTH_ON_REGISTER\x10\x01\x12\x1d\n" +
+	"\x19HOOK_TYPE_AUTH_ON_PUBLISH\x10\x02\x12\x1f\n" +
+	"\x1bHOOK_TYPE_AUTH_ON_SUBSCRIBE\x10\x03\x12!\n" +
+	"\x1dHOOK_TYPE_AUTH_ON_UNSUBSCRIBE\x10\x04*S\n" +
 	"\n" +
-	"AMQP_0_9_1\x10\x03\x12\b\n" +
-	"\x04HTTP\x10\x04\x12\b\n" +
-	"\x04CoAP\x10\x05*.\n" +
-	"\x06Action\x12\b\n" +
-	"\x04None\x10\x00\x12\v\n" +
-	"\aPublish\x10\x01\x12\r\n" +
-	"\tSubscribe\x10\x02*v\n" +
-	"\bHookType\x12\x17\n" +
-	"\x13HookTypeUnspecified\x10\x00\x12\x12\n" +
-	"\x0eAuthOnRegister\x10\x01\x12\x11\n" +
-	"\rAuthOnPublish\x10\x02\x12\x13\n" +
-	"\x0fAuthOnSubscribe\x10\x03\x12\x15\n" +
-	"\x11AuthOnUnsubscribe\x10\x04*M\n" +
-	"\n" +
-	"HookResult\x12\x19\n" +
-	"\x15HookResultUnspecified\x10\x00\x12\x10\n" +
-	"\fHookResultOk\x10\x01\x12\x12\n" +
-	"\x0eHookResultDeny\x10\x022\x92\x01\n" +
+	"HookResult\x12\x1b\n" +
+	"\x17HOOK_RESULT_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eHOOK_RESULT_OK\x10\x01\x12\x14\n" +
+	"\x10HOOK_RESULT_DENY\x10\x022\x92\x01\n" +
 	"\vAuthService\x12B\n" +
 	"\fAuthenticate\x12\x18.broker.auth.v1.AuthnReq\x1a\x18.broker.auth.v1.AuthnRes\x12?\n" +
 	"\tAuthorize\x12\x18.broker.auth.v1.AuthzReq\x1a\x18.broker.auth.v1.AuthzRes2I\n" +
