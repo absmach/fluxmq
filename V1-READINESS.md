@@ -1,11 +1,16 @@
 # FluxMQ V1.0 Readiness Assessment
 
 **Date:** 2026-08-24
-**Assessed version:** `v0.51.0` (`main` @ `6c43830d7`), plus the 2026-08-24
-public API/error-contract freeze
+**Assessed version:** `v0.51.0` (`main` @ `3511ac3e8`), plus the 2026-08-24
+public API/error-contract freeze and protocol-independent queue state machine
 **Scope:** the original repo-wide audit, plus targeted current-tree revalidation
-of the cluster wire, session ownership, DLQ, cluster TLS, and experimental
-replication paths, and the public protobuf/Go/YAML queue contract
+of the cluster wire, session ownership, DLQ, cluster TLS, experimental
+replication paths, the public protobuf/Go/YAML queue contract, and shared queue
+command behavior across protocol adapters and storage backends
+
+**Validation:** the final assessed tree passes the repository-wide short race
+suite, `golangci-lint --config .golangci.yaml run` with zero findings, Buf lint,
+and the frozen protobuf breaking-change check.
 
 ---
 
@@ -30,12 +35,11 @@ The tag is still blocked by work that the short-term plan explicitly deferred:
 - **Roadmap 1.8:** the protocol/parser and concurrency surfaces listed below
   have not received the required second audit pass.
 
-The public queue API and error model are now frozen before deeper implementation
-changes. The next broker-core work is one protocol-independent queue state
-machine, followed by a versioned message envelope with reserved broker
-metadata, a recoverable transition boundary, and a capability interface that
-keeps experimental Raft outside the stable API. See
-[`ROADMAP.md`](./ROADMAP.md#next).
+The public queue API/error model and protocol-independent queue state machine
+are now complete. The next broker-core work is a versioned message envelope
+with reserved broker metadata, followed by a recoverable transition boundary
+and a capability interface that keeps experimental Raft outside the stable
+API. See [`ROADMAP.md`](./ROADMAP.md#next).
 
 This assessment distinguishes **stable-core readiness** from **release
 readiness**. Completing the former is necessary and valuable; it is not a claim
@@ -54,8 +58,9 @@ not taken on report.
 vulnerability posture, `broker/` auth + authorization + callout, config load
 and defaults, `cluster/` session ownership and watch handling, cluster
 transport security, `logstorage/` sync discipline, DLQ state transitions,
-replication admission/failure behavior, MQTT delivery backpressure, and
-publish-path hooks.
+replication admission/failure behavior, MQTT delivery backpressure and QoS 2
+queue retry behavior, Connect queue mutations, queue pending/cursor transitions,
+and publish-path hooks.
 
 **Audited shallowly or not at all — treat as unknown, not as clean:**
 
@@ -532,9 +537,14 @@ Against the project's own stated rule. Concentrated in `logstorage/adapter.go`
 `mqtt/broker/session.go:433`, `logstorage/segment.go:460`.
 
 These are latent, not live: they break silently the first time any layer wraps
-an error. `logstorage/adapter.go:594`
-(`err != ErrGroupNotFound` guarding a `CommitOffset`) is the one most likely to
-turn into lost offset commits.
+an error.
+
+**Narrowed 2026-08-24.** ~~The `UpdateCommitted` comparison around
+`CommitOffset` was the most likely path to lost offset commits.~~ Persistent
+committed offsets no longer call that legacy ack alias at all, which also fixes
+the underlying bug where committing a cursor could delete the next pending
+record. The touched `queue/consumer` group-lookup comparisons now use
+`errors.Is`; the rest of the repository-wide sentinel sweep remains open.
 
 ### P1-5. `queue/consumer` is the least-tested and most concurrency-sensitive package
 
@@ -542,9 +552,13 @@ turn into lost offset commits.
 owns consumer-group membership, heartbeats, work-stealing, and the PEL. For
 comparison `mqtt/` sits at 0.94 and `broker/` at 0.96.
 
-This is where a partition-induced duplicate-delivery or lost-message bug will
-live. It needs a table-driven rebalance suite and a partition simulation before
-1.0.
+**Narrowed 2026-08-24.** The shared state-machine conformance suite now covers
+pending ownership, cursor/committed progression, ack, immediate and delayed
+nack, loss-safe reject, deterministic pending-only claim, and seek against both
+memory and persistent log storage. It found and fixed a persistent cursor update
+that could delete the next pending record. The package-local ratio remains low,
+and rebalance, work-stealing under partition, and concurrency simulation still
+need the table-driven suite before consumer groups leave beta.
 
 ### P1-6. Suppressed error handling is concentrated in the riskiest packages
 
@@ -555,6 +569,12 @@ concentration: `mqtt/broker` 70, `client/mqtt` 15, `logstorage` 14,
 
 A targeted sweep of the `mqtt/broker` 70 and the `amqp/broker` 23 is
 proportionate; the rest can wait.
+
+**Narrowed 2026-08-24.** Connect append, consume, ack, nack, claim, and seek no
+longer suppress storage, PEL, cursor, ownership, or delayed-nack failures; they
+delegate to the typed command processor. `queue/consumer` also propagates group
+update and explicit claim errors on those paths. The broader MQTT/AMQP ignored-
+error audit above remains open.
 
 ### P1-7. `CLAUDE.md` documents a configuration system that is not on `main`
 
@@ -687,8 +707,10 @@ codebase:
 - **Authorization fails closed** on callout error (`authcallout/http.go:143`).
 - **Public contract drift is mechanically guarded.** CI compares the current
   protobufs to `api/compat/proto-v1.binpb`; exact Go-interface and YAML-schema
-  tests fail on unreviewed shape changes. Queue clients receive typed failures
-  instead of needing to parse implementation error strings.
+  tests fail on unreviewed shape changes. The exact `queue.CommandProcessor`
+  method set is guarded too, while its concrete state machine remains private.
+  Queue clients receive typed failures instead of needing to parse
+  implementation error strings.
 - **Session ownership now has an explicit fencing model.** etcd transactions
   arbitrate acquisition and takeover; lease loss disconnects local sessions;
   caches are observational rather than authoritative.
@@ -707,12 +729,14 @@ codebase:
 
 The active sequence is architecture-first and API-stability-first:
 
-1. **Done:** freeze the queue protobuf, exported Go, YAML, error, and
-   protocol-semantic contracts; enforce an additive compatibility baseline.
-2. **Next:** move append/consume/settlement operations behind one typed queue state
-   machine and a shared cross-protocol conformance suite.
-3. Introduce a versioned message envelope with separate user and broker-owned
-   metadata namespaces.
+1. ~~**Freeze the queue protobuf, exported Go, YAML, error, and
+   protocol-semantic contracts; enforce an additive compatibility baseline.**~~
+   **Done.**
+2. ~~**Move append/consume/settlement operations behind one typed queue state
+   machine and a shared cross-protocol conformance suite.**~~ **Done
+   2026-08-24.**
+3. **Next:** introduce a versioned message envelope with separate user and
+   broker-owned metadata namespaces.
 4. Add a recoverable transition journal/outbox for source settlement plus
    destination append.
 5. Put experimental replication behind a capability contract, then optimize

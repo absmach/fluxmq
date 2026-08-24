@@ -2,9 +2,9 @@
 
 **Current:** `v0.51.0`
 **Last updated:** 2026-08-24
-**State:** the broker-core short-term plan and public API/error-contract freeze
-are complete; the next active track unifies queue operations behind one state
-machine
+**State:** the broker-core short-term plan, public API/error-contract freeze,
+and shared queue state machine are complete; the next active track versions the
+message envelope and reserves broker metadata
 **Companion document:** [`V1-READINESS.md`](./V1-READINESS.md) — findings, evidence, file:line references.
 
 This roadmap exists because the repository had no committed plan. `plan.md` was
@@ -102,6 +102,31 @@ safe.
 ---
 
 ## Progress log
+
+### 2026-08-24 — protocol-independent queue state machine complete
+
+Append, consume, ack, nack, reject, claim, seek, and post-delivery stream
+commit now cross one typed `queue.CommandProcessor` boundary. Its exact method
+set is compatibility-guarded, while the concrete implementation is private.
+The frozen MQTT/AMQP manager methods delegate to that boundary, Connect no
+longer mutates storage directly, and the delivery engine uses the same consume
+and cursor-commit rules.
+
+One behavioral suite now runs the command model against both memory and
+persistent log storage, with separate MQTT/AMQP compatibility and Connect
+adapter contracts. This work also fixed persistent committed-cursor updates
+that could delete the next pending record, made Connect surface PEL/cursor
+failures and honor nack delay/claim ownership, and made exact MQTT QoS 2 queue
+publishes withhold PUBCOMP while a failed append remains retryable.
+
+The remaining MQTT QoS 2 crash window is explicit: append can succeed before
+inbound transaction settlement is persisted, so replay can duplicate the
+append. The recoverable transition journal in item 4 owns that problem; the
+state-machine completion does not claim cross-store atomicity.
+
+The final tree passes the repository-wide short race suite, the exact
+`golangci-lint --config .golangci.yaml run` check with zero findings, Buf lint,
+and the frozen protobuf breaking-change check.
 
 ### 2026-08-24 — broker-core hardening complete
 
@@ -282,7 +307,7 @@ of done because deferring work does not make the repository ready to tag.
 
 Prioritize the next work by the cost of changing it after 1.0:
 
-1. **Freeze the public queue API and error model — ✅ DONE 2026-08-24.** Inventory
+1. ~~**Freeze the public queue API and error model.**~~ **✅ DONE 2026-08-24.** Inventory
    `proto/queue/v1`, `proto/auth/v1`, the remaining `proto/cluster/v1` surface,
    exported Go interfaces, YAML keys, and protocol-visible queue behavior.
    Record an explicit compatibility baseline and enforce additive protobuf
@@ -292,11 +317,12 @@ Prioritize the next work by the cost of changing it after 1.0:
    Connect codes. The reviewed contract and protocol limitations are recorded
    in [`API-COMPATIBILITY.md`](./API-COMPATIBILITY.md); CI checks the versioned
    descriptor image in `api/compat/`.
-2. **Make queue operations one protocol-independent state machine.** Define
-   typed commands and outcomes for append, consume, ack, nack, reject, claim,
-   and seek. MQTT, AMQP, and Connect become adapters over that model rather than
-   independent implementations of queue semantics. Run the same behavioral
-   contract suite against every adapter and storage backend.
+2. ~~**Make queue operations one protocol-independent state machine.**~~
+   **✅ DONE 2026-08-24.** Typed commands and outcomes now cover append,
+   consume, ack, nack, reject, claim, seek, and post-delivery stream commit.
+   MQTT and AMQP retain their frozen interfaces over this model; Connect and
+   the delivery engine use it directly. Shared behavioral contracts run against
+   memory and persistent log storage and across the supported adapter seams.
 3. **Version the message envelope and reserve metadata ownership.** Separate
    user properties from broker-owned source, queue, group, offset, transfer,
    trace, and delivery metadata. Give the internal envelope an explicit version
@@ -984,9 +1010,11 @@ now targets exactly one named queue and returns the assigned offset rather than
 racing a later `Tail`; `AppendBatch` is one atomic store append and explicitly
 rejects replicated/fsync modes that cannot yet establish that contract; and a
 streaming append stops at its first failure. Queue keys and byte-valued headers
-now survive storage round trips. The documented MQTT QoS 2 post-PUBREL failure
-limitation remains an acceptance criterion for the shared state-machine work,
-not an implied success guarantee.
+now survive storage round trips. Exact MQTT QoS 2 queue publishes now execute
+synchronously after PUBREL and withhold PUBCOMP when append fails, preserving
+the inbound transaction for retry. The narrower crash window between a
+successful append and persisted inbound settlement remains assigned to the
+recoverable transition journal.
 
 ---
 
@@ -1072,16 +1100,20 @@ interoperability, and cluster-failure scenarios never run.*
 
 ### 3B — Coverage where the next bug will be (may slip past the tag)
 
-- **`queue/consumer`** `[XL · 2–3w]` — 1,789 non-test LOC against 260 test LOC (0.15), owning
-  consumer-group membership, heartbeats, work-stealing, and the PEL. Compare
-  `mqtt/` at 0.94. Needs a table-driven rebalance suite and a partition
-  simulation.
+- **`queue/consumer`** `[XL · 2–3w]` — 1,789 non-test LOC against 260 package-local
+  test LOC (0.15), owning consumer-group membership, heartbeats, work-stealing,
+  and the PEL. The shared state-machine suite now covers pending ownership,
+  cursor progression, settlement, delayed nack, reject, and deterministic
+  claim across both storage backends. The table-driven rebalance suite and
+  partition simulation remain.
 - **Suppressed errors** `[M · 3–4d]` — 70 `//nolint:errcheck` in `mqtt/broker`, 23 `_ =` in
   `amqp/broker`. Sweep those two; the remaining 400-odd can wait.
 - **`storage/` root** `[M · 4–5d]` (423 non-test / 60 test) and `server/queue` (1,118 / 643).
-- **Badger vs memory backend parity** `[L · 5–7d]` — not verified in this audit. Both
-  implementations are required to stay semantically identical; nothing enforces
-  that. A shared conformance suite run against both backends is the fix.
+- ~~**Persistent-log vs memory queue-operation parity** `[L · 5–7d]`.~~
+  **✅ DONE 2026-08-24 for the command model.** One conformance suite enforces
+  append, consume, ack, nack, reject/DLQ, claim, seek, pending ownership, and
+  committed-cursor semantics against both backends. Crash recovery, retention,
+  compaction, and backup/restore parity remain under the separate drills above.
 
 **On slipping Milestone 3:** `queue/consumer` is the only XL item, and it is
 coverage rather than a known defect — 1,789 non-test LOC at a 0.15 test ratio

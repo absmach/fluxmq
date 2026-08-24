@@ -2,9 +2,8 @@
 
 This document is the compatibility baseline for the broker interfaces that are
 expensive to change after 1.0. It freezes wire shape and the queue failure
-vocabulary. Delivery and settlement are implemented today, but their shared
-protocol-independent state machine is the next architecture item and is not
-expanded into new guarantees here.
+vocabulary, and the protocol-independent queue command model used by every
+supported adapter.
 
 ## Stable surfaces
 
@@ -12,8 +11,10 @@ expanded into new guarantees here.
   `api/compat/proto-v1.binpb` is the reviewed descriptor baseline and CI runs
   `make proto-breaking` against it.
 - Go: `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
-  `broker.StreamQueueManager`. `broker/api_compat_test.go` pins their exact
-  method sets and signatures in both directions.
+  `broker.StreamQueueManager`, plus `queue.CommandProcessor` and its typed
+  command/outcome values. Compile-time guards pin the interface method sets and
+  signatures in both directions. The state-machine implementation remains
+  private so internal helpers and storage dependencies do not become API.
 - Configuration: the accepted YAML keys and strict decoding behavior pinned by
   `config/schema_test.go`. Adding a key is compatible; removing, renaming, or
   changing absent-versus-zero behavior is not.
@@ -94,11 +95,44 @@ are not a compatibility surface.
   round-trip. Broker-owned storage metadata is kept outside the user-header
   namespace.
 
+## Queue state-machine semantics
+
+`queue.CommandProcessor` is the canonical append, consume, settlement, claim,
+and seek boundary. MQTT, AMQP, Connect, and the delivery engine adapt their
+wire behavior to these commands; they do not own separate queue transitions.
+The existing broker interfaces are unchanged.
+
+- Queue-mode `Consume` claims records into the pending-entry list before they
+  are returned. A PEL or cursor update failure is returned rather than reported
+  as an empty or successful consume.
+- Stream-mode `Consume` only peeks. An adapter calls `CommitConsume` after it
+  has delivered the selected prefix, so a send failure does not advance the
+  stream cursor past an undelivered record.
+- `Ack`, `Nack`, and `Reject` enforce pending ownership when a consumer ID is
+  present. Compatibility adapters that cannot carry a consumer ID resolve the
+  owner from the group PEL. A multi-offset command stops at its first failure
+  and its in-process outcome identifies the successfully settled prefix.
+- `Nack` releases an entry for redelivery after at least the requested delay;
+  normal visibility and claim-idle rules may extend that wait. A zero delay
+  makes the entry immediately eligible.
+- `Reject` appends durably to the DLQ before removing the source pending entry.
+  It remains loss-safe and duplicate-detectable, but source settlement and DLQ
+  append are not yet one crash-atomic transition.
+- `Claim` considers pending records only, orders them oldest first, applies the
+  minimum-idle threshold, and transfers ownership to the named consumer.
+- `Seek` resolves a bounded offset without changing consumer-group state.
+  Offset seeks clamp to the queue's current head/tail; timestamp seeks return
+  the first record at or after the requested time, or the tail.
+
 For MQTT 3.1.1, a queue write failure has no negative PUBACK/PUBREC reason
 space, so the broker closes the connection. MQTT 5 maps a QoS 1 write failure to
-the reason table above. An MQTT QoS 2 write happens after PUBREL, where PUBCOMP
-cannot describe a queue failure; the canonical settlement state machine must
-resolve that limitation before 1.0 claims stronger QoS 2 failure reporting.
+the reason table above. An exact MQTT QoS 2 queue write happens after PUBREL,
+where PUBCOMP cannot carry a queue failure. The broker therefore executes that
+append synchronously, withholds PUBCOMP on failure, and leaves the inbound
+transaction pending for protocol retry. If the append succeeds and the process
+crashes before inbound settlement is recorded, a retry can still duplicate the
+append; the recoverable transition journal in the roadmap is the fix for that
+remaining crash window.
 AMQP 0.9.1 publisher confirms use ack/nack; a non-confirmed publish closes the
 channel on queue failure. AMQP 1.0 uses `accepted` or typed `rejected` outcomes;
 a pre-settled sender cannot receive an outcome.
@@ -115,5 +149,8 @@ go test ./broker ./queue ./server/queue ./mqtt/broker ./amqp/broker ./amqp1/brok
 
 These checks pin the interface shape, protobuf compatibility, error projection,
 exact append offsets and targeting, batch behavior, and binary key/header
-preservation. Cross-operation delivery and settlement conformance belongs to
-the shared queue state-machine work rather than being duplicated here.
+preservation. `TestStateMachineStorageContract` runs append, consume, ack, nack,
+reject, claim, and seek against memory and persistent log storage;
+`TestMQTTAndAMQPManagerAdapterContract` and
+`TestConnectAdapterUsesSharedQueueStateMachine` apply the same behavior through
+the supported adapter boundaries.
