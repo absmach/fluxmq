@@ -66,7 +66,9 @@ func (m *mockQueueManager) Reject(ctx context.Context, queueName, messageID, gro
 	m.rejectCalls = append(m.rejectCalls, rejectCall{queueName: queueName, messageID: messageID, groupID: groupID, reason: reason})
 	return nil
 }
+
 func (m *mockQueueManager) UpdateHeartbeat(ctx context.Context, clientID string) error { return nil }
+
 func (m *mockQueueManager) CreateQueue(ctx context.Context, config qtypes.QueueConfig) error {
 	return nil
 }

@@ -15,12 +15,18 @@ import (
 )
 
 const (
-	testLogLevelDebug = "debug"
-	testBindAddr      = "127.0.0.1:8100"
-	testAuthURL       = "localhost:7016"
-	testAuthHTTPSURL  = "https://auth.internal:7016"
-	testClientCert    = "client.crt"
-	testProfileHot    = "hot"
+	testLogLevelDebug  = "debug"
+	testBindAddr       = "127.0.0.1:8100"
+	testAuthURL        = "localhost:7016"
+	testAuthHTTPSURL   = "https://auth.internal:7016"
+	testClientCert     = "client.crt"
+	testProfileHot     = "hot"
+	testInitialCluster = "broker-1=http://127.0.0.1:2380"
+	testBroker2        = "broker-2"
+	testBroker3        = "broker-3"
+	testRaftPeer2Addr  = "127.0.0.1:7101"
+	testRaftPeer3Addr  = "127.0.0.1:7102"
+	testCAFile         = "ca.crt"
 )
 
 // ptr builds a pointer to a literal, for the configuration keys that keep
@@ -30,10 +36,10 @@ func ptr[T any](v T) *T { return &v }
 func enableInsecureTestCluster(c *Config) {
 	c.Cluster.Enabled = true
 	c.Cluster.AllowInsecure = true
-	c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+	c.Cluster.Etcd.InitialCluster = testInitialCluster
 	c.Cluster.Raft.Peers = map[string]string{
-		"broker-2": "127.0.0.1:7101",
-		"broker-3": "127.0.0.1:7102",
+		testBroker2: testRaftPeer2Addr,
+		testBroker3: testRaftPeer3Addr,
 	}
 }
 
@@ -107,7 +113,7 @@ func TestClusterTransportSecurityValidation(t *testing.T) {
 			name: "plaintext requires explicit opt-in",
 			configure: func(c *Config) {
 				c.Cluster.Enabled = true
-				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+				c.Cluster.Etcd.InitialCluster = testInitialCluster
 			},
 			wantError: "cluster transport TLS required",
 		},
@@ -116,7 +122,7 @@ func TestClusterTransportSecurityValidation(t *testing.T) {
 			configure: func(c *Config) {
 				c.Cluster.Enabled = true
 				c.Cluster.AllowInsecure = true
-				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+				c.Cluster.Etcd.InitialCluster = testInitialCluster
 			},
 		},
 		{
@@ -125,7 +131,7 @@ func TestClusterTransportSecurityValidation(t *testing.T) {
 				c.Cluster.Enabled = true
 				c.Cluster.AllowInsecure = true
 				c.Cluster.Etcd.ClientAddr = "0.0.0.0:2379"
-				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+				c.Cluster.Etcd.InitialCluster = testInitialCluster
 			},
 			wantError: "cluster.etcd.client_addr must be loopback-only",
 		},
@@ -136,8 +142,8 @@ func TestClusterTransportSecurityValidation(t *testing.T) {
 				c.Cluster.Transport.TLSEnabled = true
 				c.Cluster.Transport.TLSCertFile = "node.crt"
 				c.Cluster.Transport.TLSKeyFile = "node.key"
-				c.Cluster.Transport.TLSCAFile = "ca.crt"
-				c.Cluster.Etcd.InitialCluster = "broker-1=http://127.0.0.1:2380"
+				c.Cluster.Transport.TLSCAFile = testCAFile
+				c.Cluster.Etcd.InitialCluster = testInitialCluster
 			},
 			wantError: "must use https",
 		},
@@ -148,7 +154,7 @@ func TestClusterTransportSecurityValidation(t *testing.T) {
 				c.Cluster.Transport.TLSEnabled = true
 				c.Cluster.Transport.TLSCertFile = "node.crt"
 				c.Cluster.Transport.TLSKeyFile = "node.key"
-				c.Cluster.Transport.TLSCAFile = "ca.crt"
+				c.Cluster.Transport.TLSCAFile = testCAFile
 				c.Cluster.Etcd.InitialCluster = "broker-1=https://127.0.0.1:2380"
 			},
 		},
@@ -178,8 +184,8 @@ func TestReplicatedQueueConfigurationFailsClosed(t *testing.T) {
 		c.Cluster.Raft.Enabled = true
 		c.Cluster.Raft.WritePolicy = writePolicyForward
 		c.Cluster.Raft.Peers = map[string]string{
-			"broker-2": "127.0.0.1:7101",
-			"broker-3": "127.0.0.1:7102",
+			testBroker2: testRaftPeer2Addr,
+			testBroker3: testRaftPeer3Addr,
 		}
 	}
 	enableQueueReplication := func(c *Config) {
@@ -210,7 +216,7 @@ func TestReplicatedQueueConfigurationFailsClosed(t *testing.T) {
 			name: "membership mismatch",
 			configure: func(c *Config) {
 				configureRaft(c)
-				delete(c.Cluster.Raft.Peers, "broker-3")
+				delete(c.Cluster.Raft.Peers, testBroker3)
 				enableQueueReplication(c)
 			},
 			wantError: "must match configured membership",
@@ -365,8 +371,8 @@ func TestValidate(t *testing.T) {
 						BindAddr: testBindAddr,
 						DataDir:  "/tmp/fluxmq/raft-hot",
 						Peers: map[string]string{
-							"broker-2": testBindAddr,
-							"broker-3": "127.0.0.1:8101",
+							testBroker2: testBindAddr,
+							testBroker3: "127.0.0.1:8101",
 						},
 						ReplicationFactor: 3,
 						MinInSyncReplicas: 2,
@@ -435,7 +441,7 @@ func TestValidate(t *testing.T) {
 				c.Auth.External.TLS = &mqtttls.ClientConfig{
 					CertFile: testClientCert,
 					KeyFile:  "client.key",
-					CAFile:   "ca.crt",
+					CAFile:   testCAFile,
 				}
 			},
 			wantErr: false,

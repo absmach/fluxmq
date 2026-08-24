@@ -50,7 +50,8 @@ func (c *packetCaptureConn) Close() error {
 	return nil
 }
 
-func (c *packetCaptureConn) LocalAddr() net.Addr                { return testAddr("127.0.0.1:1883") }
+func (c *packetCaptureConn) LocalAddr() net.Addr { return testAddr("127.0.0.1:1883") }
+
 func (c *packetCaptureConn) RemoteAddr() net.Addr               { return testAddr("127.0.0.1:1883") }
 func (c *packetCaptureConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *packetCaptureConn) SetReadDeadline(_ time.Time) error  { return nil }
@@ -80,8 +81,9 @@ func (c *blockingFailWriteConn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (c *blockingFailWriteConn) Close() error                       { return nil }
-func (c *blockingFailWriteConn) LocalAddr() net.Addr                { return testAddr("127.0.0.1:1883") }
+func (c *blockingFailWriteConn) Close() error        { return nil }
+func (c *blockingFailWriteConn) LocalAddr() net.Addr { return testAddr("127.0.0.1:1883") }
+
 func (c *blockingFailWriteConn) RemoteAddr() net.Addr               { return testAddr("127.0.0.1:1883") }
 func (c *blockingFailWriteConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *blockingFailWriteConn) SetReadDeadline(_ time.Time) error  { return nil }
@@ -124,8 +126,9 @@ func (c *blockFirstWriteConn) snapshotWrites() [][]byte {
 	return out
 }
 
-func (c *blockFirstWriteConn) Close() error                       { return nil }
-func (c *blockFirstWriteConn) LocalAddr() net.Addr                { return testAddr("127.0.0.1:1883") }
+func (c *blockFirstWriteConn) Close() error        { return nil }
+func (c *blockFirstWriteConn) LocalAddr() net.Addr { return testAddr("127.0.0.1:1883") }
+
 func (c *blockFirstWriteConn) RemoteAddr() net.Addr               { return testAddr("127.0.0.1:1883") }
 func (c *blockFirstWriteConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *blockFirstWriteConn) SetReadDeadline(_ time.Time) error  { return nil }

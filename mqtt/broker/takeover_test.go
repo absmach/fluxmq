@@ -871,8 +871,11 @@ func (c *deferConn) capture(onSent func()) error {
 }
 func (c *deferConn) WritePacket(packets.ControlPacket) error                    { return nil }
 func (c *deferConn) WriteControlPacket(_ packets.ControlPacket, f func()) error { return c.capture(f) }
-func (c *deferConn) WriteDataPacket(_ packets.ControlPacket, f func()) error    { return c.capture(f) }
+
+func (c *deferConn) WriteDataPacket(_ packets.ControlPacket, f func()) error { return c.capture(f) }
+
 func (c *deferConn) TryWriteDataPacket(_ packets.ControlPacket, f func()) error { return c.capture(f) }
+
 func (c *deferConn) ReadPacket() (packets.ControlPacket, error) {
 	c.readOnce.Do(func() { close(c.reading) })
 	<-c.closeCh

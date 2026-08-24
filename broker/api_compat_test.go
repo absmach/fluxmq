@@ -58,15 +58,15 @@ type v1StreamQueueManager interface {
 }
 
 var (
-	_ v1Authenticator = (Authenticator)(nil)
-	_ Authenticator   = (v1Authenticator)(nil)
+	_ v1Authenticator = Authenticator(nil)
+	_ Authenticator   = v1Authenticator(nil)
 
-	_ v1Authorizer = (Authorizer)(nil)
-	_ Authorizer   = (v1Authorizer)(nil)
+	_ v1Authorizer = Authorizer(nil)
+	_ Authorizer   = v1Authorizer(nil)
 
-	_ v1QueueManager = (QueueManager)(nil)
-	_ QueueManager   = (v1QueueManager)(nil)
+	_ v1QueueManager = QueueManager(nil)
+	_ QueueManager   = v1QueueManager(nil)
 
-	_ v1StreamQueueManager = (StreamQueueManager)(nil)
-	_ StreamQueueManager   = (v1StreamQueueManager)(nil)
+	_ v1StreamQueueManager = StreamQueueManager(nil)
+	_ StreamQueueManager   = v1StreamQueueManager(nil)
 )

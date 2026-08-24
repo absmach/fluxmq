@@ -97,7 +97,9 @@ func (c *testCluster) GetSubscribersForTopic(_ context.Context, _ string) ([]*st
 func (c *testCluster) RegisterQueueConsumer(_ context.Context, _ *cluster.QueueConsumerInfo) error {
 	return nil
 }
+
 func (c *testCluster) UnregisterQueueConsumer(_ context.Context, _, _, _ string) error { return nil }
+
 func (c *testCluster) ListQueueConsumers(_ context.Context, _ string) ([]*cluster.QueueConsumerInfo, error) {
 	return nil, nil
 }

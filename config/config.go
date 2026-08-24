@@ -41,6 +41,7 @@ const (
 	protocolMQTT    = "mqtt"
 	protocolAMQP    = "amqp"
 	protocolAMQP091 = "amqp091"
+	protocolHTTP    = "http"
 
 	// nullTag marks a YAML document that carries no value.
 	nullTag = "!!null"
@@ -476,7 +477,7 @@ type HooksConfig struct {
 
 // knownAuthProtocols is the set of valid protocol names for auth config.
 var knownAuthProtocols = map[string]bool{
-	protocolMQTT: true, protocolAMQP: true, protocolAMQP091: true, "http": true, "coap": true,
+	protocolMQTT: true, protocolAMQP: true, protocolAMQP091: true, protocolHTTP: true, "coap": true,
 }
 
 var knownBlockingHooks = map[string]bool{
