@@ -403,50 +403,59 @@ func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 
 	packetID := p.ID
 
-	// Distribute stored message now that publisher has committed with PUBREL.
-	msg, err := s.AckInbound(packetID)
-	if err != nil {
-		h.broker.telemetry.logger.Warn("v3_pubrel_unknown_packet",
-			slog.String("client_id", s.ID),
-			slog.Int("packet_id", int(packetID)))
-	}
-
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 		ID:          packetID,
 	}
+	msg, found, err := s.GetInbound(packetID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		h.broker.telemetry.logger.Warn("v3_pubrel_unknown_packet",
+			slog.String("client_id", s.ID),
+			slog.Int("packet_id", int(packetID)))
+		return s.WritePacket(comp)
+	}
 
-	if h.broker.cfg.asyncFanOut {
-		if msg != nil {
-			submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
-				if err := h.broker.Publish(context.Background(), msg); err != nil {
-					h.broker.logError("v3_pubrel_publish", err,
-						slog.String("client_id", s.ID),
-						slog.String("topic", msg.Topic))
-				}
-				storage.ReleaseMessage(msg)
-			})
-			if !submitted {
-				if err := h.broker.Publish(context.Background(), msg); err != nil {
-					h.broker.logError("v3_pubrel_publish", err,
-						slog.String("client_id", s.ID),
-						slog.String("topic", msg.Topic))
-				}
-				storage.ReleaseMessage(msg)
+	if h.broker.cfg.asyncFanOut && h.broker.routeResolver.Resolve(msg.Topic).Kind == corebroker.RoutePubSub {
+		owned, err := s.AckInbound(packetID)
+		if err != nil {
+			return err
+		}
+		submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
+			if err := h.broker.Publish(context.Background(), owned); err != nil {
+				h.broker.logError("v3_pubrel_publish", err,
+					slog.String("client_id", s.ID),
+					slog.String("topic", owned.Topic))
 			}
+			storage.ReleaseMessage(owned)
+		})
+		if !submitted {
+			if err := h.broker.Publish(context.Background(), owned); err != nil {
+				h.broker.logError("v3_pubrel_publish", err,
+					slog.String("client_id", s.ID),
+					slog.String("topic", owned.Topic))
+			}
+			storage.ReleaseMessage(owned)
 		}
 		return s.WritePacket(comp)
 	}
 
-	// Synchronous path: distribute before PUBCOMP (default).
-	if msg != nil {
-		if err := h.broker.Publish(context.Background(), msg); err != nil {
-			h.broker.logError("v3_pubrel_publish", err,
-				slog.String("client_id", s.ID),
-				slog.String("topic", msg.Topic))
-		}
-		storage.ReleaseMessage(msg)
+	publish := storage.CopyMessage(msg)
+	if err := h.broker.Publish(context.Background(), publish); err != nil {
+		storage.ReleaseMessage(publish)
+		h.broker.logError("v3_pubrel_publish", err,
+			slog.String("client_id", s.ID),
+			slog.String("topic", msg.Topic))
+		return err
 	}
+	storage.ReleaseMessage(publish)
+	owned, err := s.AckInbound(packetID)
+	if err != nil {
+		return err
+	}
+	storage.ReleaseMessage(owned)
 	return s.WritePacket(comp)
 }
 

@@ -74,6 +74,13 @@ type InboundAdder interface {
 	AddInbound(packetID uint16, msg *storage.Message) (accepted bool, err error)
 }
 
+// InboundGetter is an optional extension used to inspect an inbound QoS 2
+// transaction without settling it. This lets the broker retain the original
+// transaction when durable queue publication fails during PUBREL.
+type InboundGetter interface {
+	GetInbound(packetID uint16) (*InflightMessage, bool)
+}
+
 // InboundAcker is an optional extension of Inflight for directional inbound
 // acknowledgement (PUBREL completing an inbound QoS 2 receive). Keeping it out
 // of the base Inflight interface preserves source compatibility for external
@@ -192,6 +199,19 @@ func (t *inflight) Get(packetID uint16) (*InflightMessage, bool) {
 	}
 
 	// Return a copy to prevent races
+	cp := *msg
+	return &cp, true
+}
+
+// GetInbound retrieves an inbound QoS 2 transaction without removing it.
+func (t *inflight) GetInbound(packetID uint16) (*InflightMessage, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	msg, ok := t.messages[inflightKey{direction: Inbound, packetID: packetID}]
+	if !ok {
+		return nil, false
+	}
 	cp := *msg
 	return &cp, true
 }

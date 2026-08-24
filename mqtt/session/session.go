@@ -414,6 +414,18 @@ func (s *Session) AddInbound(packetID uint16, msg *storage.Message) (bool, error
 	return false, messages.ErrInboundUnsupported
 }
 
+// GetInbound retrieves an inbound QoS 2 transaction without settling it.
+func (s *Session) GetInbound(packetID uint16) (*storage.Message, bool, error) {
+	if getter, ok := s.msgHandler.Inflight().(messages.InboundGetter); ok {
+		inflight, found := getter.GetInbound(packetID)
+		if !found || inflight == nil {
+			return nil, false, nil
+		}
+		return inflight.Message, true, nil
+	}
+	return nil, false, messages.ErrInboundUnsupported
+}
+
 // AckInbound acknowledges and removes an inbound message (PUBREL). Trackers
 // that do not implement the optional directional extension are rejected
 // explicitly so an inbound acknowledgement cannot remove an outbound entry.
