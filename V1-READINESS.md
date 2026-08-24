@@ -1,10 +1,11 @@
 # FluxMQ V1.0 Readiness Assessment
 
 **Date:** 2026-08-24
-**Assessed version:** `v0.51.0` (`main` @ `0978aa117`)
+**Assessed version:** `v0.51.0` (`main` @ `6c43830d7`), plus the 2026-08-24
+public API/error-contract freeze
 **Scope:** the original repo-wide audit, plus targeted current-tree revalidation
 of the cluster wire, session ownership, DLQ, cluster TLS, and experimental
-replication paths
+replication paths, and the public protobuf/Go/YAML queue contract
 
 ---
 
@@ -29,11 +30,12 @@ The tag is still blocked by work that the short-term plan explicitly deferred:
 - **Roadmap 1.8:** the protocol/parser and concurrency surfaces listed below
   have not received the required second audit pass.
 
-The next broker-core work should therefore freeze the public queue API and
-error model before deeper implementation changes: one protocol-independent
-queue state machine, a versioned message envelope with reserved broker metadata,
-a recoverable transition boundary, and a capability interface that keeps
-experimental Raft outside the stable API. See [`ROADMAP.md`](./ROADMAP.md#next).
+The public queue API and error model are now frozen before deeper implementation
+changes. The next broker-core work is one protocol-independent queue state
+machine, followed by a versioned message envelope with reserved broker
+metadata, a recoverable transition boundary, and a capability interface that
+keeps experimental Raft outside the stable API. See
+[`ROADMAP.md`](./ROADMAP.md#next).
 
 This assessment distinguishes **stable-core readiness** from **release
 readiness**. Completing the former is necessary and valuable; it is not a claim
@@ -77,6 +79,13 @@ paths. On 2026-08-24 the short-term-plan paths were revalidated against current
 `main`, including their focused tests and protocol fields. Both sweeps were
 finding-directed rather than systematic; they do not shorten the remaining
 unaudited list above.
+
+The follow-on contract pass inventoried all three public protobuf modules and
+the stable Go/YAML surfaces. A checked-in Buf image now enforces additive
+protobuf evolution; exact compile-time interface guards cover authentication
+and queue-manager implementers. Focused adapter tests pin queue error projection
+for Connect, MQTT 5, AMQP 0.9.1, and AMQP 1.0, while append/storage tests pin
+exact offsets, atomic buffered batches, and binary key/header preservation.
 
 ---
 
@@ -676,6 +685,10 @@ codebase:
   explicit drop on overflow (`delivery.go:134`). This is the failure mode that
   OOMs most brokers, and it is handled.
 - **Authorization fails closed** on callout error (`authcallout/http.go:143`).
+- **Public contract drift is mechanically guarded.** CI compares the current
+  protobufs to `api/compat/proto-v1.binpb`; exact Go-interface and YAML-schema
+  tests fail on unreviewed shape changes. Queue clients receive typed failures
+  instead of needing to parse implementation error strings.
 - **Session ownership now has an explicit fencing model.** etcd transactions
   arbitrate acquisition and takeover; lease loss disconnects local sessions;
   caches are observational rather than authoritative.
@@ -694,9 +707,9 @@ codebase:
 
 The active sequence is architecture-first and API-stability-first:
 
-1. Freeze the queue protobuf, exported Go, YAML, error, and protocol-semantic
-   contracts; enforce an additive compatibility baseline.
-2. Move append/consume/settlement operations behind one typed queue state
+1. **Done:** freeze the queue protobuf, exported Go, YAML, error, and
+   protocol-semantic contracts; enforce an additive compatibility baseline.
+2. **Next:** move append/consume/settlement operations behind one typed queue state
    machine and a shared cross-protocol conformance suite.
 3. Introduce a versioned message envelope with separate user and broker-owned
    metadata namespaces.

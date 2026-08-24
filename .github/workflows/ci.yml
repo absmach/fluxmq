@@ -54,6 +54,9 @@ jobs:
           push: false
           archive: false
 
+      - name: Check protobuf compatibility
+        run: make proto-breaking
+
       - name: Generate protobuf
         run: make proto
 

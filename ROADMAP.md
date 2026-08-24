@@ -2,8 +2,9 @@
 
 **Current:** `v0.51.0`
 **Last updated:** 2026-08-24
-**State:** the broker-core short-term plan is complete on `main`; the next active
-track freezes public queue semantics before 1.0
+**State:** the broker-core short-term plan and public API/error-contract freeze
+are complete; the next active track unifies queue operations behind one state
+machine
 **Companion document:** [`V1-READINESS.md`](./V1-READINESS.md) — findings, evidence, file:line references.
 
 This roadmap exists because the repository had no committed plan. `plan.md` was
@@ -281,14 +282,16 @@ of done because deferring work does not make the repository ready to tag.
 
 Prioritize the next work by the cost of changing it after 1.0:
 
-1. **Freeze the public queue API and error model.** Inventory
+1. **Freeze the public queue API and error model — ✅ DONE 2026-08-24.** Inventory
    `proto/queue/v1`, `proto/auth/v1`, the remaining `proto/cluster/v1` surface,
    exported Go interfaces, YAML keys, and protocol-visible queue behavior.
    Record an explicit compatibility baseline and enforce additive protobuf
    evolution. Replace string-derived client behavior with a stable typed error
    taxonomy carrying code, retryability, and ownership/leader state; map that
    taxonomy consistently to MQTT reason codes, AMQP replies/dispositions, and
-   Connect codes.
+   Connect codes. The reviewed contract and protocol limitations are recorded
+   in [`API-COMPATIBILITY.md`](./API-COMPATIBILITY.md); CI checks the versioned
+   descriptor image in `api/compat/`.
 2. **Make queue operations one protocol-independent state machine.** Define
    typed commands and outcomes for append, consume, ack, nack, reject, claim,
    and seek. MQTT, AMQP, and Connect become adapters over that model rather than
@@ -960,6 +963,31 @@ has exactly the model to copy — `HandshakeTimeout` covering transport through
 Per-listener `handshake_timeout`, default 10 seconds, covering TCP/TLS, SASL,
 and Open. Schema change, so it lands before the tag.
 
+### 1.12 Freeze the public queue API and error model — ✅ DONE 2026-08-24
+
+The public protobuf inventory now has a source-controlled Buf descriptor image;
+CI rejects breaking changes to `proto/queue/v1`, `proto/auth/v1`, or
+`proto/cluster/v1`. Reciprocal compile-time guards pin the exact method sets of
+`broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
+`broker.StreamQueueManager`; the existing schema suite remains the YAML-key
+guard. The evolution policy and supported protocol projections are documented
+in `API-COMPATIBILITY.md`.
+
+Queue failures now use one typed, protocol-independent taxonomy containing a
+stable code plus retryability, ownership, leader, and durability state. Connect
+errors carry `QueueErrorDetail`; MQTT 5, AMQP 0.9.1, AMQP 1.0 dispositions, and
+AMQP 1.0 management responses map that taxonomy without parsing or exposing
+implementation error strings.
+
+The same pass corrected three API claims that were unsafe to freeze: `Append`
+now targets exactly one named queue and returns the assigned offset rather than
+racing a later `Tail`; `AppendBatch` is one atomic store append and explicitly
+rejects replicated/fsync modes that cannot yet establish that contract; and a
+streaming append stops at its first failure. Queue keys and byte-valued headers
+now survive storage round trips. The documented MQTT QoS 2 post-PUBREL failure
+limitation remains an acceptance criterion for the shared state-machine work,
+not an implied success guarantee.
+
 ---
 
 ## Milestone 2 — Correctness and honesty (should precede the tag)
@@ -1163,6 +1191,8 @@ Deferring these is the point of having a roadmap:
 - [x] MQTT 3.1.1 queue consumption decided: settle on PUBACK, no origin recovery — *#580*
 - [x] Inflight properties survive a cluster takeover, so a settled MQTT 3.1.1 delivery is not redelivered after a node move — *`95b72b521`*
 - [x] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open — *#578*
+- [x] Public protobuf descriptor baseline enforced; stable Go interfaces pinned exactly
+- [x] Typed queue failures projected to Connect, MQTT 5, AMQP 0.9.1, and AMQP 1.0
 
 **Durability and correctness**
 

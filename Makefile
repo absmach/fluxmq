@@ -16,6 +16,7 @@ DASHBOARD_IMAGE_LATEST := ghcr.io/absmach/fluxmq-dashboard:latest
 PERF_SCRIPT_DIR := tests/perf/scripts
 PERF_SCENARIO_CONFIG ?= $(CONFIG)
 DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
+PROTO_V1_BASELINE := api/compat/proto-v1.binpb
 
 
 # Default target
@@ -303,7 +304,11 @@ proto-lint:
 
 .PHONY: proto-breaking
 proto-breaking:
-	buf breaking --against '.git#branch=main'
+	buf breaking --against $(PROTO_V1_BASELINE)
+
+.PHONY: proto-baseline
+proto-baseline:
+	buf build --exclude-source-info -o $(PROTO_V1_BASELINE)
 
 # Show help
 .PHONY: help
@@ -375,4 +380,6 @@ help:
 	@echo "  deps               Download and tidy dependencies"
 	@echo "  proto              Generate protobuf code"
 	@echo "  proto-lint         Lint protobuf definitions"
+	@echo "  proto-breaking     Check protobufs against the v1 descriptor baseline"
+	@echo "  proto-baseline     Refresh the reviewed v1 descriptor baseline"
 	@echo "  help               Show this help message"
