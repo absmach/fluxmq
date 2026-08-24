@@ -565,6 +565,30 @@ func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID s
 	return nil
 }
 
+// RequeuePendingEntry updates redelivery timing without changing ownership.
+func (a *Adapter) RequeuePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	group, err := a.groupStore.Get(queueName, groupID)
+	if err != nil {
+		return err
+	}
+	entry, owner := group.FindPending(offset)
+	if entry == nil {
+		return storage.ErrPendingEntryNotFound
+	}
+	if owner != consumerID {
+		return storage.ErrConsumerNotFound
+	}
+	if err := a.store.NackAt(queueName, groupID, offset, attemptedAt); err != nil {
+		if errors.Is(err, ErrPELEntryNotFound) {
+			return storage.ErrPendingEntryNotFound
+		}
+		return err
+	}
+	entry.ClaimedAt = attemptedAt
+	entry.DeliveryCount++
+	return a.groupStore.Save(group)
+}
+
 // UpdateCursor updates the cursor position for a queue.
 func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
 	if err := a.store.SetCursor(queueName, groupID, cursor); err != nil {
@@ -587,11 +611,11 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 
 // UpdateCommitted updates the committed offset for a queue.
 func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
-	if err := a.store.CommitOffset(queueName, groupID, committed); err != nil && err != ErrGroupNotFound {
-		return err
-	}
-
-	// Update the group state's committed offset as well
+	// Committed is the next safe offset, not a message to acknowledge. The
+	// underlying consumer store's CommitOffset is a legacy alias for Ack and
+	// would therefore remove the record at committed. Keep the canonical safe
+	// point in the persisted group state; individual Ack calls already update
+	// the underlying PEL.
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
 		c := group.GetCursor()
@@ -672,7 +696,6 @@ func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.C
 
 	c := group.GetCursor()
 	c.Cursor = cursorState.Cursor
-	c.Committed = cursorState.Committed
 }
 
 // syncPELFromStore syncs PEL state from the log store to the group state.
@@ -740,7 +763,7 @@ func pendingEntryToTypes(entry *PendingEntry) *types.PendingEntry {
 	return &types.PendingEntry{
 		Offset:        entry.Offset,
 		ConsumerID:    entry.ConsumerID,
-		ClaimedAt:     time.UnixMilli(entry.DeliveredAt),
+		ClaimedAt:     time.UnixMilli(entry.LastAttempt),
 		DeliveryCount: int(entry.DeliveryCount),
 	}
 }

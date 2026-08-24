@@ -6,6 +6,7 @@ package consumer
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ var (
 	ErrCommitOffsetOnlyForStreamMode = errors.New("commit offset only supported for stream groups")
 	ErrPELFull                       = errors.New("pending entry list at capacity")
 	ErrDLQHandlerUnavailable         = errors.New("dead-letter queue handler unavailable")
+	ErrDelayedNackUnsupported        = errors.New("delayed nack is not supported")
 )
 
 // Manager handles consumer group operations including claiming,
@@ -104,7 +106,9 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 		if group.Mode == "" {
 			group.Mode = mode
 			group.AutoCommit = autoCommit
-			_ = m.groupStore.UpdateConsumerGroup(ctx, group)
+			if err := m.groupStore.UpdateConsumerGroup(ctx, group); err != nil {
+				return nil, err
+			}
 			return group, nil
 		}
 		if group.Mode != mode {
@@ -114,7 +118,7 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 	}
 
 	// Check for "not found" errors from various storage implementations
-	if err != storage.ErrConsumerNotFound && err != logstorage.ErrGroupNotFound {
+	if !errors.Is(err, storage.ErrConsumerNotFound) && !errors.Is(err, logstorage.ErrGroupNotFound) {
 		return nil, err
 	}
 
@@ -201,6 +205,9 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 	for len(messages) < limit {
 		msg, err := m.claimFromCursor(ctx, group, consumerID, filter)
 		if err != nil {
+			if !errors.Is(err, ErrNoMessages) && !errors.Is(err, ErrPELFull) {
+				return messages, err
+			}
 			break
 		}
 		messages = append(messages, msg)
@@ -210,6 +217,9 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 	for len(messages) < limit {
 		msg, err := m.stealWork(ctx, group, consumerID, filter)
 		if err != nil {
+			if !errors.Is(err, ErrNoMessages) {
+				return messages, err
+			}
 			break
 		}
 		messages = append(messages, msg)
@@ -219,6 +229,58 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 		return nil, ErrNoMessages
 	}
 
+	return messages, nil
+}
+
+// ClaimPendingBatch transfers pending messages idle for at least minIdle to a
+// consumer. Unlike ClaimBatch it never consumes new log records. Entries are
+// considered oldest-first so all storage backends expose the same order.
+func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, consumerID string, minIdle time.Duration, limit int) ([]*types.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 {
+		limit = m.config.ClaimBatchSize
+	}
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if group.Mode == types.GroupModeStream {
+		return nil, ErrGroupModeMismatch
+	}
+
+	entries := group.StealableEntries(minIdle, consumerID)
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ClaimedAt.Equal(entries[j].ClaimedAt) {
+			return entries[i].Offset < entries[j].Offset
+		}
+		return entries[i].ClaimedAt.Before(entries[j].ClaimedAt)
+	})
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+
+	messages := make([]*types.Message, 0, len(entries))
+	for _, entry := range entries {
+		message, err := m.queueStore.Read(ctx, queueName, entry.Offset)
+		if err != nil {
+			return messages, err
+		}
+		if message.IsExpired() {
+			if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, entry.ConsumerID, entry.Offset); err != nil {
+				return messages, err
+			}
+			continue
+		}
+		if err := m.groupStore.TransferPendingEntry(ctx, queueName, groupID, entry.Offset, entry.ConsumerID, consumerID); err != nil {
+			return messages, err
+		}
+		messages = append(messages, message)
+	}
+	if len(messages) == 0 {
+		return nil, ErrNoMessages
+	}
 	return messages, nil
 }
 
@@ -538,6 +600,12 @@ func (m *Manager) AckBatch(ctx context.Context, queueName, groupID, consumerID s
 
 // Nack negatively acknowledges a message, making it available for redelivery.
 func (m *Manager) Nack(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
+	return m.NackWithDelay(ctx, queueName, groupID, consumerID, offset, 0)
+}
+
+// NackWithDelay negatively acknowledges a message and controls when it becomes
+// eligible for work stealing.
+func (m *Manager) NackWithDelay(ctx context.Context, queueName, groupID, consumerID string, offset uint64, delay time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -558,12 +626,15 @@ func (m *Manager) Nack(ctx context.Context, queueName, groupID, consumerID strin
 		return ErrConsumerNotFound
 	}
 
-	// Reset claim time to make it immediately stealable
-	// The entry stays in the owner's PEL but with updated timestamp
-	entry.ClaimedAt = time.Now().Add(-m.config.VisibilityTimeout - time.Second)
-	entry.DeliveryCount++
-
-	return m.groupStore.UpdateConsumerGroup(ctx, group)
+	requeuer, ok := m.groupStore.(storage.PendingEntryRequeuer)
+	if !ok {
+		return ErrDelayedNackUnsupported
+	}
+	attemptedAt := time.Now().Add(delay)
+	if delay == 0 {
+		attemptedAt = attemptedAt.Add(-m.config.VisibilityTimeout - time.Second)
+	}
+	return requeuer.RequeuePendingEntry(ctx, queueName, groupID, consumerID, offset, attemptedAt)
 }
 
 // Reject rejects a message, moving it to the DLQ.

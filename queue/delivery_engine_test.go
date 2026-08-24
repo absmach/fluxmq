@@ -249,7 +249,7 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 	mockRemote.consumers = []*cluster.QueueConsumerInfo{
 		{
 			QueueName:   "tasks",
-			GroupID:     "workers",
+			GroupID:     testGroupWorkers,
 			ConsumerID:  testRemoteConsumerID,
 			ClientID:    testRemoteClientID,
 			Pattern:     "",
@@ -505,7 +505,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 
 	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      testPoisonMsg,
-		Topic:   "$queue/tasks/job",
+		Topic:   testQueueTasksJob,
 		Payload: []byte("bad-job"),
 	})
 
@@ -587,7 +587,7 @@ func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
 
 	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
 		ID:      testPoisonMsg,
-		Topic:   "$queue/tasks/job",
+		Topic:   testQueueTasksJob,
 		Payload: []byte("bad-job"),
 	})
 
@@ -627,7 +627,7 @@ func TestDLQCallbackFailureLeavesMessagePending(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
 	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
 	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
-	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoisonMsg, Topic: "$queue/tasks/job"})
+	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoisonMsg, Topic: testQueueTasksJob})
 	require.NoError(t, err)
 	_, err = consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c1", nil)
 	require.NoError(t, err)

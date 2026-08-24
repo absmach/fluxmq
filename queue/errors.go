@@ -133,6 +133,7 @@ func ClassifyError(err error) Failure {
 	case errors.Is(err, cluster.ErrTakeoverInProgress):
 		return normalizeFailure(Failure{Code: ErrorCodeConflict, Retryable: true, Ownership: OwnershipOther})
 	case errors.Is(err, types.ErrInvalidConfig),
+		errors.Is(err, ErrInvalidCommand),
 		errors.Is(err, storage.ErrInvalidOffset),
 		errors.Is(err, consumer.ErrInvalidOffset):
 		return normalizeFailure(Failure{Code: ErrorCodeInvalidArgument})
@@ -181,7 +182,8 @@ func ClassifyError(err error) Failure {
 		errors.Is(err, ErrAtomicBatchReplicationUnsupported),
 		errors.Is(err, consumer.ErrGroupModeMismatch),
 		errors.Is(err, consumer.ErrCommitOffsetOnlyForStreamMode),
-		errors.Is(err, consumer.ErrDLQHandlerUnavailable):
+		errors.Is(err, consumer.ErrDLQHandlerUnavailable),
+		errors.Is(err, consumer.ErrDelayedNackUnsupported):
 		return normalizeFailure(Failure{Code: ErrorCodeFailedPrecondition})
 	default:
 		return normalizeFailure(Failure{Code: ErrorCodeInternal})

@@ -73,8 +73,8 @@ func TestDLQTransferUsesConfiguredDurabilityPath(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", "workers", &types.Message{
-		ID: "poison", Topic: "$queue/tasks/job", Payload: []byte("bad"),
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
+		ID: testPoison, Topic: testQueueTasksJob, Payload: []byte("bad"),
 	}, 7, 5, "decode failed", "$dlq/"))
 
 	require.Equal(t, int64(1), store.synced.Load(), "DLQ append did not use the durable path")

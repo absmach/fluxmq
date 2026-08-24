@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/absmach/fluxmq/logstorage"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	queueraft "github.com/absmach/fluxmq/queue/raft"
@@ -28,6 +29,9 @@ const (
 	testGroupHotPath  = "hot-path"
 	testGroupJobsRaft = "jobs-raft"
 	testConsumer1     = "consumer-1"
+	testConsumer2     = "consumer-2"
+	testGroupWorkers  = "workers"
+	testQueueJobs     = "jobs"
 	testQueueEvents   = "events"
 	testQueuePrimary  = "primary"
 )
@@ -37,10 +41,14 @@ type readyQueueCoordinator struct {
 	store qstorage.QueueStore
 }
 
-func (c *readyQueueCoordinator) IsEnabled() bool                                      { return true }
-func (c *readyQueueCoordinator) IsQueueReplicated(string) bool                        { return true }
-func (c *readyQueueCoordinator) IsLeaderForQueue(string) bool                         { return true }
-func (c *readyQueueCoordinator) LeaderForQueue(string) string                         { return "127.0.0.1:7100" }
+func (c *readyQueueCoordinator) IsEnabled() bool { return true }
+
+func (c *readyQueueCoordinator) IsQueueReplicated(string) bool { return true }
+
+func (c *readyQueueCoordinator) IsLeaderForQueue(string) bool { return true }
+
+func (c *readyQueueCoordinator) LeaderForQueue(string) string { return "127.0.0.1:7100" }
+
 func (c *readyQueueCoordinator) LeaderIDForQueue(string) string                       { return "node-1" }
 func (c *readyQueueCoordinator) EnsureQueue(context.Context, types.QueueConfig) error { return nil }
 func (c *readyQueueCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
@@ -158,6 +166,115 @@ func TestAppendContractUsesExactOffsetsAndPreservesBytes(t *testing.T) {
 	if batchResp.Msg.FirstOffset != 1 || batchResp.Msg.LastOffset != 2 || batchResp.Msg.Count != 2 {
 		t.Fatalf("batch range = [%d,%d] count=%d, want [1,2] count=2",
 			batchResp.Msg.FirstOffset, batchResp.Msg.LastOffset, batchResp.Msg.Count)
+	}
+}
+
+func TestConnectAdapterUsesSharedQueueStateMachine(t *testing.T) {
+	ctx := context.Background()
+	store, err := logstorage.NewAdapter(t.TempDir(), logstorage.DefaultAdapterConfig())
+	if err != nil {
+		t.Fatalf("create logstorage adapter: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close logstorage adapter: %v", err)
+		}
+	})
+	manager := queuepkg.NewManager(store, store, nil, queuepkg.DefaultConfig(), nil, nil)
+	h := NewHandler(manager, nil, nil, nil)
+	if err := manager.CreateQueue(ctx, types.DefaultQueueConfig(testQueueJobs, "jobs/#")); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	group := types.NewConsumerGroupState(testQueueJobs, testGroupWorkers, "")
+	if err := store.CreateConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	for _, id := range []string{testConsumer1, testConsumer2} {
+		if err := store.RegisterConsumer(ctx, testQueueJobs, testGroupWorkers, &types.ConsumerInfo{ID: id, ClientID: id}); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+
+	appended, err := h.AppendBatch(ctx, connect.NewRequest(&queuev1.AppendBatchRequest{
+		QueueName: testQueueJobs,
+		Messages: []*queuev1.BatchMessage{
+			{Value: []byte("zero")},
+			{Value: []byte("one")},
+			{Value: []byte("two")},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if appended.Msg.FirstOffset != 0 || appended.Msg.LastOffset != 2 || appended.Msg.Count != 3 {
+		t.Fatalf("append outcome = %+v", appended.Msg)
+	}
+
+	consumed, err := h.Consume(ctx, connect.NewRequest(&queuev1.ConsumeRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer1, MaxMessages: 3,
+	}))
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if len(consumed.Msg.Messages) != 3 {
+		t.Fatalf("consumed %d messages, want 3", len(consumed.Msg.Messages))
+	}
+
+	acked, err := h.Ack(ctx, connect.NewRequest(&queuev1.AckRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer1, Offsets: []uint64{0},
+	}))
+	if err != nil {
+		t.Fatalf("ack offset 0: %v", err)
+	}
+	if acked.Msg.AckedCount != 1 || acked.Msg.Committed.GetCommitted() != 1 {
+		t.Fatalf("ack outcome = %+v", acked.Msg)
+	}
+
+	if _, err := h.Nack(ctx, connect.NewRequest(&queuev1.NackRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer1, Offsets: []uint64{1}, Delay: durationpb.New(time.Second),
+	})); err != nil {
+		t.Fatalf("delayed nack: %v", err)
+	}
+	claimed, err := h.Claim(ctx, connect.NewRequest(&queuev1.ClaimRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer2, MinIdleTime: durationpb.New(time.Hour), Limit: 1,
+	}))
+	if err != nil {
+		t.Fatalf("claim delayed message: %v", err)
+	}
+	if len(claimed.Msg.Messages) != 0 {
+		t.Fatalf("delayed nack was claimable immediately: %+v", claimed.Msg.Messages)
+	}
+	if _, err := h.Nack(ctx, connect.NewRequest(&queuev1.NackRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer1, Offsets: []uint64{1},
+	})); err != nil {
+		t.Fatalf("immediate nack: %v", err)
+	}
+	claimed, err = h.Claim(ctx, connect.NewRequest(&queuev1.ClaimRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer2, MinIdleTime: durationpb.New(time.Second), Limit: 1,
+	}))
+	if err != nil {
+		t.Fatalf("claim immediate nack: %v", err)
+	}
+	if len(claimed.Msg.Messages) != 1 || claimed.Msg.Messages[0].Offset != 1 {
+		t.Fatalf("claim outcome = %+v, want offset 1", claimed.Msg.Messages)
+	}
+
+	_, err = h.Ack(ctx, connect.NewRequest(&queuev1.AckRequest{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: testConsumer2, Offsets: []uint64{2},
+	}))
+	if got := connect.CodeOf(err); got != connect.CodeNotFound {
+		t.Fatalf("wrong-owner ack code = %s, want not_found; error=%v", got, err)
+	}
+	for consumerID, offset := range map[string]uint64{testConsumer2: 1, testConsumer1: 2} {
+		if _, err := h.Ack(ctx, connect.NewRequest(&queuev1.AckRequest{
+			QueueName: testQueueJobs, GroupId: testGroupWorkers, ConsumerId: consumerID, Offsets: []uint64{offset},
+		})); err != nil {
+			t.Fatalf("ack offset %d as %s: %v", offset, consumerID, err)
+		}
+	}
+	seek, err := h.SeekToOffset(ctx, connect.NewRequest(&queuev1.SeekToOffsetRequest{QueueName: testQueueJobs, Offset: 99}))
+	if err != nil || seek.Msg.Offset != 3 {
+		t.Fatalf("seek outcome = %+v, error = %v; want tail 3", seek, err)
 	}
 }
 
@@ -306,7 +423,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 	h := NewHandler(manager, store, groupStore, nil)
 
 	createResp, err := h.CreateQueue(ctx, connect.NewRequest(&queuev1.CreateQueueRequest{
-		Name:   "jobs",
+		Name:   testQueueJobs,
 		Topics: []string{"$queue/jobs/#"},
 		Config: &queuev1.QueueConfig{
 			Replication: &queuev1.ReplicationConfig{
@@ -323,7 +440,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 		t.Fatalf("create queue: %v", err)
 	}
 
-	stored, err := store.GetQueue(ctx, "jobs")
+	stored, err := store.GetQueue(ctx, testQueueJobs)
 	if err != nil {
 		t.Fatalf("get queue: %v", err)
 	}
@@ -372,7 +489,7 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 		t.Fatalf("create queue: %v", err)
 	}
 
-	group := types.NewConsumerGroupState("orders", "workers", "")
+	group := types.NewConsumerGroupState("orders", testGroupWorkers, "")
 	if err := groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
@@ -384,20 +501,20 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 		RegisteredAt:  before,
 		LastHeartbeat: before,
 	}
-	if err := groupStore.RegisterConsumer(ctx, "orders", "workers", consumer); err != nil {
+	if err := groupStore.RegisterConsumer(ctx, "orders", testGroupWorkers, consumer); err != nil {
 		t.Fatalf("register consumer: %v", err)
 	}
 
 	_, err := h.Heartbeat(ctx, connect.NewRequest(&queuev1.HeartbeatRequest{
 		QueueName:  "orders",
-		GroupId:    "workers",
+		GroupId:    testGroupWorkers,
 		ConsumerId: testConsumer1,
 	}))
 	if err != nil {
 		t.Fatalf("heartbeat: %v", err)
 	}
 
-	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", "workers")
+	updatedGroup, err := groupStore.GetConsumerGroup(ctx, "orders", testGroupWorkers)
 	if err != nil {
 		t.Fatalf("get group: %v", err)
 	}

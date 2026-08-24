@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
@@ -275,6 +276,17 @@ func (s *raftGroupStore) TransferPendingEntry(ctx context.Context, queueName, gr
 			return s.base.TransferPendingEntry(ctx, queueName, groupID, offset, fromConsumer, toConsumer)
 		},
 	)
+}
+
+func (s *raftGroupStore) RequeuePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	if s.isReplicatedFollower(queueName) || s.leaderCoordinatorForQueue(queueName) != nil {
+		return consumer.ErrDelayedNackUnsupported
+	}
+	requeuer, ok := s.base.(storage.PendingEntryRequeuer)
+	if !ok {
+		return consumer.ErrDelayedNackUnsupported
+	}
+	return requeuer.RequeuePendingEntry(ctx, queueName, groupID, consumerID, offset, attemptedAt)
 }
 
 func (s *raftGroupStore) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {

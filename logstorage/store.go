@@ -429,6 +429,12 @@ func (s *Store) AckBatch(queueName, groupID string, offsets []uint64) error {
 
 // Nack negatively acknowledges a message (will be redelivered).
 func (s *Store) Nack(queueName, groupID string, offset uint64) error {
+	return s.NackAt(queueName, groupID, offset, time.Now())
+}
+
+// NackAt negatively acknowledges a message using an explicit logical attempt
+// time so redelivery timing survives process restart.
+func (s *Store) NackAt(queueName, groupID string, offset uint64, attemptedAt time.Time) error {
 	cm, err := s.getConsumerManager(queueName)
 	if err != nil {
 		return err
@@ -439,7 +445,7 @@ func (s *Store) Nack(queueName, groupID string, offset uint64) error {
 		return ErrGroupNotFound
 	}
 
-	return state.Nack(offset)
+	return state.NackAt(offset, attemptedAt)
 }
 
 // Claim transfers a pending message to a new consumer (work stealing).
@@ -1040,7 +1046,7 @@ func (s *Store) GetAllPending(queueName, groupID string) (map[string][]PELEntry,
 			pelEntry := PELEntry{
 				Offset:        e.Offset,
 				ConsumerID:    e.ConsumerID,
-				ClaimedAt:     e.DeliveredAt,
+				ClaimedAt:     e.LastAttempt,
 				DeliveryCount: e.DeliveryCount,
 			}
 			result[e.ConsumerID] = append(result[e.ConsumerID], pelEntry)

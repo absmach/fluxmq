@@ -133,6 +133,14 @@ type ConsumerGroupStore interface {
 	ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.ConsumerInfo, error)
 }
 
+// PendingEntryRequeuer is the optional atomic pending-entry mutation used by
+// nack. attemptedAt is the logical last delivery attempt; setting it relative
+// to the visibility timeout supports both immediate and delayed redelivery
+// without removing the entry from its current owner's PEL.
+type PendingEntryRequeuer interface {
+	RequeuePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error
+}
+
 // ConsumerStore manages consumer group state.
 type ConsumerStore interface {
 	RegisterConsumer(ctx context.Context, consumer *types.Consumer) error

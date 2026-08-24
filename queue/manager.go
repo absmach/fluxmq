@@ -29,6 +29,8 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+const defaultDLQTopicPrefix = "$dlq/"
+
 var (
 	// ErrQueueNotStream is returned when an exact stream publish targets a
 	// queue that exists but is not configured as a stream.
@@ -105,6 +107,7 @@ type Manager struct {
 	groupStore        storage.ConsumerGroupStore
 	raftGroupStore    *raftGroupStore
 	consumerManager   *consumer.Manager
+	stateMachine      *stateMachine
 	deliveryTarget    Deliverer
 	logger            *slog.Logger
 	config            Config
@@ -229,7 +232,7 @@ func DefaultConfig() Config {
 		HeartbeatInterval:      10 * time.Second,
 		ConsumerTimeout:        2 * time.Minute,
 		MaxPELSize:             100_000,
-		DLQTopicPrefix:         "$dlq/",
+		DLQTopicPrefix:         defaultDLQTopicPrefix,
 		StealInterval:          5 * time.Second,
 		StealEnabled:           true,
 		RetentionCheckInterval: 5 * time.Minute,
@@ -269,7 +272,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 	dlqPrefix := config.DLQTopicPrefix
 	if dlqPrefix == "" {
-		dlqPrefix = "$dlq/"
+		dlqPrefix = defaultDLQTopicPrefix
 	}
 
 	consumerCfg := consumer.Config{
@@ -346,6 +349,8 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		delivery:                engine,
 		metrics:                 metrics,
 	}
+	mgr.stateMachine = newStateMachine(mgr)
+	engine.setStateMachine(mgr.stateMachine)
 
 	mgr.capture = newCaptureDispatcher(
 		config.CaptureWorkers,
@@ -1051,6 +1056,14 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 // performs topic-pattern fanout and never auto-creates a queue. QueueService
 // uses this operation so its offset response cannot race a separate Tail read.
 func (m *Manager) AppendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, error) {
+	outcome, err := m.stateMachine.Append(ctx, AppendCommand{
+		QueueName: queueName,
+		Messages:  []types.PublishRequest{publish},
+	})
+	return outcome.FirstOffset, err
+}
+
+func (m *Manager) appendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, error) {
 	publish = normalizePublishRequest(publish)
 	if publish.Topic == "" {
 		publish.Topic = queueName
@@ -1094,6 +1107,15 @@ func (m *Manager) AppendToQueue(ctx context.Context, queueName string, publish t
 // rejected until their implementations can establish the same atomic contract;
 // silently looping over AppendToQueue would make the public API claim false.
 func (m *Manager) AppendBatchToQueue(ctx context.Context, queueName string, publishes []types.PublishRequest) (uint64, uint32, error) {
+	outcome, err := m.stateMachine.Append(ctx, AppendCommand{
+		QueueName:   queueName,
+		Messages:    publishes,
+		AtomicBatch: true,
+	})
+	return outcome.FirstOffset, outcome.Count, err
+}
+
+func (m *Manager) appendBatchToQueue(ctx context.Context, queueName string, publishes []types.PublishRequest) (uint64, uint32, error) {
 	if len(publishes) == 0 {
 		return 0, 0, nil
 	}
@@ -1316,40 +1338,49 @@ func (m *Manager) publishToTargets(
 // every contract reload, and a reload waiting for the write lock would in turn
 // stall every subsequent publish.
 func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) error {
+	_, err := m.stateMachine.Append(ctx, AppendCommand{
+		QueueName:               queueName,
+		Messages:                []types.PublishRequest{publish},
+		RequireProtectedDurable: true,
+	})
+	return err
+}
+
+func (m *Manager) publishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, error) {
 	expected, protected := m.protectedQueueContract(queueName)
 	if !protected {
-		return fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
+		return 0, fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
 	}
 
 	publish = normalizePublishRequest(publish)
 	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
-		return fmt.Errorf("get exact stream %q: %w", queueName, err)
+		return 0, fmt.Errorf("get exact stream %q: %w", queueName, err)
 	}
 	if queueConfig == nil {
-		return fmt.Errorf("get exact stream %q: %w", queueName, storage.ErrQueueNotFound)
+		return 0, fmt.Errorf("get exact stream %q: %w", queueName, storage.ErrQueueNotFound)
 	}
 	if err := protectedQueueContractMismatch(expected, *queueConfig); err != nil {
-		return fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
+		return 0, fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
 	}
 	if !queueConfig.Reserved {
-		return fmt.Errorf("%w: %s", ErrQueueNotReserved, queueName)
+		return 0, fmt.Errorf("%w: %s", ErrQueueNotReserved, queueName)
 	}
 	if queueConfig.Type != types.QueueTypeStream {
-		return fmt.Errorf("%w: %s", ErrQueueNotStream, queueName)
+		return 0, fmt.Errorf("%w: %s", ErrQueueNotStream, queueName)
 	}
 	if !queueConfig.Durable {
-		return fmt.Errorf("%w: %s", ErrQueueNotDurable, queueName)
+		return 0, fmt.Errorf("%w: %s", ErrQueueNotDurable, queueName)
 	}
 	if queueConfig.Replication.Enabled {
-		return fmt.Errorf("%w: %s", ErrDurableReplicatedStreamUnsupported, queueName)
+		return 0, fmt.Errorf("%w: %s", ErrDurableReplicatedStreamUnsupported, queueName)
 	}
 	durableStore, err := m.durableQueueStore()
 	if err != nil {
-		return fmt.Errorf("%w: %s", err, queueName)
+		return 0, fmt.Errorf("%w: %s", err, queueName)
 	}
 	if queueConfig.MaxMessageSize <= 0 || int64(len(publish.Payload)) > queueConfig.MaxMessageSize {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"%w: queue %s accepts at most %d bytes, got %d",
 			ErrQueueMessageTooLarge,
 			queueName,
@@ -1361,10 +1392,10 @@ func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, 
 	msg := newQueuedMessage(publish, queueConfig)
 	offset, err := durableStore.AppendAndSync(ctx, queueName, msg)
 	if err := m.completeAppend(queueName, publish.Topic, offset, err); err != nil {
-		return err
+		return 0, err
 	}
 	m.delivery.Schedule(queueName)
-	return nil
+	return offset, nil
 }
 
 // HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
@@ -1489,10 +1520,8 @@ func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRe
 		return fmt.Errorf("append to queue %q: missing queue configuration", queueName)
 	}
 
-	msg := newQueuedMessage(publish, queueConfig)
-
-	offset, err := m.appendConfiguredMessage(ctx, queueName, queueConfig, msg)
-	return m.completeAppend(queueName, publish.Topic, offset, err)
+	_, err := m.stateMachine.appendResolved(ctx, queueName, publish, queueConfig)
+	return err
 }
 
 func (m *Manager) appendConfiguredMessage(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *types.Message) (uint64, error) {
@@ -2081,71 +2110,16 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 
 // Ack acknowledges a message.
 func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
-	// Parse message ID to get offset
 	offset, err := parseMessageID(messageID)
 	if err != nil {
 		return err
 	}
-
-	if groupID != "" {
-		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
-			if group.Mode == types.GroupModeStream {
-				m.handleStreamAck(ctx, queueName, group, offset)
-				m.delivery.Schedule(queueName)
-				return nil
-			}
-		}
-	}
-
-	// Find the consumer that has this message pending
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
-	if err != nil {
-		return err
-	}
-
-	for _, group := range groups {
-		// Check if this group matches
-		if groupID != "" && group.ID != groupID {
-			continue
-		}
-		if group.Mode == types.GroupModeStream {
-			m.handleStreamAck(ctx, queueName, group, offset)
-			m.delivery.Schedule(queueName)
-			return nil
-		}
-
-		// Find and ack the message
-		for consumerID := range group.PEL {
-			err := m.consumerManager.Ack(ctx, queueName, group.ID, consumerID, offset)
-			if err == nil {
-				m.metrics.RecordAck(0)
-				m.metrics.UpdatePELSize(uint64(group.PendingCount()))
-				m.delivery.Schedule(queueName)
-				return nil
-			}
-		}
-	}
-
-	return consumer.ErrMessageNotPending
-}
-
-func (m *Manager) handleStreamAck(ctx context.Context, queueName string, group *types.ConsumerGroup, offset uint64) {
-	if !group.AutoCommit {
-		return
-	}
-
-	cursor := group.GetCursor()
-	next := offset + 1
-	if next <= cursor.Committed {
-		return
-	}
-
-	if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
-		m.logger.Warn("failed to update stream committed offset",
-			slog.String("queue", queueName),
-			slog.String("group", group.ID),
-			slog.String("error", err.Error()))
-	}
+	_, err = m.stateMachine.Ack(ctx, AckCommand{
+		QueueName: queueName,
+		GroupID:   groupID,
+		Offsets:   []uint64{offset},
+	})
+	return err
 }
 
 // Nack negatively acknowledges a message.
@@ -2155,40 +2129,12 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 		return err
 	}
 
-	if groupID != "" {
-		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
-			if group.Mode == types.GroupModeStream {
-				m.delivery.Schedule(queueName)
-				return nil
-			}
-		}
-	}
-
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
-	if err != nil {
-		return err
-	}
-
-	for _, group := range groups {
-		if groupID != "" && group.ID != groupID {
-			continue
-		}
-		if group.Mode == types.GroupModeStream {
-			m.delivery.Schedule(queueName)
-			return nil
-		}
-
-		for consumerID := range group.PEL {
-			err := m.consumerManager.Nack(ctx, queueName, group.ID, consumerID, offset)
-			if err == nil {
-				m.metrics.RecordNack()
-				m.delivery.Schedule(queueName)
-				return nil
-			}
-		}
-	}
-
-	return consumer.ErrMessageNotPending
+	_, err = m.stateMachine.Nack(ctx, NackCommand{
+		QueueName: queueName,
+		GroupID:   groupID,
+		Offsets:   []uint64{offset},
+	})
+	return err
 }
 
 // Reject rejects a message and moves it to DLQ.
@@ -2198,41 +2144,13 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 		return err
 	}
 
-	if groupID != "" {
-		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
-			if group.Mode == types.GroupModeStream {
-				return m.rejectStream(ctx, queueName, group, offset, reason)
-			}
-		}
-	}
-
-	groups, err := m.groupStore.ListConsumerGroups(ctx, queueName)
-	if err != nil {
-		return err
-	}
-
-	for _, group := range groups {
-		if groupID != "" && group.ID != groupID {
-			continue
-		}
-		if group.Mode == types.GroupModeStream {
-			return m.rejectStream(ctx, queueName, group, offset, reason)
-		}
-
-		for consumerID := range group.PEL {
-			err := m.consumerManager.Reject(ctx, queueName, group.ID, consumerID, offset, reason)
-			if err == nil {
-				m.metrics.RecordReject()
-				m.delivery.Schedule(queueName)
-				return nil
-			}
-			if !errors.Is(err, consumer.ErrMessageNotPending) && !errors.Is(err, consumer.ErrConsumerNotFound) {
-				return err
-			}
-		}
-	}
-
-	return consumer.ErrMessageNotPending
+	_, err = m.stateMachine.Reject(ctx, RejectCommand{
+		QueueName: queueName,
+		GroupID:   groupID,
+		Offsets:   []uint64{offset},
+		Reason:    reason,
+	})
+	return err
 }
 
 // rejectStream handles reject for stream-mode consumer groups.

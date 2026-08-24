@@ -38,6 +38,7 @@ type DeliveryEngine struct {
 	queueStore        storage.QueueStore
 	groupStore        storage.ConsumerGroupStore
 	consumerManager   *consumer.Manager
+	stateMachine      *stateMachine
 	local             Deliverer
 	remote            RemoteRouter // nil for single-node
 	localNodeID       string
@@ -71,6 +72,7 @@ func NewDeliveryEngine(
 		queueStore:       queueStore,
 		groupStore:       groupStore,
 		consumerManager:  consumerMgr,
+		stateMachine:     newConsumerStateMachine(queueStore, groupStore, consumerMgr),
 		local:            local,
 		remote:           remote,
 		localNodeID:      localNodeID,
@@ -81,6 +83,10 @@ func NewDeliveryEngine(
 		queue:            make(chan string, 4096),
 		stopCh:           make(chan struct{}),
 	}
+}
+
+func (e *DeliveryEngine) setStateMachine(stateMachine *stateMachine) {
+	e.stateMachine = stateMachine
 }
 
 func (e *DeliveryEngine) setConsumerRemovedCallback(callback func(context.Context, string, string, []string)) {
@@ -242,11 +248,6 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 		return false
 	}
 
-	var filter *consumer.Filter
-	if group.Pattern != "" {
-		filter = consumer.NewFilter(group.Pattern)
-	}
-
 	consumers := group.ConsumerIDs()
 	if len(consumers) == 0 {
 		return false
@@ -276,13 +277,13 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			}
 		}
 
-		var msgs []*types.Message
-		var nextCursor uint64
-		if group.Mode == types.GroupModeStream {
-			msgs, nextCursor, err = e.consumerManager.PeekBatchStream(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
-		} else {
-			msgs, err = e.consumerManager.ClaimBatch(ctx, config.Name, group.ID, consumerID, filter, e.batchSize)
-		}
+		outcome, err := e.stateMachine.Consume(ctx, ConsumeCommand{
+			QueueName:  config.Name,
+			GroupID:    group.ID,
+			ConsumerID: consumerID,
+			Filter:     group.Pattern,
+			Limit:      e.batchSize,
+		})
 		if err == consumer.ErrNoMessages {
 			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
 			continue
@@ -290,6 +291,8 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 		if err != nil {
 			continue
 		}
+		msgs := outcome.Messages
+		nextCursor := outcome.NextOffset
 		if len(msgs) == 0 {
 			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
 			continue
@@ -415,11 +418,6 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 			continue
 		}
 
-		var filter *consumer.Filter
-		if group.Pattern != "" {
-			filter = consumer.NewFilter(group.Pattern)
-		}
-
 		var workCommitted uint64
 		var hasWorkCommitted bool
 		if group.Mode == types.GroupModeStream && config.PrimaryGroup != "" {
@@ -431,17 +429,18 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 		}
 
 		for _, consumerInfo := range groupConsumers {
-			var msgs []*types.Message
-			var nextCursor uint64
-			var err error
-			if group.Mode == types.GroupModeStream {
-				msgs, nextCursor, err = e.consumerManager.PeekBatchStream(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, e.batchSize)
-			} else {
-				msgs, err = e.consumerManager.ClaimBatch(ctx, config.Name, groupID, consumerInfo.ConsumerID, filter, e.batchSize)
-			}
+			outcome, err := e.stateMachine.Consume(ctx, ConsumeCommand{
+				QueueName:  config.Name,
+				GroupID:    groupID,
+				ConsumerID: consumerInfo.ConsumerID,
+				Filter:     group.Pattern,
+				Limit:      e.batchSize,
+			})
 			if err != nil {
 				continue
 			}
+			msgs := outcome.Messages
+			nextCursor := outcome.NextOffset
 
 			if len(msgs) == 0 {
 				continue
@@ -552,7 +551,11 @@ func (e *DeliveryEngine) touchConsumerHeartbeat(ctx context.Context, queueName, 
 }
 
 func (e *DeliveryEngine) commitStreamCursor(ctx context.Context, queueName, groupID string, cursor uint64) {
-	if err := e.consumerManager.CommitStreamCursor(ctx, queueName, groupID, cursor); err != nil {
+	if err := e.stateMachine.CommitConsume(ctx, CommitConsumeCommand{
+		QueueName: queueName,
+		GroupID:   groupID,
+		Offset:    cursor,
+	}); err != nil {
 		e.logger.Warn("failed to commit stream cursor after delivery",
 			slog.String("queue", queueName),
 			slog.String("group", groupID),

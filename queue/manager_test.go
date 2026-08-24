@@ -309,6 +309,25 @@ func (s *mockGroupStore) TransferPendingEntry(ctx context.Context, queueName, gr
 	return nil
 }
 
+func (s *mockGroupStore) RequeuePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.groups[queueName] == nil || s.groups[queueName][groupID] == nil {
+		return storage.ErrConsumerNotFound
+	}
+	entry, owner := s.groups[queueName][groupID].FindPending(offset)
+	if entry == nil {
+		return storage.ErrPendingEntryNotFound
+	}
+	if owner != consumerID {
+		return storage.ErrConsumerNotFound
+	}
+	entry.ClaimedAt = attemptedAt
+	entry.DeliveryCount++
+	return nil
+}
+
 func (s *mockGroupStore) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1389,16 +1408,16 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	groupStore := newMockGroupStore()
 	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
-	group := types.NewConsumerGroupState("tasks", "workers", "")
-	group.SetConsumer("consumer", &types.ConsumerInfo{ID: "consumer", ClientID: "consumer"})
+	group := types.NewConsumerGroupState("tasks", testGroupWorkers, "")
+	group.SetConsumer(testConsumer, &types.ConsumerInfo{ID: testConsumer, ClientID: testConsumer})
 	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
-	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: "poison", Topic: "$queue/tasks/job", Payload: []byte("bad")})
+	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoison, Topic: testQueueTasksJob, Payload: []byte("bad")})
 	require.NoError(t, err)
-	_, err = mgr.consumerManager.Claim(ctx, "tasks", "workers", "consumer", nil)
+	_, err = mgr.consumerManager.Claim(ctx, "tasks", testGroupWorkers, testConsumer, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Reject(ctx, "tasks", "tasks:0", "workers", "invalid payload"))
-	entries, err := groupStore.GetPendingEntries(ctx, "tasks", "workers", "consumer")
+	require.NoError(t, mgr.Reject(ctx, "tasks", "tasks:0", testGroupWorkers, "invalid payload"))
+	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, testConsumer)
 	require.NoError(t, err)
 	require.Empty(t, entries)
 	dlqMsg, err := logStore.Read(ctx, "$dlq/tasks", 0)
@@ -1415,16 +1434,16 @@ func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
 	cfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
 	cfg.DLQConfig.Enabled = false
 	require.NoError(t, mgr.CreateQueue(ctx, cfg))
-	group := types.NewConsumerGroupState("tasks", "workers", "")
-	group.SetConsumer("consumer", &types.ConsumerInfo{ID: "consumer", ClientID: "consumer"})
+	group := types.NewConsumerGroupState("tasks", testGroupWorkers, "")
+	group.SetConsumer(testConsumer, &types.ConsumerInfo{ID: testConsumer, ClientID: testConsumer})
 	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
-	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: "poison", Topic: "$queue/tasks/job"})
+	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoison, Topic: testQueueTasksJob})
 	require.NoError(t, err)
-	_, err = mgr.consumerManager.Claim(ctx, "tasks", "workers", "consumer", nil)
+	_, err = mgr.consumerManager.Claim(ctx, "tasks", testGroupWorkers, testConsumer, nil)
 	require.NoError(t, err)
 
-	require.ErrorIs(t, mgr.Reject(ctx, "tasks", "tasks:0", "workers", "invalid payload"), ErrDLQDisabled)
-	entries, err := groupStore.GetPendingEntries(ctx, "tasks", "workers", "consumer")
+	require.ErrorIs(t, mgr.Reject(ctx, "tasks", "tasks:0", testGroupWorkers, "invalid payload"), ErrDLQDisabled)
+	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, testConsumer)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
@@ -2018,9 +2037,12 @@ func (m *mockQueueCoordinator) ApplyRegisterConsumer(_ context.Context, _ string
 func (m *mockQueueCoordinator) ApplyUnregisterConsumer(_ context.Context, _ string, _ string, _ string) error {
 	return nil
 }
+
 func (m *mockQueueCoordinator) EnsureQueue(_ context.Context, _ types.QueueConfig) error { return nil }
+
 func (m *mockQueueCoordinator) UpdateQueue(_ context.Context, _ types.QueueConfig) error { return nil }
-func (m *mockQueueCoordinator) DeleteQueue(_ context.Context, _ string) error            { return nil }
+
+func (m *mockQueueCoordinator) DeleteQueue(_ context.Context, _ string) error { return nil }
 
 func TestCrossNodeMessageRouting(t *testing.T) {
 	logStore := memlog.New()
@@ -3278,8 +3300,8 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 
 	before := time.Now().Add(-time.Hour)
 	info := &types.ConsumerInfo{
-		ID:            "consumer-1",
-		ClientID:      "consumer-1",
+		ID:            testConsumerOne,
+		ClientID:      testConsumerOne,
 		RegisteredAt:  before,
 		LastHeartbeat: before,
 	}
@@ -3287,7 +3309,7 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 		t.Fatalf("RegisterConsumer failed: %v", err)
 	}
 
-	if err := manager.UpdateConsumerHeartbeat(ctx, "orders", testGroupWorkers, "consumer-1"); err != nil {
+	if err := manager.UpdateConsumerHeartbeat(ctx, "orders", testGroupWorkers, testConsumerOne); err != nil {
 		t.Fatalf("UpdateConsumerHeartbeat failed: %v", err)
 	}
 
@@ -3295,7 +3317,7 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	updated := updatedGroup.GetConsumer("consumer-1")
+	updated := updatedGroup.GetConsumer(testConsumerOne)
 	if updated == nil {
 		t.Fatalf("expected consumer to exist")
 	}

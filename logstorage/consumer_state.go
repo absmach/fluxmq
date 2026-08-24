@@ -538,10 +538,16 @@ func (cs *ConsumerState) AckBatch(offsets []uint64) error {
 
 // Nack negatively acknowledges a message (will be redelivered).
 func (cs *ConsumerState) Nack(offset uint64) error {
+	return cs.NackAt(offset, time.Now())
+}
+
+// NackAt negatively acknowledges a message using an explicit logical attempt
+// time. This preserves immediate or delayed redelivery across restart.
+func (cs *ConsumerState) NackAt(offset uint64, attemptedAt time.Time) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	ts := time.Now().UnixMilli()
+	ts := attemptedAt.UnixMilli()
 	cs.applyNack(offset, ts)
 
 	return cs.writeOp(&Operation{
