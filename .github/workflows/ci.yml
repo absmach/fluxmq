@@ -45,7 +45,7 @@ jobs:
           cache: true
 
       - name: Set up Buf
-        uses: bufbuild/buf-setup-action@v1
+        uses: bufbuild/buf-action@v1
 
       - name: Generate protobuf
         run: make proto
