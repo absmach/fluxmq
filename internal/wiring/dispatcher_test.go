@@ -36,6 +36,8 @@ func (f *fakeMQTTClusterHandler) GetSessionStateAndClose(ctx context.Context, cl
 	return nil, nil
 }
 
+func (f *fakeMQTTClusterHandler) HandleSessionLeaseLost(context.Context, []string) {}
+
 func (f *fakeMQTTClusterHandler) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
 	return nil, nil
 }

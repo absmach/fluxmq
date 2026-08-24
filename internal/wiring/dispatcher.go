@@ -78,6 +78,10 @@ func (d *MessageDispatcher) GetSessionStateAndClose(ctx context.Context, clientI
 	return d.mqtt.GetSessionStateAndClose(ctx, clientID)
 }
 
+func (d *MessageDispatcher) HandleSessionLeaseLost(ctx context.Context, clientIDs []string) {
+	d.mqtt.HandleSessionLeaseLost(ctx, clientIDs)
+}
+
 func (d *MessageDispatcher) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
 	return d.mqtt.GetRetainedMessage(ctx, topic)
 }

@@ -30,9 +30,6 @@ const (
 	BrokerService_EnqueueRemote_FullMethodName       = "/fluxmq.cluster.v1.BrokerService/EnqueueRemote"
 	BrokerService_RouteQueueMessage_FullMethodName   = "/fluxmq.cluster.v1.BrokerService/RouteQueueMessage"
 	BrokerService_RouteQueueBatch_FullMethodName     = "/fluxmq.cluster.v1.BrokerService/RouteQueueBatch"
-	BrokerService_AppendEntries_FullMethodName       = "/fluxmq.cluster.v1.BrokerService/AppendEntries"
-	BrokerService_RequestVote_FullMethodName         = "/fluxmq.cluster.v1.BrokerService/RequestVote"
-	BrokerService_InstallSnapshot_FullMethodName     = "/fluxmq.cluster.v1.BrokerService/InstallSnapshot"
 	BrokerService_ForwardGroupOp_FullMethodName      = "/fluxmq.cluster.v1.BrokerService/ForwardGroupOp"
 	BrokerService_ForwardPublishBatch_FullMethodName = "/fluxmq.cluster.v1.BrokerService/ForwardPublishBatch"
 )
@@ -60,12 +57,6 @@ type BrokerServiceClient interface {
 	RouteQueueMessage(ctx context.Context, in *RouteQueueMessageRequest, opts ...grpc.CallOption) (*RouteQueueMessageResponse, error)
 	// RouteQueueBatch delivers multiple queue messages in one RPC.
 	RouteQueueBatch(ctx context.Context, in *RouteQueueBatchRequest, opts ...grpc.CallOption) (*RouteQueueBatchResponse, error)
-	// AppendEntries is invoked by the Raft leader to replicate log entries.
-	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
-	// RequestVote is invoked by candidates during leader election.
-	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
-	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
-	InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error)
 	// ForwardGroupOp forwards a consumer group mutation from a follower to the
 	// Raft leader for the queue's replication group. The leader applies the
 	// operation through its coordinator so it goes through Raft consensus.
@@ -164,36 +155,6 @@ func (c *brokerServiceClient) RouteQueueBatch(ctx context.Context, in *RouteQueu
 	return out, nil
 }
 
-func (c *brokerServiceClient) AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AppendEntriesResponse)
-	err := c.cc.Invoke(ctx, BrokerService_AppendEntries_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *brokerServiceClient) RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RequestVoteResponse)
-	err := c.cc.Invoke(ctx, BrokerService_RequestVote_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *brokerServiceClient) InstallSnapshot(ctx context.Context, in *InstallSnapshotRequest, opts ...grpc.CallOption) (*InstallSnapshotResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(InstallSnapshotResponse)
-	err := c.cc.Invoke(ctx, BrokerService_InstallSnapshot_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *brokerServiceClient) ForwardGroupOp(ctx context.Context, in *ForwardGroupOpRequest, opts ...grpc.CallOption) (*ForwardGroupOpResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ForwardGroupOpResponse)
@@ -237,12 +198,6 @@ type BrokerServiceServer interface {
 	RouteQueueMessage(context.Context, *RouteQueueMessageRequest) (*RouteQueueMessageResponse, error)
 	// RouteQueueBatch delivers multiple queue messages in one RPC.
 	RouteQueueBatch(context.Context, *RouteQueueBatchRequest) (*RouteQueueBatchResponse, error)
-	// AppendEntries is invoked by the Raft leader to replicate log entries.
-	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
-	// RequestVote is invoked by candidates during leader election.
-	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
-	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
-	InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error)
 	// ForwardGroupOp forwards a consumer group mutation from a follower to the
 	// Raft leader for the queue's replication group. The leader applies the
 	// operation through its coordinator so it goes through Raft consensus.
@@ -284,15 +239,6 @@ func (UnimplementedBrokerServiceServer) RouteQueueMessage(context.Context, *Rout
 }
 func (UnimplementedBrokerServiceServer) RouteQueueBatch(context.Context, *RouteQueueBatchRequest) (*RouteQueueBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RouteQueueBatch not implemented")
-}
-func (UnimplementedBrokerServiceServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AppendEntries not implemented")
-}
-func (UnimplementedBrokerServiceServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RequestVote not implemented")
-}
-func (UnimplementedBrokerServiceServer) InstallSnapshot(context.Context, *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method InstallSnapshot not implemented")
 }
 func (UnimplementedBrokerServiceServer) ForwardGroupOp(context.Context, *ForwardGroupOpRequest) (*ForwardGroupOpResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForwardGroupOp not implemented")
@@ -465,60 +411,6 @@ func _BrokerService_RouteQueueBatch_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BrokerService_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AppendEntriesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BrokerServiceServer).AppendEntries(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BrokerService_AppendEntries_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BrokerServiceServer).AppendEntries(ctx, req.(*AppendEntriesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BrokerService_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RequestVoteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BrokerServiceServer).RequestVote(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BrokerService_RequestVote_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BrokerServiceServer).RequestVote(ctx, req.(*RequestVoteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BrokerService_InstallSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(InstallSnapshotRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BrokerServiceServer).InstallSnapshot(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BrokerService_InstallSnapshot_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BrokerServiceServer).InstallSnapshot(ctx, req.(*InstallSnapshotRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BrokerService_ForwardGroupOp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ForwardGroupOpRequest)
 	if err := dec(in); err != nil {
@@ -593,18 +485,6 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RouteQueueBatch",
 			Handler:    _BrokerService_RouteQueueBatch_Handler,
-		},
-		{
-			MethodName: "AppendEntries",
-			Handler:    _BrokerService_AppendEntries_Handler,
-		},
-		{
-			MethodName: "RequestVote",
-			Handler:    _BrokerService_RequestVote_Handler,
-		},
-		{
-			MethodName: "InstallSnapshot",
-			Handler:    _BrokerService_InstallSnapshot_Handler,
 		},
 		{
 			MethodName: "ForwardGroupOp",

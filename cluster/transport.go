@@ -673,32 +673,6 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 	return connect.NewResponse(resp), nil
 }
 
-// AppendEntries implements BrokerServiceHandler.AppendEntries (Raft).
-func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*AppendEntriesResp, error) {
-	//nolint:godox // TODO: Implement Raft consensus
-	return connect.NewResponse(&clusterv1.AppendEntriesResponse{
-		Term:    req.Msg.Term,
-		Success: false,
-	}), nil
-}
-
-// RequestVote implements BrokerServiceHandler.RequestVote (Raft).
-func (t *Transport) RequestVote(ctx context.Context, req *RequestVoteReq) (*RequestVoteResp, error) {
-	//nolint:godox // TODO: Implement Raft consensus
-	return connect.NewResponse(&clusterv1.RequestVoteResponse{
-		Term:        req.Msg.Term,
-		VoteGranted: false,
-	}), nil
-}
-
-// InstallSnapshot implements BrokerServiceHandler.InstallSnapshot (Raft).
-func (t *Transport) InstallSnapshot(ctx context.Context, req *InstallSnapshotReq) (*InstallSnapshotResp, error) {
-	//nolint:godox // TODO: Implement Raft consensus
-	return connect.NewResponse(&clusterv1.InstallSnapshotResponse{
-		Term: req.Msg.Term,
-	}), nil
-}
-
 // SetQueueHandler sets the queue handler for queue distribution operations.
 func (t *Transport) SetQueueHandler(handler QueueHandler) {
 	t.mu.Lock()

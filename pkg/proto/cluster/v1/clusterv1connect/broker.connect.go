@@ -59,15 +59,6 @@ const (
 	// BrokerServiceRouteQueueBatchProcedure is the fully-qualified name of the BrokerService's
 	// RouteQueueBatch RPC.
 	BrokerServiceRouteQueueBatchProcedure = "/fluxmq.cluster.v1.BrokerService/RouteQueueBatch"
-	// BrokerServiceAppendEntriesProcedure is the fully-qualified name of the BrokerService's
-	// AppendEntries RPC.
-	BrokerServiceAppendEntriesProcedure = "/fluxmq.cluster.v1.BrokerService/AppendEntries"
-	// BrokerServiceRequestVoteProcedure is the fully-qualified name of the BrokerService's RequestVote
-	// RPC.
-	BrokerServiceRequestVoteProcedure = "/fluxmq.cluster.v1.BrokerService/RequestVote"
-	// BrokerServiceInstallSnapshotProcedure is the fully-qualified name of the BrokerService's
-	// InstallSnapshot RPC.
-	BrokerServiceInstallSnapshotProcedure = "/fluxmq.cluster.v1.BrokerService/InstallSnapshot"
 	// BrokerServiceForwardGroupOpProcedure is the fully-qualified name of the BrokerService's
 	// ForwardGroupOp RPC.
 	BrokerServiceForwardGroupOpProcedure = "/fluxmq.cluster.v1.BrokerService/ForwardGroupOp"
@@ -94,12 +85,6 @@ type BrokerServiceClient interface {
 	RouteQueueMessage(context.Context, *connect.Request[v1.RouteQueueMessageRequest]) (*connect.Response[v1.RouteQueueMessageResponse], error)
 	// RouteQueueBatch delivers multiple queue messages in one RPC.
 	RouteQueueBatch(context.Context, *connect.Request[v1.RouteQueueBatchRequest]) (*connect.Response[v1.RouteQueueBatchResponse], error)
-	// AppendEntries is invoked by the Raft leader to replicate log entries.
-	AppendEntries(context.Context, *connect.Request[v1.AppendEntriesRequest]) (*connect.Response[v1.AppendEntriesResponse], error)
-	// RequestVote is invoked by candidates during leader election.
-	RequestVote(context.Context, *connect.Request[v1.RequestVoteRequest]) (*connect.Response[v1.RequestVoteResponse], error)
-	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
-	InstallSnapshot(context.Context, *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error)
 	// ForwardGroupOp forwards a consumer group mutation from a follower to the
 	// Raft leader for the queue's replication group. The leader applies the
 	// operation through its coordinator so it goes through Raft consensus.
@@ -169,24 +154,6 @@ func NewBrokerServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(brokerServiceMethods.ByName("RouteQueueBatch")),
 			connect.WithClientOptions(opts...),
 		),
-		appendEntries: connect.NewClient[v1.AppendEntriesRequest, v1.AppendEntriesResponse](
-			httpClient,
-			baseURL+BrokerServiceAppendEntriesProcedure,
-			connect.WithSchema(brokerServiceMethods.ByName("AppendEntries")),
-			connect.WithClientOptions(opts...),
-		),
-		requestVote: connect.NewClient[v1.RequestVoteRequest, v1.RequestVoteResponse](
-			httpClient,
-			baseURL+BrokerServiceRequestVoteProcedure,
-			connect.WithSchema(brokerServiceMethods.ByName("RequestVote")),
-			connect.WithClientOptions(opts...),
-		),
-		installSnapshot: connect.NewClient[v1.InstallSnapshotRequest, v1.InstallSnapshotResponse](
-			httpClient,
-			baseURL+BrokerServiceInstallSnapshotProcedure,
-			connect.WithSchema(brokerServiceMethods.ByName("InstallSnapshot")),
-			connect.WithClientOptions(opts...),
-		),
 		forwardGroupOp: connect.NewClient[v1.ForwardGroupOpRequest, v1.ForwardGroupOpResponse](
 			httpClient,
 			baseURL+BrokerServiceForwardGroupOpProcedure,
@@ -212,9 +179,6 @@ type brokerServiceClient struct {
 	enqueueRemote       *connect.Client[v1.EnqueueRemoteRequest, v1.EnqueueRemoteResponse]
 	routeQueueMessage   *connect.Client[v1.RouteQueueMessageRequest, v1.RouteQueueMessageResponse]
 	routeQueueBatch     *connect.Client[v1.RouteQueueBatchRequest, v1.RouteQueueBatchResponse]
-	appendEntries       *connect.Client[v1.AppendEntriesRequest, v1.AppendEntriesResponse]
-	requestVote         *connect.Client[v1.RequestVoteRequest, v1.RequestVoteResponse]
-	installSnapshot     *connect.Client[v1.InstallSnapshotRequest, v1.InstallSnapshotResponse]
 	forwardGroupOp      *connect.Client[v1.ForwardGroupOpRequest, v1.ForwardGroupOpResponse]
 	forwardPublishBatch *connect.Client[v1.ForwardPublishBatchRequest, v1.ForwardPublishBatchResponse]
 }
@@ -259,21 +223,6 @@ func (c *brokerServiceClient) RouteQueueBatch(ctx context.Context, req *connect.
 	return c.routeQueueBatch.CallUnary(ctx, req)
 }
 
-// AppendEntries calls fluxmq.cluster.v1.BrokerService.AppendEntries.
-func (c *brokerServiceClient) AppendEntries(ctx context.Context, req *connect.Request[v1.AppendEntriesRequest]) (*connect.Response[v1.AppendEntriesResponse], error) {
-	return c.appendEntries.CallUnary(ctx, req)
-}
-
-// RequestVote calls fluxmq.cluster.v1.BrokerService.RequestVote.
-func (c *brokerServiceClient) RequestVote(ctx context.Context, req *connect.Request[v1.RequestVoteRequest]) (*connect.Response[v1.RequestVoteResponse], error) {
-	return c.requestVote.CallUnary(ctx, req)
-}
-
-// InstallSnapshot calls fluxmq.cluster.v1.BrokerService.InstallSnapshot.
-func (c *brokerServiceClient) InstallSnapshot(ctx context.Context, req *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error) {
-	return c.installSnapshot.CallUnary(ctx, req)
-}
-
 // ForwardGroupOp calls fluxmq.cluster.v1.BrokerService.ForwardGroupOp.
 func (c *brokerServiceClient) ForwardGroupOp(ctx context.Context, req *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error) {
 	return c.forwardGroupOp.CallUnary(ctx, req)
@@ -302,12 +251,6 @@ type BrokerServiceHandler interface {
 	RouteQueueMessage(context.Context, *connect.Request[v1.RouteQueueMessageRequest]) (*connect.Response[v1.RouteQueueMessageResponse], error)
 	// RouteQueueBatch delivers multiple queue messages in one RPC.
 	RouteQueueBatch(context.Context, *connect.Request[v1.RouteQueueBatchRequest]) (*connect.Response[v1.RouteQueueBatchResponse], error)
-	// AppendEntries is invoked by the Raft leader to replicate log entries.
-	AppendEntries(context.Context, *connect.Request[v1.AppendEntriesRequest]) (*connect.Response[v1.AppendEntriesResponse], error)
-	// RequestVote is invoked by candidates during leader election.
-	RequestVote(context.Context, *connect.Request[v1.RequestVoteRequest]) (*connect.Response[v1.RequestVoteResponse], error)
-	// InstallSnapshot is invoked by leader to transfer snapshot to a follower.
-	InstallSnapshot(context.Context, *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error)
 	// ForwardGroupOp forwards a consumer group mutation from a follower to the
 	// Raft leader for the queue's replication group. The leader applies the
 	// operation through its coordinator so it goes through Raft consensus.
@@ -373,24 +316,6 @@ func NewBrokerServiceHandler(svc BrokerServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(brokerServiceMethods.ByName("RouteQueueBatch")),
 		connect.WithHandlerOptions(opts...),
 	)
-	brokerServiceAppendEntriesHandler := connect.NewUnaryHandler(
-		BrokerServiceAppendEntriesProcedure,
-		svc.AppendEntries,
-		connect.WithSchema(brokerServiceMethods.ByName("AppendEntries")),
-		connect.WithHandlerOptions(opts...),
-	)
-	brokerServiceRequestVoteHandler := connect.NewUnaryHandler(
-		BrokerServiceRequestVoteProcedure,
-		svc.RequestVote,
-		connect.WithSchema(brokerServiceMethods.ByName("RequestVote")),
-		connect.WithHandlerOptions(opts...),
-	)
-	brokerServiceInstallSnapshotHandler := connect.NewUnaryHandler(
-		BrokerServiceInstallSnapshotProcedure,
-		svc.InstallSnapshot,
-		connect.WithSchema(brokerServiceMethods.ByName("InstallSnapshot")),
-		connect.WithHandlerOptions(opts...),
-	)
 	brokerServiceForwardGroupOpHandler := connect.NewUnaryHandler(
 		BrokerServiceForwardGroupOpProcedure,
 		svc.ForwardGroupOp,
@@ -421,12 +346,6 @@ func NewBrokerServiceHandler(svc BrokerServiceHandler, opts ...connect.HandlerOp
 			brokerServiceRouteQueueMessageHandler.ServeHTTP(w, r)
 		case BrokerServiceRouteQueueBatchProcedure:
 			brokerServiceRouteQueueBatchHandler.ServeHTTP(w, r)
-		case BrokerServiceAppendEntriesProcedure:
-			brokerServiceAppendEntriesHandler.ServeHTTP(w, r)
-		case BrokerServiceRequestVoteProcedure:
-			brokerServiceRequestVoteHandler.ServeHTTP(w, r)
-		case BrokerServiceInstallSnapshotProcedure:
-			brokerServiceInstallSnapshotHandler.ServeHTTP(w, r)
 		case BrokerServiceForwardGroupOpProcedure:
 			brokerServiceForwardGroupOpHandler.ServeHTTP(w, r)
 		case BrokerServiceForwardPublishBatchProcedure:
@@ -470,18 +389,6 @@ func (UnimplementedBrokerServiceHandler) RouteQueueMessage(context.Context, *con
 
 func (UnimplementedBrokerServiceHandler) RouteQueueBatch(context.Context, *connect.Request[v1.RouteQueueBatchRequest]) (*connect.Response[v1.RouteQueueBatchResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.RouteQueueBatch is not implemented"))
-}
-
-func (UnimplementedBrokerServiceHandler) AppendEntries(context.Context, *connect.Request[v1.AppendEntriesRequest]) (*connect.Response[v1.AppendEntriesResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.AppendEntries is not implemented"))
-}
-
-func (UnimplementedBrokerServiceHandler) RequestVote(context.Context, *connect.Request[v1.RequestVoteRequest]) (*connect.Response[v1.RequestVoteResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.RequestVote is not implemented"))
-}
-
-func (UnimplementedBrokerServiceHandler) InstallSnapshot(context.Context, *connect.Request[v1.InstallSnapshotRequest]) (*connect.Response[v1.InstallSnapshotResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fluxmq.cluster.v1.BrokerService.InstallSnapshot is not implemented"))
 }
 
 func (UnimplementedBrokerServiceHandler) ForwardGroupOp(context.Context, *connect.Request[v1.ForwardGroupOpRequest]) (*connect.Response[v1.ForwardGroupOpResponse], error) {

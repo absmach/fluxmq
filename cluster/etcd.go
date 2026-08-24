@@ -48,7 +48,22 @@ var (
 	ErrTransportNotConfigured     = errors.New("transport not configured")
 	ErrNoMessageHandlerConfigured = errors.New("no message handler configured")
 	ErrNoLocalStoreConfigured     = errors.New("no local store configured")
+	ErrSessionOwned               = errors.New("session is owned by another node")
+	ErrSessionOwnershipLost       = errors.New("local session ownership was lost")
+	ErrTakeoverInProgress         = errors.New("session takeover is already in progress")
 )
+
+// SessionOwnedError reports the node that won a competing ownership claim.
+type SessionOwnedError struct {
+	ClientID string
+	Owner    string
+}
+
+func (e *SessionOwnedError) Error() string {
+	return fmt.Sprintf("session %q is owned by node %q", e.ClientID, e.Owner)
+}
+
+func (e *SessionOwnedError) Unwrap() error { return ErrSessionOwned }
 
 // EtcdCluster implements the Cluster interface using embedded etcd.
 type EtcdCluster struct {
@@ -68,10 +83,11 @@ type EtcdCluster struct {
 	// session lease (key → value) so they can be re-registered after
 	// the lease expires (e.g. etcd stall or leader election); guarded
 	// by leaseMu together with sessionLease.
-	sessionLease clientv3.LeaseID
-	leaseMu      sync.Mutex
-	leaseCancel  context.CancelFunc
-	leasedKeys   map[string]string
+	sessionLease    clientv3.LeaseID
+	leaseMu         sync.Mutex
+	leaseRecoveryMu sync.Mutex
+	leaseCancel     context.CancelFunc
+	leasedKeys      map[string]string
 
 	// Throttles the unknown-owner warning in RoutePublish (unix nanos of last log).
 	lastUnknownOwnerWarn atomic.Int64
@@ -801,7 +817,7 @@ func (c *EtcdCluster) refreshSessionLeaseLocked(ctx context.Context) error {
 					}
 					c.logger.Warn("session lease keepalive lost, starting recovery",
 						slog.String("node_id", c.nodeID))
-					c.recoverLeaseLoop()
+					c.recoverLeaseLoop(leaseID)
 					return
 				}
 			}
@@ -813,17 +829,18 @@ func (c *EtcdCluster) refreshSessionLeaseLocked(ctx context.Context) error {
 
 // recoverLeaseLoop re-grants the session lease and re-registers all leased
 // keys, retrying with backoff until it succeeds or the cluster shuts down.
-func (c *EtcdCluster) recoverLeaseLoop() {
+func (c *EtcdCluster) recoverLeaseLoop(expectedLease clientv3.LeaseID) {
 	backoff := 500 * time.Millisecond
 	const maxBackoff = 5 * time.Second
 
 	for {
 		ctx, cancel := context.WithTimeout(c.lifecycleCtx, 10*time.Second)
-		err := c.recoverSessionLease(ctx)
+		err := c.recoverSessionLease(ctx, expectedLease)
 		cancel()
 		if err == nil {
 			return
 		}
+		expectedLease = c.currentSessionLease()
 		c.logger.Error("session lease recovery failed, retrying",
 			slog.Duration("backoff", backoff),
 			slog.String("error", err.Error()))
@@ -837,12 +854,27 @@ func (c *EtcdCluster) recoverLeaseLoop() {
 	}
 }
 
-// recoverSessionLease grants a fresh lease and re-registers every key this
-// node had attached to the previous (expired) lease.
-func (c *EtcdCluster) recoverSessionLease(ctx context.Context) error {
+// recoverSessionLease grants a fresh lease and restores recoverable keys this
+// node had attached to the previous lease. Session owners are fenced instead.
+func (c *EtcdCluster) recoverSessionLease(ctx context.Context, expectedLease clientv3.LeaseID) error {
+	c.leaseRecoveryMu.Lock()
+	defer c.leaseRecoveryMu.Unlock()
+
+	c.leaseMu.Lock()
+	if c.sessionLease != expectedLease {
+		c.leaseMu.Unlock()
+		return nil
+	}
+	lostSessions := c.detachSessionOwnersLocked()
+	c.leaseMu.Unlock()
+
+	// Fence old connections before this node can claim sessions under a fresh
+	// lease. Queue-consumer registrations retain their existing recovery
+	// behavior; session ownership deliberately does not.
+	c.notifySessionLeaseLost(ctx, lostSessions)
+
 	c.leaseMu.Lock()
 	defer c.leaseMu.Unlock()
-
 	if err := c.refreshSessionLeaseLocked(ctx); err != nil {
 		return err
 	}
@@ -852,8 +884,31 @@ func (c *EtcdCluster) recoverSessionLease(ctx context.Context) error {
 
 	c.logger.Info("session lease recovered",
 		slog.String("node_id", c.nodeID),
-		slog.Int("reregistered_keys", len(c.leasedKeys)))
+		slog.Int("reregistered_keys", len(c.leasedKeys)),
+		slog.Int("fenced_sessions", len(lostSessions)))
 	return nil
+}
+
+// detachSessionOwnersLocked removes session-owner claims from the set that is
+// automatically restored after a lease loss. Caller must hold leaseMu.
+func (c *EtcdCluster) detachSessionOwnersLocked() []string {
+	clientIDs := make([]string, 0)
+	for key := range c.leasedKeys {
+		clientID, ok := parseSessionOwnerKey(key)
+		if !ok {
+			continue
+		}
+		delete(c.leasedKeys, key)
+		clientIDs = append(clientIDs, clientID)
+	}
+	return clientIDs
+}
+
+func (c *EtcdCluster) notifySessionLeaseLost(ctx context.Context, clientIDs []string) {
+	if len(clientIDs) == 0 || c.msgHandler == nil {
+		return
+	}
+	c.msgHandler.HandleSessionLeaseLost(ctx, clientIDs)
 }
 
 // reregisterLeasedKeysLocked re-puts all tracked keys under the current
@@ -861,6 +916,9 @@ func (c *EtcdCluster) recoverSessionLease(ctx context.Context) error {
 func (c *EtcdCluster) reregisterLeasedKeysLocked(ctx context.Context) error {
 	var errs []error
 	for key, value := range c.leasedKeys {
+		if _, isSessionOwner := parseSessionOwnerKey(key); isSessionOwner {
+			continue
+		}
 		if _, err := c.client.Put(ctx, key, value, clientv3.WithLease(c.sessionLease)); err != nil {
 			errs = append(errs, fmt.Errorf("re-register %s: %w", key, err))
 		}
@@ -898,9 +956,9 @@ func (c *EtcdCluster) putWithSessionLease(ctx context.Context, key, value string
 		return err
 	}
 
-	// The lease expired server-side: recover it, which also re-registers
-	// every other key that was attached to it, then retry this Put.
-	if err := c.recoverSessionLease(ctx); err != nil {
+	// The lease expired server-side: recover it, restore the queue-consumer
+	// registrations attached to it, then retry this Put.
+	if err := c.recoverSessionLease(ctx, leaseID); err != nil {
 		return err
 	}
 
@@ -926,27 +984,152 @@ func (c *EtcdCluster) untrackLeasedKey(key string) {
 	c.leaseMu.Unlock()
 }
 
-// AcquireSession registers this node as the owner of a session.
-// Uses a leased Put so ownership auto-expires if this node dies.
-// This is called after takeover has completed (if needed), so it's safe
-// to unconditionally overwrite — the caller already handled ownership transfer.
+// AcquireSession registers this node as the owner of a session. A fresh claim
+// is a create-only transaction; an existing claim by the same node is renewed
+// idempotently. A different owner is never overwritten here.
 func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
-	key := sessionsPrefix + clientID + "/owner"
+	ownerKey := sessionOwnerKey(clientID)
+	takeoverKey := sessionTakeoverKey(clientID)
 
-	if err := c.putWithSessionLease(ctx, key, nodeID); err != nil {
-		return err
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, leaseID, tracked, err := c.tryInitialSessionClaim(ctx, clientID, nodeID, ownerKey, takeoverKey)
+		if isLeaseNotFoundErr(err) {
+			if recoverErr := c.recoverSessionLease(ctx, leaseID); recoverErr != nil {
+				return recoverErr
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if resp.Succeeded {
+			return nil
+		}
+
+		owner := txnRangeValue(resp, 0)
+		if txnRangeValue(resp, 1) != "" {
+			return ErrTakeoverInProgress
+		}
+		if tracked {
+			c.fenceLostSessionClaim(ctx, clientID, ownerKey, nodeID)
+			if owner == "" {
+				return fmt.Errorf("%w: %s", ErrSessionOwnershipLost, clientID)
+			}
+			return &SessionOwnedError{ClientID: clientID, Owner: owner}
+		}
+		if owner != nodeID {
+			return &SessionOwnedError{ClientID: clientID, Owner: owner}
+		}
+
+		// Reattach this node's idempotent claim to the current lease, but do
+		// not cross a takeover that began after the first transaction.
+		resp, leaseID, err = c.tryRenewSessionClaim(ctx, clientID, nodeID, ownerKey, takeoverKey)
+		if isLeaseNotFoundErr(err) {
+			if recoverErr := c.recoverSessionLease(ctx, leaseID); recoverErr != nil {
+				return recoverErr
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if resp.Succeeded {
+			return nil
+		}
+		if txnRangeValue(resp, 1) != "" {
+			return ErrTakeoverInProgress
+		}
+		return &SessionOwnedError{ClientID: clientID, Owner: txnRangeValue(resp, 0)}
 	}
+	return fmt.Errorf("acquire session %q: lease recovery exhausted", clientID)
+}
 
+func (c *EtcdCluster) tryInitialSessionClaim(
+	ctx context.Context,
+	clientID, nodeID, ownerKey, takeoverKey string,
+) (*clientv3.TxnResponse, clientv3.LeaseID, bool, error) {
+	c.leaseRecoveryMu.Lock()
+	defer c.leaseRecoveryMu.Unlock()
+
+	leaseID := c.currentSessionLease()
+	_, tracked := c.getLeasedKey(ownerKey)
+	claimCompare := clientv3.Compare(clientv3.Version(ownerKey), "=", 0)
+	if tracked {
+		// A locally tracked claim may only be renewed while the key still
+		// proves this node owns it. Recreating a missing tracked key would
+		// resurrect an owner before lease-loss fencing runs.
+		claimCompare = clientv3.Compare(clientv3.Value(ownerKey), "=", nodeID)
+	}
+	resp, err := c.client.Txn(ctx).
+		If(claimCompare, clientv3.Compare(clientv3.Version(takeoverKey), "=", 0)).
+		Then(clientv3.OpPut(ownerKey, nodeID, clientv3.WithLease(leaseID))).
+		Else(clientv3.OpGet(ownerKey), clientv3.OpGet(takeoverKey)).
+		Commit()
+	if err == nil && resp.Succeeded {
+		c.recordSessionOwnership(clientID, nodeID, ownerKey)
+	}
+	return resp, leaseID, tracked, err
+}
+
+func (c *EtcdCluster) tryRenewSessionClaim(
+	ctx context.Context,
+	clientID, nodeID, ownerKey, takeoverKey string,
+) (*clientv3.TxnResponse, clientv3.LeaseID, error) {
+	c.leaseRecoveryMu.Lock()
+	defer c.leaseRecoveryMu.Unlock()
+
+	leaseID := c.currentSessionLease()
+	resp, err := c.client.Txn(ctx).
+		If(
+			clientv3.Compare(clientv3.Value(ownerKey), "=", nodeID),
+			clientv3.Compare(clientv3.Version(takeoverKey), "=", 0),
+		).
+		Then(clientv3.OpPut(ownerKey, nodeID, clientv3.WithLease(leaseID))).
+		Else(clientv3.OpGet(ownerKey), clientv3.OpGet(takeoverKey)).
+		Commit()
+	if err == nil && resp.Succeeded {
+		c.recordSessionOwnership(clientID, nodeID, ownerKey)
+	}
+	return resp, leaseID, err
+}
+
+func (c *EtcdCluster) fenceLostSessionClaim(ctx context.Context, clientID, ownerKey, expectedOwner string) {
+	c.untrackLeasedKey(ownerKey)
+	c.ownerCacheMu.Lock()
+	if c.ownerCache[clientID] == expectedOwner {
+		delete(c.ownerCache, clientID)
+	}
+	c.ownerCacheMu.Unlock()
+	c.notifySessionLeaseLost(ctx, []string{clientID})
+}
+
+func (c *EtcdCluster) currentSessionLease() clientv3.LeaseID {
+	c.leaseMu.Lock()
+	defer c.leaseMu.Unlock()
+	return c.sessionLease
+}
+
+func (c *EtcdCluster) recordSessionOwnership(clientID, nodeID, key string) {
+	c.trackLeasedKey(key, nodeID)
 	c.ownerCacheMu.Lock()
 	c.ownerCache[clientID] = nodeID
 	c.ownerCacheMu.Unlock()
+}
 
-	return nil
+func txnRangeValue(resp *clientv3.TxnResponse, index int) string {
+	if resp == nil || index < 0 || index >= len(resp.Responses) {
+		return ""
+	}
+	rangeResp := resp.Responses[index].GetResponseRange()
+	if rangeResp == nil || len(rangeResp.Kvs) == 0 {
+		return ""
+	}
+	return string(rangeResp.Kvs[0].Value)
 }
 
 // ReleaseSession releases ownership of a session, only if this node owns it.
 func (c *EtcdCluster) ReleaseSession(ctx context.Context, clientID string) error {
-	key := sessionsPrefix + clientID + "/owner"
+	key := sessionOwnerKey(clientID)
 
 	// Untrack before deleting so the watcher does not re-register the key
 	// when the delete event arrives.
@@ -959,24 +1142,21 @@ func (c *EtcdCluster) ReleaseSession(ctx context.Context, clientID string) error
 		Commit()
 
 	c.ownerCacheMu.Lock()
-	delete(c.ownerCache, clientID)
+	// A concurrent takeover can replace the cache entry before this CAS
+	// completes. Only evict the local claim; never erase the new owner.
+	if c.ownerCache[clientID] == c.nodeID {
+		delete(c.ownerCache, clientID)
+	}
 	c.ownerCacheMu.Unlock()
 
 	return err
 }
 
-// GetSessionOwner returns the node ID that owns the session.
-// Uses local cache first, falls back to etcd.
+// GetSessionOwner returns the authoritative node ID that owns the session.
+// Connection admission cannot use the routing cache because a delayed watch
+// event could otherwise initiate takeover from a stale owner.
 func (c *EtcdCluster) GetSessionOwner(ctx context.Context, clientID string) (string, bool, error) {
-	// Check local cache first
-	c.ownerCacheMu.RLock()
-	nodeID, ok := c.ownerCache[clientID]
-	c.ownerCacheMu.RUnlock()
-	if ok {
-		return nodeID, true, nil
-	}
-
-	key := sessionsPrefix + clientID + "/owner"
+	key := sessionOwnerKey(clientID)
 
 	resp, err := c.client.Get(ctx, key)
 	if err != nil {
@@ -988,18 +1168,12 @@ func (c *EtcdCluster) GetSessionOwner(ctx context.Context, clientID string) (str
 	}
 
 	owner := string(resp.Kvs[0].Value)
-
-	// Cache the result
-	c.ownerCacheMu.Lock()
-	c.ownerCache[clientID] = owner
-	c.ownerCacheMu.Unlock()
-
 	return owner, true, nil
 }
 
 // WatchSessionOwner watches for ownership changes of a specific session.
 func (c *EtcdCluster) WatchSessionOwner(ctx context.Context, clientID string) <-chan OwnershipChange {
-	key := sessionsPrefix + clientID + "/owner"
+	key := sessionOwnerKey(clientID)
 	ch := make(chan OwnershipChange, 1)
 
 	watchCh := c.client.Watch(ctx, key)
@@ -1517,35 +1691,129 @@ func (c *EtcdCluster) warnUnknownOwners(topic string, count int) {
 // TakeoverSession initiates session takeover from one node to another.
 func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
 	if fromNode == toNode {
-		// Same node, no takeover needed
 		return nil, nil
 	}
-
 	if c.transport == nil {
-		// No transport, can't do remote takeover
-		// Just update ownership
-		if err := c.AcquireSession(ctx, clientID, toNode); err != nil {
-			return nil, err
-		}
-		return nil, nil
+		return nil, ErrTransportNotConfigured
+	}
+	if toNode != c.nodeID {
+		return nil, fmt.Errorf("takeover target %q is not local node %q", toNode, c.nodeID)
 	}
 
-	// Call gRPC to fromNode to get session state
+	lockKey := sessionTakeoverKey(clientID)
+	token := fmt.Sprintf("%s:%d", toNode, time.Now().UnixNano())
+	if err := c.acquireTakeoverLock(ctx, clientID, fromNode, lockKey, token); err != nil {
+		return nil, err
+	}
+	lockHeld := true
+	defer func() {
+		if lockHeld {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			defer cancel()
+			c.releaseTakeoverLock(cleanupCtx, lockKey, token)
+		}
+	}()
+
 	state, err := c.transport.SendTakeover(ctx, fromNode, clientID, fromNode, toNode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to request takeover from %s: %w", fromNode, err)
 	}
-
-	// Update ownership in etcd to new node
-	if err := c.AcquireSession(ctx, clientID, toNode); err != nil {
-		return nil, fmt.Errorf("failed to acquire session ownership: %w", err)
+	if err := c.finalizeTakeover(ctx, clientID, fromNode, toNode, lockKey, token); err != nil {
+		return nil, fmt.Errorf("failed to finalize session takeover: %w", err)
 	}
+	lockHeld = false
 
 	c.logger.Info("session taken over",
 		slog.String("client_id", clientID),
 		slog.String("from_node", fromNode),
 		slog.String("to_node", toNode))
 	return state, nil
+}
+
+func (c *EtcdCluster) acquireTakeoverLock(ctx context.Context, clientID, fromNode, lockKey, token string) error {
+	c.leaseRecoveryMu.Lock()
+	defer c.leaseRecoveryMu.Unlock()
+
+	ownerKey := sessionOwnerKey(clientID)
+	resp, err := c.client.Txn(ctx).
+		If(
+			clientv3.Compare(clientv3.Value(ownerKey), "=", fromNode),
+			clientv3.Compare(clientv3.Version(lockKey), "=", 0),
+		).
+		Then(clientv3.OpPut(lockKey, token, clientv3.WithLease(c.currentSessionLease()))).
+		Else(clientv3.OpGet(ownerKey), clientv3.OpGet(lockKey)).
+		Commit()
+	if err != nil {
+		return err
+	}
+	if resp.Succeeded {
+		return nil
+	}
+	if txnRangeValue(resp, 1) != "" {
+		return ErrTakeoverInProgress
+	}
+	return &SessionOwnedError{ClientID: clientID, Owner: txnRangeValue(resp, 0)}
+}
+
+func (c *EtcdCluster) finalizeTakeover(ctx context.Context, clientID, fromNode, toNode, lockKey, token string) error {
+	c.leaseRecoveryMu.Lock()
+	defer c.leaseRecoveryMu.Unlock()
+
+	ownerKey := sessionOwnerKey(clientID)
+	leaseID := c.currentSessionLease()
+	resp, err := c.client.Txn(ctx).
+		If(
+			clientv3.Compare(clientv3.Value(ownerKey), "=", fromNode),
+			clientv3.Compare(clientv3.Value(lockKey), "=", token),
+		).
+		Then(
+			clientv3.OpPut(ownerKey, toNode, clientv3.WithLease(leaseID)),
+			clientv3.OpDelete(lockKey),
+		).
+		Commit()
+	if err != nil {
+		return err
+	}
+	if !resp.Succeeded {
+		// The source owner's lease may expire after it handed over state. The
+		// takeover lock is on this node's lease, so an absent owner can still
+		// be claimed safely by the holder of that exact lock token.
+		resp, err = c.client.Txn(ctx).
+			If(
+				clientv3.Compare(clientv3.Version(ownerKey), "=", 0),
+				clientv3.Compare(clientv3.Value(lockKey), "=", token),
+			).
+			Then(
+				clientv3.OpPut(ownerKey, toNode, clientv3.WithLease(leaseID)),
+				clientv3.OpDelete(lockKey),
+			).
+			Else(clientv3.OpGet(ownerKey), clientv3.OpGet(lockKey)).
+			Commit()
+		if err != nil {
+			return err
+		}
+		if !resp.Succeeded {
+			if txnRangeValue(resp, 1) != token {
+				return ErrTakeoverInProgress
+			}
+			return &SessionOwnedError{ClientID: clientID, Owner: txnRangeValue(resp, 0)}
+		}
+	}
+
+	c.recordSessionOwnership(clientID, toNode, ownerKey)
+	return nil
+}
+
+func (c *EtcdCluster) releaseTakeoverLock(ctx context.Context, lockKey, token string) {
+	_, err := c.client.Txn(ctx).
+		If(clientv3.Compare(clientv3.Value(lockKey), "=", token)).
+		Then(clientv3.OpDelete(lockKey)).
+		Commit()
+	if err != nil {
+		c.logger.Warn("failed to release session takeover lock",
+			slog.String("key", lockKey),
+			slog.String("error", err.Error()))
+	}
 }
 
 // EnqueueRemote sends an enqueue request to a remote node.
@@ -1996,6 +2264,19 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 	return sessionState, nil
 }
 
+// HandleSessionLeaseLost delegates fencing to the broker message handler.
+func (c *EtcdCluster) HandleSessionLeaseLost(ctx context.Context, clientIDs []string) {
+	c.notifySessionLeaseLost(ctx, clientIDs)
+}
+
+func sessionOwnerKey(clientID string) string {
+	return sessionsPrefix + clientID + "/owner"
+}
+
+func sessionTakeoverKey(clientID string) string {
+	return sessionsPrefix + clientID + "/takeover"
+}
+
 func parseSessionOwnerKey(key string) (clientID string, ok bool) {
 	if !strings.HasPrefix(key, sessionsPrefix) || !strings.HasSuffix(key, "/owner") {
 		return "", false
@@ -2108,6 +2389,9 @@ func (c *EtcdCluster) selfHealLeasedKeys() {
 
 	restored := 0
 	for key, value := range tracked {
+		if _, isSessionOwner := parseSessionOwnerKey(key); isSessionOwner {
+			continue
+		}
 		if _, ok := existing[key]; ok {
 			continue
 		}
@@ -2164,8 +2448,7 @@ func (c *EtcdCluster) watchSessionOwners() {
 					goto restart
 				}
 
-				var restoreKeys map[string]string
-				c.ownerCacheMu.Lock()
+				lostSessions := make([]string, 0)
 				for _, event := range watchResp.Events {
 					if event.Kv == nil {
 						continue
@@ -2176,17 +2459,16 @@ func (c *EtcdCluster) watchSessionOwners() {
 						continue
 					}
 					if event.Type == clientv3.EventTypeDelete {
-						if value, tracked := c.getLeasedKey(key); tracked {
-							// Deleted behind our back (lease expiry) while
-							// this node still owns the session: keep the
-							// cache entry and restore the key below.
-							if restoreKeys == nil {
-								restoreKeys = make(map[string]string)
-							}
-							restoreKeys[key] = value
-							continue
+						if _, tracked := c.getLeasedKey(key); tracked {
+							// An owner key disappearing means this node can
+							// no longer prove ownership. Never resurrect it:
+							// stop tracking and fence the local connection.
+							c.untrackLeasedKey(key)
+							lostSessions = append(lostSessions, clientID)
 						}
+						c.ownerCacheMu.Lock()
 						delete(c.ownerCache, clientID)
+						c.ownerCacheMu.Unlock()
 						continue
 					}
 					value := string(event.Kv.Value)
@@ -2195,20 +2477,11 @@ func (c *EtcdCluster) watchSessionOwners() {
 						// so this node never resurrects the key.
 						c.untrackLeasedKey(key)
 					}
+					c.ownerCacheMu.Lock()
 					c.ownerCache[clientID] = value
+					c.ownerCacheMu.Unlock()
 				}
-				c.ownerCacheMu.Unlock()
-
-				for key, value := range restoreKeys {
-					if err := c.putWithSessionLease(c.lifecycleCtx, key, value); err != nil {
-						c.logger.Error("failed to restore session owner key",
-							slog.String("key", key),
-							slog.String("error", err.Error()))
-						continue
-					}
-					c.logger.Warn("restored session owner key deleted by lease expiry",
-						slog.String("key", key))
-				}
+				c.notifySessionLeaseLost(c.lifecycleCtx, lostSessions)
 			}
 		}
 	restart:

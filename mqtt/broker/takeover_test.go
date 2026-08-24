@@ -962,7 +962,10 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 
 	state := &clusterv1.SessionState{
 		InflightMessages: []*clusterv1.InflightMessage{
-			{PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound), Payload: []byte("op")},
+			{
+				PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound), Payload: []byte("op"),
+				Properties: map[string]string{"x-source-topic": "sensors/temperature", "trace": "abc"},
+			},
 			{PacketId: 5, Topic: "in", Qos: 2, Direction: uint32(messages.Inbound), Payload: []byte("ip")},
 		},
 	}
@@ -973,6 +976,8 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "out", gotOut.Topic)
 	require.Equal(t, "op", string(gotOut.GetPayload()), "payload must survive cluster transfer")
+	require.Equal(t, "sensors/temperature", gotOut.Properties["x-source-topic"])
+	require.Equal(t, "abc", gotOut.Properties["trace"])
 	gotIn, err := tracker.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "in", gotIn.Topic)

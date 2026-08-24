@@ -555,7 +555,11 @@ type InflightMessage struct {
 	// direction: 0 = outbound (server->client), 1 = inbound (client->server).
 	Direction uint32 `protobuf:"varint,7,opt,name=direction,proto3" json:"direction,omitempty"`
 	// state: inflight delivery state (0 = publish sent, 1 = pubrec received).
-	State         uint32 `protobuf:"varint,8,opt,name=state,proto3" json:"state,omitempty"`
+	State uint32 `protobuf:"varint,8,opt,name=state,proto3" json:"state,omitempty"`
+	// properties preserves MQTT v5 properties and broker-owned queue metadata
+	// across a session takeover. Broker-owned values are still filtered at the
+	// external protocol boundary.
+	Properties    map[string]string `protobuf:"bytes,9,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -644,6 +648,13 @@ func (x *InflightMessage) GetState() uint32 {
 		return x.State
 	}
 	return 0
+}
+
+func (x *InflightMessage) GetProperties() map[string]string {
+	if x != nil {
+		return x.Properties
+	}
+	return nil
 }
 
 type QueuedMessage struct {
@@ -1631,422 +1642,6 @@ func (x *RouteQueueBatchResponse) GetFailures() []*RouteQueueBatchError {
 	return nil
 }
 
-type AppendEntriesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Term          uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
-	LeaderId      string                 `protobuf:"bytes,3,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
-	PrevLogIndex  uint64                 `protobuf:"varint,4,opt,name=prev_log_index,json=prevLogIndex,proto3" json:"prev_log_index,omitempty"`
-	PrevLogTerm   uint64                 `protobuf:"varint,5,opt,name=prev_log_term,json=prevLogTerm,proto3" json:"prev_log_term,omitempty"`
-	Entries       [][]byte               `protobuf:"bytes,6,rep,name=entries,proto3" json:"entries,omitempty"`
-	LeaderCommit  uint64                 `protobuf:"varint,7,opt,name=leader_commit,json=leaderCommit,proto3" json:"leader_commit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AppendEntriesRequest) Reset() {
-	*x = AppendEntriesRequest{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AppendEntriesRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AppendEntriesRequest) ProtoMessage() {}
-
-func (x *AppendEntriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AppendEntriesRequest.ProtoReflect.Descriptor instead.
-func (*AppendEntriesRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{24}
-}
-
-func (x *AppendEntriesRequest) GetQueueName() string {
-	if x != nil {
-		return x.QueueName
-	}
-	return ""
-}
-
-func (x *AppendEntriesRequest) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
-func (x *AppendEntriesRequest) GetLeaderId() string {
-	if x != nil {
-		return x.LeaderId
-	}
-	return ""
-}
-
-func (x *AppendEntriesRequest) GetPrevLogIndex() uint64 {
-	if x != nil {
-		return x.PrevLogIndex
-	}
-	return 0
-}
-
-func (x *AppendEntriesRequest) GetPrevLogTerm() uint64 {
-	if x != nil {
-		return x.PrevLogTerm
-	}
-	return 0
-}
-
-func (x *AppendEntriesRequest) GetEntries() [][]byte {
-	if x != nil {
-		return x.Entries
-	}
-	return nil
-}
-
-func (x *AppendEntriesRequest) GetLeaderCommit() uint64 {
-	if x != nil {
-		return x.LeaderCommit
-	}
-	return 0
-}
-
-type AppendEntriesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	Success       bool                   `protobuf:"varint,2,opt,name=success,proto3" json:"success,omitempty"`
-	LastLogIndex  uint64                 `protobuf:"varint,3,opt,name=last_log_index,json=lastLogIndex,proto3" json:"last_log_index,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AppendEntriesResponse) Reset() {
-	*x = AppendEntriesResponse{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[25]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AppendEntriesResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AppendEntriesResponse) ProtoMessage() {}
-
-func (x *AppendEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[25]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AppendEntriesResponse.ProtoReflect.Descriptor instead.
-func (*AppendEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *AppendEntriesResponse) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
-func (x *AppendEntriesResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *AppendEntriesResponse) GetLastLogIndex() uint64 {
-	if x != nil {
-		return x.LastLogIndex
-	}
-	return 0
-}
-
-type RequestVoteRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Term          uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
-	CandidateId   string                 `protobuf:"bytes,3,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
-	LastLogIndex  uint64                 `protobuf:"varint,4,opt,name=last_log_index,json=lastLogIndex,proto3" json:"last_log_index,omitempty"`
-	LastLogTerm   uint64                 `protobuf:"varint,5,opt,name=last_log_term,json=lastLogTerm,proto3" json:"last_log_term,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RequestVoteRequest) Reset() {
-	*x = RequestVoteRequest{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[26]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RequestVoteRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RequestVoteRequest) ProtoMessage() {}
-
-func (x *RequestVoteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[26]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RequestVoteRequest.ProtoReflect.Descriptor instead.
-func (*RequestVoteRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{26}
-}
-
-func (x *RequestVoteRequest) GetQueueName() string {
-	if x != nil {
-		return x.QueueName
-	}
-	return ""
-}
-
-func (x *RequestVoteRequest) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
-func (x *RequestVoteRequest) GetCandidateId() string {
-	if x != nil {
-		return x.CandidateId
-	}
-	return ""
-}
-
-func (x *RequestVoteRequest) GetLastLogIndex() uint64 {
-	if x != nil {
-		return x.LastLogIndex
-	}
-	return 0
-}
-
-func (x *RequestVoteRequest) GetLastLogTerm() uint64 {
-	if x != nil {
-		return x.LastLogTerm
-	}
-	return 0
-}
-
-type RequestVoteResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	VoteGranted   bool                   `protobuf:"varint,2,opt,name=vote_granted,json=voteGranted,proto3" json:"vote_granted,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RequestVoteResponse) Reset() {
-	*x = RequestVoteResponse{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[27]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RequestVoteResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RequestVoteResponse) ProtoMessage() {}
-
-func (x *RequestVoteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[27]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RequestVoteResponse.ProtoReflect.Descriptor instead.
-func (*RequestVoteResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *RequestVoteResponse) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
-func (x *RequestVoteResponse) GetVoteGranted() bool {
-	if x != nil {
-		return x.VoteGranted
-	}
-	return false
-}
-
-type InstallSnapshotRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	QueueName         string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Term              uint64                 `protobuf:"varint,2,opt,name=term,proto3" json:"term,omitempty"`
-	LeaderId          string                 `protobuf:"bytes,3,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
-	LastIncludedIndex uint64                 `protobuf:"varint,4,opt,name=last_included_index,json=lastIncludedIndex,proto3" json:"last_included_index,omitempty"`
-	LastIncludedTerm  uint64                 `protobuf:"varint,5,opt,name=last_included_term,json=lastIncludedTerm,proto3" json:"last_included_term,omitempty"`
-	Data              []byte                 `protobuf:"bytes,6,opt,name=data,proto3" json:"data,omitempty"`
-	Done              bool                   `protobuf:"varint,7,opt,name=done,proto3" json:"done,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *InstallSnapshotRequest) Reset() {
-	*x = InstallSnapshotRequest{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[28]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *InstallSnapshotRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*InstallSnapshotRequest) ProtoMessage() {}
-
-func (x *InstallSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[28]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use InstallSnapshotRequest.ProtoReflect.Descriptor instead.
-func (*InstallSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{28}
-}
-
-func (x *InstallSnapshotRequest) GetQueueName() string {
-	if x != nil {
-		return x.QueueName
-	}
-	return ""
-}
-
-func (x *InstallSnapshotRequest) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
-func (x *InstallSnapshotRequest) GetLeaderId() string {
-	if x != nil {
-		return x.LeaderId
-	}
-	return ""
-}
-
-func (x *InstallSnapshotRequest) GetLastIncludedIndex() uint64 {
-	if x != nil {
-		return x.LastIncludedIndex
-	}
-	return 0
-}
-
-func (x *InstallSnapshotRequest) GetLastIncludedTerm() uint64 {
-	if x != nil {
-		return x.LastIncludedTerm
-	}
-	return 0
-}
-
-func (x *InstallSnapshotRequest) GetData() []byte {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *InstallSnapshotRequest) GetDone() bool {
-	if x != nil {
-		return x.Done
-	}
-	return false
-}
-
-type InstallSnapshotResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Term          uint64                 `protobuf:"varint,1,opt,name=term,proto3" json:"term,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *InstallSnapshotResponse) Reset() {
-	*x = InstallSnapshotResponse{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[29]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *InstallSnapshotResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*InstallSnapshotResponse) ProtoMessage() {}
-
-func (x *InstallSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[29]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use InstallSnapshotResponse.ProtoReflect.Descriptor instead.
-func (*InstallSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{29}
-}
-
-func (x *InstallSnapshotResponse) GetTerm() uint64 {
-	if x != nil {
-		return x.Term
-	}
-	return 0
-}
-
 // ForwardGroupOpRequest carries a consumer group mutation from a follower
 // to the Raft leader. op_data is a JSON-encoded raft.Operation struct.
 type ForwardGroupOpRequest struct {
@@ -2059,7 +1654,7 @@ type ForwardGroupOpRequest struct {
 
 func (x *ForwardGroupOpRequest) Reset() {
 	*x = ForwardGroupOpRequest{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[30]
+	mi := &file_cluster_v1_broker_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2071,7 +1666,7 @@ func (x *ForwardGroupOpRequest) String() string {
 func (*ForwardGroupOpRequest) ProtoMessage() {}
 
 func (x *ForwardGroupOpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[30]
+	mi := &file_cluster_v1_broker_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2084,7 +1679,7 @@ func (x *ForwardGroupOpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardGroupOpRequest.ProtoReflect.Descriptor instead.
 func (*ForwardGroupOpRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{30}
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ForwardGroupOpRequest) GetQueueName() string {
@@ -2111,7 +1706,7 @@ type ForwardGroupOpResponse struct {
 
 func (x *ForwardGroupOpResponse) Reset() {
 	*x = ForwardGroupOpResponse{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[31]
+	mi := &file_cluster_v1_broker_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2123,7 +1718,7 @@ func (x *ForwardGroupOpResponse) String() string {
 func (*ForwardGroupOpResponse) ProtoMessage() {}
 
 func (x *ForwardGroupOpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[31]
+	mi := &file_cluster_v1_broker_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2136,7 +1731,7 @@ func (x *ForwardGroupOpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardGroupOpResponse.ProtoReflect.Descriptor instead.
 func (*ForwardGroupOpResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{31}
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ForwardGroupOpResponse) GetSuccess() bool {
@@ -2166,7 +1761,7 @@ type ForwardPublishRequest struct {
 
 func (x *ForwardPublishRequest) Reset() {
 	*x = ForwardPublishRequest{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[32]
+	mi := &file_cluster_v1_broker_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2178,7 +1773,7 @@ func (x *ForwardPublishRequest) String() string {
 func (*ForwardPublishRequest) ProtoMessage() {}
 
 func (x *ForwardPublishRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[32]
+	mi := &file_cluster_v1_broker_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2191,7 +1786,7 @@ func (x *ForwardPublishRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardPublishRequest.ProtoReflect.Descriptor instead.
 func (*ForwardPublishRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{32}
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ForwardPublishRequest) GetTopic() string {
@@ -2238,7 +1833,7 @@ type ForwardPublishBatchRequest struct {
 
 func (x *ForwardPublishBatchRequest) Reset() {
 	*x = ForwardPublishBatchRequest{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[33]
+	mi := &file_cluster_v1_broker_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2250,7 +1845,7 @@ func (x *ForwardPublishBatchRequest) String() string {
 func (*ForwardPublishBatchRequest) ProtoMessage() {}
 
 func (x *ForwardPublishBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[33]
+	mi := &file_cluster_v1_broker_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2263,7 +1858,7 @@ func (x *ForwardPublishBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardPublishBatchRequest.ProtoReflect.Descriptor instead.
 func (*ForwardPublishBatchRequest) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{33}
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ForwardPublishBatchRequest) GetMessages() []*ForwardPublishRequest {
@@ -2284,7 +1879,7 @@ type ForwardPublishBatchError struct {
 
 func (x *ForwardPublishBatchError) Reset() {
 	*x = ForwardPublishBatchError{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[34]
+	mi := &file_cluster_v1_broker_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2296,7 +1891,7 @@ func (x *ForwardPublishBatchError) String() string {
 func (*ForwardPublishBatchError) ProtoMessage() {}
 
 func (x *ForwardPublishBatchError) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[34]
+	mi := &file_cluster_v1_broker_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2309,7 +1904,7 @@ func (x *ForwardPublishBatchError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardPublishBatchError.ProtoReflect.Descriptor instead.
 func (*ForwardPublishBatchError) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{34}
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ForwardPublishBatchError) GetIndex() uint32 {
@@ -2345,7 +1940,7 @@ type ForwardPublishBatchResponse struct {
 
 func (x *ForwardPublishBatchResponse) Reset() {
 	*x = ForwardPublishBatchResponse{}
-	mi := &file_cluster_v1_broker_proto_msgTypes[35]
+	mi := &file_cluster_v1_broker_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2357,7 +1952,7 @@ func (x *ForwardPublishBatchResponse) String() string {
 func (*ForwardPublishBatchResponse) ProtoMessage() {}
 
 func (x *ForwardPublishBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_v1_broker_proto_msgTypes[35]
+	mi := &file_cluster_v1_broker_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2370,7 +1965,7 @@ func (x *ForwardPublishBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardPublishBatchResponse.ProtoReflect.Descriptor instead.
 func (*ForwardPublishBatchResponse) Descriptor() ([]byte, []int) {
-	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{35}
+	return file_cluster_v1_broker_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ForwardPublishBatchResponse) GetSuccess() bool {
@@ -2448,7 +2043,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x11inflight_messages\x18\x03 \x03(\v2\".fluxmq.cluster.v1.InflightMessageR\x10inflightMessages\x12I\n" +
 	"\x0fqueued_messages\x18\x04 \x03(\v2 .fluxmq.cluster.v1.QueuedMessageR\x0equeuedMessages\x12E\n" +
 	"\rsubscriptions\x18\x05 \x03(\v2\x1f.fluxmq.cluster.v1.SubscriptionR\rsubscriptions\x122\n" +
-	"\x04will\x18\x06 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\x04will\"\xda\x01\n" +
+	"\x04will\x18\x06 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\x04will\"\xed\x02\n" +
 	"\x0fInflightMessage\x12\x1b\n" +
 	"\tpacket_id\x18\x01 \x01(\rR\bpacketId\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x18\n" +
@@ -2457,7 +2052,13 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x06retain\x18\x05 \x01(\bR\x06retain\x12\x1c\n" +
 	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12\x1c\n" +
 	"\tdirection\x18\a \x01(\rR\tdirection\x12\x14\n" +
-	"\x05state\x18\b \x01(\rR\x05state\"\x87\x01\n" +
+	"\x05state\x18\b \x01(\rR\x05state\x12R\n" +
+	"\n" +
+	"properties\x18\t \x03(\v22.fluxmq.cluster.v1.InflightMessage.PropertiesEntryR\n" +
+	"properties\x1a=\n" +
+	"\x0fPropertiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x87\x01\n" +
 	"\rQueuedMessage\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x10\n" +
@@ -2547,41 +2148,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1c\n" +
 	"\tdelivered\x18\x03 \x01(\rR\tdelivered\x12C\n" +
-	"\bfailures\x18\x04 \x03(\v2'.fluxmq.cluster.v1.RouteQueueBatchErrorR\bfailures\"\xef\x01\n" +
-	"\x14AppendEntriesRequest\x12\x1d\n" +
-	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
-	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x1b\n" +
-	"\tleader_id\x18\x03 \x01(\tR\bleaderId\x12$\n" +
-	"\x0eprev_log_index\x18\x04 \x01(\x04R\fprevLogIndex\x12\"\n" +
-	"\rprev_log_term\x18\x05 \x01(\x04R\vprevLogTerm\x12\x18\n" +
-	"\aentries\x18\x06 \x03(\fR\aentries\x12#\n" +
-	"\rleader_commit\x18\a \x01(\x04R\fleaderCommit\"k\n" +
-	"\x15AppendEntriesResponse\x12\x12\n" +
-	"\x04term\x18\x01 \x01(\x04R\x04term\x12\x18\n" +
-	"\asuccess\x18\x02 \x01(\bR\asuccess\x12$\n" +
-	"\x0elast_log_index\x18\x03 \x01(\x04R\flastLogIndex\"\xb4\x01\n" +
-	"\x12RequestVoteRequest\x12\x1d\n" +
-	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
-	"\x04term\x18\x02 \x01(\x04R\x04term\x12!\n" +
-	"\fcandidate_id\x18\x03 \x01(\tR\vcandidateId\x12$\n" +
-	"\x0elast_log_index\x18\x04 \x01(\x04R\flastLogIndex\x12\"\n" +
-	"\rlast_log_term\x18\x05 \x01(\x04R\vlastLogTerm\"L\n" +
-	"\x13RequestVoteResponse\x12\x12\n" +
-	"\x04term\x18\x01 \x01(\x04R\x04term\x12!\n" +
-	"\fvote_granted\x18\x02 \x01(\bR\vvoteGranted\"\xee\x01\n" +
-	"\x16InstallSnapshotRequest\x12\x1d\n" +
-	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
-	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x1b\n" +
-	"\tleader_id\x18\x03 \x01(\tR\bleaderId\x12.\n" +
-	"\x13last_included_index\x18\x04 \x01(\x04R\x11lastIncludedIndex\x12,\n" +
-	"\x12last_included_term\x18\x05 \x01(\x04R\x10lastIncludedTerm\x12\x12\n" +
-	"\x04data\x18\x06 \x01(\fR\x04data\x12\x12\n" +
-	"\x04done\x18\a \x01(\bR\x04done\"-\n" +
-	"\x17InstallSnapshotResponse\x12\x12\n" +
-	"\x04term\x18\x01 \x01(\x04R\x04term\"O\n" +
+	"\bfailures\x18\x04 \x03(\v2'.fluxmq.cluster.v1.RouteQueueBatchErrorR\bfailures\"O\n" +
 	"\x15ForwardGroupOpRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x17\n" +
@@ -2610,8 +2177,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1c\n" +
 	"\tdelivered\x18\x03 \x01(\rR\tdelivered\x12G\n" +
-	"\bfailures\x18\x04 \x03(\v2+.fluxmq.cluster.v1.ForwardPublishBatchErrorR\bfailures2\xab\n" +
-	"\n" +
+	"\bfailures\x18\x04 \x03(\v2+.fluxmq.cluster.v1.ForwardPublishBatchErrorR\bfailures2\xff\a\n" +
 	"\rBrokerService\x12U\n" +
 	"\fRoutePublish\x12!.fluxmq.cluster.v1.PublishRequest\x1a\".fluxmq.cluster.v1.PublishResponse\x12d\n" +
 	"\x11RoutePublishBatch\x12&.fluxmq.cluster.v1.PublishBatchRequest\x1a'.fluxmq.cluster.v1.PublishBatchResponse\x12Z\n" +
@@ -2620,10 +2186,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\tFetchWill\x12#.fluxmq.cluster.v1.FetchWillRequest\x1a$.fluxmq.cluster.v1.FetchWillResponse\x12b\n" +
 	"\rEnqueueRemote\x12'.fluxmq.cluster.v1.EnqueueRemoteRequest\x1a(.fluxmq.cluster.v1.EnqueueRemoteResponse\x12n\n" +
 	"\x11RouteQueueMessage\x12+.fluxmq.cluster.v1.RouteQueueMessageRequest\x1a,.fluxmq.cluster.v1.RouteQueueMessageResponse\x12h\n" +
-	"\x0fRouteQueueBatch\x12).fluxmq.cluster.v1.RouteQueueBatchRequest\x1a*.fluxmq.cluster.v1.RouteQueueBatchResponse\x12b\n" +
-	"\rAppendEntries\x12'.fluxmq.cluster.v1.AppendEntriesRequest\x1a(.fluxmq.cluster.v1.AppendEntriesResponse\x12\\\n" +
-	"\vRequestVote\x12%.fluxmq.cluster.v1.RequestVoteRequest\x1a&.fluxmq.cluster.v1.RequestVoteResponse\x12h\n" +
-	"\x0fInstallSnapshot\x12).fluxmq.cluster.v1.InstallSnapshotRequest\x1a*.fluxmq.cluster.v1.InstallSnapshotResponse\x12e\n" +
+	"\x0fRouteQueueBatch\x12).fluxmq.cluster.v1.RouteQueueBatchRequest\x1a*.fluxmq.cluster.v1.RouteQueueBatchResponse\x12e\n" +
 	"\x0eForwardGroupOp\x12(.fluxmq.cluster.v1.ForwardGroupOpRequest\x1a).fluxmq.cluster.v1.ForwardGroupOpResponse\x12t\n" +
 	"\x13ForwardPublishBatch\x12-.fluxmq.cluster.v1.ForwardPublishBatchRequest\x1a..fluxmq.cluster.v1.ForwardPublishBatchResponseB\xc4\x01\n" +
 	"\x15com.fluxmq.cluster.v1B\vBrokerProtoP\x01Z8github.com/absmach/fluxmq/pkg/proto/cluster/v1;clusterv1\xa2\x02\x03FCX\xaa\x02\x11Fluxmq.Cluster.V1\xca\x02\x11Fluxmq\\Cluster\\V1\xe2\x02\x1dFluxmq\\Cluster\\V1\\GPBMetadata\xea\x02\x13Fluxmq::Cluster::V1b\x06proto3"
@@ -2640,7 +2203,7 @@ func file_cluster_v1_broker_proto_rawDescGZIP() []byte {
 	return file_cluster_v1_broker_proto_rawDescData
 }
 
-var file_cluster_v1_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_cluster_v1_broker_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_cluster_v1_broker_proto_goTypes = []any{
 	(*PublishRequest)(nil),              // 0: fluxmq.cluster.v1.PublishRequest
 	(*PublishResponse)(nil),             // 1: fluxmq.cluster.v1.PublishResponse
@@ -2666,26 +2229,21 @@ var file_cluster_v1_broker_proto_goTypes = []any{
 	(*RouteQueueBatchRequest)(nil),      // 21: fluxmq.cluster.v1.RouteQueueBatchRequest
 	(*RouteQueueBatchError)(nil),        // 22: fluxmq.cluster.v1.RouteQueueBatchError
 	(*RouteQueueBatchResponse)(nil),     // 23: fluxmq.cluster.v1.RouteQueueBatchResponse
-	(*AppendEntriesRequest)(nil),        // 24: fluxmq.cluster.v1.AppendEntriesRequest
-	(*AppendEntriesResponse)(nil),       // 25: fluxmq.cluster.v1.AppendEntriesResponse
-	(*RequestVoteRequest)(nil),          // 26: fluxmq.cluster.v1.RequestVoteRequest
-	(*RequestVoteResponse)(nil),         // 27: fluxmq.cluster.v1.RequestVoteResponse
-	(*InstallSnapshotRequest)(nil),      // 28: fluxmq.cluster.v1.InstallSnapshotRequest
-	(*InstallSnapshotResponse)(nil),     // 29: fluxmq.cluster.v1.InstallSnapshotResponse
-	(*ForwardGroupOpRequest)(nil),       // 30: fluxmq.cluster.v1.ForwardGroupOpRequest
-	(*ForwardGroupOpResponse)(nil),      // 31: fluxmq.cluster.v1.ForwardGroupOpResponse
-	(*ForwardPublishRequest)(nil),       // 32: fluxmq.cluster.v1.ForwardPublishRequest
-	(*ForwardPublishBatchRequest)(nil),  // 33: fluxmq.cluster.v1.ForwardPublishBatchRequest
-	(*ForwardPublishBatchError)(nil),    // 34: fluxmq.cluster.v1.ForwardPublishBatchError
-	(*ForwardPublishBatchResponse)(nil), // 35: fluxmq.cluster.v1.ForwardPublishBatchResponse
-	nil,                                 // 36: fluxmq.cluster.v1.PublishRequest.PropertiesEntry
-	nil,                                 // 37: fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
-	nil,                                 // 38: fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
-	nil,                                 // 39: fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
-	nil,                                 // 40: fluxmq.cluster.v1.ForwardPublishRequest.PropertiesEntry
+	(*ForwardGroupOpRequest)(nil),       // 24: fluxmq.cluster.v1.ForwardGroupOpRequest
+	(*ForwardGroupOpResponse)(nil),      // 25: fluxmq.cluster.v1.ForwardGroupOpResponse
+	(*ForwardPublishRequest)(nil),       // 26: fluxmq.cluster.v1.ForwardPublishRequest
+	(*ForwardPublishBatchRequest)(nil),  // 27: fluxmq.cluster.v1.ForwardPublishBatchRequest
+	(*ForwardPublishBatchError)(nil),    // 28: fluxmq.cluster.v1.ForwardPublishBatchError
+	(*ForwardPublishBatchResponse)(nil), // 29: fluxmq.cluster.v1.ForwardPublishBatchResponse
+	nil,                                 // 30: fluxmq.cluster.v1.PublishRequest.PropertiesEntry
+	nil,                                 // 31: fluxmq.cluster.v1.InflightMessage.PropertiesEntry
+	nil,                                 // 32: fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
+	nil,                                 // 33: fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
+	nil,                                 // 34: fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
+	nil,                                 // 35: fluxmq.cluster.v1.ForwardPublishRequest.PropertiesEntry
 }
 var file_cluster_v1_broker_proto_depIdxs = []int32{
-	36, // 0: fluxmq.cluster.v1.PublishRequest.properties:type_name -> fluxmq.cluster.v1.PublishRequest.PropertiesEntry
+	30, // 0: fluxmq.cluster.v1.PublishRequest.properties:type_name -> fluxmq.cluster.v1.PublishRequest.PropertiesEntry
 	0,  // 1: fluxmq.cluster.v1.PublishBatchRequest.messages:type_name -> fluxmq.cluster.v1.PublishRequest
 	3,  // 2: fluxmq.cluster.v1.PublishBatchResponse.failures:type_name -> fluxmq.cluster.v1.PublishBatchError
 	7,  // 3: fluxmq.cluster.v1.TakeoverResponse.session_state:type_name -> fluxmq.cluster.v1.SessionState
@@ -2693,47 +2251,42 @@ var file_cluster_v1_broker_proto_depIdxs = []int32{
 	9,  // 5: fluxmq.cluster.v1.SessionState.queued_messages:type_name -> fluxmq.cluster.v1.QueuedMessage
 	10, // 6: fluxmq.cluster.v1.SessionState.subscriptions:type_name -> fluxmq.cluster.v1.Subscription
 	11, // 7: fluxmq.cluster.v1.SessionState.will:type_name -> fluxmq.cluster.v1.WillMessage
-	14, // 8: fluxmq.cluster.v1.FetchRetainedResponse.message:type_name -> fluxmq.cluster.v1.RetainedMessage
-	37, // 9: fluxmq.cluster.v1.RetainedMessage.properties:type_name -> fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
-	11, // 10: fluxmq.cluster.v1.FetchWillResponse.message:type_name -> fluxmq.cluster.v1.WillMessage
-	38, // 11: fluxmq.cluster.v1.EnqueueRemoteRequest.properties:type_name -> fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
-	39, // 12: fluxmq.cluster.v1.RouteQueueMessageRequest.properties:type_name -> fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
-	19, // 13: fluxmq.cluster.v1.RouteQueueBatchRequest.messages:type_name -> fluxmq.cluster.v1.RouteQueueMessageRequest
-	22, // 14: fluxmq.cluster.v1.RouteQueueBatchResponse.failures:type_name -> fluxmq.cluster.v1.RouteQueueBatchError
-	40, // 15: fluxmq.cluster.v1.ForwardPublishRequest.properties:type_name -> fluxmq.cluster.v1.ForwardPublishRequest.PropertiesEntry
-	32, // 16: fluxmq.cluster.v1.ForwardPublishBatchRequest.messages:type_name -> fluxmq.cluster.v1.ForwardPublishRequest
-	34, // 17: fluxmq.cluster.v1.ForwardPublishBatchResponse.failures:type_name -> fluxmq.cluster.v1.ForwardPublishBatchError
-	0,  // 18: fluxmq.cluster.v1.BrokerService.RoutePublish:input_type -> fluxmq.cluster.v1.PublishRequest
-	2,  // 19: fluxmq.cluster.v1.BrokerService.RoutePublishBatch:input_type -> fluxmq.cluster.v1.PublishBatchRequest
-	5,  // 20: fluxmq.cluster.v1.BrokerService.TakeoverSession:input_type -> fluxmq.cluster.v1.TakeoverRequest
-	12, // 21: fluxmq.cluster.v1.BrokerService.FetchRetained:input_type -> fluxmq.cluster.v1.FetchRetainedRequest
-	15, // 22: fluxmq.cluster.v1.BrokerService.FetchWill:input_type -> fluxmq.cluster.v1.FetchWillRequest
-	17, // 23: fluxmq.cluster.v1.BrokerService.EnqueueRemote:input_type -> fluxmq.cluster.v1.EnqueueRemoteRequest
-	19, // 24: fluxmq.cluster.v1.BrokerService.RouteQueueMessage:input_type -> fluxmq.cluster.v1.RouteQueueMessageRequest
-	21, // 25: fluxmq.cluster.v1.BrokerService.RouteQueueBatch:input_type -> fluxmq.cluster.v1.RouteQueueBatchRequest
-	24, // 26: fluxmq.cluster.v1.BrokerService.AppendEntries:input_type -> fluxmq.cluster.v1.AppendEntriesRequest
-	26, // 27: fluxmq.cluster.v1.BrokerService.RequestVote:input_type -> fluxmq.cluster.v1.RequestVoteRequest
-	28, // 28: fluxmq.cluster.v1.BrokerService.InstallSnapshot:input_type -> fluxmq.cluster.v1.InstallSnapshotRequest
-	30, // 29: fluxmq.cluster.v1.BrokerService.ForwardGroupOp:input_type -> fluxmq.cluster.v1.ForwardGroupOpRequest
-	33, // 30: fluxmq.cluster.v1.BrokerService.ForwardPublishBatch:input_type -> fluxmq.cluster.v1.ForwardPublishBatchRequest
-	1,  // 31: fluxmq.cluster.v1.BrokerService.RoutePublish:output_type -> fluxmq.cluster.v1.PublishResponse
-	4,  // 32: fluxmq.cluster.v1.BrokerService.RoutePublishBatch:output_type -> fluxmq.cluster.v1.PublishBatchResponse
-	6,  // 33: fluxmq.cluster.v1.BrokerService.TakeoverSession:output_type -> fluxmq.cluster.v1.TakeoverResponse
-	13, // 34: fluxmq.cluster.v1.BrokerService.FetchRetained:output_type -> fluxmq.cluster.v1.FetchRetainedResponse
-	16, // 35: fluxmq.cluster.v1.BrokerService.FetchWill:output_type -> fluxmq.cluster.v1.FetchWillResponse
-	18, // 36: fluxmq.cluster.v1.BrokerService.EnqueueRemote:output_type -> fluxmq.cluster.v1.EnqueueRemoteResponse
-	20, // 37: fluxmq.cluster.v1.BrokerService.RouteQueueMessage:output_type -> fluxmq.cluster.v1.RouteQueueMessageResponse
-	23, // 38: fluxmq.cluster.v1.BrokerService.RouteQueueBatch:output_type -> fluxmq.cluster.v1.RouteQueueBatchResponse
-	25, // 39: fluxmq.cluster.v1.BrokerService.AppendEntries:output_type -> fluxmq.cluster.v1.AppendEntriesResponse
-	27, // 40: fluxmq.cluster.v1.BrokerService.RequestVote:output_type -> fluxmq.cluster.v1.RequestVoteResponse
-	29, // 41: fluxmq.cluster.v1.BrokerService.InstallSnapshot:output_type -> fluxmq.cluster.v1.InstallSnapshotResponse
-	31, // 42: fluxmq.cluster.v1.BrokerService.ForwardGroupOp:output_type -> fluxmq.cluster.v1.ForwardGroupOpResponse
-	35, // 43: fluxmq.cluster.v1.BrokerService.ForwardPublishBatch:output_type -> fluxmq.cluster.v1.ForwardPublishBatchResponse
-	31, // [31:44] is the sub-list for method output_type
-	18, // [18:31] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	31, // 8: fluxmq.cluster.v1.InflightMessage.properties:type_name -> fluxmq.cluster.v1.InflightMessage.PropertiesEntry
+	14, // 9: fluxmq.cluster.v1.FetchRetainedResponse.message:type_name -> fluxmq.cluster.v1.RetainedMessage
+	32, // 10: fluxmq.cluster.v1.RetainedMessage.properties:type_name -> fluxmq.cluster.v1.RetainedMessage.PropertiesEntry
+	11, // 11: fluxmq.cluster.v1.FetchWillResponse.message:type_name -> fluxmq.cluster.v1.WillMessage
+	33, // 12: fluxmq.cluster.v1.EnqueueRemoteRequest.properties:type_name -> fluxmq.cluster.v1.EnqueueRemoteRequest.PropertiesEntry
+	34, // 13: fluxmq.cluster.v1.RouteQueueMessageRequest.properties:type_name -> fluxmq.cluster.v1.RouteQueueMessageRequest.PropertiesEntry
+	19, // 14: fluxmq.cluster.v1.RouteQueueBatchRequest.messages:type_name -> fluxmq.cluster.v1.RouteQueueMessageRequest
+	22, // 15: fluxmq.cluster.v1.RouteQueueBatchResponse.failures:type_name -> fluxmq.cluster.v1.RouteQueueBatchError
+	35, // 16: fluxmq.cluster.v1.ForwardPublishRequest.properties:type_name -> fluxmq.cluster.v1.ForwardPublishRequest.PropertiesEntry
+	26, // 17: fluxmq.cluster.v1.ForwardPublishBatchRequest.messages:type_name -> fluxmq.cluster.v1.ForwardPublishRequest
+	28, // 18: fluxmq.cluster.v1.ForwardPublishBatchResponse.failures:type_name -> fluxmq.cluster.v1.ForwardPublishBatchError
+	0,  // 19: fluxmq.cluster.v1.BrokerService.RoutePublish:input_type -> fluxmq.cluster.v1.PublishRequest
+	2,  // 20: fluxmq.cluster.v1.BrokerService.RoutePublishBatch:input_type -> fluxmq.cluster.v1.PublishBatchRequest
+	5,  // 21: fluxmq.cluster.v1.BrokerService.TakeoverSession:input_type -> fluxmq.cluster.v1.TakeoverRequest
+	12, // 22: fluxmq.cluster.v1.BrokerService.FetchRetained:input_type -> fluxmq.cluster.v1.FetchRetainedRequest
+	15, // 23: fluxmq.cluster.v1.BrokerService.FetchWill:input_type -> fluxmq.cluster.v1.FetchWillRequest
+	17, // 24: fluxmq.cluster.v1.BrokerService.EnqueueRemote:input_type -> fluxmq.cluster.v1.EnqueueRemoteRequest
+	19, // 25: fluxmq.cluster.v1.BrokerService.RouteQueueMessage:input_type -> fluxmq.cluster.v1.RouteQueueMessageRequest
+	21, // 26: fluxmq.cluster.v1.BrokerService.RouteQueueBatch:input_type -> fluxmq.cluster.v1.RouteQueueBatchRequest
+	24, // 27: fluxmq.cluster.v1.BrokerService.ForwardGroupOp:input_type -> fluxmq.cluster.v1.ForwardGroupOpRequest
+	27, // 28: fluxmq.cluster.v1.BrokerService.ForwardPublishBatch:input_type -> fluxmq.cluster.v1.ForwardPublishBatchRequest
+	1,  // 29: fluxmq.cluster.v1.BrokerService.RoutePublish:output_type -> fluxmq.cluster.v1.PublishResponse
+	4,  // 30: fluxmq.cluster.v1.BrokerService.RoutePublishBatch:output_type -> fluxmq.cluster.v1.PublishBatchResponse
+	6,  // 31: fluxmq.cluster.v1.BrokerService.TakeoverSession:output_type -> fluxmq.cluster.v1.TakeoverResponse
+	13, // 32: fluxmq.cluster.v1.BrokerService.FetchRetained:output_type -> fluxmq.cluster.v1.FetchRetainedResponse
+	16, // 33: fluxmq.cluster.v1.BrokerService.FetchWill:output_type -> fluxmq.cluster.v1.FetchWillResponse
+	18, // 34: fluxmq.cluster.v1.BrokerService.EnqueueRemote:output_type -> fluxmq.cluster.v1.EnqueueRemoteResponse
+	20, // 35: fluxmq.cluster.v1.BrokerService.RouteQueueMessage:output_type -> fluxmq.cluster.v1.RouteQueueMessageResponse
+	23, // 36: fluxmq.cluster.v1.BrokerService.RouteQueueBatch:output_type -> fluxmq.cluster.v1.RouteQueueBatchResponse
+	25, // 37: fluxmq.cluster.v1.BrokerService.ForwardGroupOp:output_type -> fluxmq.cluster.v1.ForwardGroupOpResponse
+	29, // 38: fluxmq.cluster.v1.BrokerService.ForwardPublishBatch:output_type -> fluxmq.cluster.v1.ForwardPublishBatchResponse
+	29, // [29:39] is the sub-list for method output_type
+	19, // [19:29] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_cluster_v1_broker_proto_init() }
@@ -2747,7 +2300,7 @@ func file_cluster_v1_broker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cluster_v1_broker_proto_rawDesc), len(file_cluster_v1_broker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   41,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -316,7 +316,7 @@ func (c *Connection) run() error {
 		err := cl.AcquireSession(ctx, clientID, cl.NodeID())
 		cancel()
 		if err != nil {
-			c.logger.Warn("AMQP 0.9.1 acquire session ownership failed", "client_id", clientID, "error", err)
+			return fmt.Errorf("acquire AMQP 0.9.1 connection ownership: %w", err)
 		}
 	}
 	c.logger.Info("AMQP 0.9.1 connection opened", "remote", c.connID)

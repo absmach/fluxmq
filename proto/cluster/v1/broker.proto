@@ -32,17 +32,6 @@ service BrokerService {
   // RouteQueueBatch delivers multiple queue messages in one RPC.
   rpc RouteQueueBatch(RouteQueueBatchRequest) returns (RouteQueueBatchResponse);
 
-  // Raft RPCs for queue replication
-
-  // AppendEntries is invoked by the Raft leader to replicate log entries.
-  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
-
-  // RequestVote is invoked by candidates during leader election.
-  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
-
-  // InstallSnapshot is invoked by leader to transfer snapshot to a follower.
-  rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse);
-
   // ForwardGroupOp forwards a consumer group mutation from a follower to the
   // Raft leader for the queue's replication group. The leader applies the
   // operation through its coordinator so it goes through Raft consensus.
@@ -126,6 +115,10 @@ message InflightMessage {
   uint32 direction = 7;
   // state: inflight delivery state (0 = publish sent, 1 = pubrec received).
   uint32 state = 8;
+  // properties preserves MQTT v5 properties and broker-owned queue metadata
+  // across a session takeover. Broker-owned values are still filtered at the
+  // external protocol boundary.
+  map<string, string> properties = 9;
 }
 
 message QueuedMessage {
@@ -243,53 +236,6 @@ message RouteQueueBatchResponse {
   string error = 2;
   uint32 delivered = 3;
   repeated RouteQueueBatchError failures = 4;
-}
-
-// =============================================================================
-// Raft Consensus
-// =============================================================================
-
-message AppendEntriesRequest {
-  string queue_name = 1;
-  uint64 term = 2;
-  string leader_id = 3;
-  uint64 prev_log_index = 4;
-  uint64 prev_log_term = 5;
-  repeated bytes entries = 6;
-  uint64 leader_commit = 7;
-}
-
-message AppendEntriesResponse {
-  uint64 term = 1;
-  bool success = 2;
-  uint64 last_log_index = 3;
-}
-
-message RequestVoteRequest {
-  string queue_name = 1;
-  uint64 term = 2;
-  string candidate_id = 3;
-  uint64 last_log_index = 4;
-  uint64 last_log_term = 5;
-}
-
-message RequestVoteResponse {
-  uint64 term = 1;
-  bool vote_granted = 2;
-}
-
-message InstallSnapshotRequest {
-  string queue_name = 1;
-  uint64 term = 2;
-  string leader_id = 3;
-  uint64 last_included_index = 4;
-  uint64 last_included_term = 5;
-  bytes data = 6;
-  bool done = 7;
-}
-
-message InstallSnapshotResponse {
-  uint64 term = 1;
 }
 
 // =============================================================================

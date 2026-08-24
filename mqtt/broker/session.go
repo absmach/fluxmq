@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
@@ -27,6 +28,18 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	defer b.sessionLocks.Unlock(clientID)
 
 	ctx := context.Background()
+	releaseOwnershipOnFailure := false
+	sessionReady := false
+	defer func() {
+		if !releaseOwnershipOnFailure || sessionReady || b.cluster == nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if err := b.cluster.ReleaseSession(cleanupCtx, clientID); err != nil {
+			b.logError("cluster_release_session_after_create_failure", err, slog.String("client_id", clientID))
+		}
+	}()
 
 	// Check if session is owned by another node in the cluster
 	var takeoverState *clusterv1.SessionState
@@ -55,6 +68,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 			}
 
 			b.telemetry.logger.Info("session takeover completed", slog.String("client_id", clientID))
+			releaseOwnershipOnFailure = true
 
 			// Webhook: session takeover
 			if b.telemetry.webhooks != nil {
@@ -76,6 +90,12 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	}
 
 	if existing != nil {
+		if b.cluster != nil {
+			if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
+				return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
+			}
+		}
+		sessionReady = true
 		return existing, false, nil
 	}
 
@@ -169,7 +189,12 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		b.handleDisconnect(s, graceful)
 	})
 
-	b.sessionsMap.Set(clientID, s)
+	if b.cluster != nil {
+		if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
+			return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
+		}
+		releaseOwnershipOnFailure = true
+	}
 
 	if b.stores.sessions != nil {
 		if err := b.stores.sessions.Save(s.Info()); err != nil {
@@ -177,13 +202,8 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		}
 	}
 
-	if b.cluster != nil {
-		ctx := context.Background()
-		nodeID := b.cluster.NodeID()
-		if err := b.cluster.AcquireSession(ctx, clientID, nodeID); err != nil {
-			b.logError("cluster_acquire_session", err, slog.String("client_id", clientID))
-		}
-	}
+	b.sessionsMap.Set(clientID, s)
+	sessionReady = true
 
 	return s, true, nil
 }
@@ -203,6 +223,17 @@ func (b *Broker) DestroySession(clientID string) error {
 
 // destroySessionLocked destroys a session. Must be called with the session's key lock held.
 func (b *Broker) destroySessionLocked(ctx context.Context, s *session.Session) error {
+	return b.destroySessionLockedWithOwnership(ctx, s, true)
+}
+
+// destroySessionForTakeoverLocked removes local state while deliberately
+// leaving the distributed owner key in place. The new node replaces that key
+// with a CAS after it has received the captured state.
+func (b *Broker) destroySessionForTakeoverLocked(ctx context.Context, s *session.Session) error {
+	return b.destroySessionLockedWithOwnership(ctx, s, false)
+}
+
+func (b *Broker) destroySessionLockedWithOwnership(ctx context.Context, s *session.Session, releaseOwnership bool) error {
 	if s.IsConnected() {
 		s.Disconnect(false, v5.DisconnectAdministrativeAction) //nolint:errcheck // disconnect during session destroy; connection is being removed
 	}
@@ -250,13 +281,28 @@ func (b *Broker) destroySessionLocked(ctx context.Context, s *session.Session) e
 	}
 
 	// Release session ownership in cluster
-	if b.cluster != nil {
+	if releaseOwnership && b.cluster != nil {
 		if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
 			b.logError("cluster_release_session", err, slog.String("client_id", s.ID))
 		}
 	}
 
 	return nil
+}
+
+// HandleSessionLeaseLost fences connections that this node can no longer
+// prove it owns. Persistent session state is retained locally for a later
+// explicit takeover or reconnect; only the live connection is stopped.
+func (b *Broker) HandleSessionLeaseLost(_ context.Context, clientIDs []string) {
+	for _, clientID := range clientIDs {
+		// Lease recovery can be triggered by AcquireSession while CreateSession
+		// already holds the client key lock. Session.Disconnect has its own
+		// generation lock, so fencing here must not try to re-enter that key lock.
+		s := b.sessionsMap.Get(clientID)
+		if s != nil && s.IsConnected() {
+			_ = s.Disconnect(false, v5.DisconnectServerUnavailable)
+		}
+	}
 }
 
 // handleDisconnect handles session disconnect.
@@ -477,11 +523,12 @@ func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, trac
 
 	for _, msg := range state.InflightMessages {
 		storeMsg := &storage.Message{
-			Topic:    msg.Topic,
-			Payload:  msg.GetPayload(),
-			QoS:      byte(msg.Qos),
-			Retain:   msg.Retain,
-			PacketID: uint16(msg.PacketId),
+			Topic:      msg.Topic,
+			Payload:    msg.GetPayload(),
+			QoS:        byte(msg.Qos),
+			Retain:     msg.Retain,
+			PacketID:   uint16(msg.PacketId),
+			Properties: maps.Clone(msg.Properties),
 		}
 		restoreInflightEntry(tracker, uint16(msg.PacketId), storeMsg, msg.Direction, msg.State)
 	}
@@ -588,14 +635,15 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	// Capture inflight messages
 	for _, msg := range s.Inflight().GetAll() {
 		state.InflightMessages = append(state.InflightMessages, &clusterv1.InflightMessage{
-			PacketId:  uint32(msg.PacketID),
-			Topic:     msg.Message.Topic,
-			Payload:   msg.Message.GetPayload(),
-			Qos:       uint32(msg.Message.QoS),
-			Retain:    msg.Message.Retain,
-			Timestamp: time.Now().Unix(),
-			Direction: uint32(msg.Direction),
-			State:     uint32(msg.State),
+			PacketId:   uint32(msg.PacketID),
+			Topic:      msg.Message.Topic,
+			Payload:    msg.Message.GetPayload(),
+			Qos:        uint32(msg.Message.QoS),
+			Retain:     msg.Message.Retain,
+			Timestamp:  time.Now().Unix(),
+			Direction:  uint32(msg.Direction),
+			State:      uint32(msg.State),
+			Properties: maps.Clone(msg.Message.Properties),
 		})
 	}
 
@@ -621,8 +669,10 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 		}
 	}
 
-	// Forcefully disconnect and remove
-	if err := b.destroySessionLocked(ctx, s); err != nil {
+	// The takeover caller owns the distributed handoff. Suppress the ordinary
+	// disconnect callback and retain the old owner key until its final CAS.
+	s.SetOnDisconnect(nil)
+	if err := b.destroySessionForTakeoverLocked(ctx, s); err != nil {
 		return nil, fmt.Errorf("failed to destroy session: %w", err)
 	}
 

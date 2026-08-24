@@ -195,6 +195,11 @@ type MessageHandler interface {
 	// Returns nil if the session doesn't exist on this node.
 	GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error)
 
+	// HandleSessionLeaseLost fences local sessions whose ownership lease was
+	// lost. The implementation must stop serving those connections before this
+	// node begins acquiring ownership under a replacement lease.
+	HandleSessionLeaseLost(ctx context.Context, clientIDs []string)
+
 	// GetRetainedMessage fetches a retained message from the local store.
 	// This is called when another node requests a large retained message payload.
 	// Returns (nil, nil) if the message doesn't exist.
