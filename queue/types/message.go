@@ -27,6 +27,8 @@ type Message struct {
 	ID         string
 	Payload    []byte                 // Deprecated: Use PayloadBuf for zero-copy
 	PayloadBuf *core.RefCountedBuffer `json:"-"` // Zero-copy payload buffer (preferred)
+	Key        []byte
+	Headers    map[string][]byte
 	Topic      string
 	Sequence   uint64
 	Properties map[string]string

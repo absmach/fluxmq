@@ -4,6 +4,7 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -3590,10 +3591,10 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 }
 
 // PublishToMatchingQueues stores what it is given, so it must take ownership of
-// the caller's payload and properties. An empty non-nil map is still the
-// caller's map, and normalizing the request writes a client ID into whatever it
-// is handed, so cloning only non-empty maps would mutate a protocol broker's
-// own state.
+// the caller's payload, key, headers, and properties. An empty non-nil map is
+// still the caller's map, and normalizing the request writes a client ID into
+// whatever it is handed, so cloning only non-empty maps would mutate a protocol
+// broker's own state.
 func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	logStore := memlog.New()
 	mgr := NewManager(logStore, newMockGroupStore(), nil, DefaultConfig(), nil, nil)
@@ -3605,11 +3606,15 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 
 	properties := map[string]string{}
 	payload := []byte("original")
+	key := []byte("key")
+	headers := map[string][]byte{"binary": {0x00, 0xff}}
 	flushCapture(t, mgr, func() {
 		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
 			ClientID:   testCapturePublisher,
 			Topic:      testCapturedTopic,
 			Payload:    payload,
+			Key:        key,
+			Headers:    headers,
 			Properties: properties,
 		}); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
@@ -3622,12 +3627,24 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 
 	// The stored copy must survive the caller reusing its buffer.
 	payload[0] = 'X'
+	key[0] = 'X'
+	headers["binary"][0] = 0xff
+	headers["new"] = []byte("new")
 	stored, err := logStore.Read(ctx, testCaptureQueue, 0)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 	if got := string(stored.GetPayload()); got != "original" {
 		t.Fatalf("stored payload = %q, want original", got)
+	}
+	if got := string(stored.Key); got != "key" {
+		t.Fatalf("stored key = %q, want key", got)
+	}
+	if got := stored.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
+		t.Fatalf("stored binary header = %v, want [0 255]", got)
+	}
+	if _, ok := stored.Headers["new"]; ok {
+		t.Fatal("stored headers alias the caller's map")
 	}
 	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
 		t.Fatalf("stored client ID = %q, want mqtt-publisher", got)

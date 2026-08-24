@@ -204,6 +204,45 @@ func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
 	assert.True(t, got1.ExpiresAt.IsZero())
 }
 
+func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+	cfg := types.DefaultQueueConfig("api", "$queue/api/#")
+	require.NoError(t, adapter.CreateQueue(ctx, cfg))
+
+	messages := []*types.Message{
+		{
+			ID:      "1",
+			Topic:   "$queue/api/one",
+			Payload: []byte("one"),
+			Key:     []byte{0x00, 0xff},
+			Headers: map[string][]byte{"binary": {0x00, 0xff}},
+		},
+		{
+			ID:      "2",
+			Topic:   "$queue/api/two",
+			Payload: []byte("two"),
+			Key:     []byte("key-2"),
+			Headers: map[string][]byte{"text": []byte("value")},
+		},
+	}
+
+	_, err = adapter.AppendBatch(ctx, "api", messages)
+	require.NoError(t, err)
+
+	got, err := adapter.ReadBatch(ctx, "api", 0, 2)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, messages[0].Key, got[0].Key)
+	assert.Equal(t, messages[0].Headers, got[0].Headers)
+	assert.Equal(t, messages[1].Key, got[1].Key)
+	assert.Equal(t, messages[1].Headers, got[1].Headers)
+}
+
 func TestAdapter_AppendAndSyncHonorsContextAndReportsDurability(t *testing.T) {
 	dir := t.TempDir()
 	adapter, err := NewAdapter(dir, DefaultAdapterConfig())

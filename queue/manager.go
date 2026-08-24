@@ -65,6 +65,13 @@ var (
 	// from claiming the local queue log was fsynced. Raft's synchronous mode
 	// waits for apply; it does not use DurableQueueStore.AppendAndSync.
 	ErrFsyncReplicatedQueueUnsupported = errors.New("fsync acknowledgement durability does not support replicated queues")
+	// ErrAtomicBatchReplicationUnsupported prevents QueueService.AppendBatch
+	// from claiming atomic offsets through a replication path that only exposes
+	// single-record apply.
+	ErrAtomicBatchReplicationUnsupported = errors.New("atomic batch append does not support replicated queues")
+	// ErrAtomicBatchDurabilityUnsupported prevents QueueService.AppendBatch from
+	// acknowledging fsync durability when the store has no atomic batch barrier.
+	ErrAtomicBatchDurabilityUnsupported = errors.New("atomic batch append does not support fsync acknowledgement durability")
 	// ErrDLQDisabled leaves the source delivery pending instead of dropping it.
 	ErrDLQDisabled = errors.New("dead-letter queue is disabled")
 	// ErrReplicationUnavailable prevents a replicated queue from degrading to a
@@ -1039,6 +1046,93 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 	return m.publishToTargets(ctx, publish, targets, fanoutStrict)
 }
 
+// AppendToQueue appends to exactly one named queue and returns the offset
+// assigned by that queue's storage or replication path. Unlike Publish it never
+// performs topic-pattern fanout and never auto-creates a queue. QueueService
+// uses this operation so its offset response cannot race a separate Tail read.
+func (m *Manager) AppendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, error) {
+	publish = normalizePublishRequest(publish)
+	if publish.Topic == "" {
+		publish.Topic = queueName
+	}
+
+	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil {
+		return 0, err
+	}
+	if queueConfig == nil {
+		return 0, storage.ErrQueueNotFound
+	}
+	if queueConfig.Replication.Enabled {
+		if err := m.replicationWriteReadiness(queueName); err != nil {
+			return 0, err
+		}
+		if !m.raftCoordinator.IsLeaderForQueue(queueName) {
+			return 0, WithFailure(
+				fmt.Errorf("%w: queue %q is not led by this node", ErrReplicationUnavailable, queueName),
+				Failure{
+					Code:       ErrorCodeUnavailable,
+					Retryable:  true,
+					Leader:     LeaderNotLocal,
+					Durability: DurabilityNotAttempted,
+				},
+			)
+		}
+	}
+
+	msg := newQueuedMessage(publish, queueConfig)
+	offset, err := m.appendConfiguredMessage(ctx, queueName, queueConfig, msg)
+	if err := m.completeAppend(queueName, publish.Topic, offset, err); err != nil {
+		return 0, err
+	}
+	m.delivery.Schedule(queueName)
+	return offset, nil
+}
+
+// AppendBatchToQueue atomically appends a batch to one single-node buffered
+// queue and returns its first offset. Replicated batches and fsync batches are
+// rejected until their implementations can establish the same atomic contract;
+// silently looping over AppendToQueue would make the public API claim false.
+func (m *Manager) AppendBatchToQueue(ctx context.Context, queueName string, publishes []types.PublishRequest) (uint64, uint32, error) {
+	if len(publishes) == 0 {
+		return 0, 0, nil
+	}
+
+	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
+	if err != nil {
+		return 0, 0, err
+	}
+	if queueConfig == nil {
+		return 0, 0, storage.ErrQueueNotFound
+	}
+	if queueConfig.Replication.Enabled {
+		return 0, 0, ErrAtomicBatchReplicationUnsupported
+	}
+	if queueConfig.Durable && m.ackDurabilityFor(queueConfig) == AckDurabilityFsync {
+		return 0, 0, ErrAtomicBatchDurabilityUnsupported
+	}
+
+	messages := make([]*types.Message, len(publishes))
+	for i, publish := range publishes {
+		publish = normalizePublishRequest(publish)
+		if publish.Topic == "" {
+			publish.Topic = queueName
+		}
+		messages[i] = newQueuedMessage(publish, queueConfig)
+	}
+
+	firstOffset, err := m.queueStore.AppendBatch(ctx, queueName, messages)
+	if err != nil {
+		return 0, 0, fmt.Errorf("append batch to queue %q: %w", queueName, err)
+	}
+	m.logger.Debug("message batch published",
+		slog.String("queue", queueName),
+		slog.Uint64("first_offset", firstOffset),
+		slog.Int("count", len(messages)))
+	m.delivery.Schedule(queueName)
+	return firstOffset, uint32(len(messages)), nil
+}
+
 // PublishToMatchingQueues captures an ordinary pub/sub publish in existing
 // queues whose configured topic patterns match it. Unlike Publish, it never
 // auto-creates a queue when no pattern matches.
@@ -1079,6 +1173,8 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 	// normalizePublishRequest writes the client ID into whatever it is given.
 	// Clone leaves a nil map nil, which that call then replaces outright.
 	publish.Payload = bytes.Clone(publish.Payload)
+	publish.Key = bytes.Clone(publish.Key)
+	publish.Headers = cloneByteMap(publish.Headers)
 	publish.Properties = maps.Clone(publish.Properties)
 	publish = normalizePublishRequest(publish)
 
@@ -1474,6 +1570,8 @@ func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConf
 	msg := &types.Message{
 		ID:         generateMessageID(),
 		Payload:    publish.Payload,
+		Key:        bytes.Clone(publish.Key),
+		Headers:    cloneByteMap(publish.Headers),
 		Topic:      publish.Topic,
 		Properties: cloneWithoutForwardingMeta(publish.Properties),
 		State:      types.StateQueued,
@@ -1483,6 +1581,17 @@ func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConf
 		msg.ExpiresAt = now.Add(queueConfig.MessageTTL)
 	}
 	return msg
+}
+
+func cloneByteMap(src map[string][]byte) map[string][]byte {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string][]byte, len(src))
+	for key, value := range src {
+		dst[key] = bytes.Clone(value)
+	}
+	return dst
 }
 
 func (m *Manager) completeAppend(queueName, topic string, offset uint64, err error) error {

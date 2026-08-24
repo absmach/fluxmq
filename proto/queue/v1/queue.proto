@@ -307,6 +307,54 @@ enum ReplicationMode {
   REPLICATION_MODE_ASYNC = 2;
 }
 
+// QueueErrorDetail is attached to Connect/gRPC errors returned by QueueService.
+// Clients should branch on these fields instead of parsing the human-readable
+// error message. Enum values and meanings are part of the v1 compatibility
+// contract and may only be extended additively.
+message QueueErrorDetail {
+  QueueErrorCode code = 1;
+  bool retryable = 2;
+  QueueOwnershipState ownership = 3;
+  QueueLeaderState leader = 4;
+  QueueDurabilityState durability = 5;
+}
+
+enum QueueErrorCode {
+  QUEUE_ERROR_CODE_UNSPECIFIED = 0;
+  QUEUE_ERROR_CODE_INTERNAL = 1;
+  QUEUE_ERROR_CODE_CANCELED = 2;
+  QUEUE_ERROR_CODE_INVALID_ARGUMENT = 3;
+  QUEUE_ERROR_CODE_NOT_FOUND = 4;
+  QUEUE_ERROR_CODE_ALREADY_EXISTS = 5;
+  QUEUE_ERROR_CODE_CONFLICT = 6;
+  QUEUE_ERROR_CODE_FAILED_PRECONDITION = 7;
+  QUEUE_ERROR_CODE_RESOURCE_EXHAUSTED = 8;
+  QUEUE_ERROR_CODE_OUT_OF_RANGE = 9;
+  QUEUE_ERROR_CODE_UNAVAILABLE = 10;
+  QUEUE_ERROR_CODE_DEADLINE_EXCEEDED = 11;
+}
+
+enum QueueOwnershipState {
+  QUEUE_OWNERSHIP_STATE_UNSPECIFIED = 0;
+  QUEUE_OWNERSHIP_STATE_CALLER = 1;
+  QUEUE_OWNERSHIP_STATE_OTHER = 2;
+  QUEUE_OWNERSHIP_STATE_LOST = 3;
+}
+
+enum QueueLeaderState {
+  QUEUE_LEADER_STATE_UNSPECIFIED = 0;
+  QUEUE_LEADER_STATE_REQUIRED = 1;
+  QUEUE_LEADER_STATE_UNAVAILABLE = 2;
+  QUEUE_LEADER_STATE_NOT_LOCAL = 3;
+}
+
+enum QueueDurabilityState {
+  QUEUE_DURABILITY_STATE_UNSPECIFIED = 0;
+  QUEUE_DURABILITY_STATE_NOT_ATTEMPTED = 1;
+  QUEUE_DURABILITY_STATE_UNCONFIRMED = 2;
+  QUEUE_DURABILITY_STATE_UNSUPPORTED = 3;
+}
+
 // QueueInfo contains metadata about a queue.
 message QueueInfo {
   string queue_name = 1;

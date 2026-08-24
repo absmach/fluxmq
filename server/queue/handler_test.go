@@ -4,6 +4,7 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ const (
 	testGroupJobsRaft = "jobs-raft"
 	testConsumer1     = "consumer-1"
 	testQueueEvents   = "events"
+	testQueuePrimary  = "primary"
 )
 
 type readyQueueCoordinator struct {
@@ -102,6 +104,60 @@ func TestListQueuesFilteringAndPagination(t *testing.T) {
 	page2Names := []string{page2Resp.Msg.Queues[0].Name, page2Resp.Msg.Queues[1].Name}
 	if !sort.StringsAreSorted(page2Names) {
 		t.Fatalf("page 2 not sorted: %#v", page2Names)
+	}
+}
+
+func TestAppendContractUsesExactOffsetsAndPreservesBytes(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	groupStore := noopGroupStore{}
+	manager := queuepkg.NewManager(store, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
+
+	for _, name := range []string{testQueuePrimary, "same-pattern"} {
+		cfg := types.DefaultQueueConfig(name, "shared/#")
+		if err := manager.CreateQueue(ctx, cfg); err != nil {
+			t.Fatalf("create queue %q: %v", name, err)
+		}
+	}
+	h := NewHandler(manager, store, groupStore, nil)
+
+	appendResp, err := h.Append(ctx, connect.NewRequest(&queuev1.AppendRequest{
+		QueueName: testQueuePrimary,
+		Key:       []byte{0x00, 0xff},
+		Value:     []byte("one"),
+		Headers:   map[string][]byte{"binary": {0x00, 0xff}},
+	}))
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if appendResp.Msg.Offset != 0 {
+		t.Fatalf("append offset = %d, want 0", appendResp.Msg.Offset)
+	}
+
+	stored, err := store.Read(ctx, testQueuePrimary, appendResp.Msg.Offset)
+	if err != nil {
+		t.Fatalf("read appended message: %v", err)
+	}
+	if !bytes.Equal(stored.Key, []byte{0x00, 0xff}) || !bytes.Equal(stored.Headers["binary"], []byte{0x00, 0xff}) {
+		t.Fatalf("binary key/headers changed: key=%v headers=%v", stored.Key, stored.Headers)
+	}
+	if count, err := store.Count(ctx, "same-pattern"); err != nil || count != 0 {
+		t.Fatalf("exact append routed to same-pattern queue: count=%d err=%v", count, err)
+	}
+
+	batchResp, err := h.AppendBatch(ctx, connect.NewRequest(&queuev1.AppendBatchRequest{
+		QueueName: testQueuePrimary,
+		Messages: []*queuev1.BatchMessage{
+			{Key: []byte("k2"), Value: []byte("two")},
+			{Key: []byte("k3"), Value: []byte("three")},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("append batch: %v", err)
+	}
+	if batchResp.Msg.FirstOffset != 1 || batchResp.Msg.LastOffset != 2 || batchResp.Msg.Count != 2 {
+		t.Fatalf("batch range = [%d,%d] count=%d, want [1,2] count=2",
+			batchResp.Msg.FirstOffset, batchResp.Msg.LastOffset, batchResp.Msg.Count)
 	}
 }
 
@@ -602,60 +658,47 @@ func TestQueueMutationsReportInvalidFiltersAsInvalidArgument(t *testing.T) {
 	})
 }
 
-// The update path cannot be driven to an invalid filter through the API, because
-// the proto carries no topics on update: they are settable only at creation. Its
-// mapping is still reachable — a queue persisted with a bad filter before
-// validation existed fails when updated — so the two mappings are covered
-// directly, which also pins every branch rather than the one an integration test
-// happens to reach.
+// Every QueueService method shares one domain mapping. Method implementations
+// may supply a fallback only for errors the queue domain has not classified.
 func TestQueueMutationErrorCodes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		err        error
-		wantCreate connect.Code
-		wantUpdate connect.Code
+		name string
+		err  error
+		want connect.Code
 	}{
 		{
-			name:       "invalid configuration is the caller's mistake",
-			err:        fmt.Errorf("wrapped: %w", types.ErrInvalidConfig),
-			wantCreate: connect.CodeInvalidArgument,
-			wantUpdate: connect.CodeInvalidArgument,
+			name: "invalid configuration is the caller's mistake",
+			err:  fmt.Errorf("wrapped: %w", types.ErrInvalidConfig),
+			want: connect.CodeInvalidArgument,
 		},
 		{
-			name:       "protected queue mutation is a precondition",
-			err:        queuepkg.ErrProtectedQueueMutation,
-			wantCreate: connect.CodeFailedPrecondition,
-			wantUpdate: connect.CodeFailedPrecondition,
+			name: "protected queue mutation is a precondition",
+			err:  queuepkg.ErrProtectedQueueMutation,
+			want: connect.CodeFailedPrecondition,
 		},
 		{
-			name:       "name already taken",
-			err:        qstorage.ErrQueueAlreadyExists,
-			wantCreate: connect.CodeAlreadyExists,
-			wantUpdate: connect.CodeInternal,
+			name: "name already taken",
+			err:  qstorage.ErrQueueAlreadyExists,
+			want: connect.CodeAlreadyExists,
 		},
 		{
-			name:       "queue missing",
-			err:        qstorage.ErrQueueNotFound,
-			wantCreate: connect.CodeInternal,
-			wantUpdate: connect.CodeNotFound,
+			name: "queue missing",
+			err:  qstorage.ErrQueueNotFound,
+			want: connect.CodeNotFound,
 		},
 		{
-			name:       "anything else is a server fault",
-			err:        errors.New("disk on fire"),
-			wantCreate: connect.CodeInternal,
-			wantUpdate: connect.CodeInternal,
+			name: "anything else is a server fault",
+			err:  errors.New("disk on fire"),
+			want: connect.CodeInternal,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := createQueueErrorCode(tt.err); got != tt.wantCreate {
-				t.Fatalf("createQueueErrorCode = %v, want %v", got, tt.wantCreate)
-			}
-			if got := updateQueueErrorCode(tt.err); got != tt.wantUpdate {
-				t.Fatalf("updateQueueErrorCode = %v, want %v", got, tt.wantUpdate)
+			if got := newConnectError(connect.CodeInternal, tt.err).Code(); got != tt.want {
+				t.Fatalf("newConnectError code = %v, want %v", got, tt.want)
 			}
 		})
 	}

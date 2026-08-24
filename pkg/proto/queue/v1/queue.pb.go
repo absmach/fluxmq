@@ -128,6 +128,238 @@ func (ReplicationMode) EnumDescriptor() ([]byte, []int) {
 	return file_queue_v1_queue_proto_rawDescGZIP(), []int{1}
 }
 
+type QueueErrorCode int32
+
+const (
+	QueueErrorCode_QUEUE_ERROR_CODE_UNSPECIFIED         QueueErrorCode = 0
+	QueueErrorCode_QUEUE_ERROR_CODE_INTERNAL            QueueErrorCode = 1
+	QueueErrorCode_QUEUE_ERROR_CODE_CANCELED            QueueErrorCode = 2
+	QueueErrorCode_QUEUE_ERROR_CODE_INVALID_ARGUMENT    QueueErrorCode = 3
+	QueueErrorCode_QUEUE_ERROR_CODE_NOT_FOUND           QueueErrorCode = 4
+	QueueErrorCode_QUEUE_ERROR_CODE_ALREADY_EXISTS      QueueErrorCode = 5
+	QueueErrorCode_QUEUE_ERROR_CODE_CONFLICT            QueueErrorCode = 6
+	QueueErrorCode_QUEUE_ERROR_CODE_FAILED_PRECONDITION QueueErrorCode = 7
+	QueueErrorCode_QUEUE_ERROR_CODE_RESOURCE_EXHAUSTED  QueueErrorCode = 8
+	QueueErrorCode_QUEUE_ERROR_CODE_OUT_OF_RANGE        QueueErrorCode = 9
+	QueueErrorCode_QUEUE_ERROR_CODE_UNAVAILABLE         QueueErrorCode = 10
+	QueueErrorCode_QUEUE_ERROR_CODE_DEADLINE_EXCEEDED   QueueErrorCode = 11
+)
+
+// Enum value maps for QueueErrorCode.
+var (
+	QueueErrorCode_name = map[int32]string{
+		0:  "QUEUE_ERROR_CODE_UNSPECIFIED",
+		1:  "QUEUE_ERROR_CODE_INTERNAL",
+		2:  "QUEUE_ERROR_CODE_CANCELED",
+		3:  "QUEUE_ERROR_CODE_INVALID_ARGUMENT",
+		4:  "QUEUE_ERROR_CODE_NOT_FOUND",
+		5:  "QUEUE_ERROR_CODE_ALREADY_EXISTS",
+		6:  "QUEUE_ERROR_CODE_CONFLICT",
+		7:  "QUEUE_ERROR_CODE_FAILED_PRECONDITION",
+		8:  "QUEUE_ERROR_CODE_RESOURCE_EXHAUSTED",
+		9:  "QUEUE_ERROR_CODE_OUT_OF_RANGE",
+		10: "QUEUE_ERROR_CODE_UNAVAILABLE",
+		11: "QUEUE_ERROR_CODE_DEADLINE_EXCEEDED",
+	}
+	QueueErrorCode_value = map[string]int32{
+		"QUEUE_ERROR_CODE_UNSPECIFIED":         0,
+		"QUEUE_ERROR_CODE_INTERNAL":            1,
+		"QUEUE_ERROR_CODE_CANCELED":            2,
+		"QUEUE_ERROR_CODE_INVALID_ARGUMENT":    3,
+		"QUEUE_ERROR_CODE_NOT_FOUND":           4,
+		"QUEUE_ERROR_CODE_ALREADY_EXISTS":      5,
+		"QUEUE_ERROR_CODE_CONFLICT":            6,
+		"QUEUE_ERROR_CODE_FAILED_PRECONDITION": 7,
+		"QUEUE_ERROR_CODE_RESOURCE_EXHAUSTED":  8,
+		"QUEUE_ERROR_CODE_OUT_OF_RANGE":        9,
+		"QUEUE_ERROR_CODE_UNAVAILABLE":         10,
+		"QUEUE_ERROR_CODE_DEADLINE_EXCEEDED":   11,
+	}
+)
+
+func (x QueueErrorCode) Enum() *QueueErrorCode {
+	p := new(QueueErrorCode)
+	*p = x
+	return p
+}
+
+func (x QueueErrorCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QueueErrorCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_queue_v1_queue_proto_enumTypes[2].Descriptor()
+}
+
+func (QueueErrorCode) Type() protoreflect.EnumType {
+	return &file_queue_v1_queue_proto_enumTypes[2]
+}
+
+func (x QueueErrorCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QueueErrorCode.Descriptor instead.
+func (QueueErrorCode) EnumDescriptor() ([]byte, []int) {
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{2}
+}
+
+type QueueOwnershipState int32
+
+const (
+	QueueOwnershipState_QUEUE_OWNERSHIP_STATE_UNSPECIFIED QueueOwnershipState = 0
+	QueueOwnershipState_QUEUE_OWNERSHIP_STATE_CALLER      QueueOwnershipState = 1
+	QueueOwnershipState_QUEUE_OWNERSHIP_STATE_OTHER       QueueOwnershipState = 2
+	QueueOwnershipState_QUEUE_OWNERSHIP_STATE_LOST        QueueOwnershipState = 3
+)
+
+// Enum value maps for QueueOwnershipState.
+var (
+	QueueOwnershipState_name = map[int32]string{
+		0: "QUEUE_OWNERSHIP_STATE_UNSPECIFIED",
+		1: "QUEUE_OWNERSHIP_STATE_CALLER",
+		2: "QUEUE_OWNERSHIP_STATE_OTHER",
+		3: "QUEUE_OWNERSHIP_STATE_LOST",
+	}
+	QueueOwnershipState_value = map[string]int32{
+		"QUEUE_OWNERSHIP_STATE_UNSPECIFIED": 0,
+		"QUEUE_OWNERSHIP_STATE_CALLER":      1,
+		"QUEUE_OWNERSHIP_STATE_OTHER":       2,
+		"QUEUE_OWNERSHIP_STATE_LOST":        3,
+	}
+)
+
+func (x QueueOwnershipState) Enum() *QueueOwnershipState {
+	p := new(QueueOwnershipState)
+	*p = x
+	return p
+}
+
+func (x QueueOwnershipState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QueueOwnershipState) Descriptor() protoreflect.EnumDescriptor {
+	return file_queue_v1_queue_proto_enumTypes[3].Descriptor()
+}
+
+func (QueueOwnershipState) Type() protoreflect.EnumType {
+	return &file_queue_v1_queue_proto_enumTypes[3]
+}
+
+func (x QueueOwnershipState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QueueOwnershipState.Descriptor instead.
+func (QueueOwnershipState) EnumDescriptor() ([]byte, []int) {
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{3}
+}
+
+type QueueLeaderState int32
+
+const (
+	QueueLeaderState_QUEUE_LEADER_STATE_UNSPECIFIED QueueLeaderState = 0
+	QueueLeaderState_QUEUE_LEADER_STATE_REQUIRED    QueueLeaderState = 1
+	QueueLeaderState_QUEUE_LEADER_STATE_UNAVAILABLE QueueLeaderState = 2
+	QueueLeaderState_QUEUE_LEADER_STATE_NOT_LOCAL   QueueLeaderState = 3
+)
+
+// Enum value maps for QueueLeaderState.
+var (
+	QueueLeaderState_name = map[int32]string{
+		0: "QUEUE_LEADER_STATE_UNSPECIFIED",
+		1: "QUEUE_LEADER_STATE_REQUIRED",
+		2: "QUEUE_LEADER_STATE_UNAVAILABLE",
+		3: "QUEUE_LEADER_STATE_NOT_LOCAL",
+	}
+	QueueLeaderState_value = map[string]int32{
+		"QUEUE_LEADER_STATE_UNSPECIFIED": 0,
+		"QUEUE_LEADER_STATE_REQUIRED":    1,
+		"QUEUE_LEADER_STATE_UNAVAILABLE": 2,
+		"QUEUE_LEADER_STATE_NOT_LOCAL":   3,
+	}
+)
+
+func (x QueueLeaderState) Enum() *QueueLeaderState {
+	p := new(QueueLeaderState)
+	*p = x
+	return p
+}
+
+func (x QueueLeaderState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QueueLeaderState) Descriptor() protoreflect.EnumDescriptor {
+	return file_queue_v1_queue_proto_enumTypes[4].Descriptor()
+}
+
+func (QueueLeaderState) Type() protoreflect.EnumType {
+	return &file_queue_v1_queue_proto_enumTypes[4]
+}
+
+func (x QueueLeaderState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QueueLeaderState.Descriptor instead.
+func (QueueLeaderState) EnumDescriptor() ([]byte, []int) {
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{4}
+}
+
+type QueueDurabilityState int32
+
+const (
+	QueueDurabilityState_QUEUE_DURABILITY_STATE_UNSPECIFIED   QueueDurabilityState = 0
+	QueueDurabilityState_QUEUE_DURABILITY_STATE_NOT_ATTEMPTED QueueDurabilityState = 1
+	QueueDurabilityState_QUEUE_DURABILITY_STATE_UNCONFIRMED   QueueDurabilityState = 2
+	QueueDurabilityState_QUEUE_DURABILITY_STATE_UNSUPPORTED   QueueDurabilityState = 3
+)
+
+// Enum value maps for QueueDurabilityState.
+var (
+	QueueDurabilityState_name = map[int32]string{
+		0: "QUEUE_DURABILITY_STATE_UNSPECIFIED",
+		1: "QUEUE_DURABILITY_STATE_NOT_ATTEMPTED",
+		2: "QUEUE_DURABILITY_STATE_UNCONFIRMED",
+		3: "QUEUE_DURABILITY_STATE_UNSUPPORTED",
+	}
+	QueueDurabilityState_value = map[string]int32{
+		"QUEUE_DURABILITY_STATE_UNSPECIFIED":   0,
+		"QUEUE_DURABILITY_STATE_NOT_ATTEMPTED": 1,
+		"QUEUE_DURABILITY_STATE_UNCONFIRMED":   2,
+		"QUEUE_DURABILITY_STATE_UNSUPPORTED":   3,
+	}
+)
+
+func (x QueueDurabilityState) Enum() *QueueDurabilityState {
+	p := new(QueueDurabilityState)
+	*p = x
+	return p
+}
+
+func (x QueueDurabilityState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QueueDurabilityState) Descriptor() protoreflect.EnumDescriptor {
+	return file_queue_v1_queue_proto_enumTypes[5].Descriptor()
+}
+
+func (QueueDurabilityState) Type() protoreflect.EnumType {
+	return &file_queue_v1_queue_proto_enumTypes[5]
+}
+
+func (x QueueDurabilityState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QueueDurabilityState.Descriptor instead.
+func (QueueDurabilityState) EnumDescriptor() ([]byte, []int) {
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{5}
+}
+
 type InitialPosition int32
 
 const (
@@ -161,11 +393,11 @@ func (x InitialPosition) String() string {
 }
 
 func (InitialPosition) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[2].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[6].Descriptor()
 }
 
 func (InitialPosition) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[2]
+	return &file_queue_v1_queue_proto_enumTypes[6]
 }
 
 func (x InitialPosition) Number() protoreflect.EnumNumber {
@@ -174,7 +406,7 @@ func (x InitialPosition) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InitialPosition.Descriptor instead.
 func (InitialPosition) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{2}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{6}
 }
 
 // Special offset values.
@@ -214,11 +446,11 @@ func (x TailRequest_StartFrom) String() string {
 }
 
 func (TailRequest_StartFrom) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[3].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[7].Descriptor()
 }
 
 func (TailRequest_StartFrom) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[3]
+	return &file_queue_v1_queue_proto_enumTypes[7]
 }
 
 func (x TailRequest_StartFrom) Number() protoreflect.EnumNumber {
@@ -227,7 +459,7 @@ func (x TailRequest_StartFrom) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TailRequest_StartFrom.Descriptor instead.
 func (TailRequest_StartFrom) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{28, 0}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{29, 0}
 }
 
 // Message represents a single message in the log.
@@ -917,6 +1149,86 @@ func (x *QueueState) GetNewestMessage() *timestamppb.Timestamp {
 	return nil
 }
 
+// QueueErrorDetail is attached to Connect/gRPC errors returned by QueueService.
+// Clients should branch on these fields instead of parsing the human-readable
+// error message. Enum values and meanings are part of the v1 compatibility
+// contract and may only be extended additively.
+type QueueErrorDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          QueueErrorCode         `protobuf:"varint,1,opt,name=code,proto3,enum=fluxmq.queue.v1.QueueErrorCode" json:"code,omitempty"`
+	Retryable     bool                   `protobuf:"varint,2,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	Ownership     QueueOwnershipState    `protobuf:"varint,3,opt,name=ownership,proto3,enum=fluxmq.queue.v1.QueueOwnershipState" json:"ownership,omitempty"`
+	Leader        QueueLeaderState       `protobuf:"varint,4,opt,name=leader,proto3,enum=fluxmq.queue.v1.QueueLeaderState" json:"leader,omitempty"`
+	Durability    QueueDurabilityState   `protobuf:"varint,5,opt,name=durability,proto3,enum=fluxmq.queue.v1.QueueDurabilityState" json:"durability,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueueErrorDetail) Reset() {
+	*x = QueueErrorDetail{}
+	mi := &file_queue_v1_queue_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueueErrorDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueErrorDetail) ProtoMessage() {}
+
+func (x *QueueErrorDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_queue_v1_queue_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueErrorDetail.ProtoReflect.Descriptor instead.
+func (*QueueErrorDetail) Descriptor() ([]byte, []int) {
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *QueueErrorDetail) GetCode() QueueErrorCode {
+	if x != nil {
+		return x.Code
+	}
+	return QueueErrorCode_QUEUE_ERROR_CODE_UNSPECIFIED
+}
+
+func (x *QueueErrorDetail) GetRetryable() bool {
+	if x != nil {
+		return x.Retryable
+	}
+	return false
+}
+
+func (x *QueueErrorDetail) GetOwnership() QueueOwnershipState {
+	if x != nil {
+		return x.Ownership
+	}
+	return QueueOwnershipState_QUEUE_OWNERSHIP_STATE_UNSPECIFIED
+}
+
+func (x *QueueErrorDetail) GetLeader() QueueLeaderState {
+	if x != nil {
+		return x.Leader
+	}
+	return QueueLeaderState_QUEUE_LEADER_STATE_UNSPECIFIED
+}
+
+func (x *QueueErrorDetail) GetDurability() QueueDurabilityState {
+	if x != nil {
+		return x.Durability
+	}
+	return QueueDurabilityState_QUEUE_DURABILITY_STATE_UNSPECIFIED
+}
+
 // QueueInfo contains metadata about a queue.
 type QueueInfo struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
@@ -941,7 +1253,7 @@ type QueueInfo struct {
 
 func (x *QueueInfo) Reset() {
 	*x = QueueInfo{}
-	mi := &file_queue_v1_queue_proto_msgTypes[8]
+	mi := &file_queue_v1_queue_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -953,7 +1265,7 @@ func (x *QueueInfo) String() string {
 func (*QueueInfo) ProtoMessage() {}
 
 func (x *QueueInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[8]
+	mi := &file_queue_v1_queue_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -966,7 +1278,7 @@ func (x *QueueInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueInfo.ProtoReflect.Descriptor instead.
 func (*QueueInfo) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{8}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *QueueInfo) GetQueueName() string {
@@ -1049,7 +1361,7 @@ type ConsumerGroup struct {
 
 func (x *ConsumerGroup) Reset() {
 	*x = ConsumerGroup{}
-	mi := &file_queue_v1_queue_proto_msgTypes[9]
+	mi := &file_queue_v1_queue_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1061,7 +1373,7 @@ func (x *ConsumerGroup) String() string {
 func (*ConsumerGroup) ProtoMessage() {}
 
 func (x *ConsumerGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[9]
+	mi := &file_queue_v1_queue_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1074,7 +1386,7 @@ func (x *ConsumerGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumerGroup.ProtoReflect.Descriptor instead.
 func (*ConsumerGroup) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{9}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ConsumerGroup) GetQueueName() string {
@@ -1147,7 +1459,7 @@ type ConsumerGroupConfig struct {
 
 func (x *ConsumerGroupConfig) Reset() {
 	*x = ConsumerGroupConfig{}
-	mi := &file_queue_v1_queue_proto_msgTypes[10]
+	mi := &file_queue_v1_queue_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1159,7 +1471,7 @@ func (x *ConsumerGroupConfig) String() string {
 func (*ConsumerGroupConfig) ProtoMessage() {}
 
 func (x *ConsumerGroupConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[10]
+	mi := &file_queue_v1_queue_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1172,7 +1484,7 @@ func (x *ConsumerGroupConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumerGroupConfig.ProtoReflect.Descriptor instead.
 func (*ConsumerGroupConfig) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{10}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ConsumerGroupConfig) GetAckTimeout() *durationpb.Duration {
@@ -1213,7 +1525,7 @@ type QueueCursor struct {
 
 func (x *QueueCursor) Reset() {
 	*x = QueueCursor{}
-	mi := &file_queue_v1_queue_proto_msgTypes[11]
+	mi := &file_queue_v1_queue_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1225,7 +1537,7 @@ func (x *QueueCursor) String() string {
 func (*QueueCursor) ProtoMessage() {}
 
 func (x *QueueCursor) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[11]
+	mi := &file_queue_v1_queue_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1238,7 +1550,7 @@ func (x *QueueCursor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueCursor.ProtoReflect.Descriptor instead.
 func (*QueueCursor) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{11}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *QueueCursor) GetCursor() uint64 {
@@ -1285,7 +1597,7 @@ type ConsumerInfo struct {
 
 func (x *ConsumerInfo) Reset() {
 	*x = ConsumerInfo{}
-	mi := &file_queue_v1_queue_proto_msgTypes[12]
+	mi := &file_queue_v1_queue_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1297,7 +1609,7 @@ func (x *ConsumerInfo) String() string {
 func (*ConsumerInfo) ProtoMessage() {}
 
 func (x *ConsumerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[12]
+	mi := &file_queue_v1_queue_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1310,7 +1622,7 @@ func (x *ConsumerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumerInfo.ProtoReflect.Descriptor instead.
 func (*ConsumerInfo) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{12}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ConsumerInfo) GetConsumerId() string {
@@ -1354,7 +1666,7 @@ type PendingEntry struct {
 
 func (x *PendingEntry) Reset() {
 	*x = PendingEntry{}
-	mi := &file_queue_v1_queue_proto_msgTypes[13]
+	mi := &file_queue_v1_queue_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1366,7 +1678,7 @@ func (x *PendingEntry) String() string {
 func (*PendingEntry) ProtoMessage() {}
 
 func (x *PendingEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[13]
+	mi := &file_queue_v1_queue_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1379,7 +1691,7 @@ func (x *PendingEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingEntry.ProtoReflect.Descriptor instead.
 func (*PendingEntry) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{13}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *PendingEntry) GetOffset() uint64 {
@@ -1428,7 +1740,7 @@ type CreateQueueRequest struct {
 
 func (x *CreateQueueRequest) Reset() {
 	*x = CreateQueueRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[14]
+	mi := &file_queue_v1_queue_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1440,7 +1752,7 @@ func (x *CreateQueueRequest) String() string {
 func (*CreateQueueRequest) ProtoMessage() {}
 
 func (x *CreateQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[14]
+	mi := &file_queue_v1_queue_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1453,7 +1765,7 @@ func (x *CreateQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateQueueRequest.ProtoReflect.Descriptor instead.
 func (*CreateQueueRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{14}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CreateQueueRequest) GetName() string {
@@ -1486,7 +1798,7 @@ type GetQueueRequest struct {
 
 func (x *GetQueueRequest) Reset() {
 	*x = GetQueueRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[15]
+	mi := &file_queue_v1_queue_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1498,7 +1810,7 @@ func (x *GetQueueRequest) String() string {
 func (*GetQueueRequest) ProtoMessage() {}
 
 func (x *GetQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[15]
+	mi := &file_queue_v1_queue_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1511,7 +1823,7 @@ func (x *GetQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetQueueRequest.ProtoReflect.Descriptor instead.
 func (*GetQueueRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{15}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetQueueRequest) GetName() string {
@@ -1534,7 +1846,7 @@ type ListQueuesRequest struct {
 
 func (x *ListQueuesRequest) Reset() {
 	*x = ListQueuesRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[16]
+	mi := &file_queue_v1_queue_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1546,7 +1858,7 @@ func (x *ListQueuesRequest) String() string {
 func (*ListQueuesRequest) ProtoMessage() {}
 
 func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[16]
+	mi := &file_queue_v1_queue_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1559,7 +1871,7 @@ func (x *ListQueuesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueuesRequest.ProtoReflect.Descriptor instead.
 func (*ListQueuesRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{16}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ListQueuesRequest) GetPrefix() string {
@@ -1593,7 +1905,7 @@ type ListQueuesResponse struct {
 
 func (x *ListQueuesResponse) Reset() {
 	*x = ListQueuesResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[17]
+	mi := &file_queue_v1_queue_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1605,7 +1917,7 @@ func (x *ListQueuesResponse) String() string {
 func (*ListQueuesResponse) ProtoMessage() {}
 
 func (x *ListQueuesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[17]
+	mi := &file_queue_v1_queue_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1618,7 +1930,7 @@ func (x *ListQueuesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueuesResponse.ProtoReflect.Descriptor instead.
 func (*ListQueuesResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{17}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ListQueuesResponse) GetQueues() []*Queue {
@@ -1644,7 +1956,7 @@ type DeleteQueueRequest struct {
 
 func (x *DeleteQueueRequest) Reset() {
 	*x = DeleteQueueRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[18]
+	mi := &file_queue_v1_queue_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1656,7 +1968,7 @@ func (x *DeleteQueueRequest) String() string {
 func (*DeleteQueueRequest) ProtoMessage() {}
 
 func (x *DeleteQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[18]
+	mi := &file_queue_v1_queue_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1669,7 +1981,7 @@ func (x *DeleteQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteQueueRequest.ProtoReflect.Descriptor instead.
 func (*DeleteQueueRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{18}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DeleteQueueRequest) GetName() string {
@@ -1689,7 +2001,7 @@ type UpdateQueueRequest struct {
 
 func (x *UpdateQueueRequest) Reset() {
 	*x = UpdateQueueRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[19]
+	mi := &file_queue_v1_queue_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1701,7 +2013,7 @@ func (x *UpdateQueueRequest) String() string {
 func (*UpdateQueueRequest) ProtoMessage() {}
 
 func (x *UpdateQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[19]
+	mi := &file_queue_v1_queue_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1714,7 +2026,7 @@ func (x *UpdateQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateQueueRequest.ProtoReflect.Descriptor instead.
 func (*UpdateQueueRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{19}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UpdateQueueRequest) GetName() string {
@@ -1746,7 +2058,7 @@ type AppendRequest struct {
 
 func (x *AppendRequest) Reset() {
 	*x = AppendRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[20]
+	mi := &file_queue_v1_queue_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1758,7 +2070,7 @@ func (x *AppendRequest) String() string {
 func (*AppendRequest) ProtoMessage() {}
 
 func (x *AppendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[20]
+	mi := &file_queue_v1_queue_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1771,7 +2083,7 @@ func (x *AppendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendRequest.ProtoReflect.Descriptor instead.
 func (*AppendRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{20}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AppendRequest) GetQueueName() string {
@@ -1812,7 +2124,7 @@ type AppendResponse struct {
 
 func (x *AppendResponse) Reset() {
 	*x = AppendResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[21]
+	mi := &file_queue_v1_queue_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1824,7 +2136,7 @@ func (x *AppendResponse) String() string {
 func (*AppendResponse) ProtoMessage() {}
 
 func (x *AppendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[21]
+	mi := &file_queue_v1_queue_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1837,7 +2149,7 @@ func (x *AppendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendResponse.ProtoReflect.Descriptor instead.
 func (*AppendResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{21}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *AppendResponse) GetOffset() uint64 {
@@ -1865,7 +2177,7 @@ type AppendBatchRequest struct {
 
 func (x *AppendBatchRequest) Reset() {
 	*x = AppendBatchRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[22]
+	mi := &file_queue_v1_queue_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1877,7 +2189,7 @@ func (x *AppendBatchRequest) String() string {
 func (*AppendBatchRequest) ProtoMessage() {}
 
 func (x *AppendBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[22]
+	mi := &file_queue_v1_queue_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1890,7 +2202,7 @@ func (x *AppendBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendBatchRequest.ProtoReflect.Descriptor instead.
 func (*AppendBatchRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{22}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *AppendBatchRequest) GetQueueName() string {
@@ -1918,7 +2230,7 @@ type BatchMessage struct {
 
 func (x *BatchMessage) Reset() {
 	*x = BatchMessage{}
-	mi := &file_queue_v1_queue_proto_msgTypes[23]
+	mi := &file_queue_v1_queue_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1930,7 +2242,7 @@ func (x *BatchMessage) String() string {
 func (*BatchMessage) ProtoMessage() {}
 
 func (x *BatchMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[23]
+	mi := &file_queue_v1_queue_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1943,7 +2255,7 @@ func (x *BatchMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchMessage.ProtoReflect.Descriptor instead.
 func (*BatchMessage) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{23}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *BatchMessage) GetKey() []byte {
@@ -1981,7 +2293,7 @@ type AppendBatchResponse struct {
 
 func (x *AppendBatchResponse) Reset() {
 	*x = AppendBatchResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[24]
+	mi := &file_queue_v1_queue_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1993,7 +2305,7 @@ func (x *AppendBatchResponse) String() string {
 func (*AppendBatchResponse) ProtoMessage() {}
 
 func (x *AppendBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[24]
+	mi := &file_queue_v1_queue_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2006,7 +2318,7 @@ func (x *AppendBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendBatchResponse.ProtoReflect.Descriptor instead.
 func (*AppendBatchResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{24}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AppendBatchResponse) GetFirstOffset() uint64 {
@@ -2047,7 +2359,7 @@ type ReadRequest struct {
 
 func (x *ReadRequest) Reset() {
 	*x = ReadRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[25]
+	mi := &file_queue_v1_queue_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2059,7 +2371,7 @@ func (x *ReadRequest) String() string {
 func (*ReadRequest) ProtoMessage() {}
 
 func (x *ReadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[25]
+	mi := &file_queue_v1_queue_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2072,7 +2384,7 @@ func (x *ReadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadRequest.ProtoReflect.Descriptor instead.
 func (*ReadRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{25}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ReadRequest) GetQueueName() string {
@@ -2103,7 +2415,7 @@ type ReadBatchRequest struct {
 
 func (x *ReadBatchRequest) Reset() {
 	*x = ReadBatchRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[26]
+	mi := &file_queue_v1_queue_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2115,7 +2427,7 @@ func (x *ReadBatchRequest) String() string {
 func (*ReadBatchRequest) ProtoMessage() {}
 
 func (x *ReadBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[26]
+	mi := &file_queue_v1_queue_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2128,7 +2440,7 @@ func (x *ReadBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadBatchRequest.ProtoReflect.Descriptor instead.
 func (*ReadBatchRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{26}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ReadBatchRequest) GetQueueName() string {
@@ -2172,7 +2484,7 @@ type ReadBatchResponse struct {
 
 func (x *ReadBatchResponse) Reset() {
 	*x = ReadBatchResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[27]
+	mi := &file_queue_v1_queue_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2184,7 +2496,7 @@ func (x *ReadBatchResponse) String() string {
 func (*ReadBatchResponse) ProtoMessage() {}
 
 func (x *ReadBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[27]
+	mi := &file_queue_v1_queue_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2197,7 +2509,7 @@ func (x *ReadBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadBatchResponse.ProtoReflect.Descriptor instead.
 func (*ReadBatchResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{27}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ReadBatchResponse) GetMessages() []*Message {
@@ -2233,7 +2545,7 @@ type TailRequest struct {
 
 func (x *TailRequest) Reset() {
 	*x = TailRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[28]
+	mi := &file_queue_v1_queue_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2245,7 +2557,7 @@ func (x *TailRequest) String() string {
 func (*TailRequest) ProtoMessage() {}
 
 func (x *TailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[28]
+	mi := &file_queue_v1_queue_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2258,7 +2570,7 @@ func (x *TailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TailRequest.ProtoReflect.Descriptor instead.
 func (*TailRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{28}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TailRequest) GetQueueName() string {
@@ -2292,7 +2604,7 @@ type SeekToOffsetRequest struct {
 
 func (x *SeekToOffsetRequest) Reset() {
 	*x = SeekToOffsetRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[29]
+	mi := &file_queue_v1_queue_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2304,7 +2616,7 @@ func (x *SeekToOffsetRequest) String() string {
 func (*SeekToOffsetRequest) ProtoMessage() {}
 
 func (x *SeekToOffsetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[29]
+	mi := &file_queue_v1_queue_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2317,7 +2629,7 @@ func (x *SeekToOffsetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SeekToOffsetRequest.ProtoReflect.Descriptor instead.
 func (*SeekToOffsetRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{29}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *SeekToOffsetRequest) GetQueueName() string {
@@ -2344,7 +2656,7 @@ type SeekToTimestampRequest struct {
 
 func (x *SeekToTimestampRequest) Reset() {
 	*x = SeekToTimestampRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[30]
+	mi := &file_queue_v1_queue_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2356,7 +2668,7 @@ func (x *SeekToTimestampRequest) String() string {
 func (*SeekToTimestampRequest) ProtoMessage() {}
 
 func (x *SeekToTimestampRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[30]
+	mi := &file_queue_v1_queue_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2369,7 +2681,7 @@ func (x *SeekToTimestampRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SeekToTimestampRequest.ProtoReflect.Descriptor instead.
 func (*SeekToTimestampRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{30}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SeekToTimestampRequest) GetQueueName() string {
@@ -2398,7 +2710,7 @@ type SeekResponse struct {
 
 func (x *SeekResponse) Reset() {
 	*x = SeekResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[31]
+	mi := &file_queue_v1_queue_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2410,7 +2722,7 @@ func (x *SeekResponse) String() string {
 func (*SeekResponse) ProtoMessage() {}
 
 func (x *SeekResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[31]
+	mi := &file_queue_v1_queue_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2423,7 +2735,7 @@ func (x *SeekResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SeekResponse.ProtoReflect.Descriptor instead.
 func (*SeekResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{31}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SeekResponse) GetOffset() uint64 {
@@ -2459,7 +2771,7 @@ type CreateConsumerGroupRequest struct {
 
 func (x *CreateConsumerGroupRequest) Reset() {
 	*x = CreateConsumerGroupRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[32]
+	mi := &file_queue_v1_queue_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2471,7 +2783,7 @@ func (x *CreateConsumerGroupRequest) String() string {
 func (*CreateConsumerGroupRequest) ProtoMessage() {}
 
 func (x *CreateConsumerGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[32]
+	mi := &file_queue_v1_queue_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2484,7 +2796,7 @@ func (x *CreateConsumerGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateConsumerGroupRequest.ProtoReflect.Descriptor instead.
 func (*CreateConsumerGroupRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{32}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *CreateConsumerGroupRequest) GetQueueName() string {
@@ -2525,7 +2837,7 @@ type GetConsumerGroupRequest struct {
 
 func (x *GetConsumerGroupRequest) Reset() {
 	*x = GetConsumerGroupRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[33]
+	mi := &file_queue_v1_queue_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2537,7 +2849,7 @@ func (x *GetConsumerGroupRequest) String() string {
 func (*GetConsumerGroupRequest) ProtoMessage() {}
 
 func (x *GetConsumerGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[33]
+	mi := &file_queue_v1_queue_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2550,7 +2862,7 @@ func (x *GetConsumerGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConsumerGroupRequest.ProtoReflect.Descriptor instead.
 func (*GetConsumerGroupRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{33}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GetConsumerGroupRequest) GetQueueName() string {
@@ -2578,7 +2890,7 @@ type ListConsumerGroupsRequest struct {
 
 func (x *ListConsumerGroupsRequest) Reset() {
 	*x = ListConsumerGroupsRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[34]
+	mi := &file_queue_v1_queue_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2590,7 +2902,7 @@ func (x *ListConsumerGroupsRequest) String() string {
 func (*ListConsumerGroupsRequest) ProtoMessage() {}
 
 func (x *ListConsumerGroupsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[34]
+	mi := &file_queue_v1_queue_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2603,7 +2915,7 @@ func (x *ListConsumerGroupsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConsumerGroupsRequest.ProtoReflect.Descriptor instead.
 func (*ListConsumerGroupsRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{34}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListConsumerGroupsRequest) GetQueueName() string {
@@ -2637,7 +2949,7 @@ type ListConsumerGroupsResponse struct {
 
 func (x *ListConsumerGroupsResponse) Reset() {
 	*x = ListConsumerGroupsResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[35]
+	mi := &file_queue_v1_queue_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2649,7 +2961,7 @@ func (x *ListConsumerGroupsResponse) String() string {
 func (*ListConsumerGroupsResponse) ProtoMessage() {}
 
 func (x *ListConsumerGroupsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[35]
+	mi := &file_queue_v1_queue_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2662,7 +2974,7 @@ func (x *ListConsumerGroupsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConsumerGroupsResponse.ProtoReflect.Descriptor instead.
 func (*ListConsumerGroupsResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{35}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListConsumerGroupsResponse) GetGroups() []*ConsumerGroup {
@@ -2689,7 +3001,7 @@ type DeleteConsumerGroupRequest struct {
 
 func (x *DeleteConsumerGroupRequest) Reset() {
 	*x = DeleteConsumerGroupRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[36]
+	mi := &file_queue_v1_queue_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2701,7 +3013,7 @@ func (x *DeleteConsumerGroupRequest) String() string {
 func (*DeleteConsumerGroupRequest) ProtoMessage() {}
 
 func (x *DeleteConsumerGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[36]
+	mi := &file_queue_v1_queue_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2714,7 +3026,7 @@ func (x *DeleteConsumerGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteConsumerGroupRequest.ProtoReflect.Descriptor instead.
 func (*DeleteConsumerGroupRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{36}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *DeleteConsumerGroupRequest) GetQueueName() string {
@@ -2746,7 +3058,7 @@ type JoinGroupRequest struct {
 
 func (x *JoinGroupRequest) Reset() {
 	*x = JoinGroupRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[37]
+	mi := &file_queue_v1_queue_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2758,7 +3070,7 @@ func (x *JoinGroupRequest) String() string {
 func (*JoinGroupRequest) ProtoMessage() {}
 
 func (x *JoinGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[37]
+	mi := &file_queue_v1_queue_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2771,7 +3083,7 @@ func (x *JoinGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinGroupRequest.ProtoReflect.Descriptor instead.
 func (*JoinGroupRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{37}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *JoinGroupRequest) GetQueueName() string {
@@ -2821,7 +3133,7 @@ type JoinGroupResponse struct {
 
 func (x *JoinGroupResponse) Reset() {
 	*x = JoinGroupResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[38]
+	mi := &file_queue_v1_queue_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2833,7 +3145,7 @@ func (x *JoinGroupResponse) String() string {
 func (*JoinGroupResponse) ProtoMessage() {}
 
 func (x *JoinGroupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[38]
+	mi := &file_queue_v1_queue_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2846,7 +3158,7 @@ func (x *JoinGroupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinGroupResponse.ProtoReflect.Descriptor instead.
 func (*JoinGroupResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{38}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *JoinGroupResponse) GetGenerationId() uint64 {
@@ -2874,7 +3186,7 @@ type LeaveGroupRequest struct {
 
 func (x *LeaveGroupRequest) Reset() {
 	*x = LeaveGroupRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[39]
+	mi := &file_queue_v1_queue_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2886,7 +3198,7 @@ func (x *LeaveGroupRequest) String() string {
 func (*LeaveGroupRequest) ProtoMessage() {}
 
 func (x *LeaveGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[39]
+	mi := &file_queue_v1_queue_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2899,7 +3211,7 @@ func (x *LeaveGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LeaveGroupRequest.ProtoReflect.Descriptor instead.
 func (*LeaveGroupRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{39}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *LeaveGroupRequest) GetQueueName() string {
@@ -2935,7 +3247,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[40]
+	mi := &file_queue_v1_queue_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2947,7 +3259,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[40]
+	mi := &file_queue_v1_queue_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2960,7 +3272,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{40}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *HeartbeatRequest) GetQueueName() string {
@@ -3003,7 +3315,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[41]
+	mi := &file_queue_v1_queue_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3015,7 +3327,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[41]
+	mi := &file_queue_v1_queue_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3028,7 +3340,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{41}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *HeartbeatResponse) GetShouldRejoin() bool {
@@ -3062,7 +3374,7 @@ type ConsumeRequest struct {
 
 func (x *ConsumeRequest) Reset() {
 	*x = ConsumeRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[42]
+	mi := &file_queue_v1_queue_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3074,7 +3386,7 @@ func (x *ConsumeRequest) String() string {
 func (*ConsumeRequest) ProtoMessage() {}
 
 func (x *ConsumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[42]
+	mi := &file_queue_v1_queue_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3087,7 +3399,7 @@ func (x *ConsumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeRequest.ProtoReflect.Descriptor instead.
 func (*ConsumeRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{42}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ConsumeRequest) GetQueueName() string {
@@ -3141,7 +3453,7 @@ type ConsumeResponse struct {
 
 func (x *ConsumeResponse) Reset() {
 	*x = ConsumeResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[43]
+	mi := &file_queue_v1_queue_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3153,7 +3465,7 @@ func (x *ConsumeResponse) String() string {
 func (*ConsumeResponse) ProtoMessage() {}
 
 func (x *ConsumeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[43]
+	mi := &file_queue_v1_queue_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3166,7 +3478,7 @@ func (x *ConsumeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeResponse.ProtoReflect.Descriptor instead.
 func (*ConsumeResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{43}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ConsumeResponse) GetMessages() []*Message {
@@ -3189,7 +3501,7 @@ type ConsumeQueueRequest struct {
 
 func (x *ConsumeQueueRequest) Reset() {
 	*x = ConsumeQueueRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[44]
+	mi := &file_queue_v1_queue_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3201,7 +3513,7 @@ func (x *ConsumeQueueRequest) String() string {
 func (*ConsumeQueueRequest) ProtoMessage() {}
 
 func (x *ConsumeQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[44]
+	mi := &file_queue_v1_queue_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3214,7 +3526,7 @@ func (x *ConsumeQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeQueueRequest.ProtoReflect.Descriptor instead.
 func (*ConsumeQueueRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{44}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ConsumeQueueRequest) GetQueueName() string {
@@ -3258,7 +3570,7 @@ type AckRequest struct {
 
 func (x *AckRequest) Reset() {
 	*x = AckRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[45]
+	mi := &file_queue_v1_queue_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3270,7 +3582,7 @@ func (x *AckRequest) String() string {
 func (*AckRequest) ProtoMessage() {}
 
 func (x *AckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[45]
+	mi := &file_queue_v1_queue_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3283,7 +3595,7 @@ func (x *AckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckRequest.ProtoReflect.Descriptor instead.
 func (*AckRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{45}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *AckRequest) GetQueueName() string {
@@ -3326,7 +3638,7 @@ type AckResponse struct {
 
 func (x *AckResponse) Reset() {
 	*x = AckResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[46]
+	mi := &file_queue_v1_queue_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3338,7 +3650,7 @@ func (x *AckResponse) String() string {
 func (*AckResponse) ProtoMessage() {}
 
 func (x *AckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[46]
+	mi := &file_queue_v1_queue_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3351,7 +3663,7 @@ func (x *AckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AckResponse.ProtoReflect.Descriptor instead.
 func (*AckResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{46}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *AckResponse) GetAckedCount() uint32 {
@@ -3382,7 +3694,7 @@ type NackRequest struct {
 
 func (x *NackRequest) Reset() {
 	*x = NackRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[47]
+	mi := &file_queue_v1_queue_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3394,7 +3706,7 @@ func (x *NackRequest) String() string {
 func (*NackRequest) ProtoMessage() {}
 
 func (x *NackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[47]
+	mi := &file_queue_v1_queue_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3407,7 +3719,7 @@ func (x *NackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NackRequest.ProtoReflect.Descriptor instead.
 func (*NackRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{47}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *NackRequest) GetQueueName() string {
@@ -3461,7 +3773,7 @@ type ClaimRequest struct {
 
 func (x *ClaimRequest) Reset() {
 	*x = ClaimRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[48]
+	mi := &file_queue_v1_queue_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3473,7 +3785,7 @@ func (x *ClaimRequest) String() string {
 func (*ClaimRequest) ProtoMessage() {}
 
 func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[48]
+	mi := &file_queue_v1_queue_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3486,7 +3798,7 @@ func (x *ClaimRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimRequest.ProtoReflect.Descriptor instead.
 func (*ClaimRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{48}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ClaimRequest) GetQueueName() string {
@@ -3533,7 +3845,7 @@ type ClaimResponse struct {
 
 func (x *ClaimResponse) Reset() {
 	*x = ClaimResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[49]
+	mi := &file_queue_v1_queue_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3545,7 +3857,7 @@ func (x *ClaimResponse) String() string {
 func (*ClaimResponse) ProtoMessage() {}
 
 func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[49]
+	mi := &file_queue_v1_queue_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3558,7 +3870,7 @@ func (x *ClaimResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimResponse.ProtoReflect.Descriptor instead.
 func (*ClaimResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{49}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ClaimResponse) GetMessages() []*Message {
@@ -3583,7 +3895,7 @@ type GetPendingRequest struct {
 
 func (x *GetPendingRequest) Reset() {
 	*x = GetPendingRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[50]
+	mi := &file_queue_v1_queue_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3595,7 +3907,7 @@ func (x *GetPendingRequest) String() string {
 func (*GetPendingRequest) ProtoMessage() {}
 
 func (x *GetPendingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[50]
+	mi := &file_queue_v1_queue_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3608,7 +3920,7 @@ func (x *GetPendingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingRequest.ProtoReflect.Descriptor instead.
 func (*GetPendingRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{50}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *GetPendingRequest) GetQueueName() string {
@@ -3657,7 +3969,7 @@ type GetPendingResponse struct {
 
 func (x *GetPendingResponse) Reset() {
 	*x = GetPendingResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[51]
+	mi := &file_queue_v1_queue_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3669,7 +3981,7 @@ func (x *GetPendingResponse) String() string {
 func (*GetPendingResponse) ProtoMessage() {}
 
 func (x *GetPendingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[51]
+	mi := &file_queue_v1_queue_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3682,7 +3994,7 @@ func (x *GetPendingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPendingResponse.ProtoReflect.Descriptor instead.
 func (*GetPendingResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{51}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *GetPendingResponse) GetEntries() []*PendingEntry {
@@ -3715,7 +4027,7 @@ type GetQueueInfoRequest struct {
 
 func (x *GetQueueInfoRequest) Reset() {
 	*x = GetQueueInfoRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[52]
+	mi := &file_queue_v1_queue_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3727,7 +4039,7 @@ func (x *GetQueueInfoRequest) String() string {
 func (*GetQueueInfoRequest) ProtoMessage() {}
 
 func (x *GetQueueInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[52]
+	mi := &file_queue_v1_queue_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3740,7 +4052,7 @@ func (x *GetQueueInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetQueueInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetQueueInfoRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{52}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GetQueueInfoRequest) GetQueueName() string {
@@ -3759,7 +4071,7 @@ type GetStatsRequest struct {
 
 func (x *GetStatsRequest) Reset() {
 	*x = GetStatsRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[53]
+	mi := &file_queue_v1_queue_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3771,7 +4083,7 @@ func (x *GetStatsRequest) String() string {
 func (*GetStatsRequest) ProtoMessage() {}
 
 func (x *GetStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[53]
+	mi := &file_queue_v1_queue_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3784,7 +4096,7 @@ func (x *GetStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStatsRequest.ProtoReflect.Descriptor instead.
 func (*GetStatsRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{53}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *GetStatsRequest) GetQueueName() string {
@@ -3813,7 +4125,7 @@ type QueueStats struct {
 
 func (x *QueueStats) Reset() {
 	*x = QueueStats{}
-	mi := &file_queue_v1_queue_proto_msgTypes[54]
+	mi := &file_queue_v1_queue_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3825,7 +4137,7 @@ func (x *QueueStats) String() string {
 func (*QueueStats) ProtoMessage() {}
 
 func (x *QueueStats) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[54]
+	mi := &file_queue_v1_queue_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3838,7 +4150,7 @@ func (x *QueueStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueStats.ProtoReflect.Descriptor instead.
 func (*QueueStats) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{54}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *QueueStats) GetQueueName() string {
@@ -3909,7 +4221,7 @@ type ConsumerGroupSummary struct {
 
 func (x *ConsumerGroupSummary) Reset() {
 	*x = ConsumerGroupSummary{}
-	mi := &file_queue_v1_queue_proto_msgTypes[55]
+	mi := &file_queue_v1_queue_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3921,7 +4233,7 @@ func (x *ConsumerGroupSummary) String() string {
 func (*ConsumerGroupSummary) ProtoMessage() {}
 
 func (x *ConsumerGroupSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[55]
+	mi := &file_queue_v1_queue_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3934,7 +4246,7 @@ func (x *ConsumerGroupSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumerGroupSummary.ProtoReflect.Descriptor instead.
 func (*ConsumerGroupSummary) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{55}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ConsumerGroupSummary) GetGroupId() string {
@@ -3974,7 +4286,7 @@ type PurgeRequest struct {
 
 func (x *PurgeRequest) Reset() {
 	*x = PurgeRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[56]
+	mi := &file_queue_v1_queue_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3986,7 +4298,7 @@ func (x *PurgeRequest) String() string {
 func (*PurgeRequest) ProtoMessage() {}
 
 func (x *PurgeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[56]
+	mi := &file_queue_v1_queue_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3999,7 +4311,7 @@ func (x *PurgeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeRequest.ProtoReflect.Descriptor instead.
 func (*PurgeRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{56}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *PurgeRequest) GetQueueName() string {
@@ -4019,7 +4331,7 @@ type PurgeResponse struct {
 
 func (x *PurgeResponse) Reset() {
 	*x = PurgeResponse{}
-	mi := &file_queue_v1_queue_proto_msgTypes[57]
+	mi := &file_queue_v1_queue_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4031,7 +4343,7 @@ func (x *PurgeResponse) String() string {
 func (*PurgeResponse) ProtoMessage() {}
 
 func (x *PurgeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[57]
+	mi := &file_queue_v1_queue_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4044,7 +4356,7 @@ func (x *PurgeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeResponse.ProtoReflect.Descriptor instead.
 func (*PurgeResponse) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{57}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *PurgeResponse) GetMessagesDeleted() uint64 {
@@ -4072,7 +4384,7 @@ type TruncateRequest struct {
 
 func (x *TruncateRequest) Reset() {
 	*x = TruncateRequest{}
-	mi := &file_queue_v1_queue_proto_msgTypes[58]
+	mi := &file_queue_v1_queue_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4084,7 +4396,7 @@ func (x *TruncateRequest) String() string {
 func (*TruncateRequest) ProtoMessage() {}
 
 func (x *TruncateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_queue_v1_queue_proto_msgTypes[58]
+	mi := &file_queue_v1_queue_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4097,7 +4409,7 @@ func (x *TruncateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TruncateRequest.ProtoReflect.Descriptor instead.
 func (*TruncateRequest) Descriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{58}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *TruncateRequest) GetQueueName() string {
@@ -4180,7 +4492,15 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"totalBytes\x120\n" +
 	"\x14consumer_group_count\x18\x03 \x01(\rR\x12consumerGroupCount\x12A\n" +
 	"\x0eoldest_message\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\roldestMessage\x12A\n" +
-	"\x0enewest_message\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\rnewestMessage\"\xe3\x02\n" +
+	"\x0enewest_message\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\rnewestMessage\"\xab\x02\n" +
+	"\x10QueueErrorDetail\x123\n" +
+	"\x04code\x18\x01 \x01(\x0e2\x1f.fluxmq.queue.v1.QueueErrorCodeR\x04code\x12\x1c\n" +
+	"\tretryable\x18\x02 \x01(\bR\tretryable\x12B\n" +
+	"\townership\x18\x03 \x01(\x0e2$.fluxmq.queue.v1.QueueOwnershipStateR\townership\x129\n" +
+	"\x06leader\x18\x04 \x01(\x0e2!.fluxmq.queue.v1.QueueLeaderStateR\x06leader\x12E\n" +
+	"\n" +
+	"durability\x18\x05 \x01(\x0e2%.fluxmq.queue.v1.QueueDurabilityStateR\n" +
+	"durability\"\xe3\x02\n" +
 	"\tQueueInfo\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x1f\n" +
@@ -4480,7 +4800,36 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x0fReplicationMode\x12 \n" +
 	"\x1cREPLICATION_MODE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15REPLICATION_MODE_SYNC\x10\x01\x12\x1a\n" +
-	"\x16REPLICATION_MODE_ASYNC\x10\x02*o\n" +
+	"\x16REPLICATION_MODE_ASYNC\x10\x02*\xbb\x03\n" +
+	"\x0eQueueErrorCode\x12 \n" +
+	"\x1cQUEUE_ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19QUEUE_ERROR_CODE_INTERNAL\x10\x01\x12\x1d\n" +
+	"\x19QUEUE_ERROR_CODE_CANCELED\x10\x02\x12%\n" +
+	"!QUEUE_ERROR_CODE_INVALID_ARGUMENT\x10\x03\x12\x1e\n" +
+	"\x1aQUEUE_ERROR_CODE_NOT_FOUND\x10\x04\x12#\n" +
+	"\x1fQUEUE_ERROR_CODE_ALREADY_EXISTS\x10\x05\x12\x1d\n" +
+	"\x19QUEUE_ERROR_CODE_CONFLICT\x10\x06\x12(\n" +
+	"$QUEUE_ERROR_CODE_FAILED_PRECONDITION\x10\a\x12'\n" +
+	"#QUEUE_ERROR_CODE_RESOURCE_EXHAUSTED\x10\b\x12!\n" +
+	"\x1dQUEUE_ERROR_CODE_OUT_OF_RANGE\x10\t\x12 \n" +
+	"\x1cQUEUE_ERROR_CODE_UNAVAILABLE\x10\n" +
+	"\x12&\n" +
+	"\"QUEUE_ERROR_CODE_DEADLINE_EXCEEDED\x10\v*\x9f\x01\n" +
+	"\x13QueueOwnershipState\x12%\n" +
+	"!QUEUE_OWNERSHIP_STATE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cQUEUE_OWNERSHIP_STATE_CALLER\x10\x01\x12\x1f\n" +
+	"\x1bQUEUE_OWNERSHIP_STATE_OTHER\x10\x02\x12\x1e\n" +
+	"\x1aQUEUE_OWNERSHIP_STATE_LOST\x10\x03*\x9d\x01\n" +
+	"\x10QueueLeaderState\x12\"\n" +
+	"\x1eQUEUE_LEADER_STATE_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bQUEUE_LEADER_STATE_REQUIRED\x10\x01\x12\"\n" +
+	"\x1eQUEUE_LEADER_STATE_UNAVAILABLE\x10\x02\x12 \n" +
+	"\x1cQUEUE_LEADER_STATE_NOT_LOCAL\x10\x03*\xb8\x01\n" +
+	"\x14QueueDurabilityState\x12&\n" +
+	"\"QUEUE_DURABILITY_STATE_UNSPECIFIED\x10\x00\x12(\n" +
+	"$QUEUE_DURABILITY_STATE_NOT_ATTEMPTED\x10\x01\x12&\n" +
+	"\"QUEUE_DURABILITY_STATE_UNCONFIRMED\x10\x02\x12&\n" +
+	"\"QUEUE_DURABILITY_STATE_UNSUPPORTED\x10\x03*o\n" +
 	"\x0fInitialPosition\x12 \n" +
 	"\x1cINITIAL_POSITION_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INITIAL_POSITION_EARLIEST\x10\x01\x12\x1b\n" +
@@ -4534,207 +4883,216 @@ func file_queue_v1_queue_proto_rawDescGZIP() []byte {
 	return file_queue_v1_queue_proto_rawDescData
 }
 
-var file_queue_v1_queue_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_queue_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
+var file_queue_v1_queue_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_queue_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 65)
 var file_queue_v1_queue_proto_goTypes = []any{
 	(CompressionType)(0),               // 0: fluxmq.queue.v1.CompressionType
 	(ReplicationMode)(0),               // 1: fluxmq.queue.v1.ReplicationMode
-	(InitialPosition)(0),               // 2: fluxmq.queue.v1.InitialPosition
-	(TailRequest_StartFrom)(0),         // 3: fluxmq.queue.v1.TailRequest.StartFrom
-	(*Message)(nil),                    // 4: fluxmq.queue.v1.Message
-	(*DeliveryInfo)(nil),               // 5: fluxmq.queue.v1.DeliveryInfo
-	(*Queue)(nil),                      // 6: fluxmq.queue.v1.Queue
-	(*QueueConfig)(nil),                // 7: fluxmq.queue.v1.QueueConfig
-	(*RetentionConfig)(nil),            // 8: fluxmq.queue.v1.RetentionConfig
-	(*SegmentConfig)(nil),              // 9: fluxmq.queue.v1.SegmentConfig
-	(*ReplicationConfig)(nil),          // 10: fluxmq.queue.v1.ReplicationConfig
-	(*QueueState)(nil),                 // 11: fluxmq.queue.v1.QueueState
-	(*QueueInfo)(nil),                  // 12: fluxmq.queue.v1.QueueInfo
-	(*ConsumerGroup)(nil),              // 13: fluxmq.queue.v1.ConsumerGroup
-	(*ConsumerGroupConfig)(nil),        // 14: fluxmq.queue.v1.ConsumerGroupConfig
-	(*QueueCursor)(nil),                // 15: fluxmq.queue.v1.QueueCursor
-	(*ConsumerInfo)(nil),               // 16: fluxmq.queue.v1.ConsumerInfo
-	(*PendingEntry)(nil),               // 17: fluxmq.queue.v1.PendingEntry
-	(*CreateQueueRequest)(nil),         // 18: fluxmq.queue.v1.CreateQueueRequest
-	(*GetQueueRequest)(nil),            // 19: fluxmq.queue.v1.GetQueueRequest
-	(*ListQueuesRequest)(nil),          // 20: fluxmq.queue.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),         // 21: fluxmq.queue.v1.ListQueuesResponse
-	(*DeleteQueueRequest)(nil),         // 22: fluxmq.queue.v1.DeleteQueueRequest
-	(*UpdateQueueRequest)(nil),         // 23: fluxmq.queue.v1.UpdateQueueRequest
-	(*AppendRequest)(nil),              // 24: fluxmq.queue.v1.AppendRequest
-	(*AppendResponse)(nil),             // 25: fluxmq.queue.v1.AppendResponse
-	(*AppendBatchRequest)(nil),         // 26: fluxmq.queue.v1.AppendBatchRequest
-	(*BatchMessage)(nil),               // 27: fluxmq.queue.v1.BatchMessage
-	(*AppendBatchResponse)(nil),        // 28: fluxmq.queue.v1.AppendBatchResponse
-	(*ReadRequest)(nil),                // 29: fluxmq.queue.v1.ReadRequest
-	(*ReadBatchRequest)(nil),           // 30: fluxmq.queue.v1.ReadBatchRequest
-	(*ReadBatchResponse)(nil),          // 31: fluxmq.queue.v1.ReadBatchResponse
-	(*TailRequest)(nil),                // 32: fluxmq.queue.v1.TailRequest
-	(*SeekToOffsetRequest)(nil),        // 33: fluxmq.queue.v1.SeekToOffsetRequest
-	(*SeekToTimestampRequest)(nil),     // 34: fluxmq.queue.v1.SeekToTimestampRequest
-	(*SeekResponse)(nil),               // 35: fluxmq.queue.v1.SeekResponse
-	(*CreateConsumerGroupRequest)(nil), // 36: fluxmq.queue.v1.CreateConsumerGroupRequest
-	(*GetConsumerGroupRequest)(nil),    // 37: fluxmq.queue.v1.GetConsumerGroupRequest
-	(*ListConsumerGroupsRequest)(nil),  // 38: fluxmq.queue.v1.ListConsumerGroupsRequest
-	(*ListConsumerGroupsResponse)(nil), // 39: fluxmq.queue.v1.ListConsumerGroupsResponse
-	(*DeleteConsumerGroupRequest)(nil), // 40: fluxmq.queue.v1.DeleteConsumerGroupRequest
-	(*JoinGroupRequest)(nil),           // 41: fluxmq.queue.v1.JoinGroupRequest
-	(*JoinGroupResponse)(nil),          // 42: fluxmq.queue.v1.JoinGroupResponse
-	(*LeaveGroupRequest)(nil),          // 43: fluxmq.queue.v1.LeaveGroupRequest
-	(*HeartbeatRequest)(nil),           // 44: fluxmq.queue.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),          // 45: fluxmq.queue.v1.HeartbeatResponse
-	(*ConsumeRequest)(nil),             // 46: fluxmq.queue.v1.ConsumeRequest
-	(*ConsumeResponse)(nil),            // 47: fluxmq.queue.v1.ConsumeResponse
-	(*ConsumeQueueRequest)(nil),        // 48: fluxmq.queue.v1.ConsumeQueueRequest
-	(*AckRequest)(nil),                 // 49: fluxmq.queue.v1.AckRequest
-	(*AckResponse)(nil),                // 50: fluxmq.queue.v1.AckResponse
-	(*NackRequest)(nil),                // 51: fluxmq.queue.v1.NackRequest
-	(*ClaimRequest)(nil),               // 52: fluxmq.queue.v1.ClaimRequest
-	(*ClaimResponse)(nil),              // 53: fluxmq.queue.v1.ClaimResponse
-	(*GetPendingRequest)(nil),          // 54: fluxmq.queue.v1.GetPendingRequest
-	(*GetPendingResponse)(nil),         // 55: fluxmq.queue.v1.GetPendingResponse
-	(*GetQueueInfoRequest)(nil),        // 56: fluxmq.queue.v1.GetQueueInfoRequest
-	(*GetStatsRequest)(nil),            // 57: fluxmq.queue.v1.GetStatsRequest
-	(*QueueStats)(nil),                 // 58: fluxmq.queue.v1.QueueStats
-	(*ConsumerGroupSummary)(nil),       // 59: fluxmq.queue.v1.ConsumerGroupSummary
-	(*PurgeRequest)(nil),               // 60: fluxmq.queue.v1.PurgeRequest
-	(*PurgeResponse)(nil),              // 61: fluxmq.queue.v1.PurgeResponse
-	(*TruncateRequest)(nil),            // 62: fluxmq.queue.v1.TruncateRequest
-	nil,                                // 63: fluxmq.queue.v1.Message.HeadersEntry
-	nil,                                // 64: fluxmq.queue.v1.ConsumerInfo.MetadataEntry
-	nil,                                // 65: fluxmq.queue.v1.AppendRequest.HeadersEntry
-	nil,                                // 66: fluxmq.queue.v1.BatchMessage.HeadersEntry
-	nil,                                // 67: fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
-	(*timestamppb.Timestamp)(nil),      // 68: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),        // 69: google.protobuf.Duration
-	(*emptypb.Empty)(nil),              // 70: google.protobuf.Empty
+	(QueueErrorCode)(0),                // 2: fluxmq.queue.v1.QueueErrorCode
+	(QueueOwnershipState)(0),           // 3: fluxmq.queue.v1.QueueOwnershipState
+	(QueueLeaderState)(0),              // 4: fluxmq.queue.v1.QueueLeaderState
+	(QueueDurabilityState)(0),          // 5: fluxmq.queue.v1.QueueDurabilityState
+	(InitialPosition)(0),               // 6: fluxmq.queue.v1.InitialPosition
+	(TailRequest_StartFrom)(0),         // 7: fluxmq.queue.v1.TailRequest.StartFrom
+	(*Message)(nil),                    // 8: fluxmq.queue.v1.Message
+	(*DeliveryInfo)(nil),               // 9: fluxmq.queue.v1.DeliveryInfo
+	(*Queue)(nil),                      // 10: fluxmq.queue.v1.Queue
+	(*QueueConfig)(nil),                // 11: fluxmq.queue.v1.QueueConfig
+	(*RetentionConfig)(nil),            // 12: fluxmq.queue.v1.RetentionConfig
+	(*SegmentConfig)(nil),              // 13: fluxmq.queue.v1.SegmentConfig
+	(*ReplicationConfig)(nil),          // 14: fluxmq.queue.v1.ReplicationConfig
+	(*QueueState)(nil),                 // 15: fluxmq.queue.v1.QueueState
+	(*QueueErrorDetail)(nil),           // 16: fluxmq.queue.v1.QueueErrorDetail
+	(*QueueInfo)(nil),                  // 17: fluxmq.queue.v1.QueueInfo
+	(*ConsumerGroup)(nil),              // 18: fluxmq.queue.v1.ConsumerGroup
+	(*ConsumerGroupConfig)(nil),        // 19: fluxmq.queue.v1.ConsumerGroupConfig
+	(*QueueCursor)(nil),                // 20: fluxmq.queue.v1.QueueCursor
+	(*ConsumerInfo)(nil),               // 21: fluxmq.queue.v1.ConsumerInfo
+	(*PendingEntry)(nil),               // 22: fluxmq.queue.v1.PendingEntry
+	(*CreateQueueRequest)(nil),         // 23: fluxmq.queue.v1.CreateQueueRequest
+	(*GetQueueRequest)(nil),            // 24: fluxmq.queue.v1.GetQueueRequest
+	(*ListQueuesRequest)(nil),          // 25: fluxmq.queue.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),         // 26: fluxmq.queue.v1.ListQueuesResponse
+	(*DeleteQueueRequest)(nil),         // 27: fluxmq.queue.v1.DeleteQueueRequest
+	(*UpdateQueueRequest)(nil),         // 28: fluxmq.queue.v1.UpdateQueueRequest
+	(*AppendRequest)(nil),              // 29: fluxmq.queue.v1.AppendRequest
+	(*AppendResponse)(nil),             // 30: fluxmq.queue.v1.AppendResponse
+	(*AppendBatchRequest)(nil),         // 31: fluxmq.queue.v1.AppendBatchRequest
+	(*BatchMessage)(nil),               // 32: fluxmq.queue.v1.BatchMessage
+	(*AppendBatchResponse)(nil),        // 33: fluxmq.queue.v1.AppendBatchResponse
+	(*ReadRequest)(nil),                // 34: fluxmq.queue.v1.ReadRequest
+	(*ReadBatchRequest)(nil),           // 35: fluxmq.queue.v1.ReadBatchRequest
+	(*ReadBatchResponse)(nil),          // 36: fluxmq.queue.v1.ReadBatchResponse
+	(*TailRequest)(nil),                // 37: fluxmq.queue.v1.TailRequest
+	(*SeekToOffsetRequest)(nil),        // 38: fluxmq.queue.v1.SeekToOffsetRequest
+	(*SeekToTimestampRequest)(nil),     // 39: fluxmq.queue.v1.SeekToTimestampRequest
+	(*SeekResponse)(nil),               // 40: fluxmq.queue.v1.SeekResponse
+	(*CreateConsumerGroupRequest)(nil), // 41: fluxmq.queue.v1.CreateConsumerGroupRequest
+	(*GetConsumerGroupRequest)(nil),    // 42: fluxmq.queue.v1.GetConsumerGroupRequest
+	(*ListConsumerGroupsRequest)(nil),  // 43: fluxmq.queue.v1.ListConsumerGroupsRequest
+	(*ListConsumerGroupsResponse)(nil), // 44: fluxmq.queue.v1.ListConsumerGroupsResponse
+	(*DeleteConsumerGroupRequest)(nil), // 45: fluxmq.queue.v1.DeleteConsumerGroupRequest
+	(*JoinGroupRequest)(nil),           // 46: fluxmq.queue.v1.JoinGroupRequest
+	(*JoinGroupResponse)(nil),          // 47: fluxmq.queue.v1.JoinGroupResponse
+	(*LeaveGroupRequest)(nil),          // 48: fluxmq.queue.v1.LeaveGroupRequest
+	(*HeartbeatRequest)(nil),           // 49: fluxmq.queue.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),          // 50: fluxmq.queue.v1.HeartbeatResponse
+	(*ConsumeRequest)(nil),             // 51: fluxmq.queue.v1.ConsumeRequest
+	(*ConsumeResponse)(nil),            // 52: fluxmq.queue.v1.ConsumeResponse
+	(*ConsumeQueueRequest)(nil),        // 53: fluxmq.queue.v1.ConsumeQueueRequest
+	(*AckRequest)(nil),                 // 54: fluxmq.queue.v1.AckRequest
+	(*AckResponse)(nil),                // 55: fluxmq.queue.v1.AckResponse
+	(*NackRequest)(nil),                // 56: fluxmq.queue.v1.NackRequest
+	(*ClaimRequest)(nil),               // 57: fluxmq.queue.v1.ClaimRequest
+	(*ClaimResponse)(nil),              // 58: fluxmq.queue.v1.ClaimResponse
+	(*GetPendingRequest)(nil),          // 59: fluxmq.queue.v1.GetPendingRequest
+	(*GetPendingResponse)(nil),         // 60: fluxmq.queue.v1.GetPendingResponse
+	(*GetQueueInfoRequest)(nil),        // 61: fluxmq.queue.v1.GetQueueInfoRequest
+	(*GetStatsRequest)(nil),            // 62: fluxmq.queue.v1.GetStatsRequest
+	(*QueueStats)(nil),                 // 63: fluxmq.queue.v1.QueueStats
+	(*ConsumerGroupSummary)(nil),       // 64: fluxmq.queue.v1.ConsumerGroupSummary
+	(*PurgeRequest)(nil),               // 65: fluxmq.queue.v1.PurgeRequest
+	(*PurgeResponse)(nil),              // 66: fluxmq.queue.v1.PurgeResponse
+	(*TruncateRequest)(nil),            // 67: fluxmq.queue.v1.TruncateRequest
+	nil,                                // 68: fluxmq.queue.v1.Message.HeadersEntry
+	nil,                                // 69: fluxmq.queue.v1.ConsumerInfo.MetadataEntry
+	nil,                                // 70: fluxmq.queue.v1.AppendRequest.HeadersEntry
+	nil,                                // 71: fluxmq.queue.v1.BatchMessage.HeadersEntry
+	nil,                                // 72: fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil),      // 73: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),        // 74: google.protobuf.Duration
+	(*emptypb.Empty)(nil),              // 75: google.protobuf.Empty
 }
 var file_queue_v1_queue_proto_depIdxs = []int32{
-	68, // 0: fluxmq.queue.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
-	63, // 1: fluxmq.queue.v1.Message.headers:type_name -> fluxmq.queue.v1.Message.HeadersEntry
-	5,  // 2: fluxmq.queue.v1.Message.delivery_info:type_name -> fluxmq.queue.v1.DeliveryInfo
-	68, // 3: fluxmq.queue.v1.DeliveryInfo.first_delivered_at:type_name -> google.protobuf.Timestamp
-	68, // 4: fluxmq.queue.v1.DeliveryInfo.delivered_at:type_name -> google.protobuf.Timestamp
-	7,  // 5: fluxmq.queue.v1.Queue.config:type_name -> fluxmq.queue.v1.QueueConfig
-	11, // 6: fluxmq.queue.v1.Queue.state:type_name -> fluxmq.queue.v1.QueueState
-	68, // 7: fluxmq.queue.v1.Queue.created_at:type_name -> google.protobuf.Timestamp
-	68, // 8: fluxmq.queue.v1.Queue.updated_at:type_name -> google.protobuf.Timestamp
-	8,  // 9: fluxmq.queue.v1.QueueConfig.retention:type_name -> fluxmq.queue.v1.RetentionConfig
+	73, // 0: fluxmq.queue.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
+	68, // 1: fluxmq.queue.v1.Message.headers:type_name -> fluxmq.queue.v1.Message.HeadersEntry
+	9,  // 2: fluxmq.queue.v1.Message.delivery_info:type_name -> fluxmq.queue.v1.DeliveryInfo
+	73, // 3: fluxmq.queue.v1.DeliveryInfo.first_delivered_at:type_name -> google.protobuf.Timestamp
+	73, // 4: fluxmq.queue.v1.DeliveryInfo.delivered_at:type_name -> google.protobuf.Timestamp
+	11, // 5: fluxmq.queue.v1.Queue.config:type_name -> fluxmq.queue.v1.QueueConfig
+	15, // 6: fluxmq.queue.v1.Queue.state:type_name -> fluxmq.queue.v1.QueueState
+	73, // 7: fluxmq.queue.v1.Queue.created_at:type_name -> google.protobuf.Timestamp
+	73, // 8: fluxmq.queue.v1.Queue.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 9: fluxmq.queue.v1.QueueConfig.retention:type_name -> fluxmq.queue.v1.RetentionConfig
 	0,  // 10: fluxmq.queue.v1.QueueConfig.compression:type_name -> fluxmq.queue.v1.CompressionType
-	9,  // 11: fluxmq.queue.v1.QueueConfig.segment:type_name -> fluxmq.queue.v1.SegmentConfig
-	10, // 12: fluxmq.queue.v1.QueueConfig.replication:type_name -> fluxmq.queue.v1.ReplicationConfig
-	69, // 13: fluxmq.queue.v1.RetentionConfig.max_age:type_name -> google.protobuf.Duration
-	69, // 14: fluxmq.queue.v1.SegmentConfig.max_age:type_name -> google.protobuf.Duration
+	13, // 11: fluxmq.queue.v1.QueueConfig.segment:type_name -> fluxmq.queue.v1.SegmentConfig
+	14, // 12: fluxmq.queue.v1.QueueConfig.replication:type_name -> fluxmq.queue.v1.ReplicationConfig
+	74, // 13: fluxmq.queue.v1.RetentionConfig.max_age:type_name -> google.protobuf.Duration
+	74, // 14: fluxmq.queue.v1.SegmentConfig.max_age:type_name -> google.protobuf.Duration
 	1,  // 15: fluxmq.queue.v1.ReplicationConfig.mode:type_name -> fluxmq.queue.v1.ReplicationMode
-	69, // 16: fluxmq.queue.v1.ReplicationConfig.ack_timeout:type_name -> google.protobuf.Duration
-	69, // 17: fluxmq.queue.v1.ReplicationConfig.heartbeat_timeout:type_name -> google.protobuf.Duration
-	69, // 18: fluxmq.queue.v1.ReplicationConfig.election_timeout:type_name -> google.protobuf.Duration
-	69, // 19: fluxmq.queue.v1.ReplicationConfig.snapshot_interval:type_name -> google.protobuf.Duration
-	68, // 20: fluxmq.queue.v1.QueueState.oldest_message:type_name -> google.protobuf.Timestamp
-	68, // 21: fluxmq.queue.v1.QueueState.newest_message:type_name -> google.protobuf.Timestamp
-	68, // 22: fluxmq.queue.v1.QueueInfo.oldest_timestamp:type_name -> google.protobuf.Timestamp
-	68, // 23: fluxmq.queue.v1.QueueInfo.newest_timestamp:type_name -> google.protobuf.Timestamp
-	14, // 24: fluxmq.queue.v1.ConsumerGroup.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
-	15, // 25: fluxmq.queue.v1.ConsumerGroup.cursor:type_name -> fluxmq.queue.v1.QueueCursor
-	16, // 26: fluxmq.queue.v1.ConsumerGroup.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
-	68, // 27: fluxmq.queue.v1.ConsumerGroup.created_at:type_name -> google.protobuf.Timestamp
-	69, // 28: fluxmq.queue.v1.ConsumerGroupConfig.ack_timeout:type_name -> google.protobuf.Duration
-	2,  // 29: fluxmq.queue.v1.ConsumerGroupConfig.initial_position:type_name -> fluxmq.queue.v1.InitialPosition
-	68, // 30: fluxmq.queue.v1.QueueCursor.updated_at:type_name -> google.protobuf.Timestamp
-	68, // 31: fluxmq.queue.v1.ConsumerInfo.last_heartbeat:type_name -> google.protobuf.Timestamp
-	64, // 32: fluxmq.queue.v1.ConsumerInfo.metadata:type_name -> fluxmq.queue.v1.ConsumerInfo.MetadataEntry
-	68, // 33: fluxmq.queue.v1.PendingEntry.delivered_at:type_name -> google.protobuf.Timestamp
-	69, // 34: fluxmq.queue.v1.PendingEntry.idle_time:type_name -> google.protobuf.Duration
-	7,  // 35: fluxmq.queue.v1.CreateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
-	6,  // 36: fluxmq.queue.v1.ListQueuesResponse.queues:type_name -> fluxmq.queue.v1.Queue
-	7,  // 37: fluxmq.queue.v1.UpdateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
-	65, // 38: fluxmq.queue.v1.AppendRequest.headers:type_name -> fluxmq.queue.v1.AppendRequest.HeadersEntry
-	68, // 39: fluxmq.queue.v1.AppendResponse.timestamp:type_name -> google.protobuf.Timestamp
-	27, // 40: fluxmq.queue.v1.AppendBatchRequest.messages:type_name -> fluxmq.queue.v1.BatchMessage
-	66, // 41: fluxmq.queue.v1.BatchMessage.headers:type_name -> fluxmq.queue.v1.BatchMessage.HeadersEntry
-	68, // 42: fluxmq.queue.v1.AppendBatchResponse.timestamp:type_name -> google.protobuf.Timestamp
-	4,  // 43: fluxmq.queue.v1.ReadBatchResponse.messages:type_name -> fluxmq.queue.v1.Message
-	3,  // 44: fluxmq.queue.v1.TailRequest.start_from:type_name -> fluxmq.queue.v1.TailRequest.StartFrom
-	68, // 45: fluxmq.queue.v1.SeekToTimestampRequest.timestamp:type_name -> google.protobuf.Timestamp
-	68, // 46: fluxmq.queue.v1.SeekResponse.timestamp:type_name -> google.protobuf.Timestamp
-	14, // 47: fluxmq.queue.v1.CreateConsumerGroupRequest.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
-	13, // 48: fluxmq.queue.v1.ListConsumerGroupsResponse.groups:type_name -> fluxmq.queue.v1.ConsumerGroup
-	67, // 49: fluxmq.queue.v1.JoinGroupRequest.metadata:type_name -> fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
-	69, // 50: fluxmq.queue.v1.JoinGroupRequest.session_timeout:type_name -> google.protobuf.Duration
-	16, // 51: fluxmq.queue.v1.JoinGroupResponse.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
-	69, // 52: fluxmq.queue.v1.ConsumeRequest.wait_time:type_name -> google.protobuf.Duration
-	4,  // 53: fluxmq.queue.v1.ConsumeResponse.messages:type_name -> fluxmq.queue.v1.Message
-	15, // 54: fluxmq.queue.v1.AckResponse.committed:type_name -> fluxmq.queue.v1.QueueCursor
-	69, // 55: fluxmq.queue.v1.NackRequest.delay:type_name -> google.protobuf.Duration
-	69, // 56: fluxmq.queue.v1.ClaimRequest.min_idle_time:type_name -> google.protobuf.Duration
-	4,  // 57: fluxmq.queue.v1.ClaimResponse.messages:type_name -> fluxmq.queue.v1.Message
-	17, // 58: fluxmq.queue.v1.GetPendingResponse.entries:type_name -> fluxmq.queue.v1.PendingEntry
-	59, // 59: fluxmq.queue.v1.QueueStats.consumer_groups:type_name -> fluxmq.queue.v1.ConsumerGroupSummary
-	18, // 60: fluxmq.queue.v1.QueueService.CreateQueue:input_type -> fluxmq.queue.v1.CreateQueueRequest
-	19, // 61: fluxmq.queue.v1.QueueService.GetQueue:input_type -> fluxmq.queue.v1.GetQueueRequest
-	20, // 62: fluxmq.queue.v1.QueueService.ListQueues:input_type -> fluxmq.queue.v1.ListQueuesRequest
-	22, // 63: fluxmq.queue.v1.QueueService.DeleteQueue:input_type -> fluxmq.queue.v1.DeleteQueueRequest
-	23, // 64: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
-	24, // 65: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
-	26, // 66: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
-	24, // 67: fluxmq.queue.v1.QueueService.AppendQueue:input_type -> fluxmq.queue.v1.AppendRequest
-	29, // 68: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
-	30, // 69: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
-	32, // 70: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
-	33, // 71: fluxmq.queue.v1.QueueService.SeekToOffset:input_type -> fluxmq.queue.v1.SeekToOffsetRequest
-	34, // 72: fluxmq.queue.v1.QueueService.SeekToTimestamp:input_type -> fluxmq.queue.v1.SeekToTimestampRequest
-	36, // 73: fluxmq.queue.v1.QueueService.CreateConsumerGroup:input_type -> fluxmq.queue.v1.CreateConsumerGroupRequest
-	37, // 74: fluxmq.queue.v1.QueueService.GetConsumerGroup:input_type -> fluxmq.queue.v1.GetConsumerGroupRequest
-	38, // 75: fluxmq.queue.v1.QueueService.ListConsumerGroups:input_type -> fluxmq.queue.v1.ListConsumerGroupsRequest
-	40, // 76: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:input_type -> fluxmq.queue.v1.DeleteConsumerGroupRequest
-	41, // 77: fluxmq.queue.v1.QueueService.JoinGroup:input_type -> fluxmq.queue.v1.JoinGroupRequest
-	43, // 78: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
-	44, // 79: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
-	46, // 80: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
-	48, // 81: fluxmq.queue.v1.QueueService.ConsumeQueue:input_type -> fluxmq.queue.v1.ConsumeQueueRequest
-	49, // 82: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
-	51, // 83: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
-	52, // 84: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
-	54, // 85: fluxmq.queue.v1.QueueService.GetPending:input_type -> fluxmq.queue.v1.GetPendingRequest
-	56, // 86: fluxmq.queue.v1.QueueService.GetQueueInfo:input_type -> fluxmq.queue.v1.GetQueueInfoRequest
-	57, // 87: fluxmq.queue.v1.QueueService.GetStats:input_type -> fluxmq.queue.v1.GetStatsRequest
-	60, // 88: fluxmq.queue.v1.QueueService.Purge:input_type -> fluxmq.queue.v1.PurgeRequest
-	62, // 89: fluxmq.queue.v1.QueueService.Truncate:input_type -> fluxmq.queue.v1.TruncateRequest
-	6,  // 90: fluxmq.queue.v1.QueueService.CreateQueue:output_type -> fluxmq.queue.v1.Queue
-	6,  // 91: fluxmq.queue.v1.QueueService.GetQueue:output_type -> fluxmq.queue.v1.Queue
-	21, // 92: fluxmq.queue.v1.QueueService.ListQueues:output_type -> fluxmq.queue.v1.ListQueuesResponse
-	70, // 93: fluxmq.queue.v1.QueueService.DeleteQueue:output_type -> google.protobuf.Empty
-	6,  // 94: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
-	25, // 95: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
-	28, // 96: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	28, // 97: fluxmq.queue.v1.QueueService.AppendQueue:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	4,  // 98: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
-	31, // 99: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
-	4,  // 100: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
-	35, // 101: fluxmq.queue.v1.QueueService.SeekToOffset:output_type -> fluxmq.queue.v1.SeekResponse
-	35, // 102: fluxmq.queue.v1.QueueService.SeekToTimestamp:output_type -> fluxmq.queue.v1.SeekResponse
-	13, // 103: fluxmq.queue.v1.QueueService.CreateConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
-	13, // 104: fluxmq.queue.v1.QueueService.GetConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
-	39, // 105: fluxmq.queue.v1.QueueService.ListConsumerGroups:output_type -> fluxmq.queue.v1.ListConsumerGroupsResponse
-	70, // 106: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:output_type -> google.protobuf.Empty
-	42, // 107: fluxmq.queue.v1.QueueService.JoinGroup:output_type -> fluxmq.queue.v1.JoinGroupResponse
-	70, // 108: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
-	45, // 109: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
-	47, // 110: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
-	4,  // 111: fluxmq.queue.v1.QueueService.ConsumeQueue:output_type -> fluxmq.queue.v1.Message
-	50, // 112: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
-	70, // 113: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
-	53, // 114: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
-	55, // 115: fluxmq.queue.v1.QueueService.GetPending:output_type -> fluxmq.queue.v1.GetPendingResponse
-	12, // 116: fluxmq.queue.v1.QueueService.GetQueueInfo:output_type -> fluxmq.queue.v1.QueueInfo
-	58, // 117: fluxmq.queue.v1.QueueService.GetStats:output_type -> fluxmq.queue.v1.QueueStats
-	61, // 118: fluxmq.queue.v1.QueueService.Purge:output_type -> fluxmq.queue.v1.PurgeResponse
-	70, // 119: fluxmq.queue.v1.QueueService.Truncate:output_type -> google.protobuf.Empty
-	90, // [90:120] is the sub-list for method output_type
-	60, // [60:90] is the sub-list for method input_type
-	60, // [60:60] is the sub-list for extension type_name
-	60, // [60:60] is the sub-list for extension extendee
-	0,  // [0:60] is the sub-list for field type_name
+	74, // 16: fluxmq.queue.v1.ReplicationConfig.ack_timeout:type_name -> google.protobuf.Duration
+	74, // 17: fluxmq.queue.v1.ReplicationConfig.heartbeat_timeout:type_name -> google.protobuf.Duration
+	74, // 18: fluxmq.queue.v1.ReplicationConfig.election_timeout:type_name -> google.protobuf.Duration
+	74, // 19: fluxmq.queue.v1.ReplicationConfig.snapshot_interval:type_name -> google.protobuf.Duration
+	73, // 20: fluxmq.queue.v1.QueueState.oldest_message:type_name -> google.protobuf.Timestamp
+	73, // 21: fluxmq.queue.v1.QueueState.newest_message:type_name -> google.protobuf.Timestamp
+	2,  // 22: fluxmq.queue.v1.QueueErrorDetail.code:type_name -> fluxmq.queue.v1.QueueErrorCode
+	3,  // 23: fluxmq.queue.v1.QueueErrorDetail.ownership:type_name -> fluxmq.queue.v1.QueueOwnershipState
+	4,  // 24: fluxmq.queue.v1.QueueErrorDetail.leader:type_name -> fluxmq.queue.v1.QueueLeaderState
+	5,  // 25: fluxmq.queue.v1.QueueErrorDetail.durability:type_name -> fluxmq.queue.v1.QueueDurabilityState
+	73, // 26: fluxmq.queue.v1.QueueInfo.oldest_timestamp:type_name -> google.protobuf.Timestamp
+	73, // 27: fluxmq.queue.v1.QueueInfo.newest_timestamp:type_name -> google.protobuf.Timestamp
+	19, // 28: fluxmq.queue.v1.ConsumerGroup.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
+	20, // 29: fluxmq.queue.v1.ConsumerGroup.cursor:type_name -> fluxmq.queue.v1.QueueCursor
+	21, // 30: fluxmq.queue.v1.ConsumerGroup.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
+	73, // 31: fluxmq.queue.v1.ConsumerGroup.created_at:type_name -> google.protobuf.Timestamp
+	74, // 32: fluxmq.queue.v1.ConsumerGroupConfig.ack_timeout:type_name -> google.protobuf.Duration
+	6,  // 33: fluxmq.queue.v1.ConsumerGroupConfig.initial_position:type_name -> fluxmq.queue.v1.InitialPosition
+	73, // 34: fluxmq.queue.v1.QueueCursor.updated_at:type_name -> google.protobuf.Timestamp
+	73, // 35: fluxmq.queue.v1.ConsumerInfo.last_heartbeat:type_name -> google.protobuf.Timestamp
+	69, // 36: fluxmq.queue.v1.ConsumerInfo.metadata:type_name -> fluxmq.queue.v1.ConsumerInfo.MetadataEntry
+	73, // 37: fluxmq.queue.v1.PendingEntry.delivered_at:type_name -> google.protobuf.Timestamp
+	74, // 38: fluxmq.queue.v1.PendingEntry.idle_time:type_name -> google.protobuf.Duration
+	11, // 39: fluxmq.queue.v1.CreateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
+	10, // 40: fluxmq.queue.v1.ListQueuesResponse.queues:type_name -> fluxmq.queue.v1.Queue
+	11, // 41: fluxmq.queue.v1.UpdateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
+	70, // 42: fluxmq.queue.v1.AppendRequest.headers:type_name -> fluxmq.queue.v1.AppendRequest.HeadersEntry
+	73, // 43: fluxmq.queue.v1.AppendResponse.timestamp:type_name -> google.protobuf.Timestamp
+	32, // 44: fluxmq.queue.v1.AppendBatchRequest.messages:type_name -> fluxmq.queue.v1.BatchMessage
+	71, // 45: fluxmq.queue.v1.BatchMessage.headers:type_name -> fluxmq.queue.v1.BatchMessage.HeadersEntry
+	73, // 46: fluxmq.queue.v1.AppendBatchResponse.timestamp:type_name -> google.protobuf.Timestamp
+	8,  // 47: fluxmq.queue.v1.ReadBatchResponse.messages:type_name -> fluxmq.queue.v1.Message
+	7,  // 48: fluxmq.queue.v1.TailRequest.start_from:type_name -> fluxmq.queue.v1.TailRequest.StartFrom
+	73, // 49: fluxmq.queue.v1.SeekToTimestampRequest.timestamp:type_name -> google.protobuf.Timestamp
+	73, // 50: fluxmq.queue.v1.SeekResponse.timestamp:type_name -> google.protobuf.Timestamp
+	19, // 51: fluxmq.queue.v1.CreateConsumerGroupRequest.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
+	18, // 52: fluxmq.queue.v1.ListConsumerGroupsResponse.groups:type_name -> fluxmq.queue.v1.ConsumerGroup
+	72, // 53: fluxmq.queue.v1.JoinGroupRequest.metadata:type_name -> fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
+	74, // 54: fluxmq.queue.v1.JoinGroupRequest.session_timeout:type_name -> google.protobuf.Duration
+	21, // 55: fluxmq.queue.v1.JoinGroupResponse.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
+	74, // 56: fluxmq.queue.v1.ConsumeRequest.wait_time:type_name -> google.protobuf.Duration
+	8,  // 57: fluxmq.queue.v1.ConsumeResponse.messages:type_name -> fluxmq.queue.v1.Message
+	20, // 58: fluxmq.queue.v1.AckResponse.committed:type_name -> fluxmq.queue.v1.QueueCursor
+	74, // 59: fluxmq.queue.v1.NackRequest.delay:type_name -> google.protobuf.Duration
+	74, // 60: fluxmq.queue.v1.ClaimRequest.min_idle_time:type_name -> google.protobuf.Duration
+	8,  // 61: fluxmq.queue.v1.ClaimResponse.messages:type_name -> fluxmq.queue.v1.Message
+	22, // 62: fluxmq.queue.v1.GetPendingResponse.entries:type_name -> fluxmq.queue.v1.PendingEntry
+	64, // 63: fluxmq.queue.v1.QueueStats.consumer_groups:type_name -> fluxmq.queue.v1.ConsumerGroupSummary
+	23, // 64: fluxmq.queue.v1.QueueService.CreateQueue:input_type -> fluxmq.queue.v1.CreateQueueRequest
+	24, // 65: fluxmq.queue.v1.QueueService.GetQueue:input_type -> fluxmq.queue.v1.GetQueueRequest
+	25, // 66: fluxmq.queue.v1.QueueService.ListQueues:input_type -> fluxmq.queue.v1.ListQueuesRequest
+	27, // 67: fluxmq.queue.v1.QueueService.DeleteQueue:input_type -> fluxmq.queue.v1.DeleteQueueRequest
+	28, // 68: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
+	29, // 69: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
+	31, // 70: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
+	29, // 71: fluxmq.queue.v1.QueueService.AppendQueue:input_type -> fluxmq.queue.v1.AppendRequest
+	34, // 72: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
+	35, // 73: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
+	37, // 74: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
+	38, // 75: fluxmq.queue.v1.QueueService.SeekToOffset:input_type -> fluxmq.queue.v1.SeekToOffsetRequest
+	39, // 76: fluxmq.queue.v1.QueueService.SeekToTimestamp:input_type -> fluxmq.queue.v1.SeekToTimestampRequest
+	41, // 77: fluxmq.queue.v1.QueueService.CreateConsumerGroup:input_type -> fluxmq.queue.v1.CreateConsumerGroupRequest
+	42, // 78: fluxmq.queue.v1.QueueService.GetConsumerGroup:input_type -> fluxmq.queue.v1.GetConsumerGroupRequest
+	43, // 79: fluxmq.queue.v1.QueueService.ListConsumerGroups:input_type -> fluxmq.queue.v1.ListConsumerGroupsRequest
+	45, // 80: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:input_type -> fluxmq.queue.v1.DeleteConsumerGroupRequest
+	46, // 81: fluxmq.queue.v1.QueueService.JoinGroup:input_type -> fluxmq.queue.v1.JoinGroupRequest
+	48, // 82: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
+	49, // 83: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
+	51, // 84: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
+	53, // 85: fluxmq.queue.v1.QueueService.ConsumeQueue:input_type -> fluxmq.queue.v1.ConsumeQueueRequest
+	54, // 86: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
+	56, // 87: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
+	57, // 88: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
+	59, // 89: fluxmq.queue.v1.QueueService.GetPending:input_type -> fluxmq.queue.v1.GetPendingRequest
+	61, // 90: fluxmq.queue.v1.QueueService.GetQueueInfo:input_type -> fluxmq.queue.v1.GetQueueInfoRequest
+	62, // 91: fluxmq.queue.v1.QueueService.GetStats:input_type -> fluxmq.queue.v1.GetStatsRequest
+	65, // 92: fluxmq.queue.v1.QueueService.Purge:input_type -> fluxmq.queue.v1.PurgeRequest
+	67, // 93: fluxmq.queue.v1.QueueService.Truncate:input_type -> fluxmq.queue.v1.TruncateRequest
+	10, // 94: fluxmq.queue.v1.QueueService.CreateQueue:output_type -> fluxmq.queue.v1.Queue
+	10, // 95: fluxmq.queue.v1.QueueService.GetQueue:output_type -> fluxmq.queue.v1.Queue
+	26, // 96: fluxmq.queue.v1.QueueService.ListQueues:output_type -> fluxmq.queue.v1.ListQueuesResponse
+	75, // 97: fluxmq.queue.v1.QueueService.DeleteQueue:output_type -> google.protobuf.Empty
+	10, // 98: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
+	30, // 99: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
+	33, // 100: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	33, // 101: fluxmq.queue.v1.QueueService.AppendQueue:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	8,  // 102: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
+	36, // 103: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
+	8,  // 104: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
+	40, // 105: fluxmq.queue.v1.QueueService.SeekToOffset:output_type -> fluxmq.queue.v1.SeekResponse
+	40, // 106: fluxmq.queue.v1.QueueService.SeekToTimestamp:output_type -> fluxmq.queue.v1.SeekResponse
+	18, // 107: fluxmq.queue.v1.QueueService.CreateConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
+	18, // 108: fluxmq.queue.v1.QueueService.GetConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
+	44, // 109: fluxmq.queue.v1.QueueService.ListConsumerGroups:output_type -> fluxmq.queue.v1.ListConsumerGroupsResponse
+	75, // 110: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:output_type -> google.protobuf.Empty
+	47, // 111: fluxmq.queue.v1.QueueService.JoinGroup:output_type -> fluxmq.queue.v1.JoinGroupResponse
+	75, // 112: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
+	50, // 113: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
+	52, // 114: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
+	8,  // 115: fluxmq.queue.v1.QueueService.ConsumeQueue:output_type -> fluxmq.queue.v1.Message
+	55, // 116: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
+	75, // 117: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
+	58, // 118: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
+	60, // 119: fluxmq.queue.v1.QueueService.GetPending:output_type -> fluxmq.queue.v1.GetPendingResponse
+	17, // 120: fluxmq.queue.v1.QueueService.GetQueueInfo:output_type -> fluxmq.queue.v1.QueueInfo
+	63, // 121: fluxmq.queue.v1.QueueService.GetStats:output_type -> fluxmq.queue.v1.QueueStats
+	66, // 122: fluxmq.queue.v1.QueueService.Purge:output_type -> fluxmq.queue.v1.PurgeResponse
+	75, // 123: fluxmq.queue.v1.QueueService.Truncate:output_type -> google.protobuf.Empty
+	94, // [94:124] is the sub-list for method output_type
+	64, // [64:94] is the sub-list for method input_type
+	64, // [64:64] is the sub-list for extension type_name
+	64, // [64:64] is the sub-list for extension extendee
+	0,  // [0:64] is the sub-list for field type_name
 }
 
 func init() { file_queue_v1_queue_proto_init() }
@@ -4747,8 +5105,8 @@ func file_queue_v1_queue_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_queue_v1_queue_proto_rawDesc), len(file_queue_v1_queue_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   64,
+			NumEnums:      8,
+			NumMessages:   65,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

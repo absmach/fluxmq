@@ -8,6 +8,8 @@ type PublishRequest struct {
 	ClientID   string
 	Topic      string
 	Payload    []byte
+	Key        []byte
+	Headers    map[string][]byte
 	Properties map[string]string
 }
 

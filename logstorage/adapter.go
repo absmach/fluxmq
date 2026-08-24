@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strconv"
@@ -14,8 +15,13 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-// headerTopic is the message header key that carries the original topic.
-const headerTopic = "_topic"
+const (
+	// headerTopic is the message header key that carries the original topic.
+	headerTopic = "_topic"
+	// headerUserHeaders carries QueueService's opaque byte-valued headers as one
+	// encoded value so they cannot collide with broker-owned storage metadata.
+	headerUserHeaders = "_queue_user_headers"
+)
 
 var (
 	_ storage.QueueStore         = (*Adapter)(nil)
@@ -231,7 +237,7 @@ func (a *Adapter) queueConfigExists(queueName string) error {
 
 func encodeMessage(msg *types.Message) ([]byte, []byte, map[string][]byte) {
 	value := msg.GetPayload()
-	key := []byte{}
+	key := msg.Key
 
 	headers := make(map[string][]byte)
 	for k, v := range msg.Properties {
@@ -245,6 +251,12 @@ func encodeMessage(msg *types.Message) ([]byte, []byte, map[string][]byte) {
 	}
 	if !msg.ExpiresAt.IsZero() {
 		headers["_expires_at"] = []byte(strconv.FormatInt(msg.ExpiresAt.UnixMilli(), 10))
+	}
+	if len(msg.Headers) > 0 {
+		// map[string][]byte has no unsupported JSON value type.
+		if encoded, err := json.Marshal(msg.Headers); err == nil {
+			headers[headerUserHeaders] = encoded
+		}
 	}
 
 	return value, key, headers
@@ -301,23 +313,7 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*typ
 	batch := NewBatch(0)
 
 	for _, msg := range msgs {
-		value := msg.GetPayload()
-		key := []byte{}
-
-		headers := make(map[string][]byte)
-		for k, v := range msg.Properties {
-			headers[k] = []byte(v)
-		}
-
-		headers[headerTopic] = []byte(msg.Topic)
-		headers["_id"] = []byte(msg.ID)
-		if msg.State != "" {
-			headers["_state"] = []byte(msg.State)
-		}
-		if !msg.ExpiresAt.IsZero() {
-			headers["_expires_at"] = []byte(strconv.FormatInt(msg.ExpiresAt.UnixMilli(), 10))
-		}
-
+		value, key, headers := encodeMessage(msg)
 		batch.Append(value, key, headers)
 	}
 
@@ -702,6 +698,7 @@ func logMessageToTypes(msg *Message) *types.Message {
 	result := &types.Message{
 		Sequence:   msg.Offset,
 		Payload:    msg.Value,
+		Key:        msg.Key,
 		CreatedAt:  msg.Timestamp,
 		Properties: make(map[string]string),
 	}
@@ -718,6 +715,8 @@ func logMessageToTypes(msg *Message) *types.Message {
 			if ms, err := strconv.ParseInt(string(v), 10, 64); err == nil {
 				result.ExpiresAt = time.UnixMilli(ms)
 			}
+		case headerUserHeaders:
+			_ = json.Unmarshal(v, &result.Headers)
 		default:
 			result.Properties[k] = string(v)
 		}
