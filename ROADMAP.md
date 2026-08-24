@@ -1,8 +1,9 @@
 # FluxMQ Roadmap to 1.0
 
 **Current:** `v0.51.0`
-**Last updated:** 2026-08-21
-**State:** five pull requests merged (#576–#580); nothing outstanding on a branch
+**Last updated:** 2026-08-24
+**State:** the broker-core short-term plan is complete on `main`; the next active
+track freezes public queue semantics before 1.0
 **Companion document:** [`V1-READINESS.md`](./V1-READINESS.md) — findings, evidence, file:line references.
 
 This roadmap exists because the repository had no committed plan. `plan.md` was
@@ -19,12 +20,14 @@ estimates differed.
 
 ## The 1.0 contract
 
-Tagging 1.0 freezes three things. Everything in Milestone 1 exists because it
+Tagging 1.0 freezes five things. Everything in Milestone 1 exists because it
 is expensive or impossible to change afterward:
 
-1. **`proto/cluster/v1` and `proto/auth/v1`** — wire contracts shared with
-   `atom` (vendored) and `magistrala` (go.mod). Breaking these post-1.0 means a
-   coordinated three-repository migration.
+1. **`proto/queue/v1`, `proto/cluster/v1`, and `proto/auth/v1`** — public and
+   cross-repository wire contracts. The cluster/auth modules are shared with
+   `atom` (vendored) and `magistrala` (go.mod); the queue service is the public
+   management and data API. Breaking these post-1.0 means client migrations and,
+   for cluster/auth, a coordinated three-repository migration.
 2. **The `broker.Authorizer` / `broker.Authenticator` interfaces** — adding
    `context.Context` is a breaking signature change.
 3. **The YAML configuration schema** — key names, and the absent-vs-zero
@@ -64,6 +67,13 @@ is expensive or impossible to change afterward:
 Anything that is *only* a bug fix or a performance improvement can land after
 1.0. Anything that changes one of the five above cannot.
 
+Before the tag, record a descriptor baseline and allow only additive protobuf
+changes: never reuse field numbers, change existing field meaning, or make a
+previously optional behavior mandatory. Freeze a typed public error taxonomy at
+the same time. MQTT reason codes, AMQP replies/dispositions, and Connect codes
+must project the same retryability and ownership/leader outcome; public clients
+must not need to parse error strings.
+
 ### What 1.0 supports
 
 The tag makes a support claim, not just a version bump. Ship the matrix below
@@ -91,6 +101,23 @@ safe.
 ---
 
 ## Progress log
+
+### 2026-08-24 — broker-core hardening complete
+
+The five items in `short-term-plan.md` landed on `main` in dependency order.
+They close the known wire-contract, ownership, DLQ, cluster-transport, and
+replication fail-open gaps without promoting queue Raft beyond experimental.
+
+| Commit | Roadmap items | What it changed |
+| --- | --- | --- |
+| `95b72b521` | 1.1, 1.6 | Removed the unused Raft RPCs, preserved inflight properties, made ownership/takeover CAS-based, and fenced sessions on lease loss |
+| `87aa027e9` | 1.10 | Made DLQ transitions durable and loss-safe, including explicit reject and stable transfer IDs |
+| `d00806b7f` | 1.1 | Secured broker, embedded-etcd, and queue-Raft transports with one cluster identity; added explicit development-only plaintext opt-in |
+| `0978aa117` | 1.10 | Made experimental replication reject invalid, unavailable, or under-replicated writes instead of falling back locally |
+
+Targeted tests cover the changed paths. Broad interoperability, parser fuzzing,
+soak testing, release workflow, and admin access control were deliberately not
+part of this track and must not be inferred from its completion.
 
 ### 2026-08-21 — what merged
 
@@ -247,35 +274,54 @@ table. It is pushed to `origin`, so nothing is at risk in the meantime.
 
 ### Next
 
-Seven Milestone 1 items remain. Only one pair is serial.
+The active workstream remains broker-core only. Admin access control, release
+automation, GitHub governance, operational rollout, broad soak testing, and
+other non-core work remain deferred. They still appear in the full definition
+of done because deferring work does not make the repository ready to tag.
 
-1. **1.9 — authenticate the admin API.** `[L · 5–7d]` The worst finding in
-   `V1-READINESS.md` and the only one an outsider can reach without
-   credentials: anyone who can open `:8082` can call `DeleteQueue` and
-   `reload`, and the default Compose stack publishes that port. Route paths and
-   role names freeze at the tag, so it cannot be deferred past 1.0 the way a bug
-   fix can.
-2. **1.3 — cache authorization decisions.** `[L · 4–5d]` What is left of the
-   critical path now that 1.2 has merged. Until it lands, a callout-configured
-   broker still performs one synchronous round-trip per published message; the
-   context added in #577 makes that cancellable, not cheap.
-3. **1.8 — second audit pass.** `[L · 5–8d]` Run it in parallel from day one.
-   Three of the defects fixed this week were found by building, not by reading,
-   which is exactly what this pass is for and exactly why its findings arrive
-   late.
-4. **1.10 — DLQ and replication failure-safety.** `[M · 4–6d]` Completes the
-   durability work: an acknowledged publish now reaches disk, but the consumer
-   path still drops the pending entry whether or not the dead-letter append
-   succeeded.
+Prioritize the next work by the cost of changing it after 1.0:
 
-1.1, 1.6 and 1.7 are genuinely parallel and get no cheaper or dearer by
-waiting.
+1. **Freeze the public queue API and error model.** Inventory
+   `proto/queue/v1`, `proto/auth/v1`, the remaining `proto/cluster/v1` surface,
+   exported Go interfaces, YAML keys, and protocol-visible queue behavior.
+   Record an explicit compatibility baseline and enforce additive protobuf
+   evolution. Replace string-derived client behavior with a stable typed error
+   taxonomy carrying code, retryability, and ownership/leader state; map that
+   taxonomy consistently to MQTT reason codes, AMQP replies/dispositions, and
+   Connect codes.
+2. **Make queue operations one protocol-independent state machine.** Define
+   typed commands and outcomes for append, consume, ack, nack, reject, claim,
+   and seek. MQTT, AMQP, and Connect become adapters over that model rather than
+   independent implementations of queue semantics. Run the same behavioral
+   contract suite against every adapter and storage backend.
+3. **Version the message envelope and reserve metadata ownership.** Separate
+   user properties from broker-owned source, queue, group, offset, transfer,
+   trace, and delivery metadata. Give the internal envelope an explicit version
+   and define projection/filtering rules per protocol so future metadata cannot
+   collide with user keys or silently change wire behavior.
+4. **Create one recoverable queue-transition boundary.** DLQ movement is now
+   loss-safe but source settlement and destination append are not one atomic
+   storage operation. Introduce a durable transition journal/outbox with stable
+   operation IDs and replay semantics, initially for DLQ and settlement and
+   later for cursor/group transitions. Keep the single-node contract independent
+   of any replication implementation.
+5. **Isolate experimental replication behind capabilities.** Public queue
+   guarantees should depend on declared capabilities—leader availability,
+   quorum, durability acknowledgement, and replay—not directly on Hashicorp
+   Raft configuration. Queue Raft stays disabled by default and outside the 1.0
+   compatibility contract; this boundary lets it evolve without changing the
+   stable queue API.
+6. **Optimize only the resulting stable paths.** Establish allocation-reporting
+   baselines for append/delivery, session takeover, and queue transitions. The
+   first candidates are an immutable or reference-counted envelope, batched
+   append/apply and group-state updates, and cached validated queue plans. Take
+   a change only for a measured bottleneck and reject unexplained regressions
+   above 10%.
 
-**Also open, cheap, unclaimed:** `badger_sync_writes: false` in the three
-cluster reference deployments — the shipped cluster example is non-durable —
-and an additive `proto/cluster/v1` field so inflight message properties survive
-a takeover, without which a settled MQTT 3.1.1 delivery redelivers after a node
-move (#580).
+Of the pre-existing Milestone 1 items, 1.3 (authorization decision caching),
+1.7 (TLS revocation verification), and 1.8 (the second protocol audit) fit this
+core/API-stability focus. Item 1.9 remains a real 1.0 blocker but is not part of
+the active workstream.
 
 **Working agreements** that held up across the five merges, worth keeping:
 
@@ -314,17 +360,17 @@ Two follow-ups ride along with those: bound the capture backlog by bytes rather
 than job count (Milestone 2), and revalidate the trie numbers on the Milestone 5
 reference profiles rather than a review workstation.
 
-**Re-verified on 2026-08-21 before import** — every row below was read in place
-against the tree, not taken from `v1.md`:
+**Re-verified on 2026-08-24** — every row below reflects the current tree, not
+only the state imported from `v1.md`:
 
 | `v1.md` finding                                | Verdict    | Where it went |
 | ---------------------------------------------- | ---------- | ------------- |
 | Admin/Connect API has no authentication         | Holds      | 1.9           |
-| Ordinary durable publish is buffered            | Holds      | 1.5           |
-| DLQ removes the PEL entry regardless of outcome | Holds      | 1.10          |
-| Replication fails open                          | Holds, narrowed — a `WritePolicy` switch now exists (`queue/manager.go:1025-1049`); the default `WritePolicyLocal` (`:204`) is the open path | 1.10 |
-| etcd peer/client traffic is plaintext           | Holds      | 1.1 (Track A, widened) |
-| AMQP 1.0 handshake is unbounded                 | Holds      | 1.11          |
+| Ordinary durable publish is buffered            | Resolved as an explicit per-queue contract: `buffered` remains the default and `fsync` is selectable | 1.5, 1.5b |
+| DLQ removes the PEL entry regardless of outcome | Resolved — source state advances only after a durable append; stable transfer ID covers crash-window duplicates | 1.10 |
+| Replication fails open                          | Resolved — invalid/unavailable replication rejects configuration or the write; no local fallback | 1.10 |
+| etcd peer/client traffic is plaintext           | Resolved — shared cluster mTLS, loopback client listener, explicit insecure-development opt-in | 1.1 |
+| AMQP 1.0 handshake is unbounded                 | Resolved   | 1.11          |
 | Images are pushed before they are scanned       | Holds      | 4             |
 | `AsyncEventHook.Close` races enqueue            | Holds      | 2             |
 | Readiness is liveness-only                      | **Stale** — `/ready` checks broker, storage `Ping`, and peer reachability (`server/health/server.go:178-254`). Rewritten as *extend* readiness, not add it | 2 |
@@ -496,61 +542,24 @@ published message.
 
 Ordered by "cannot be changed after 1.0" first, then by risk.
 
-### 1.1 Secure the cluster transports; delete the stub RPCs from the proto
+### 1.1 Secure the cluster transports; delete the stub RPCs from the proto — ✅ DONE 2026-08-24
 
-**Weight: M · 3.5–5 days** — 1.5–2 for Raft and the proto, 2–3 for etcd.
+**What shipped:** `proto/cluster/v1` no longer advertises the unused
+`AppendEntries`, `RequestVote`, or unary `InstallSnapshot` RPCs. The same wire
+cleanup added inflight-message properties and preserves them through export,
+takeover, restore, retry, and settlement.
 
-**This is two tracks, not one.** Separating them is what makes the work small:
+Queue Raft now uses a TLS `StreamLayer`; broker transport, queue Raft, and
+embedded-etcd peer/client traffic reuse one cluster certificate, key, and CA.
+Embedded-etcd client traffic is loopback-only, Raft diagnostics go through
+structured logging, and clustering without TLS fails validation unless
+`cluster.allow_insecure: true` is explicitly selected for development.
 
-- **Track A — `queue/raft/`, queue log replication.** hashicorp/raft v1.7.3,
-  2,771 non-test LOC against 1,506 test LOC, started from `cmd/main.go:974`
-  and configured through `config.RaftConfig`. Wired and working. Its only
-  blocker is the cleartext transport at `queue/raft/manager.go:166`.
-- **Track B — replacing etcd as the coordination layer.** The stub RPCs at
-  `cluster/transport.go:678,687,696` are scaffolding for a deleted 20-week
-  design document. Post-1.0 regardless. (For the record: "custom Raft" in that
-  document meant a custom *coordination layer built on* hashicorp/raft, never
-  hand-written consensus — the question of implementing Raft ourselves was
-  never open.)
-
-Options, given that split:
-
-|            | A. TLS the existing transport                                                                                   | B. gRPC transport now                                                                                               | C. Cut Track A                                                             |
-| ---------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Work       | `raft.NewNetworkTransport` with a TLS `StreamLayer` (the Consul pattern); delete the 3 stub RPCs from the proto | Fix the proto (`stream InstallSnapshot`, add `TimeoutNow`), implement `raft.Transport` over the mTLS broker channel | Remove the RPCs, drop `queue/raft` from the build, delete the config block |
-| Cost       | ~1 day                                                                                                          | ~1–2 weeks                                                                                                          | ~1 day                                                                     |
-| Closes     | P0-2, P0-3                                                                                                      | P0-2, P0-3, and drops a port from the deployment surface                                                            | P0-2, P0-3                                                                 |
-| Cost after | B stays available as a non-breaking 1.1 item                                                                    | —                                                                                                                   | Discards wired, tested code                                                |
-
-**Recommendation: A.** B is the right end state, but it is proto surgery on the
-critical path to a tag. A ships in a day and leaves B as a clean 1.1 item. C
-throws away working code.
-
-Either way, **the three stub RPCs come out of `proto/cluster/v1`.** Nothing
-calls them; the shipped versions could not carry a real `raft.Transport` anyway
-(unary `InstallSnapshot`, no `TimeoutNow`); and re-adding RPCs later is
-additive and non-breaking, while removing them after 1.0 is not.
-
-Route the `os.Stderr` writer at `manager.go:166` into `slog` at the same time.
-
-**Track A′ — etcd peer and client traffic.** *Imported from `v1.md`; verified
-2026-08-21.* Securing Raft alone leaves the coordination layer in the clear:
-`cluster/etcd.go:39` hardcodes `urlPrefix = "http://"` and every peer URL is
-built from it (`:174`), so session ownership, subscription routing, and queue
-consumer state cross the network unauthenticated and unencrypted on a cluster
-that has broker mTLS configured. That is a worse exposure than the Raft
-transport, because clustering is a supported 1.0 feature and queue Raft is not.
-
-- Feed the existing cluster TLS material to embedded etcd's peer and client
-  transports; keep the etcd client listener on loopback as an implementation
-  detail.
-- One identity for both etcd peer traffic and broker transport traffic. Two
-  certificate configurations for one trust domain is a footgun.
-- **Non-TLS clustering fails to start** unless an explicit
-  development-only insecure opt-in is set. Default-secure is the whole point;
-  an opt-out that nobody sets in production is the only acceptable escape.
-- Schema change, so it lands before the tag with the key named in
-  `config/schema_test.go`.
+This closes readiness findings P0-2, P0-3, and P0-11. It does **not** promote
+queue Raft: replication remains experimental, off by default, and outside the
+1.0 compatibility contract. Replacing etcd or implementing a gRPC Raft
+transport remains post-1.0 because either can be introduced additively behind
+the stable queue API.
 
 ### 1.2 Plumb `context.Context` through the authorization interfaces — ✅ DONE 2026-08-21
 
@@ -836,26 +845,19 @@ expert setting.
 Blocked behind nothing. Revisit 1.5's default the day it lands, and say in the
 1.0 notes which of the two shipped.
 
-### 1.6 Close the session-ownership split-brain
+### 1.6 Close the session-ownership split-brain — ✅ DONE 2026-08-24
 
-**Weight: L · 4–6 days** — the CAS is an hour; the partition test harness is the work.
+Fresh ownership is acquired with a create-if-absent transaction; acquisition by
+the same node is idempotent and another owner returns a typed conflict. Takeover
+is serialized per client and finishes with a compare-and-swap from the observed
+owner, so concurrent contenders cannot both claim success. Lease expiry no
+longer resurrects owner keys: the broker fences and disconnects sessions tied to
+the lost lease before it accepts new claims.
 
-`cluster/etcd.go:933` acquires ownership with an unconditional leased Put while
-`ReleaseSession` twelve lines below uses a proper CAS. Separately,
-`cluster/etcd.go:2176-2210` **restores** an ownership key that etcd deleted on
-lease expiry — inverting the one signal that says this node is no longer
-trusted to own the session.
-
-- CAS on acquire: `Compare(CreateRevision(key), "=", 0)`, or against the
-  ModRevision observed during takeover.
-- Delete the resurrection path. On lease loss a node drops the session.
-- Test: partition, lease expiry, takeover on the peer, heal, assert exactly one
-  owner.
-- Document that membership is fixed once a node holds data, stated against
-  main's cluster keys — salvaged from the parked `config` branch (`6d055c8d9`),
-  whose text documents v1-only keys and cannot be cherry-picked as written. A
-  changed member map against existing cluster data must fail startup, and the
-  partition harness built here is what proves it.
+Focused tests cover simultaneous acquisition, concurrent takeover, owner
+lookup, stale ownership, lease loss, and reacquisition. The stable contract is
+that etcd ownership is authoritative; local caches may accelerate lookup but
+never grant ownership.
 
 ### 1.7 Test the TLS revocation stack
 
@@ -913,40 +915,24 @@ item 5. Tests: 401 without credentials, 403 for insufficient role, on every
 route, table-driven over the route set so a new route without a role assignment
 fails the suite.
 
-### 1.10 Make DLQ movement and replication failure-safe
+### 1.10 Make DLQ movement and replication failure-safe — ✅ DONE 2026-08-24
 
-**Weight: M · 4–6 days** *(imported from `v1.md` Phase 2; verified 2026-08-21)*
+DLQ creation, append, and durability errors now propagate to the caller. The
+source pending entry or stream cursor advances only after the normal durable
+append path succeeds, explicit reject uses the same transition, and every move
+has a stable broker-owned transfer ID derived from source queue, group, and
+offset. If the DLQ is disabled or unavailable, the source delivery remains
+pending. This is loss-safe and duplicate-detectable; the next architectural
+step is the recoverable transition journal described in [Next](#next).
 
-Two independent ways a message disappears without anyone being told.
-
-**DLQ is lossy.** `queue/consumer/manager.go:441-446`: on exceeding
-`MaxDeliveryCount`, the handler calls `OnDLQ` best-effort — it is skipped
-entirely when the source read fails — and then removes the pending entry with
-`_ = RemovePendingEntry(...)` regardless of whether the DLQ append happened.
-The one error return that would say "this message was not saved" is discarded
-by an `_`. Explicit `Reject` does not route through DLQ at all.
-
-- Remove the PEL entry **only after** a successful durable DLQ append.
-- At-least-once with a stable transfer ID, so a crash between append and PEL
-  removal produces a detectable duplicate rather than a silent loss.
-- Route `Reject` through the same path.
-- Propagate sync/append failures to the protocol layer instead of logging them
-  — a publisher that got an ack must not have lost its message.
-- Tests inject append, fsync, and DLQ failures and assert the source PEL entry
-  survives every one of them.
-
-**Replication fails open.** `queue/manager.go:204` defaults to
-`WritePolicyLocal`, and the switch at `:1025-1049` appends locally when the
-Raft coordinator is absent or disabled; `:339` logs
-`distribution_mode=replicate requires raft to be enabled; falling back to
-forward`. A queue configured with `replication_factor: 3` can therefore accept
-writes with a replication factor of one and report success.
-
-- A replication-enabled queue without the experimental gate and a healthy Raft
-  manager is a **startup error**, not a warning.
-- Unknown or unavailable write paths return errors. No silent local fallback.
-- `replication_factor` and `min_in_sync_replicas` are enforced or they are not
-  accepted.
+Replication configuration is now validated at startup and on queue
+create/update. A replicated queue rejects writes when the experimental gate is
+off, Raft is disabled or unhealthy, a usable group or leader is unavailable,
+or factor/minimum-in-sync requirements cannot be met. Replicated writes allow
+only explicit `reject` or `forward` policies; no unknown-policy or unavailable
+path silently falls back to a local append. `ack_durability: fsync` with
+replication remains explicitly unsupported rather than being accepted with
+weaker semantics.
 
 ### 1.11 Bound the AMQP 1.0 handshake — ✅ DONE 2026-08-21
 
@@ -1166,8 +1152,8 @@ Deferring these is the point of having a roadmap:
 
 **Contract and security**
 
-- [ ] Raft transport secured (TLS `StreamLayer`); 3 stub RPCs removed from `proto/cluster/v1`
-- [ ] etcd peer and client traffic uses the cluster mTLS identity; clustering without TLS fails to start unless the explicit development-only opt-in is set
+- [x] Raft transport secured (TLS `StreamLayer`); 3 stub RPCs removed from `proto/cluster/v1` — *`95b72b521`, `d00806b7f`*
+- [x] etcd peer and client traffic uses the cluster mTLS identity; clustering without TLS fails to start unless the explicit development-only opt-in is set — *`d00806b7f`*
 - [x] `Authorizer` carries `context.Context` — *#577*
 - [ ] Authorization decisions cached; publish-throughput benchmark recorded
 - [ ] Admin API returns 401 without credentials and 403 for an insufficient role, on every route; destructive operations emit structured audit events; non-loopback binds without auth refuse to start
@@ -1175,7 +1161,7 @@ Deferring these is the point of having a roadmap:
 - [x] MQTT listeners moved under `server.mqtt`; types renamed — *#576*
 - [x] Queue delivery address settled for MQTT 5.0 and both AMQP versions; origin in `types.PropSourceTopic` — *#576*
 - [x] MQTT 3.1.1 queue consumption decided: settle on PUBACK, no origin recovery — *#580*
-- [ ] Inflight properties survive a cluster takeover, so a settled MQTT 3.1.1 delivery is not redelivered after a node move (additive `proto/cluster/v1` field)
+- [x] Inflight properties survive a cluster takeover, so a settled MQTT 3.1.1 delivery is not redelivered after a node move — *`95b72b521`*
 - [x] AMQP 1.0 `handshake_timeout` bounds transport, SASL, and Open — *#578*
 
 **Durability and correctness**
@@ -1184,9 +1170,9 @@ Deferring these is the point of having a roadmap:
 - [x] Durability barriers coalesce, so `fsync` scales with concurrent publishers — *#579*. The default stays `buffered`: sharing the barrier makes `fsync` usable on a busy queue, not free
 - [ ] Replicated queues can use `fsync` — today the combination is refused, because Raft apply never reaches the queue log's per-append barrier
 - [ ] Acknowledged fsync-mode messages survive `SIGKILL` and restart
-- [ ] Injected append/fsync/DLQ failures never remove the source PEL entry; crash-window DLQ duplicates share a stable transfer ID; `Reject` routes through DLQ
-- [ ] Replication-enabled queues refuse to start without the experimental gate and a healthy Raft manager; no silent local fallback remains
-- [ ] Session acquire is a CAS; lease-expiry resurrection removed
+- [x] Injected append/fsync/DLQ failures never remove the source PEL entry; crash-window DLQ duplicates share a stable transfer ID; `Reject` routes through DLQ — *`87aa027e9`*
+- [x] Replication-enabled queues refuse configuration/writes without the experimental gate and a healthy Raft manager; no silent local fallback remains — *`0978aa117`*
+- [x] Session acquire/takeover is CAS-based; lease-expiry resurrection is removed and lease loss fences local sessions — *`95b72b521`*
 - [ ] A secure three-node cluster passes formation, leader and follower loss, partition, lease expiry, reconnect, takeover, retained delivery, and graceful shutdown
 
 **Verification**

@@ -1,55 +1,44 @@
 # FluxMQ V1.0 Readiness Assessment
 
-**Date:** 2026-08-20
-**Audited version:** `v0.51.0` (`main` @ `84e9bf8a5`)
-**Scope:** 162,792 Go LOC, 539 files, 81 packages (~85,700 non-test, non-generated)
+**Date:** 2026-08-24
+**Assessed version:** `v0.51.0` (`main` @ `0978aa117`)
+**Scope:** the original repo-wide audit, plus targeted current-tree revalidation
+of the cluster wire, session ownership, DLQ, cluster TLS, and experimental
+replication paths
 
 ---
 
 ## Verdict
 
-**Not ready to tag 1.0.** The engineering quality is high — `go vet` clean,
-`govulncheck` clean, healthy dependency posture, mature backpressure and etcd
-watch handling. The blockers are not sloppiness; they are **unfinished seams
-that a 1.0 tag would freeze**: an authorization path that cannot carry
-production load, a replication transport with no transport security, stub RPCs
-inside a protobuf contract about to be declared stable, and a durability
-default that is not reachable from configuration.
+**Not ready to tag 1.0, but the known broker-core correctness blockers are now
+materially narrower.** The completed short-term plan closes P0-2, P0-3, P0-7,
+P0-10, and P0-11: the cluster wire no longer freezes abandoned RPCs, inflight
+metadata survives takeover, session ownership is fenced by CAS and lease loss,
+DLQ movement is loss-safe, cluster transports are secure by default, and
+experimental replication fails closed.
 
-Eleven P0 items below — four now resolved, see the next paragraph — plus P0-5a — a live misconfiguration in four shipped
-example files, found by a sizing spike run against P0-5 on 2026-08-20. Six of
-them are days of work. Two (auth caching, the audit backlog) are the real
-schedule risk.
+The tag is still blocked by work that the short-term plan explicitly deferred:
 
-**Resolved so far**, all merged 2026-08-21: P0-4, P0-5 and P0-5a (#576, strict
-config decode, missing file is an error), P0-6 (#578 and #579, queue
-acknowledgement durability, configurable per queue, with barriers that share an
-fsync), P1-8 (#578, AMQP 1.0 handshake bound). P0-1 is half done
-(#577): the interface carries a context, the decision cache does not exist.
+- **P0-1:** authorization callouts are cancellable but still synchronous and
+  uncached on every publish. The breaking Go interface change is complete; the
+  remaining cache can be additive.
+- **P0-8:** CRL/OCSP behavior remains unverified on a trust-critical path.
+- **P0-9:** the admin and Connect queue surfaces remain unauthenticated. This is
+  outside the active broker-core workstream, but deferral does not make it safe
+  to freeze or expose as a supported 1.0 API.
+- **Roadmap 1.8:** the protocol/parser and concurrency surfaces listed below
+  have not received the required second audit pass.
 
-**P0-9 — an admin API with no authentication at all — is untouched, and is the
-most serious finding in this document.**
+The next broker-core work should therefore freeze the public queue API and
+error model before deeper implementation changes: one protocol-independent
+queue state machine, a versioned message envelope with reserved broker metadata,
+a recoverable transition boundary, and a capability interface that keeps
+experimental Raft outside the stable API. See [`ROADMAP.md`](./ROADMAP.md#next).
 
-**Found by shipping, not by this audit.** Three defects surfaced while building
-the fixes above, none of them visible to the pass that produced this document:
-MQTT 3.1.1 could subscribe to a classic queue and never settle a message, so its
-work redelivered five times and went to the dead-letter queue (#580); a rotated
-queue segment was never fsynced by anything, because the periodic sync only
-visits the active segment (#578); and the AMQP 1.0 TLS handshake ran inline in
-the accept loop, where one unresponsive peer stalled every pending connection
-(#578). That ratio is the argument for starting 1.8 early rather than treating
-it as a final gate.
-
-P0-9 through P0-11 and P1-8 through P1-10 arrived on 2026-08-21, when the
-second v1 plan (`v1.md`) was reconciled into `ROADMAP.md`; each was re-verified
-against the tree before being recorded.
-
-Two defects were found by *building the fixes* rather than by review, and both
-are recorded under P0-6: a rotated queue segment was never fsynced by the broker
-at all, and the AMQP 1.0 TLS handshake ran inline in the accept loop where one
-unresponsive peer stalled every pending connection (P1-8). Neither was visible
-from the audit pass that produced this document — worth remembering when
-weighing 1.8, the second audit pass, against shipping the fixes it would gate.
+This assessment distinguishes **stable-core readiness** from **release
+readiness**. Completing the former is necessary and valuable; it is not a claim
+that admin security, broad verification, release governance, or operational
+qualification are complete.
 
 ---
 
@@ -61,8 +50,10 @@ not taken on report.
 
 **Audited in depth:** repo inventory, planning/doc state, dependency and
 vulnerability posture, `broker/` auth + authorization + callout, config load
-and defaults, `cluster/` session ownership and watch handling, `logstorage/`
-sync discipline, MQTT delivery backpressure, publish-path hooks.
+and defaults, `cluster/` session ownership and watch handling, cluster
+transport security, `logstorage/` sync discipline, DLQ state transitions,
+replication admission/failure behavior, MQTT delivery backpressure, and
+publish-path hooks.
 
 **Audited shallowly or not at all — treat as unknown, not as clean:**
 
@@ -70,7 +61,8 @@ sync discipline, MQTT delivery backpressure, publish-path hooks.
 - AMQP 1.0 link credit / flow control / partial-delivery reassembly
 - MQTT codec DoS surface (attacker-controlled length prefixes)
 - MQTT v5 topic-alias and property round-trip correctness
-- Queue consumer-group rebalance, retention/compaction races, DLQ wiring
+- Queue consumer-group rebalance and retention/compaction races beyond the
+  focused ownership, settlement, and DLQ transition tests
 - WebSocket / HTTP / CoAP transport DoS surface, CoAP UDP amplification
 - `pkg/tls` CRL/OCSP fail-open behavior (the code is untested, see P0-8)
 - `ratelimit/` per-IP map growth and `X-Forwarded-For` handling
@@ -79,12 +71,12 @@ sync discipline, MQTT delivery backpressure, publish-path hooks.
 A second pass over that list is required before the tag.
 
 **Measured since the first pass:** strict-decode breakage across all 10 shipped
-config files (P0-5), which surfaced P0-5a. On 2026-08-21 a targeted
-verification sweep read the admin API surface, the queue append and DLQ paths,
-the etcd and Raft transports, the AMQP 1.0 accept loop, the readiness handler,
-and both CI workflows — the source of P0-9 through P0-11 and P1-8 through
-P1-10. That sweep was finding-directed, not a systematic pass; it does not
-shorten the unaudited list above.
+config files (P0-5), which surfaced P0-5a. The 2026-08-21 sweep read the admin
+API, queue append/DLQ, etcd/Raft transport, AMQP 1.0 accept, readiness, and CI
+paths. On 2026-08-24 the short-term-plan paths were revalidated against current
+`main`, including their focused tests and protocol fields. Both sweeps were
+finding-directed rather than systematic; they do not shorten the remaining
+unaudited list above.
 
 ---
 
@@ -144,88 +136,52 @@ so it must land **before** 1.0). Drop the per-call `Info` log to `Debug`.
 > above stands exactly as written, and the 4.1s stall is now cancellable rather
 > than absent. Roadmap 1.3 is what closes it.
 
-### There are two Raft tracks, and only one of them is real
+### There are two Raft tracks, and only one is part of the current code
 
-Worth separating before P0-2 and P0-3, because they are not the same project:
+The distinction remains important after resolving P0-2 and P0-3:
 
 **Track A — `queue/raft/`, queue log replication. Real and fully wired.**
 hashicorp/raft v1.7.3, 2,771 non-test LOC against 1,506 test LOC. Started from
 `cmd/main.go:974` via `StartQueueCoordinator`, configured through
 `config.RaftConfig` (`config/config.go:889-911`) with `replication_factor`,
 `sync_mode`, `min_in_sync_replicas`, `ack_timeout`, `write_policy`, and
-`distribution_mode`. This is considerably more finished than the README's
-"(WIP)" suggests. Its defect is the transport — P0-2.
+`distribution_mode`. Its transport is now secure and its failure behavior is
+fail-closed, but its operational and recovery model is not qualified for the
+stable contract. It remains experimental and disabled by default.
 
-**Track B — replacing etcd as the coordination layer. Abandoned scaffolding.**
-The stub RPCs in P0-3 are leftovers from a deleted 20-week design document
+**Track B — replacing etcd as the coordination layer. Deleted scaffolding.**
+The former stub RPCs in P0-3 were leftovers from a deleted 20-week design document
 (`docs/custom-raft-implementation-plan.md`, removed in `f6a31c8c1`) that
 proposed replacing etcd with a hashicorp/raft-backed, MQTT-aware coordination
 layer. Note that "custom Raft" in that document never meant implementing
 consensus by hand — its own summary reads "Use existing libraries
 (hashicorp/raft + BadgerDB) to avoid implementing consensus from scratch."
-Track B is a post-1.0 project regardless.
+Track B remains a post-1.0 project. Its abandoned RPCs are now gone, so it no
+longer consumes compatibility budget in the 1.0 protobuf contract. If revisited,
+it must enter through an additive capability boundary rather than redefine
+public queue behavior.
 
-The connection between them: Track B's gRPC transport was also intended to
-carry Track A's traffic. That is why P0-2 and P0-3 have a shared fix — and why
-the cheap fix for P0-2 does not require touching the proto.
+### P0-2. Raft replication uses a cleartext, unauthenticated transport — ✅ RESOLVED 2026-08-24
 
-### P0-2. Raft replication uses a cleartext, unauthenticated transport
+Queue Raft now uses `raft.NewNetworkTransport` over a TLS stream layer and
+reuses the broker cluster identity. Peer verification requires the configured
+CA and certificate identity; Raft diagnostics are bridged into structured
+logging. Generated-certificate tests cover authenticated success and rejection
+of an untrusted peer.
 
-`queue/raft/manager.go:166`:
+This secures an experimental feature; it does not promote queue Raft into the
+1.0 compatibility or production-support contract.
 
-```go
-transport, err := raft.NewTCPTransport(m.bindAddr, addr, 3, 10*time.Second, os.Stderr)
-```
+### P0-3. Three Raft RPCs in the cluster protobuf contract are hardcoded failures — ✅ RESOLVED 2026-08-24
 
-`config.RaftConfig` (`config/config.go:889-911`) exposes `BindAddr`,
-`DataDir`, `Peers` — and **no TLS fields at all**. Every other cluster channel
-(etcd peer, broker gRPC) is mTLS. Enabling Raft opens a plaintext,
-unauthenticated socket carrying queue message payloads and accepting
-unauthenticated `AppendEntries` from anything that can reach the port.
+`AppendEntries`, `RequestVote`, and unary `InstallSnapshot` were removed from
+`proto/cluster/v1` before the contract freeze. No production caller used them,
+and the live Hashicorp Raft transport does not depend on the cluster Connect
+service. Reintroducing a future transport API remains additive.
 
-Also logs to `os.Stderr`, bypassing `log/slog` in violation of the project's
-own logging rule.
-
-**Fix:** `raft.NewNetworkTransport` with a TLS `StreamLayer` — the pattern
-Consul uses. It reuses the cluster's existing certificate material and does not
-touch `proto/cluster/v1`, so it stays off the critical path to the tag.
-Roughly a day. Route the `os.Stderr` writer into `slog` at the same time.
-
-### P0-3. Three Raft RPCs in the cluster protobuf contract are hardcoded failures
-
-`cluster/transport.go:678,687,696`:
-
-```go
-func (t *Transport) AppendEntries(ctx context.Context, req *AppendEntriesReq) (*AppendEntriesResp, error) {
-	//nolint:godox // TODO: Implement Raft consensus
-	return connect.NewResponse(&clusterv1.AppendEntriesResponse{
-		Term:    req.Msg.Term,
-		Success: false,
-	}), nil
-}
-```
-
-`RequestVote` returns `VoteGranted: false`; `InstallSnapshot` returns an empty
-response. A 1.0 tag freezes `proto/cluster/v1`. Shipping stub RPCs inside a
-frozen contract is not reversible without a breaking proto change.
-
-**The shipped proto could not carry a real `raft.Transport` even if the stubs
-were implemented.** Comparing the deleted plan's sketch
-(`docs/custom-raft-implementation-plan.md:150-159`) against what actually
-landed in `proto/cluster/v1/broker.proto:37-44`:
-
-| Planned | Shipped |
-| --- | --- |
-| `rpc InstallSnapshot(stream InstallSnapshotRequest)` | **unary** — the entire snapshot in one message, bounded by the gRPC max message size |
-| `rpc TimeoutNow(TimeoutNowRequest)` | **absent** — no leadership transfer |
-| `ApplyCommand`, `GetSessionOwner` | absent (Track B only; correctly out of scope) |
-
-A unary `InstallSnapshot` is a defect that the tag would freeze.
-
-**Decision required before tag:** remove these three RPCs from
-`proto/cluster/v1`. Nothing calls them, Track A does not need them under the
-P0-2 fix, and re-adding RPCs to a proto later is additive and non-breaking —
-removing them after 1.0 is not.
+The same wire revision added `InflightMessage.properties`, preserving user and
+broker-owned queue metadata through session export, takeover, restoration,
+retry, and settlement.
 
 ### P0-4. A missing config file silently starts a default broker
 
@@ -428,57 +384,19 @@ setting. An operator must be able to choose fsync-per-append.
 > Still open from this finding's last paragraph: `badger_sync_writes: false` in
 > the three cluster reference deployments.
 
-### P0-7. Session ownership can split-brain
+### P0-7. Session ownership can split-brain — ✅ RESOLVED 2026-08-24
 
-Two defects on the same path.
+Fresh acquisition is a create-if-absent transaction. Reacquisition by the same
+node is idempotent; another live owner produces typed `ErrSessionOwned`
+information rather than being overwritten. Takeover is serialized per client
+and completes with a compare-and-swap from the owner that was actually
+observed.
 
-**(a) `AcquireSession` is an unconditional leased Put, not a CAS.**
-`cluster/etcd.go:933-945`:
-
-```go
-// This is called after takeover has completed (if needed), so it's safe
-// to unconditionally overwrite — the caller already handled ownership transfer.
-func (c *EtcdCluster) AcquireSession(ctx context.Context, clientID, nodeID string) error {
-	key := sessionsPrefix + clientID + "/owner"
-	if err := c.putWithSessionLease(ctx, key, nodeID); err != nil {
-```
-
-`ReleaseSession` immediately below (`etcd.go:956-957`) *does* use a CAS
-(`If(Compare(Value(key), "=", c.nodeID))`), so the pattern is understood — the
-acquire path just doesn't use it. Two nodes racing a CONNECT for the same
-client ID both run takeover, both Put, last write wins, and both believe they
-own the session.
-
-**(b) The watcher resurrects an ownership key deleted by lease expiry.**
-`cluster/etcd.go:2176-2210`: when a session-owner key is deleted and this node
-still tracks it as leased, the node re-Puts its own claim:
-
-```go
-if event.Type == clientv3.EventTypeDelete {
-	if value, tracked := c.getLeasedKey(key); tracked {
-		restoreKeys[key] = value
-		continue
-	}
-```
-
-Lease expiry is precisely etcd's signal that this node is **no longer trusted**
-to own the session. Restoring the claim inverts that signal.
-
-**Failure scenario:** node A is partitioned, its etcd lease expires, client
-reconnects to node B which legitimately takes over. Partition heals; A's
-watcher drains the backlog, sees the delete for its tracked key, and re-Puts
-`owner=A`. The restore Put (line 2201) is itself unconditional. etcd now names
-A as owner while B holds the live TCP connection. Publishes route to A; the
-client on B receives nothing.
-
-The `value != c.nodeID` untrack at line 2194 mitigates this only when A
-processes B's PUT before the DELETE — which event ordering does not guarantee
-across a watch restart.
-
-**Fix:** CAS on acquire (`Compare(CreateRevision(key), "=", 0)`, or compare
-against the observed ModRevision after takeover). Delete the resurrection path
-entirely; on lease loss, a node must drop the session and let the client
-reconnect.
+Lease-expiry deletes are no longer resurrected. Lease loss fences and
+disconnects every local session associated with that lease before new claims
+are accepted. Focused tests exercise simultaneous acquisition, concurrent
+takeover, stale observations, lease loss, and reacquisition. etcd remains the
+authoritative ownership state; caches cannot grant a session.
 
 ### P0-8. The TLS revocation stack has zero tests
 
@@ -517,30 +435,34 @@ and reload the broker's configuration. This is the single largest gap between
 what the broker claims and what it enforces, and — unlike P0-1 — it needs no
 particular configuration to be reachable.
 
-### P0-10. DLQ movement and replication both fail open
+### P0-10. DLQ movement and replication both fail open — ✅ RESOLVED 2026-08-24
 
-**DLQ.** `queue/consumer/manager.go:441-446`: when `DeliveryCount >=
-MaxDeliveryCount`, `OnDLQ` is called only if the source read succeeds, its
-outcome is not checked, and the pending entry is then removed with
-`_ = m.groupStore.RemovePendingEntry(...)` unconditionally. The message is gone
-whether or not it reached the DLQ. Explicit `Reject` never enters this path at
-all.
+DLQ transitions now propagate create, append, and sync failures; use the normal
+queue durability path; and settle the source only after the destination append
+succeeds. Explicit reject uses the same transition. A stable broker-owned
+transfer ID derived from source queue, group, and offset makes the remaining
+crash-window duplicate detectable. When the DLQ is disabled or unavailable,
+the source delivery remains pending.
 
-**Replication.** `queue/manager.go:204` defaults to `WritePolicyLocal`; the
-switch at `:1025-1049` appends locally when `m.raftCoordinator` is nil or
-disabled, and `:339` downgrades a replicated distribution mode to `forward`
-with a warning. A queue configured for replication can accept writes at a
-replication factor of one and answer success.
+Experimental replication now validates configuration at startup and on queue
+create/update. A replicated write is rejected when its gate, Raft manager,
+group, leader, replication factor, or minimum-in-sync requirement is
+unavailable. Only explicit `reject` and `forward` policies are allowed; local
+fallback is gone. Replicated `fsync` remains rejected because its stronger
+acknowledgement contract has not been implemented.
 
-### P0-11. etcd peer and client traffic is plaintext
+The remaining architectural gap is atomic recovery across source settlement
+and destination append. The stable transfer ID makes the current behavior
+loss-safe; the transition journal proposed in `ROADMAP.md` would make replay a
+first-class model rather than a DLQ-specific recovery convention.
 
-`cluster/etcd.go:39` hardcodes `urlPrefix = "http://"`, and the peer URL built
-from it is installed at `:174`. Session ownership, subscription routing, and
-queue consumer state therefore cross the network unauthenticated and
-unencrypted — including on clusters that have configured broker mTLS and
-believe themselves secured. Clustering is a supported 1.0 feature; queue Raft
-(P0-2) is not, which makes this the more serious of the two cleartext
-transports.
+### P0-11. etcd peer and client traffic is plaintext — ✅ RESOLVED 2026-08-24
+
+Embedded-etcd peer and client traffic now uses the same mutual-TLS identity as
+the broker cluster transport. The client listener is restricted to loopback.
+Cluster configuration fails validation without TLS unless the operator selects
+the explicit development-only `cluster.allow_insecure` opt-in. Certificate and
+plaintext-policy tests cover both secure and intentionally insecure modes.
 
 ---
 
@@ -706,27 +628,25 @@ appears on either path.
 
 ## P2 — Process and documentation
 
-### P2-1. There is no committed plan, roadmap, ADR, CHANGELOG, or SECURITY.md
+### P2-1. Release planning exists; architecture decisions and release policy remain informal
 
-`plan.md` was deleted in `5101c90f2` (2025-12-24, "Merge roadmap and plan").
-`docs/queues-implementation-plan.md`, `docs/performance-optimization-plan.md`,
-and `docs/custom-raft-implementation-plan.md` were deleted over the following
-three weeks. What replaced them is `docs/content/docs/roadmap.md` — 26 lines,
-a ten-bullet emoji list ending in "track open issues and PRs".
+`ROADMAP.md` and this readiness assessment now provide a tracked 1.0 scope and
+completion record, so the original "no committed plan" finding is resolved.
+The focused `short-term-plan.md` is a working document rather than the durable
+release plan; its completed outcomes have been reconciled into these files.
 
-All substantive planning now lives in **untracked** local files (`CLAUDE.md`,
-`chat/`, `.claude/`). For a 1.0 cut, release scope existing only in one
-developer's working tree is the largest process risk in this document.
-
-Missing release-governance files: `SECURITY.md`, `CHANGELOG.md`, `CODEOWNERS`.
-Present: `LICENSE`, `CONTRIBUTING.md`.
+The remaining gap is narrower: there is no durable ADR series for architectural
+decisions and no `SECURITY.md`, `CHANGELOG.md`, or `CODEOWNERS`. Those are not
+part of the active broker-core track, but they remain release-readiness work.
 
 ### P2-2. README contradicts itself on Raft and DLQ
 
 `README.md:29` — `- ✅ Optional Raft layer for queue appends (WIP)` — marks the
-same item done and unfinished on one line. Given P0-2 and P0-3, neither half is
-accurate. `README.md:96` — "DLQ handler present (delivery path wiring
-pending)" — while the Features list above advertises DLQ without qualification.
+same item done and unfinished on one line instead of stating the actual support
+boundary: experimental, secure, fail-closed, disabled by default, and outside
+the 1.0 contract. `README.md:96` still says "DLQ handler present (delivery path
+wiring pending)", which is now false after the loss-safe delivery and reject
+paths landed.
 
 ### P2-3. Six files exceed 2,000 lines
 
@@ -756,14 +676,13 @@ codebase:
   explicit drop on overflow (`delivery.go:134`). This is the failure mode that
   OOMs most brokers, and it is handled.
 - **Authorization fails closed** on callout error (`authcallout/http.go:143`).
-- **The etcd session-owner watcher is mature code** — handles compaction
-  restart, watch-channel close, cache reload, and ownership-move untracking
-  (`cluster/etcd.go:2142-2210`). The resurrection path is the one flaw in an
-  otherwise careful implementation.
+- **Session ownership now has an explicit fencing model.** etcd transactions
+  arbitrate acquisition and takeover; lease loss disconnects local sessions;
+  caches are observational rather than authoritative.
 - **`logstorage/` has real durability machinery** — segment fsync, directory
   fsync with correct `ErrUnsupported` handling (`segment.go:183-193`),
-  recovery, time index, PEL. The gap is the *default* and its
-  *unconfigurability*, not the mechanism.
+  recovery, time index, and PEL. A queue can choose `buffered` or `fsync`, and
+  concurrent fsync acknowledgements share a durability barrier.
 - **Test ratios are strong where it counts**: `broker/` 0.96, `mqtt/` 0.94,
   `server/` 0.92, `storage/` 1.01, `reload/` 1.63.
 - **Three previously-known issues are already fixed** (refbuffer double-free,
@@ -773,4 +692,21 @@ codebase:
 
 ## Recommended sequencing
 
-See `ROADMAP.md`.
+The active sequence is architecture-first and API-stability-first:
+
+1. Freeze the queue protobuf, exported Go, YAML, error, and protocol-semantic
+   contracts; enforce an additive compatibility baseline.
+2. Move append/consume/settlement operations behind one typed queue state
+   machine and a shared cross-protocol conformance suite.
+3. Introduce a versioned message envelope with separate user and broker-owned
+   metadata namespaces.
+4. Add a recoverable transition journal/outbox for source settlement plus
+   destination append.
+5. Put experimental replication behind a capability contract, then optimize
+   only measured stable paths.
+
+In parallel, the core-relevant existing blockers are authorization decision
+caching (P0-1), TLS revocation verification (P0-8), and the second protocol
+audit. Admin authentication (P0-9) is deliberately deferred from this
+workstream but still blocks the 1.0 tag. Detailed acceptance criteria and the
+performance guardrail are in [`ROADMAP.md`](./ROADMAP.md#next).
