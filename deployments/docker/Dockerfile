@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Multi-arch build: BUILDPLATFORM is the builder's native arch,
 # TARGETOS/TARGETARCH are the requested target. buildx supplies both.
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.0-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
