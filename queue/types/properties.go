@@ -31,7 +31,9 @@ const (
 	PropCommitOffset  = "x-offset"
 
 	// Queue reject metadata.
-	PropRejectReason = "reason"
+	PropRejectReason  = "reason"
+	PropDLQTransferID = "x-dlq-transfer-id"
+	PropDLQReason     = "x-dlq-reason"
 
 	// Internal queue forwarding metadata.
 	PropForwardTargetQueues = "x-queue-forward-targets"

@@ -67,6 +67,20 @@ func TestAckDurabilityFsyncSyncsDurableQueuePublish(t *testing.T) {
 	require.Equal(t, int64(0), store.appends.Load(), "durable publish took the buffered path")
 }
 
+func TestDLQTransferUsesConfiguredDurabilityPath(t *testing.T) {
+	store := &syncRecordingStore{QueueStore: memlog.New()}
+	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
+	ctx := context.Background()
+
+	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", "workers", &types.Message{
+		ID: "poison", Topic: "$queue/tasks/job", Payload: []byte("bad"),
+	}, 7, 5, "decode failed", "$dlq/"))
+
+	require.Equal(t, int64(1), store.synced.Load(), "DLQ append did not use the durable path")
+	require.Equal(t, int64(0), store.appends.Load(), "DLQ append bypassed fsync policy")
+}
+
 // TestAckDurabilityBufferedSkipsTheSync covers the opt-out: a deployment that
 // chooses throughput gets the unsynced path, and the loss window is the store's
 // sync interval.

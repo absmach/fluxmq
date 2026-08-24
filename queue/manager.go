@@ -6,6 +6,7 @@ package queue
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -64,6 +65,14 @@ var (
 	// from claiming the local queue log was fsynced. Raft's synchronous mode
 	// waits for apply; it does not use DurableQueueStore.AppendAndSync.
 	ErrFsyncReplicatedQueueUnsupported = errors.New("fsync acknowledgement durability does not support replicated queues")
+	// ErrDLQDisabled leaves the source delivery pending instead of dropping it.
+	ErrDLQDisabled = errors.New("dead-letter queue is disabled")
+	// ErrReplicationUnavailable prevents a replicated queue from degrading to a
+	// local-only write when its Raft group or leader cannot be used.
+	ErrReplicationUnavailable = errors.New("queue replication unavailable")
+	// ErrReplicationWritePolicy rejects local and unknown policies for queues
+	// whose contract promises replicated writes.
+	ErrReplicationWritePolicy = errors.New("invalid write policy for replicated queue")
 )
 
 type queueCluster interface {
@@ -259,11 +268,11 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		StealBatchSize:     5,
 		AutoCommitInterval: config.AutoCommitInterval,
 		MaxPELSize:         config.MaxPELSize,
-		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int) {
+		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, offset uint64, deliveryCount int, reason string) error {
 			if mgr == nil {
-				return
+				return consumer.ErrDLQHandlerUnavailable
 			}
-			mgr.moveToDLQ(ctx, queueName, groupID, msg, deliveryCount, dlqPrefix)
+			return mgr.moveToDLQ(ctx, queueName, groupID, msg, offset, deliveryCount, reason, dlqPrefix)
 		},
 	}
 
@@ -1432,12 +1441,35 @@ func (m *Manager) completeAppend(queueName, topic string, offset uint64, err err
 	return nil
 }
 
-// moveToDLQ publishes a poison message to the dead-letter queue.
-// It auto-creates the DLQ queue if it doesn't exist.
-func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int, dlqPrefix string) {
+func (m *Manager) appendConfiguredMessage(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *types.Message) (uint64, error) {
+	replicated := queueConfig.Replication.Enabled
+	if replicated && m.raftCoordinator != nil && m.raftCoordinator.IsEnabled() {
+		syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
+		return m.raftCoordinator.ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
+			SyncMode:   &syncMode,
+			AckTimeout: queueConfig.Replication.AckTimeout,
+		})
+	}
+	if replicated {
+		m.logger.Warn("queue replication enabled but raft manager unavailable; appending locally",
+			slog.String("queue", queueName))
+	}
+	return m.appendWithAckDurability(ctx, queueName, queueConfig, msg)
+}
+
+// moveToDLQ publishes a poison message to the dead-letter queue. It returns
+// success only after the destination append has completed, allowing callers to
+// keep the source delivery pending on every failure.
+func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg *types.Message, sourceOffset uint64, deliveryCount int, reason, dlqPrefix string) error {
 	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
-	if err != nil || queueCfg == nil || !queueCfg.DLQConfig.Enabled {
-		return
+	if err != nil {
+		return fmt.Errorf("get source queue for DLQ transfer: %w", err)
+	}
+	if queueCfg == nil || !queueCfg.DLQConfig.Enabled {
+		return fmt.Errorf("%w: %s", ErrDLQDisabled, queueName)
+	}
+	if dlqPrefix == "" {
+		dlqPrefix = "$dlq/"
 	}
 
 	dlqTopic := queueCfg.DLQConfig.Topic
@@ -1446,18 +1478,25 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 	}
 
 	dlqQueueName := dlqTopic
-	if _, err := m.queueStore.GetQueue(ctx, dlqQueueName); err != nil {
-		dlqCfg := types.DefaultQueueConfig(dlqQueueName, dlqTopic+"/#")
-		dlqCfg.DLQConfig.Enabled = false // prevent DLQ chains
-		dlqCfg.MessageTTL = 0            // DLQ messages don't expire
-		if createErr := m.queueStore.CreateQueue(ctx, dlqCfg); createErr != nil {
-			m.logger.Warn("failed to auto-create DLQ queue",
-				slog.String("dlq_queue", dlqQueueName),
-				slog.String("error", createErr.Error()))
+	dlqCfg, err := m.queueStore.GetQueue(ctx, dlqQueueName)
+	if errors.Is(err, storage.ErrQueueNotFound) {
+		newDLQCfg := types.DefaultQueueConfig(dlqQueueName, dlqTopic+"/#")
+		newDLQCfg.DLQConfig.Enabled = false // prevent DLQ chains
+		newDLQCfg.MessageTTL = 0            // DLQ messages don't expire
+		if createErr := m.CreateQueue(ctx, newDLQCfg); createErr != nil && !errors.Is(createErr, storage.ErrQueueAlreadyExists) {
+			return fmt.Errorf("create DLQ queue %q: %w", dlqQueueName, createErr)
 		}
+		dlqCfg, err = m.queueStore.GetQueue(ctx, dlqQueueName)
+	}
+	if err != nil {
+		return fmt.Errorf("get DLQ queue %q: %w", dlqQueueName, err)
+	}
+	if dlqCfg == nil {
+		return fmt.Errorf("get DLQ queue %q: %w", dlqQueueName, storage.ErrQueueNotFound)
 	}
 
-	props := make(map[string]string, len(msg.Properties)+6)
+	transferID := dlqTransferID(queueName, groupID, sourceOffset)
+	props := make(map[string]string, len(msg.Properties)+8)
 	for k, v := range msg.Properties {
 		props[k] = v
 	}
@@ -1466,12 +1505,16 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 	props["_dlq_group"] = groupID
 	props["_dlq_delivery_count"] = strconv.Itoa(deliveryCount)
 	props["_dlq_moved_at"] = time.Now().UTC().Format(time.RFC3339)
+	props[types.PropDLQTransferID] = transferID
+	if reason != "" {
+		props[types.PropDLQReason] = reason
+	}
 	if msg.ID != "" {
 		props["_dlq_original_id"] = msg.ID
 	}
 
 	dlqMsg := &types.Message{
-		ID:         generateMessageID(),
+		ID:         transferID,
 		Payload:    msg.StablePayload(),
 		Topic:      dlqTopic,
 		Properties: props,
@@ -1479,13 +1522,13 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 		CreatedAt:  time.Now(),
 	}
 
-	if _, err := m.queueStore.Append(ctx, dlqQueueName, dlqMsg); err != nil {
+	if _, err := m.appendConfiguredMessage(ctx, dlqQueueName, dlqCfg, dlqMsg); err != nil {
 		m.logger.Warn("failed to append message to DLQ",
 			slog.String("queue", queueName),
 			slog.String("dlq_queue", dlqQueueName),
 			slog.String("message_id", msg.ID),
 			slog.String("error", err.Error()))
-		return
+		return fmt.Errorf("append DLQ transfer %q: %w", transferID, err)
 	}
 
 	m.logger.Warn("message moved to DLQ",
@@ -1494,6 +1537,13 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 		slog.String("dlq_queue", dlqQueueName),
 		slog.String("message_id", msg.ID),
 		slog.Int("delivery_count", deliveryCount))
+	return nil
+}
+
+func dlqTransferID(queueName, groupID string, sourceOffset uint64) string {
+	source := fmt.Sprintf("%d:%s:%d:%s:%d", len(queueName), queueName, len(groupID), groupID, sourceOffset)
+	sum := sha256.Sum256([]byte(source))
+	return fmt.Sprintf("dlq-%x", sum[:16])
 }
 
 func autoQueueFromTopic(topic string) (queueName, pattern string) {
@@ -1998,8 +2048,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 	if groupID != "" {
 		if group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
 			if group.Mode == types.GroupModeStream {
-				m.rejectStream(ctx, queueName, group, offset, reason)
-				return nil
+				return m.rejectStream(ctx, queueName, group, offset, reason)
 			}
 		}
 	}
@@ -2014,8 +2063,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 			continue
 		}
 		if group.Mode == types.GroupModeStream {
-			m.rejectStream(ctx, queueName, group, offset, reason)
-			return nil
+			return m.rejectStream(ctx, queueName, group, offset, reason)
 		}
 
 		for consumerID := range group.PEL {
@@ -2025,6 +2073,9 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 				m.delivery.Schedule(queueName)
 				return nil
 			}
+			if !errors.Is(err, consumer.ErrMessageNotPending) && !errors.Is(err, consumer.ErrConsumerNotFound) {
+				return err
+			}
 		}
 	}
 
@@ -2033,22 +2084,25 @@ func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, rea
 
 // rejectStream handles reject for stream-mode consumer groups.
 // Stream queues don't have PEL, so reject advances the cursor past the
-// rejected message (same as ack) to prevent infinite redelivery.
-func (m *Manager) rejectStream(ctx context.Context, queueName string, group *types.ConsumerGroup, offset uint64, reason string) {
+// rejected message only after its DLQ append has succeeded.
+func (m *Manager) rejectStream(ctx context.Context, queueName string, group *types.ConsumerGroup, offset uint64, reason string) error {
+	msg, err := m.queueStore.Read(ctx, queueName, offset)
+	if err != nil {
+		return err
+	}
+	deliveryCount := max(msg.RetryCount+1, 1)
+	if err := m.moveToDLQ(ctx, queueName, group.ID, msg, offset, deliveryCount, reason, m.config.DLQTopicPrefix); err != nil {
+		return err
+	}
+
 	cursor := group.GetCursor()
 	next := offset + 1
 	if next > cursor.Cursor {
 		if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
-			m.logger.Warn("failed to update stream cursor on reject",
-				slog.String("queue", queueName),
-				slog.String("group", group.ID),
-				slog.String("error", err.Error()))
+			return err
 		}
 		if err := m.groupStore.UpdateCommitted(ctx, queueName, group.ID, next); err != nil {
-			m.logger.Warn("failed to update stream committed offset on reject",
-				slog.String("queue", queueName),
-				slog.String("group", group.ID),
-				slog.String("error", err.Error()))
+			return err
 		}
 	}
 
@@ -2059,6 +2113,7 @@ func (m *Manager) rejectStream(ctx context.Context, queueName string, group *typ
 		slog.String("reason", reason))
 	m.metrics.RecordReject()
 	m.delivery.Schedule(queueName)
+	return nil
 }
 
 // --- Heartbeat ---

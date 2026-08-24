@@ -20,6 +20,7 @@ import (
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -472,7 +473,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 		MaxPELSize:         100_000,
 		AutoCommitInterval: DefaultConfig().AutoCommitInterval,
 		VisibilityTimeout:  1 * time.Millisecond, // very short so entries are immediately stealable
-		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int) {
+		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, _ uint64, deliveryCount int, _ string) error {
 			mu.Lock()
 			dlqCalls = append(dlqCalls, struct {
 				queueName     string
@@ -481,6 +482,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 				deliveryCount int
 			}{queueName, groupID, msg.ID, deliveryCount})
 			mu.Unlock()
+			return nil
 		},
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
@@ -548,7 +550,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	}
 }
 
-func TestDLQCallbackNilHandlerSilentlyDrops(t *testing.T) {
+func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
 	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
 		return nil
 	})
@@ -564,7 +566,7 @@ func TestDLQCallbackNilHandlerSilentlyDrops(t *testing.T) {
 		MaxPELSize:         100_000,
 		AutoCommitInterval: DefaultConfig().AutoCommitInterval,
 		VisibilityTimeout:  1 * time.Millisecond,
-		// OnDLQ is nil — should silently remove from PEL
+		// OnDLQ is nil — the source delivery must remain pending.
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
 
@@ -600,11 +602,43 @@ func TestDLQCallbackNilHandlerSilentlyDrops(t *testing.T) {
 		t.Fatal("expected no messages")
 	}
 
-	// PEL entry should still be removed
+	// Without a confirmed DLQ append, the PEL entry must remain retryable.
 	entries, _ := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, "c1")
-	if len(entries) != 0 {
-		t.Fatalf("expected PEL entry removed, got %d", len(entries))
+	if len(entries) != 1 {
+		t.Fatalf("expected PEL entry retained, got %d", len(entries))
 	}
+}
+
+func TestDLQCallbackFailureLeavesMessagePending(t *testing.T) {
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	ctx := context.Background()
+	consumerMgr := consumer.NewManager(logStore, groupStore, consumer.Config{
+		MaxDeliveryCount:  3,
+		VisibilityTimeout: time.Millisecond,
+		MaxPELSize:        100,
+		OnDLQ: func(context.Context, string, string, *types.Message, uint64, int, string) error {
+			return errors.New("DLQ unavailable")
+		},
+	})
+
+	require.NoError(t, logStore.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
+	group := types.NewConsumerGroupState("tasks", testGroupWorkers, "")
+	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
+	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
+	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
+	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoisonMsg, Topic: "$queue/tasks/job"})
+	require.NoError(t, err)
+	_, err = consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c1", nil)
+	require.NoError(t, err)
+	group.PEL["c1"][0].DeliveryCount = 5
+	group.PEL["c1"][0].ClaimedAt = time.Now().Add(-time.Hour)
+
+	_, err = consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c2", nil)
+	require.ErrorIs(t, err, consumer.ErrNoMessages)
+	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, "c1")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }
 
 func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {

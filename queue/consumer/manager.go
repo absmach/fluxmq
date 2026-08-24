@@ -24,6 +24,7 @@ var (
 	ErrGroupModeMismatch             = errors.New("consumer group mode mismatch")
 	ErrCommitOffsetOnlyForStreamMode = errors.New("commit offset only supported for stream groups")
 	ErrPELFull                       = errors.New("pending entry list at capacity")
+	ErrDLQHandlerUnavailable         = errors.New("dead-letter queue handler unavailable")
 )
 
 // Manager handles consumer group operations including claiming,
@@ -37,9 +38,9 @@ type Manager struct {
 }
 
 // DLQHandler is called when a message exceeds MaxDeliveryCount.
-// The handler receives the queue name, group ID, the poisoned message,
-// and the delivery count that triggered the DLQ move.
-type DLQHandler func(ctx context.Context, queueName, groupID string, msg *types.Message, deliveryCount int)
+// The handler receives a stable source offset so retries can preserve transfer
+// identity. It must return nil only after the DLQ append has succeeded.
+type DLQHandler func(ctx context.Context, queueName, groupID string, msg *types.Message, offset uint64, deliveryCount int, reason string) error
 
 // Config defines configuration for the consumer group manager.
 type Config struct {
@@ -66,7 +67,7 @@ type Config struct {
 	MaxPELSize int
 
 	// OnDLQ is called when a message exceeds MaxDeliveryCount during work stealing.
-	// If nil, poison messages are silently removed from the PEL.
+	// If nil or if it returns an error, poison messages remain in the PEL.
 	OnDLQ DLQHandler
 }
 
@@ -438,13 +439,19 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 	for _, entry := range stealable {
 		// Poison message: exceeded max delivery attempts.
 		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
-			if m.config.OnDLQ != nil {
-				msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
-				if err == nil {
-					m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.DeliveryCount)
-				}
+			if m.config.OnDLQ == nil {
+				continue
 			}
-			_ = m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset)
+			msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
+			if err != nil {
+				continue
+			}
+			if err := m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.Offset, entry.DeliveryCount, "max delivery count exceeded"); err != nil {
+				continue
+			}
+			if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset); err != nil {
+				continue
+			}
 			continue
 		}
 
@@ -564,13 +571,34 @@ func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Remove from PEL (message goes to DLQ via separate mechanism)
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+	entry, ownerID := group.FindPending(offset)
+	if entry == nil {
+		return ErrMessageNotPending
+	}
+	if ownerID != consumerID {
+		return ErrConsumerNotFound
+	}
+	if m.config.OnDLQ == nil {
+		return ErrDLQHandlerUnavailable
+	}
+	msg, err := m.queueStore.Read(ctx, queueName, offset)
+	if err != nil {
+		return err
+	}
+	if err := m.config.OnDLQ(ctx, queueName, groupID, msg, offset, entry.DeliveryCount, reason); err != nil {
+		return err
+	}
+
+	// The source delivery is removed only after the DLQ write succeeds.
 	if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
 		return err
 	}
 
-	// Get group to update committed offset
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err = m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
 		return err
 	}

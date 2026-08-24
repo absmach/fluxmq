@@ -24,6 +24,7 @@ import (
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -1365,6 +1366,11 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
+	if _, err := logStore.Append(context.Background(), testQueueEvents, &types.Message{
+		ID: "stream-reject", Topic: "$queue/events/bad", Payload: []byte("bad"),
+	}); err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
 
 	cursor := &types.CursorOption{Position: types.CursorEarliest, Mode: types.GroupModeStream}
 	if err := mgr.SubscribeWithCursor(context.Background(), testQueueEvents, "", testClientOneID, "streamer", "", cursor); err != nil {
@@ -1385,6 +1391,52 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	if c := group.GetCursor().Committed; c != 1 {
 		t.Fatalf("expected committed 1 after reject, got %d", c)
 	}
+}
+
+func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
+	ctx := context.Background()
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
+	group := types.NewConsumerGroupState("tasks", "workers", "")
+	group.SetConsumer("consumer", &types.ConsumerInfo{ID: "consumer", ClientID: "consumer"})
+	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
+	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: "poison", Topic: "$queue/tasks/job", Payload: []byte("bad")})
+	require.NoError(t, err)
+	_, err = mgr.consumerManager.Claim(ctx, "tasks", "workers", "consumer", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Reject(ctx, "tasks", "tasks:0", "workers", "invalid payload"))
+	entries, err := groupStore.GetPendingEntries(ctx, "tasks", "workers", "consumer")
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	dlqMsg, err := logStore.Read(ctx, "$dlq/tasks", 0)
+	require.NoError(t, err)
+	require.Equal(t, "invalid payload", dlqMsg.Properties[types.PropDLQReason])
+	require.NotEmpty(t, dlqMsg.Properties[types.PropDLQTransferID])
+}
+
+func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
+	ctx := context.Background()
+	logStore := memlog.New()
+	groupStore := newMockGroupStore()
+	mgr := NewManager(logStore, groupStore, nil, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	cfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	cfg.DLQConfig.Enabled = false
+	require.NoError(t, mgr.CreateQueue(ctx, cfg))
+	group := types.NewConsumerGroupState("tasks", "workers", "")
+	group.SetConsumer("consumer", &types.ConsumerInfo{ID: "consumer", ClientID: "consumer"})
+	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
+	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: "poison", Topic: "$queue/tasks/job"})
+	require.NoError(t, err)
+	_, err = mgr.consumerManager.Claim(ctx, "tasks", "workers", "consumer", nil)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, mgr.Reject(ctx, "tasks", "tasks:0", "workers", "invalid payload"), ErrDLQDisabled)
+	entries, err := groupStore.GetPendingEntries(ctx, "tasks", "workers", "consumer")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }
 
 func TestRetentionOffsetMessages(t *testing.T) {
@@ -3352,7 +3404,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
 	poisonMsg.SetPayloadFromBuffer(pool.GetWithData([]byte("poison-payload")))
 
-	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 6, "$dlq/")
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
 	poisonMsg.ReleasePayload()
 	reused := pool.GetWithData([]byte("reused-buffer!"))
 	defer reused.Release()
@@ -3389,6 +3441,12 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if msg.Properties["_dlq_original_id"] != "bad-msg-1" {
 		t.Fatalf("expected original ID 'bad-msg-1', got %q", msg.Properties["_dlq_original_id"])
 	}
+	if msg.Properties[types.PropDLQTransferID] == "" || msg.ID != msg.Properties[types.PropDLQTransferID] {
+		t.Fatalf("expected stable transfer identity, id=%q property=%q", msg.ID, msg.Properties[types.PropDLQTransferID])
+	}
+	if msg.Properties[types.PropDLQReason] != "decode failed" {
+		t.Fatalf("expected reject reason, got %q", msg.Properties[types.PropDLQReason])
+	}
 	if msg.Properties["custom-key"] != "custom-val" {
 		t.Fatalf("expected original property preserved, got %q", msg.Properties["custom-key"])
 	}
@@ -3417,14 +3475,15 @@ func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
+	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
 		ID:      "msg-1",
 		Topic:   "$queue/tasks/test",
 		Payload: []byte("data"),
-	}, 5, "$dlq/")
+	}, 0, 5, "", "$dlq/")
+	require.ErrorIs(t, err, ErrDLQDisabled)
 
 	// DLQ queue should not be created
-	_, err := logStore.GetQueue(ctx, "$dlq/tasks")
+	_, err = logStore.GetQueue(ctx, "$dlq/tasks")
 	if err == nil {
 		t.Fatal("expected DLQ queue not to be created when DLQ is disabled")
 	}
@@ -3450,11 +3509,11 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
 		ID:      "msg-1",
 		Topic:   "$queue/tasks/test",
 		Payload: []byte("data"),
-	}, 5, "$dlq/")
+	}, 0, 5, "", "$dlq/"))
 
 	// Should use custom topic as queue name
 	_, err := logStore.GetQueue(ctx, "errors/tasks")
