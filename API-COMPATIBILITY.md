@@ -7,9 +7,16 @@ supported adapter.
 
 ## Stable surfaces
 
-- Protobuf: `proto/queue/v1`, `proto/auth/v1`, and `proto/cluster/v1`.
-  `api/compat/proto-v1.binpb` is the reviewed descriptor baseline and CI runs
-  `make proto-breaking` against it.
+- Protobuf, public: `proto/queue/v1` and `proto/auth/v1`. These are what
+  external clients compile against. `api/compat/proto-public-v1.binpb` is the
+  reviewed descriptor baseline.
+- Protobuf, internal: `proto/cluster/v1`. This is the inter-node wire, an
+  implementation detail shared between broker nodes rather than a client-facing
+  contract. `api/compat/proto-cluster-v1.binpb` is its separate baseline, so a
+  cluster-wire change is reviewed on its own terms instead of being weighed
+  against a published promise.
+
+  CI runs `make proto-breaking`, which checks both. Both are hard failures.
 - Go: `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
   `broker.StreamQueueManager`, plus `queue.CommandProcessor` and its typed
   command/outcome values. Compile-time guards pin the interface method sets and

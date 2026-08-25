@@ -38,21 +38,11 @@ type v1QueueManager interface {
 	DeleteQueue(ctx context.Context, queueName string) error
 }
 
+// StreamQueueManager embeds QueueManager, so the baseline embeds its own
+// QueueManager rather than restating those methods. Duplicating them would let
+// the two copies drift apart without failing anything.
 type v1StreamQueueManager interface {
-	Publish(ctx context.Context, publish types.PublishRequest) error
-	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
-	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error
-	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
-	Ack(ctx context.Context, queueName, messageID, groupID string) error
-	Nack(ctx context.Context, queueName, messageID, groupID string) error
-	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
-	Start(ctx context.Context) error
-	Stop() error
-	UpdateHeartbeat(ctx context.Context, clientID string) error
-	GetQueue(ctx context.Context, queueName string) (*types.QueueConfig, error)
-	ListQueues(ctx context.Context) ([]types.QueueConfig, error)
-	CreateQueue(ctx context.Context, config types.QueueConfig) error
-	DeleteQueue(ctx context.Context, queueName string) error
+	v1QueueManager
 	UpdateQueue(ctx context.Context, config types.QueueConfig) error
 	CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error
 }
