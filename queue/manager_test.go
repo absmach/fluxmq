@@ -14,10 +14,9 @@ import (
 	"testing"
 	"time"
 
-	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/logstorage"
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
 	queueraft "github.com/absmach/fluxmq/queue/raft"
@@ -75,7 +74,7 @@ func (s *getErrorQueueStore) GetQueue(ctx context.Context, queueName string) (*t
 	return s.QueueStore.GetQueue(ctx, queueName)
 }
 
-func (s *recordingDurableQueueStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *recordingDurableQueueStore) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.mu.Lock()
 	s.operations = append(s.operations, "append:"+queueName)
 	err := s.appendErr
@@ -86,7 +85,7 @@ func (s *recordingDurableQueueStore) Append(ctx context.Context, queueName strin
 	return s.QueueStore.Append(ctx, queueName, msg)
 }
 
-func (s *recordingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *recordingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.mu.Lock()
 	s.operations = append(s.operations, "append:"+queueName)
 	appendErr := s.appendErr
@@ -128,7 +127,7 @@ func (s *recordingDurableQueueStore) Operations() []string {
 	return append([]string(nil), s.operations...)
 }
 
-func (d *targetCheckingDeliverer) Deliver(context.Context, string, *brokerstorage.Message) error {
+func (d *targetCheckingDeliverer) Deliver(context.Context, string, *message.Envelope) error {
 	return nil
 }
 
@@ -404,9 +403,9 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+	deliveredMsgs := make(chan *message.Envelope, 10)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		t.Logf("Delivered message to %s: topic=%s", clientID, msg.Topic)
 		deliveredMsgs <- msg
 		return nil
@@ -454,8 +453,8 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	payload := []byte("hello world")
 
 	t.Logf("Publishing message to %s", publishTopic)
-	if err := manager.Enqueue(ctx, publishTopic, payload, nil); err != nil {
-		t.Fatalf("Enqueue failed: %v", err)
+	if err := manager.Publish(ctx, types.PublishRequest{Topic: publishTopic, Payload: payload}); err != nil {
+		t.Fatalf("Publish failed: %v", err)
 	}
 
 	tail, _ := logStore.Tail(ctx, queueName)
@@ -464,12 +463,12 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	t.Log("Waiting for message delivery...")
 	select {
 	case msg := <-deliveredMsgs:
-		t.Logf("Received message: topic=%s payload=%s", msg.Topic, string(msg.GetPayload()))
+		t.Logf("Received message: topic=%s payload=%s", msg.Topic, string(msg.PayloadBytes()))
 		if msg.Topic != publishTopic {
 			t.Errorf("Expected topic %s, got %s", publishTopic, msg.Topic)
 		}
-		if string(msg.GetPayload()) != string(payload) {
-			t.Errorf("Expected payload %s, got %s", payload, msg.GetPayload())
+		if string(msg.PayloadBytes()) != string(payload) {
+			t.Errorf("Expected payload %s, got %s", payload, msg.PayloadBytes())
 		}
 	case <-time.After(2 * time.Second):
 		groups, _ = groupStore.ListConsumerGroups(ctx, queueName)
@@ -529,7 +528,7 @@ type volatileDurableQueueStore struct {
 	appendAndSyncCalls int
 }
 
-func (s *volatileDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *volatileDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.appendAndSyncCalls++
 	return s.QueueStore.Append(ctx, queueName, msg)
 }
@@ -568,7 +567,7 @@ type blockingDurableQueueStore struct {
 	release chan struct{}
 }
 
-func (s *blockingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *blockingDurableQueueStore) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	close(s.started)
 	<-s.release
 	return s.QueueStore.Append(ctx, queueName, msg)
@@ -956,8 +955,8 @@ func TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if string(msg.Payload) != string(payload) {
-		t.Fatalf("persisted payload = %q, want %q", msg.Payload, payload)
+	if string(msg.PayloadBytes()) != string(payload) {
+		t.Fatalf("persisted payload = %q, want %q", msg.PayloadBytes(), payload)
 	}
 }
 
@@ -1017,9 +1016,9 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	delivered := make(chan *brokerstorage.Message, 1)
+	delivered := make(chan *message.Envelope, 1)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		delivered <- msg
 		return nil
 	})
@@ -1051,8 +1050,8 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if got := msg.Properties[types.PropStreamOffset]; got != "0" {
-			t.Fatalf("expected stream offset 0, got %q", got)
+		if msg.Broker.Queue.Stream == nil || msg.Broker.Queue.Stream.Offset != 0 {
+			t.Fatalf("expected stream offset 0, got %#v", msg.Broker.Queue.Stream)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
@@ -1070,13 +1069,13 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	}
 }
 
-func TestPublishNormalizesClientIDProperty(t *testing.T) {
+func TestPublishCarriesTypedSourceMetadata(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	delivered := make(chan *brokerstorage.Message, 1)
+	delivered := make(chan *message.Envelope, 1)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		delivered <- msg
 		return nil
 	})
@@ -1092,9 +1091,9 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 	}
 
 	if err := mgr.Publish(ctx, types.PublishRequest{
-		ClientID: "mqtt-pub-1",
-		Topic:    "$queue/orders/process",
-		Payload:  []byte("hello"),
+		Source:  message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT},
+		Topic:   "$queue/orders/process",
+		Payload: []byte("hello"),
 	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -1103,8 +1102,8 @@ func TestPublishNormalizesClientIDProperty(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if got := msg.Properties[corebroker.ClientIDProperty]; got != "mqtt-pub-1" {
-			t.Fatalf("expected client_id property %q, got %q", "mqtt-pub-1", got)
+		if got := msg.Broker.Source.ClientID; got != "mqtt-pub-1" {
+			t.Fatalf("expected client id %q, got %q", "mqtt-pub-1", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
@@ -1127,7 +1126,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	properties := map[string]string{"source": "device"}
 	flushCapture(t, mgr, func() {
 		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			ClientID:   testCapturePublisher,
+			Source:     message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT},
 			Topic:      testCapturedTopic,
 			Payload:    payload,
 			Properties: properties,
@@ -1158,13 +1157,13 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read captured message failed: %v", err)
 	}
-	if got := string(stored.GetPayload()); got != "original" {
+	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("captured payload = %q, want original", got)
 	}
-	if got := stored.Properties["source"]; got != "device" {
+	if got := stored.User.Properties["source"]; got != "device" {
 		t.Fatalf("captured source = %q, want device", got)
 	}
-	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
+	if got := stored.Broker.Source.ClientID; got != testCapturePublisher {
 		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
 	}
 
@@ -1375,9 +1374,8 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	if err := mgr.CreateQueue(context.Background(), queueCfg); err != nil {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
-	if _, err := logStore.Append(context.Background(), testQueueEvents, &types.Message{
-		ID: "stream-reject", Topic: "$queue/events/bad", Payload: []byte("bad"),
-	}); err != nil {
+	if _, err := logStore.Append(context.Background(), testQueueEvents,
+		newQueueEnvelope("stream-reject", "$queue/events/bad", []byte("bad"))); err != nil {
 		t.Fatalf("Append failed: %v", err)
 	}
 
@@ -1411,7 +1409,7 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	group := types.NewConsumerGroupState("tasks", testGroupWorkers, "")
 	group.SetConsumer(testConsumer, &types.ConsumerInfo{ID: testConsumer, ClientID: testConsumer})
 	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
-	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoison, Topic: testQueueTasksJob, Payload: []byte("bad")})
+	_, err := logStore.Append(ctx, "tasks", newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")))
 	require.NoError(t, err)
 	_, err = mgr.consumerManager.Claim(ctx, "tasks", testGroupWorkers, testConsumer, nil)
 	require.NoError(t, err)
@@ -1422,8 +1420,8 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	require.Empty(t, entries)
 	dlqMsg, err := logStore.Read(ctx, "$dlq/tasks", 0)
 	require.NoError(t, err)
-	require.Equal(t, "invalid payload", dlqMsg.Properties[types.PropDLQReason])
-	require.NotEmpty(t, dlqMsg.Properties[types.PropDLQTransferID])
+	require.Equal(t, "invalid payload", dlqMsg.Broker.Transfer.FailureReason)
+	require.NotEmpty(t, dlqMsg.Broker.Transfer.ID)
 }
 
 func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
@@ -1437,7 +1435,7 @@ func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
 	group := types.NewConsumerGroupState("tasks", testGroupWorkers, "")
 	group.SetConsumer(testConsumer, &types.ConsumerInfo{ID: testConsumer, ClientID: testConsumer})
 	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
-	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoison, Topic: testQueueTasksJob})
+	_, err := logStore.Append(ctx, "tasks", newQueueEnvelope(testPoison, testQueueTasksJob, nil))
 	require.NoError(t, err)
 	_, err = mgr.consumerManager.Claim(ctx, "tasks", testGroupWorkers, testConsumer, nil)
 	require.NoError(t, err)
@@ -1484,9 +1482,9 @@ func TestExactQueueSubscription(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+	deliveredMsgs := make(chan *message.Envelope, 10)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		deliveredMsgs <- msg
 		return nil
 	})
@@ -1511,14 +1509,14 @@ func TestExactQueueSubscription(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Enqueue(ctx, "$queue/tasks", []byte("task1"), nil); err != nil {
+	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/tasks", Payload: []byte("task1")}); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
 	select {
 	case msg := <-deliveredMsgs:
-		if string(msg.GetPayload()) != "task1" {
-			t.Errorf("Expected payload 'task1', got %s", msg.GetPayload())
+		if string(msg.PayloadBytes()) != "task1" {
+			t.Errorf("Expected payload 'task1', got %s", msg.PayloadBytes())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for message delivery")
@@ -1529,9 +1527,9 @@ func TestMultiLevelWildcard(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+	deliveredMsgs := make(chan *message.Envelope, 10)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		deliveredMsgs <- msg
 		return nil
 	})
@@ -1560,7 +1558,7 @@ func TestMultiLevelWildcard(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		if err := manager.Enqueue(ctx, topic, []byte(topic), nil); err != nil {
+		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte(topic)}); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1583,9 +1581,9 @@ func TestSingleLevelWildcard(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+	deliveredMsgs := make(chan *message.Envelope, 10)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		deliveredMsgs <- msg
 		return nil
 	})
@@ -1618,13 +1616,13 @@ func TestSingleLevelWildcard(t *testing.T) {
 	}
 
 	for _, topic := range matching {
-		if err := manager.Enqueue(ctx, topic, []byte("match"), nil); err != nil {
+		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("match")}); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
 
 	for _, topic := range nonMatching {
-		if err := manager.Enqueue(ctx, topic, []byte("nomatch"), nil); err != nil {
+		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("nomatch")}); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1636,7 +1634,7 @@ loop:
 	for {
 		select {
 		case msg := <-deliveredMsgs:
-			if string(msg.GetPayload()) == "nomatch" {
+			if string(msg.PayloadBytes()) == "nomatch" {
 				t.Errorf("Received non-matching message: %s", msg.Topic)
 			}
 			received++
@@ -1657,9 +1655,9 @@ func TestQueueNameWildcardSingleLevel(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+	deliveredMsgs := make(chan *message.Envelope, 10)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		deliveredMsgs <- msg
 		return nil
 	})
@@ -1692,13 +1690,13 @@ func TestQueueNameWildcardSingleLevel(t *testing.T) {
 	}
 
 	for _, topic := range matching {
-		if err := manager.Enqueue(ctx, topic, []byte("match"), nil); err != nil {
+		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("match")}); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
 
 	for _, topic := range nonMatching {
-		if err := manager.Enqueue(ctx, topic, []byte("nomatch"), nil); err != nil {
+		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("nomatch")}); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1710,7 +1708,7 @@ loop:
 	for {
 		select {
 		case msg := <-deliveredMsgs:
-			if string(msg.GetPayload()) == "nomatch" {
+			if string(msg.PayloadBytes()) == "nomatch" {
 				t.Errorf("Received non-matching message: %s", msg.Topic)
 			}
 			received++
@@ -1744,7 +1742,7 @@ type routedMessage struct {
 	nodeID    string
 	clientID  string
 	queueName string
-	message   *cluster.QueueMessage
+	message   *message.Envelope
 }
 
 type forwardPublishCall struct {
@@ -1765,26 +1763,17 @@ func newMockCluster(nodeID string) *mockCluster {
 
 func (c *mockCluster) NodeID() string { return c.nodeID }
 
-func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error {
-	var msgCopy *cluster.QueueMessage
+func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
+	var msgCopy *message.Envelope
 	if msg != nil {
-		userProps := make(map[string]string, len(msg.UserProperties))
-		for k, v := range msg.UserProperties {
-			userProps[k] = v
-		}
-		payloadCopy := make([]byte, len(msg.Payload))
-		copy(payloadCopy, msg.Payload)
-		copied := *msg
-		copied.UserProperties = userProps
-		copied.Payload = payloadCopy
-		msgCopy = &copied
+		msgCopy = msg.Clone()
 	}
 	c.routedMessagesMu.Lock()
 	defer c.routedMessagesMu.Unlock()
 	c.routedMessages = append(c.routedMessages, routedMessage{
 		nodeID:    nodeID,
 		clientID:  clientID,
-		queueName: queueName,
+		queueName: msg.Broker.Queue.Name,
 		message:   msgCopy,
 	})
 	return nil
@@ -1986,7 +1975,7 @@ func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, _ types.Queue
 	return nil
 }
 func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error { return nil }
-func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *types.Message, _ queueraft.ApplyOptions) (uint64, error) {
+func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
 }
@@ -2054,7 +2043,7 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 
 	var localDeliveries []string
 	var localMu sync.Mutex
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		localMu.Lock()
 		localDeliveries = append(localDeliveries, clientID)
 		localMu.Unlock()
@@ -2084,7 +2073,7 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 		t.Fatalf("Subscribe remote client failed: %v", err)
 	}
 
-	if err := manager.Enqueue(ctx, "$queue/test/msg", []byte("hello"), nil); err != nil {
+	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/test/msg", Payload: []byte("hello")}); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -2113,10 +2102,10 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 				t.Error("Expected routed message payload to be set")
 				continue
 			}
-			if rm.message.MessageID == "" {
+			if rm.message.Broker.Queue.MessageID == "" {
 				t.Error("Expected routed message-id to be set")
 			}
-			if rm.message.GroupID == "" {
+			if rm.message.Broker.Queue.GroupID == "" {
 				t.Error("Expected routed message to include group-id")
 			}
 		}
@@ -2131,7 +2120,7 @@ func TestSubscribeDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -2158,7 +2147,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -2169,7 +2158,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Enqueue(ctx, testQueueTasksNew, []byte("job"), map[string]string{"custom": testCustomValue}); err != nil {
+	if err := manager.Publish(ctx, types.PublishRequest{Topic: testQueueTasksNew, Payload: []byte("job"), Properties: map[string]string{"custom": testCustomValue}}); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -2184,19 +2173,19 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if msg.message == nil {
 		t.Fatal("expected routed queue message payload")
 	}
-	if msg.message.MessageID != "tasks:0" {
-		t.Fatalf("expected message-id tasks:0, got %q", msg.message.MessageID)
+	if msg.message.Broker.Queue.MessageID != "tasks:0" {
+		t.Fatalf("expected message-id tasks:0, got %q", msg.message.Broker.Queue.MessageID)
 	}
-	if got := msg.message.GroupID; got != testGroupWorkers { //nolint:goconst // test value
+	if got := msg.message.Broker.Queue.GroupID; got != testGroupWorkers { //nolint:goconst // test value
 		t.Fatalf("expected group-id workers, got %q", got)
 	}
-	if got := msg.message.QueueName; got != "tasks" {
+	if got := msg.message.Broker.Queue.Name; got != "tasks" {
 		t.Fatalf("expected queue tasks, got %q", got)
 	}
-	if got := msg.message.Sequence; got != 0 {
+	if got := msg.message.Broker.Queue.Offset; got != 0 {
 		t.Fatalf("expected sequence 0, got %d", got)
 	}
-	if got := msg.message.UserProperties["custom"]; got != testCustomValue {
+	if got := msg.message.User.Properties["custom"]; got != testCustomValue {
 		t.Fatalf("expected user property custom=value, got %q", got)
 	}
 }
@@ -2212,7 +2201,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		cfg,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -2230,7 +2219,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	if err := manager.Enqueue(ctx, "$queue/events/user.action", []byte("event-1"), nil); err != nil {
+	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/events/user.action", Payload: []byte("event-1")}); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -2259,8 +2248,8 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 			if routed[0].message == nil {
 				t.Fatal("expected routed stream message payload")
 			}
-			if got := routed[0].message.StreamOffset; got != 0 {
-				t.Fatalf("expected stream offset=0, got %d", got)
+			if stream := routed[0].message.Broker.Queue.Stream; stream == nil || stream.Offset != 0 {
+				t.Fatalf("expected stream offset=0, got %#v", stream)
 			}
 			return
 		}
@@ -2281,7 +2270,7 @@ func TestSubscribeWithCursorDefaultsProxyNodeIDFromCluster(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mockCl,
@@ -2311,7 +2300,7 @@ func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		logger,
 		nil,
@@ -2368,7 +2357,7 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	config.WritePolicy = WritePolicyForward
 	config.DistributionMode = DistributionForward
 
-	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	}), config, logger, mockCl)
 
@@ -2420,7 +2409,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 	config.WritePolicy = WritePolicyForward
 	config.DistributionMode = DistributionForward
 
-	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	}), config, logger, mockCl)
 
@@ -2469,7 +2458,7 @@ func TestSubscribeWithCursorReplicatedQueueRoutesStateThroughCoordinator(t *test
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		managerConfig,
 		slog.Default(),
 		nil,
@@ -2515,7 +2504,7 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 	config.WritePolicy = WritePolicyForward
 	config.DistributionMode = DistributionForward
 
-	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	}), config, logger, mockCl)
 
@@ -2557,7 +2546,7 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 		if !call.forwardToLeader {
 			t.Fatalf("expected forward-to-leader call")
 		}
-		target := call.properties[types.PropForwardTargetQueues]
+		target := call.properties[message.PropertyForwardTargetQueues]
 		if target == "" {
 			t.Fatalf("expected target queues metadata")
 		}
@@ -2569,13 +2558,13 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 	}
 }
 
-func TestPublishForcedTargetsProperty(t *testing.T) {
+func TestPublishForcedTargets(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.Default(),
 		nil,
@@ -2590,11 +2579,9 @@ func TestPublishForcedTargetsProperty(t *testing.T) {
 	}
 
 	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "shared/topic",
-		Payload: []byte("hello"),
-		Properties: map[string]string{
-			types.PropForwardTargetQueues: "q1",
-		},
+		Topic:               "shared/topic",
+		Payload:             []byte("hello"),
+		ForwardTargetQueues: []string{"q1"},
 	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -2609,7 +2596,7 @@ func TestPublishForcedTargetsProperty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read q1 message failed: %v", err)
 	}
-	if _, ok := msg.Properties[types.PropForwardTargetQueues]; ok {
+	if _, ok := msg.User.Properties[message.PropertyForwardTargetQueues]; ok {
 		t.Fatalf("forwarding metadata must not be persisted in message properties")
 	}
 }
@@ -2630,7 +2617,7 @@ func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
 	config := DefaultConfig()
 	config.DistributionMode = DistributionReplicate
 
-	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	manager := NewManager(logStore, groupStore, DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	}), config, logger, mockCl)
 
@@ -2661,11 +2648,11 @@ func TestDeliverQueueMessage(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	var deliveredMsg *brokerstorage.Message
+	var deliveredMsg *message.Envelope
 	var deliveredClientID string
 	var mu sync.Mutex
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		defer mu.Unlock()
 		deliveredClientID = clientID
@@ -2680,16 +2667,13 @@ func TestDeliverQueueMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	msg := &cluster.QueueMessage{
+	msg := message.New("$queue/test", []byte("routed payload"))
+	msg.User.Properties = map[string]string{"custom": "prop"}
+	msg.Broker.Queue = message.QueueMetadata{
 		MessageID: "msg-123",
-		QueueName: testQueueTest,
+		Name:      testQueueTest,
 		GroupID:   testGroupWorkers,
-		Payload:   []byte("routed payload"),
-		Sequence:  42,
-		UserProperties: map[string]string{
-			"custom":              "prop",
-			types.PropSourceTopic: "forged/topic",
-		},
+		Offset:    42,
 	}
 
 	err := manager.DeliverQueueMessage(ctx, "target-client", msg)
@@ -2712,27 +2696,27 @@ func TestDeliverQueueMessage(t *testing.T) {
 		t.Errorf("Expected topic '$queue/test', got '%s'", deliveredMsg.Topic)
 	}
 
-	if string(deliveredMsg.GetPayload()) != "routed payload" {
-		t.Errorf("Expected payload 'routed payload', got '%s'", string(deliveredMsg.GetPayload()))
+	if string(deliveredMsg.PayloadBytes()) != "routed payload" {
+		t.Errorf("Expected payload 'routed payload', got '%s'", string(deliveredMsg.PayloadBytes()))
 	}
 
-	if deliveredMsg.Properties[types.PropMessageID] != "msg-123" {
-		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Properties[types.PropMessageID])
+	if deliveredMsg.Broker.Queue.MessageID != "msg-123" {
+		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Broker.Queue.MessageID)
 	}
-	if deliveredMsg.Properties[types.PropQueueName] != testQueueTest {
-		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Properties[types.PropQueueName])
+	if deliveredMsg.Broker.Queue.Name != testQueueTest {
+		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Broker.Queue.Name)
 	}
-	if sourceTopic, ok := deliveredMsg.Properties[types.PropSourceTopic]; !ok || sourceTopic != "" {
-		t.Errorf("Expected an explicit empty broker-owned source topic, got %q (present=%t)", sourceTopic, ok)
+	if deliveredMsg.Broker.Source.Topic != "" {
+		t.Errorf("Expected an empty broker-owned source topic, got %q", deliveredMsg.Broker.Source.Topic)
 	}
 }
 
-func TestDeliverQueueMessageCanonicalizesCapturedTopic(t *testing.T) {
-	var deliveredMsg *brokerstorage.Message
+func TestDeliverQueueMessagePreservesCanonicalTopic(t *testing.T) {
+	var deliveredMsg *message.Envelope
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		DeliveryTargetFunc(func(_ context.Context, _ string, msg *brokerstorage.Message) error {
+		DeliveryTargetFunc(func(_ context.Context, _ string, msg *message.Envelope) error {
 			deliveredMsg = msg
 			return nil
 		}),
@@ -2741,14 +2725,9 @@ func TestDeliverQueueMessageCanonicalizesCapturedTopic(t *testing.T) {
 		nil,
 	)
 
-	err := manager.DeliverQueueMessage(context.Background(), "target-client", &cluster.QueueMessage{
-		MessageID: "m:1",
-		QueueName: "m",
-		GroupID:   "rules-engine",
-		Topic:     testCapturedTopic,
-		Payload:   []byte("payload"),
-		Sequence:  1,
-	})
+	envelope := message.New("$queue/"+testCapturedTopic, []byte("payload"))
+	envelope.Broker.Queue = message.QueueMetadata{MessageID: "m:1", Name: "m", GroupID: "rules-engine", Offset: 1}
+	err := manager.DeliverQueueMessage(context.Background(), "target-client", envelope)
 	if err != nil {
 		t.Fatalf("DeliverQueueMessage failed: %v", err)
 	}
@@ -2764,7 +2743,7 @@ func TestGetOrCreateQueue_CreatesEphemeral(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil })
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil })
 	config := DefaultConfig()
 	logger := slog.Default()
 
@@ -2836,7 +2815,7 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -2867,8 +2846,8 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 	if msg.Topic != topic {
 		t.Fatalf("expected stored topic %q, got %q", topic, msg.Topic)
 	}
-	if string(msg.GetPayload()) != "hello" {
-		t.Fatalf("expected payload hello, got %q", string(msg.GetPayload()))
+	if string(msg.PayloadBytes()) != "hello" {
+		t.Fatalf("expected payload hello, got %q", string(msg.PayloadBytes()))
 	}
 }
 
@@ -2876,7 +2855,7 @@ func TestEphemeralQueue_DisconnectAndCleanup(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil })
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil })
 	config := DefaultConfig()
 	config.DeliveryInterval = 50 * time.Millisecond
 	logger := slog.Default()
@@ -2996,7 +2975,7 @@ func TestCleanupStaleConsumersStartsEphemeralExpiry(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		config,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -3039,7 +3018,7 @@ func TestCleanupEphemeralQueues(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error { return nil })
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error { return nil })
 	config := DefaultConfig()
 	logger := slog.Default()
 
@@ -3094,7 +3073,7 @@ func TestEnqueueLocal(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	})
 
@@ -3110,7 +3089,12 @@ func TestEnqueueLocal(t *testing.T) {
 	}
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
-	msgID, err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{"key": testCustomValue})
+	msgID, err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{
+		"key":                    testCustomValue,
+		message.PropertyClientID: "mqtt:remote-client",
+		message.PropertyProtocol: string(message.ProtocolMQTT),
+		message.PropertyTraceID:  "trace-remote",
+	})
 	if err != nil {
 		t.Fatalf("EnqueueLocal failed: %v", err)
 	}
@@ -3128,13 +3112,31 @@ func TestEnqueueLocal(t *testing.T) {
 	if tail == 0 {
 		t.Error("Expected message to be stored in mqtt queue")
 	}
+
+	stored, err := logStore.Read(ctx, "mqtt", 0)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	defer message.Release(stored)
+	if stored.Broker.Source.ClientID != "mqtt:remote-client" || stored.Broker.Source.Protocol != message.ProtocolMQTT {
+		t.Fatalf("typed source metadata was not preserved: %+v", stored.Broker.Source)
+	}
+	if stored.Broker.Trace.TraceID != "trace-remote" {
+		t.Fatalf("typed trace metadata was not preserved: %+v", stored.Broker.Trace)
+	}
+	if _, leaked := stored.User.Properties[message.PropertyClientID]; leaked {
+		t.Fatal("broker source metadata leaked into user properties")
+	}
+	if _, leaked := stored.User.Properties[message.PropertyTraceID]; leaked {
+		t.Fatal("broker trace metadata leaked into user properties")
+	}
 }
 
 func TestSubscriptionTrackingReferenceCounts(t *testing.T) {
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -3168,7 +3170,7 @@ func TestSubscriptionTrackingPrunesStaleEntries(t *testing.T) {
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		cfg,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -3193,7 +3195,7 @@ func TestUpdateHeartbeatRemovesStaleTrackedTargets(t *testing.T) {
 	manager := NewManager(
 		memlog.New(),
 		newMockGroupStore(),
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -3232,7 +3234,7 @@ func TestOnConsumerRemovedCallbackFires(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		cfg,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -3281,7 +3283,7 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 	manager := NewManager(
 		logStore,
 		groupStore,
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		nil,
@@ -3373,7 +3375,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 	}
 
 	// Ack one message to free PEL space (message ID format is queueName:offset)
-	ackID := fmt.Sprintf("pelcap:%d", msgs[0].Sequence)
+	ackID := fmt.Sprintf("pelcap:%d", msgs[0].Broker.Queue.Offset)
 	if err := mgr.Ack(ctx, "pelcap", ackID, "g1"); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
@@ -3396,7 +3398,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 
 	mgr := NewManager(
 		logStore, groupStore,
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		logger, nil,
 	)
@@ -3408,20 +3410,10 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	poisonMsg := &types.Message{
-		ID:    "bad-msg-1",
-		Topic: "$queue/tasks/process",
-		Properties: map[string]string{
-			"custom-key": "custom-val",
-		},
-	}
-	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
-	poisonMsg.SetPayloadFromBuffer(pool.GetWithData([]byte("poison-payload")))
+	poisonMsg := newQueueEnvelope("bad-msg-1", "$queue/tasks/process", []byte("poison-payload"))
+	poisonMsg.User.Properties = map[string]string{"custom-key": "custom-val"}
 
 	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
-	poisonMsg.ReleasePayload()
-	reused := pool.GetWithData([]byte("reused-buffer!"))
-	defer reused.Release()
 
 	// Verify the DLQ queue was auto-created
 	dlqCfg, err := logStore.GetQueue(ctx, "$dlq/tasks")
@@ -3437,35 +3429,35 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read DLQ message: %v", err)
 	}
-	if string(msg.GetPayload()) != "poison-payload" {
-		t.Fatalf("expected poison-payload, got %s", string(msg.GetPayload()))
+	if string(msg.PayloadBytes()) != "poison-payload" {
+		t.Fatalf("expected poison-payload, got %s", string(msg.PayloadBytes()))
 	}
-	if msg.Properties["_dlq_original_queue"] != "tasks" {
-		t.Fatalf("expected original queue 'tasks', got %q", msg.Properties["_dlq_original_queue"])
+	if msg.Broker.Transfer.SourceQueue != "tasks" {
+		t.Fatalf("expected original queue 'tasks', got %q", msg.Broker.Transfer.SourceQueue)
 	}
-	if msg.Properties["_dlq_original_topic"] != "$queue/tasks/process" {
-		t.Fatalf("expected original topic, got %q", msg.Properties["_dlq_original_topic"])
+	if msg.Broker.Source.Topic != "$queue/tasks/process" {
+		t.Fatalf("expected original topic, got %q", msg.Broker.Source.Topic)
 	}
-	if msg.Properties["_dlq_group"] != testGroupWorkers {
-		t.Fatalf("expected group 'workers', got %q", msg.Properties["_dlq_group"])
+	if msg.Broker.Transfer.SourceGroup != testGroupWorkers {
+		t.Fatalf("expected group 'workers', got %q", msg.Broker.Transfer.SourceGroup)
 	}
-	if msg.Properties["_dlq_delivery_count"] != "6" {
-		t.Fatalf("expected delivery count '6', got %q", msg.Properties["_dlq_delivery_count"])
+	if msg.Broker.Transfer.DeliveryCount != 6 {
+		t.Fatalf("expected delivery count 6, got %d", msg.Broker.Transfer.DeliveryCount)
 	}
-	if msg.Properties["_dlq_original_id"] != "bad-msg-1" {
-		t.Fatalf("expected original ID 'bad-msg-1', got %q", msg.Properties["_dlq_original_id"])
+	if msg.Broker.Transfer.SourceOffset != 42 {
+		t.Fatalf("expected original offset 42, got %d", msg.Broker.Transfer.SourceOffset)
 	}
-	if msg.Properties[types.PropDLQTransferID] == "" || msg.ID != msg.Properties[types.PropDLQTransferID] {
-		t.Fatalf("expected stable transfer identity, id=%q property=%q", msg.ID, msg.Properties[types.PropDLQTransferID])
+	if msg.Broker.Transfer.ID == "" || msg.Broker.Queue.MessageID != msg.Broker.Transfer.ID {
+		t.Fatalf("expected stable transfer identity, id=%q transfer=%q", msg.Broker.Queue.MessageID, msg.Broker.Transfer.ID)
 	}
-	if msg.Properties[types.PropDLQReason] != "decode failed" {
-		t.Fatalf("expected reject reason, got %q", msg.Properties[types.PropDLQReason])
+	if msg.Broker.Transfer.FailureReason != "decode failed" {
+		t.Fatalf("expected reject reason, got %q", msg.Broker.Transfer.FailureReason)
 	}
-	if msg.Properties["custom-key"] != "custom-val" {
-		t.Fatalf("expected original property preserved, got %q", msg.Properties["custom-key"])
+	if msg.User.Properties["custom-key"] != "custom-val" {
+		t.Fatalf("expected original property preserved, got %q", msg.User.Properties["custom-key"])
 	}
-	if msg.State != types.StateDLQ {
-		t.Fatalf("expected state StateDLQ, got %q", msg.State)
+	if msg.Broker.Queue.State != message.QueueStateDLQ {
+		t.Fatalf("expected state DLQ, got %q", msg.Broker.Queue.State)
 	}
 }
 
@@ -3477,7 +3469,7 @@ func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
 
 	mgr := NewManager(
 		logStore, groupStore,
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		logger, nil,
 	)
@@ -3489,11 +3481,8 @@ func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
-		ID:      "msg-1",
-		Topic:   "$queue/tasks/test",
-		Payload: []byte("data"),
-	}, 0, 5, "", "$dlq/")
+	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+		newQueueEnvelope("msg-1", "$queue/tasks/test", []byte("data")), 0, 5, "", "$dlq/")
 	require.ErrorIs(t, err, ErrDLQDisabled)
 
 	// DLQ queue should not be created
@@ -3511,7 +3500,7 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 
 	mgr := NewManager(
 		logStore, groupStore,
-		DeliveryTargetFunc(func(context.Context, string, *brokerstorage.Message) error { return nil }),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
 		DefaultConfig(),
 		logger, nil,
 	)
@@ -3523,11 +3512,8 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
-		ID:      "msg-1",
-		Topic:   "$queue/tasks/test",
-		Payload: []byte("data"),
-	}, 0, 5, "", "$dlq/"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+		newQueueEnvelope("msg-1", "$queue/tasks/test", []byte("data")), 0, 5, "", "$dlq/"))
 
 	// Should use custom topic as queue name
 	_, err := logStore.GetQueue(ctx, "errors/tasks")
@@ -3538,8 +3524,8 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read from custom DLQ: %v", err)
 	}
-	if string(msg.GetPayload()) != "data" {
-		t.Fatalf("expected 'data', got %s", string(msg.GetPayload()))
+	if string(msg.PayloadBytes()) != "data" {
+		t.Fatalf("expected 'data', got %s", string(msg.PayloadBytes()))
 	}
 }
 
@@ -3550,7 +3536,7 @@ type appendFailingStore struct {
 	failQueue string
 }
 
-func (s *appendFailingStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *appendFailingStore) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	if queueName == s.failQueue {
 		return 0, errors.New("storage unavailable")
 	}
@@ -3632,7 +3618,7 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	headers := map[string][]byte{"binary": {0x00, 0xff}}
 	flushCapture(t, mgr, func() {
 		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			ClientID:   testCapturePublisher,
+			Source:     message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT},
 			Topic:      testCapturedTopic,
 			Payload:    payload,
 			Key:        key,
@@ -3656,19 +3642,19 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if got := string(stored.GetPayload()); got != "original" {
+	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("stored payload = %q, want original", got)
 	}
-	if got := string(stored.Key); got != "key" {
+	if got := string(stored.User.Key); got != "key" {
 		t.Fatalf("stored key = %q, want key", got)
 	}
-	if got := stored.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
+	if got := stored.User.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
 		t.Fatalf("stored binary header = %v, want [0 255]", got)
 	}
-	if _, ok := stored.Headers["new"]; ok {
+	if _, ok := stored.User.Headers["new"]; ok {
 		t.Fatal("stored headers alias the caller's map")
 	}
-	if got := stored.Properties[corebroker.ClientIDProperty]; got != testCapturePublisher {
+	if got := stored.Broker.Source.ClientID; got != testCapturePublisher {
 		t.Fatalf("stored client ID = %q, want mqtt-publisher", got)
 	}
 }

@@ -16,8 +16,8 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
+	coremessage "github.com/absmach/fluxmq/message"
 	qtypes "github.com/absmach/fluxmq/queue/types"
-	"github.com/absmach/fluxmq/storage"
 )
 
 type queueLinkManager interface {
@@ -113,10 +113,15 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueLinkManager.(corebroker.TopicQueuePublisher); ok {
 		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-			ClientID:   corebroker.ClientIDFromProperties(props),
+			Source: coremessage.SourceMetadata{
+				ClientID:   props[coremessage.PropertyClientID],
+				ExternalID: props[coremessage.PropertyExternalID],
+				Protocol:   coremessage.Protocol(props[coremessage.PropertyProtocol]),
+			},
+			Trace:      coremessage.TraceFromProperties(props),
 			Topic:      topic,
 			Payload:    payload,
-			Properties: props,
+			Properties: coremessage.FilterUserProperties(props),
 		}); err != nil {
 			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
@@ -160,7 +165,7 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.
 // It delivers only to local AMQP 1.0 subscribers without re-routing to the cluster.
-func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+func (b *Broker) ForwardPublish(ctx context.Context, msg *coremessage.Envelope) error {
 	subs, err := b.router.Match(msg.Topic)
 	if err != nil {
 		return err
@@ -176,7 +181,7 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 			continue
 		}
 		c := val.(*Connection)
-		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, sub.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+		c.deliverMessage(msg.Topic, msg.PayloadBytes(), coremessage.ProjectProperties(msg, coremessage.PublicProjection), sub.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	}
 
 	return nil
@@ -196,7 +201,8 @@ func (b *Broker) LocalDeliverPubSub(ctx context.Context, clientID string, topic 
 
 // DeliverToClient delivers a queue message to a specific AMQP client.
 // clientID must have the "amqp:" prefix already stripped.
-func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) error {
+func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *coremessage.Envelope) error {
+	defer coremessage.Release(msg)
 	// Strip the amqp: prefix to get the container ID
 	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
 
@@ -207,39 +213,23 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 
 	c := val.(*Connection)
 
-	// Convert storage.Message to delivery
-	switch m := msg.(type) {
-	case *storage.Message:
-		payload := m.GetPayload()
-		topic := m.Topic
-		props := m.Properties
-
-		// Build AMQP message
-		amqpMsg := &message.Message{
-			Properties: &message.Properties{
-				To: topic,
-			},
-			Data: [][]byte{payload},
-		}
-		if props != nil {
-			amqpMsg.ApplicationProperties = make(map[string]any, len(props))
-			for k, v := range props {
-				// Broker-internal state is never revealed to a remote receiver.
-				if corebroker.IsReservedProperty(k) {
-					continue
-				}
-				amqpMsg.ApplicationProperties[k] = v
-			}
-		}
-		if msgID, ok := props[qtypes.PropMessageID]; ok {
-			amqpMsg.Properties.MessageID = msgID
-		}
-
-		c.deliverAMQPMessage(topic, amqpMsg, m.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
-		return nil
-	default:
-		return fmt.Errorf("unsupported message type: %T", msg)
+	props := coremessage.ProjectProperties(msg, coremessage.PublicProjection)
+	amqpMsg := &message.Message{
+		Properties: &message.Properties{To: msg.Topic},
+		Data:       [][]byte{msg.PayloadBytes()},
 	}
+	if props != nil {
+		amqpMsg.ApplicationProperties = make(map[string]any, len(props))
+		for key, value := range props {
+			amqpMsg.ApplicationProperties[key] = value
+		}
+	}
+	if msg.Broker.Queue.MessageID != "" {
+		amqpMsg.Properties.MessageID = msg.Broker.Queue.MessageID
+	}
+
+	c.deliverAMQPMessage(msg.Topic, amqpMsg, msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+	return nil
 }
 
 // SetCluster sets the cluster reference for cross-node pub/sub routing.
@@ -253,14 +243,14 @@ func (b *Broker) SetRoutePublishTimeout(d time.Duration) {
 }
 
 // DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP client.
-func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
+func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *coremessage.Envelope) error {
 	containerID := strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)
 	val, ok := b.connections.Load(containerID)
 	if !ok {
 		return fmt.Errorf("%w: AMQP client not found: %s", corebroker.ErrClientNotConnected, containerID)
 	}
 	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties, msg.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+	c.deliverMessage(msg.Topic, msg.PayloadBytes(), coremessage.ProjectProperties(msg, coremessage.PublicProjection), msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	return nil
 }
 

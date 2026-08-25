@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	"github.com/absmach/fluxmq/mqtt/session"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,10 +33,7 @@ func TestDeliverToSession_MarkSentAfterWireWrite(t *testing.T) {
 	_, errConn := s.Connect(conn)
 	require.NoError(t, errConn)
 
-	msg := storage.AcquireMessage()
-	msg.Topic = testTopic
-	msg.QoS = 1
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.NewDelivery(testTopic, []byte("payload"), 1, false)
 
 	packetID, err := b.DeliverToSession(context.Background(), s, msg)
 	require.NoError(t, err)

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
@@ -59,22 +60,21 @@ func TestBuildPublishMessage(t *testing.T) {
 		msg := buildPublishMessage("m/d1/c/c1/test", []byte("payload"), 1, true, "http:1.2.3.4:1234", "ext-42", "application/senml+json")
 		require.NotNil(t, msg)
 		assert.Equal(t, "m/d1/c/c1/test", msg.Topic)
-		assert.Equal(t, []byte("payload"), msg.Payload)
-		assert.Equal(t, byte(1), msg.QoS)
-		assert.True(t, msg.Retain)
-		assert.Equal(t, "http:1.2.3.4:1234", msg.ClientID)
-		assert.Equal(t, "application/senml+json", msg.ContentType)
-		assert.Equal(t, corebroker.ProtocolHTTP, msg.Properties[corebroker.ProtocolProperty])
-		assert.Equal(t, "ext-42", msg.Properties[corebroker.ExternalIDProperty])
+		assert.Equal(t, []byte("payload"), msg.PayloadBytes())
+		assert.Equal(t, byte(1), msg.Broker.Delivery.QoS)
+		assert.True(t, msg.Broker.Delivery.Retain)
+		assert.Equal(t, "http:1.2.3.4:1234", msg.Broker.Source.ClientID)
+		assert.Equal(t, "application/senml+json", msg.User.ContentType)
+		assert.Equal(t, message.ProtocolHTTP, msg.Broker.Source.Protocol)
+		assert.Equal(t, "ext-42", msg.Broker.Source.ExternalID)
 	})
 
 	t.Run("omits external id when empty", func(t *testing.T) {
 		msg := buildPublishMessage("topic", []byte("p"), 0, false, "client", "", "")
 		require.NotNil(t, msg)
-		assert.Equal(t, corebroker.ProtocolHTTP, msg.Properties[corebroker.ProtocolProperty])
-		_, present := msg.Properties[corebroker.ExternalIDProperty]
-		assert.False(t, present, "external_id must not be set when empty")
-		assert.Equal(t, "", msg.ContentType)
+		assert.Equal(t, message.ProtocolHTTP, msg.Broker.Source.Protocol)
+		assert.Empty(t, msg.Broker.Source.ExternalID)
+		assert.Equal(t, "", msg.User.ContentType)
 	})
 }
 

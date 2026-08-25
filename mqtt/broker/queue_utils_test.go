@@ -4,15 +4,15 @@
 package broker
 
 import (
-	"encoding/base64"
 	"testing"
+	"time"
 
-	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestExtractAllProperties_CorrelationDataBase64(t *testing.T) {
+func TestSetMQTT5MetadataPreservesCorrelationData(t *testing.T) {
 	tests := []struct {
 		name            string
 		correlationData []byte
@@ -37,43 +37,59 @@ func TestExtractAllProperties_CorrelationDataBase64(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			props := &v5.PublishProperties{
-				CorrelationData: tt.correlationData,
+			envelope := message.New("topic", nil)
+			defer message.Release(envelope)
+			input := append([]byte(nil), tt.correlationData...)
+			setMQTT5Metadata(envelope, nil, time.Time{}, time.Time{}, nil, "", "", input)
+			if len(input) > 0 {
+				input[0] ^= 0xff
 			}
-
-			result := extractAllProperties(props)
-
-			encoded := result["correlation-id"]
-			if encoded == "" {
-				t.Fatal("correlation-id not set in result")
-			}
-
-			decoded, err := base64.StdEncoding.DecodeString(encoded)
-			if err != nil {
-				t.Fatalf("correlation-id is not valid base64: %v", err)
-			}
-
-			if string(decoded) != string(tt.correlationData) {
-				t.Errorf("round-trip failed: got %v, want %v", decoded, tt.correlationData)
-			}
+			assert.Equal(t, tt.correlationData, envelope.User.CorrelationData)
 		})
 	}
 }
 
-func TestExtractAllProperties_NilCorrelationData(t *testing.T) {
-	props := &v5.PublishProperties{
-		ContentType: "application/json",
-	}
+func TestSetMQTT5MetadataCopiesScalarPointers(t *testing.T) {
+	expiry := uint32(30)
+	payloadFormat := byte(1)
+	envelope := message.New("topic", nil)
+	defer message.Release(envelope)
 
-	result := extractAllProperties(props)
+	setMQTT5Metadata(envelope, &expiry, time.Time{}, time.Time{}, &payloadFormat, "", "", nil)
+	expiry = 1
+	payloadFormat = 0
 
-	if _, ok := result["correlation-id"]; ok {
-		t.Error("correlation-id should not be set when CorrelationData is nil")
-	}
+	assert.Equal(t, uint32(30), *envelope.User.MessageExpiry)
+	assert.Equal(t, byte(1), *envelope.User.PayloadFormat)
 }
 
-func TestExtractAllProperties_NilProps(t *testing.T) {
-	result := extractAllProperties(nil)
+func TestQueuePublishRequestPreservesMQTT5Metadata(t *testing.T) {
+	payloadFormat := byte(1)
+	messageExpiry := uint32(30)
+	publishedAt := time.Now()
+	expiresAt := publishedAt.Add(30 * time.Second)
+	envelope := message.New("requests/42", []byte("payload"))
+	defer message.Release(envelope)
+	envelope.User.ContentType = "application/json"
+	envelope.User.ResponseTopic = "responses/42"
+	envelope.User.CorrelationData = []byte{0x00, 0xff}
+	envelope.User.PayloadFormat = &payloadFormat
+	envelope.User.MessageExpiry = &messageExpiry
+	envelope.Broker.Delivery.PublishedAt = publishedAt
+	envelope.Broker.Delivery.ExpiresAt = expiresAt
+
+	publish := queuePublishRequest(envelope)
+	assert.Equal(t, envelope.User.ContentType, publish.ContentType)
+	assert.Equal(t, envelope.User.ResponseTopic, publish.ResponseTopic)
+	assert.Equal(t, envelope.User.CorrelationData, publish.CorrelationData)
+	assert.Equal(t, envelope.User.PayloadFormat, publish.PayloadFormat)
+	assert.Equal(t, envelope.User.MessageExpiry, publish.MessageExpiry)
+	assert.Equal(t, publishedAt, publish.PublishedAt)
+	assert.Equal(t, expiresAt, publish.ExpiresAt)
+}
+
+func TestExtractUserPropertiesNil(t *testing.T) {
+	result := extractUserProperties(nil)
 
 	if len(result) != 0 {
 		t.Errorf("expected empty map for nil props, got %v", result)
@@ -91,7 +107,7 @@ const (
 // A publishing device must not be able to set broker-internal properties: they
 // are the channel services use to pass state that authenticates nothing on its
 // own, so a forged one would let a client drive service behaviour.
-func TestExtractAllProperties_StripsReservedUserProperties(t *testing.T) {
+func TestExtractUserPropertiesStripsReservedProperties(t *testing.T) {
 	tests := []struct {
 		name   string
 		user   []v5.User
@@ -101,10 +117,10 @@ func TestExtractAllProperties_StripsReservedUserProperties(t *testing.T) {
 		{
 			name: "reserved property is dropped",
 			user: []v5.User{
-				{Key: corebroker.ReservedPropertyPrefix + "re.trace", Value: testRuleTrace},
+				{Key: message.ReservedPropertyPrefix + "re.trace", Value: testRuleTrace},
 			},
 			want:   map[string]string{},
-			absent: []string{corebroker.ReservedPropertyPrefix + "re.trace"},
+			absent: []string{message.ReservedPropertyPrefix + "re.trace"},
 		},
 		{
 			name: "ordinary properties are kept",
@@ -118,16 +134,16 @@ func TestExtractAllProperties_StripsReservedUserProperties(t *testing.T) {
 			name: "reserved dropped alongside ordinary",
 			user: []v5.User{
 				{Key: testTraceKey, Value: testTraceVal},
-				{Key: corebroker.ReservedPropertyPrefix + "re.trace", Value: testRuleTrace},
+				{Key: message.ReservedPropertyPrefix + "re.trace", Value: testRuleTrace},
 			},
 			want:   map[string]string{testTraceKey: testTraceVal},
-			absent: []string{corebroker.ReservedPropertyPrefix + "re.trace"},
+			absent: []string{message.ReservedPropertyPrefix + "re.trace"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := extractAllProperties(&v5.PublishProperties{User: tc.user})
+			got := extractUserProperties(&v5.PublishProperties{User: tc.user})
 
 			assert.Equal(t, tc.want, got)
 			for _, key := range tc.absent {

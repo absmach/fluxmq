@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
-	"github.com/absmach/fluxmq/storage"
+	payloadbuf "github.com/absmach/fluxmq/payload"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,18 +34,18 @@ func TestEncodePublishRetainsPayloadBuffer(t *testing.T) {
 		{"v5", packets.V5},
 	} {
 		t.Run(version.name, func(t *testing.T) {
-			pool := core.NewBufferPoolWithCapacity(4, 4, 4)
-			buf := pool.GetWithData([]byte("payload-bytes"))
+			pool := payloadbuf.NewPoolWithCapacity(4, 4, 4)
+			buf := pool.FromBytes([]byte("payload-bytes"))
 
-			msg := storage.AcquireMessage()
+			msg := message.Acquire()
 			msg.Topic = testTopic
-			msg.SetPayloadFromBuffer(buf)
+			msg.SetPayloadBuffer(buf)
 
 			pkt := EncodePublish(msg, 7, version.id, false)
 
 			// The publisher is done with the message as soon as the packet exists.
 			msg.ReleasePayload()
-			storage.ReleaseMessage(msg)
+			message.Release(msg)
 
 			require.Equal(t, int32(1), buf.RefCount(),
 				"packet must hold the only remaining reference after the message is released")
@@ -75,19 +76,19 @@ func TestAsyncDeliveryKeepsPayloadIntact(t *testing.T) {
 	}, nil))
 	conn.awaitWrite(t)
 
-	pool := core.NewBufferPoolWithCapacity(4, 4, 4)
-	buf := pool.GetWithData([]byte(payload))
+	pool := payloadbuf.NewPoolWithCapacity(4, 4, 4)
+	buf := pool.FromBytes([]byte(payload))
 
-	msg := storage.AcquireMessage()
+	msg := message.Acquire()
 	msg.Topic = testTopic
-	msg.SetPayloadFromBuffer(buf)
+	msg.SetPayloadBuffer(buf)
 
 	pkt := EncodePublish(msg, 0, packets.V311, false)
 	require.NoError(t, c.TryWriteDataPacket(pkt, nil))
 
 	// QoS 0 delivery drops the message's reference immediately after queueing.
 	msg.ReleasePayload()
-	storage.ReleaseMessage(msg)
+	message.Release(msg)
 
 	// A concurrent publish reusing a recycled buffer would overwrite the bytes
 	// the queued packet points into.

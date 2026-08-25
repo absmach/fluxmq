@@ -13,8 +13,8 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/connguard"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/broker"
-	"github.com/absmach/fluxmq/storage"
 	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -33,22 +33,11 @@ type Config struct {
 	TLSConfig *piondtls.Config
 }
 
-func buildPublishMessage(topic string, payload []byte, clientID, externalID, contentType string) *storage.Message {
-	props := map[string]string{
-		corebroker.ProtocolProperty: corebroker.ProtocolCoAP,
-	}
-	if externalID != "" {
-		props[corebroker.ExternalIDProperty] = externalID
-	}
-	return &storage.Message{
-		Topic:       topic,
-		Payload:     payload,
-		QoS:         0,
-		Retain:      false,
-		ClientID:    clientID,
-		ContentType: contentType,
-		Properties:  props,
-	}
+func buildPublishMessage(topic string, data []byte, clientID, externalID, contentType string) *message.Envelope {
+	envelope := message.New(topic, data)
+	envelope.User.ContentType = contentType
+	envelope.Broker.Source = message.SourceMetadata{ClientID: clientID, ExternalID: externalID, Protocol: message.ProtocolCoAP}
+	return envelope
 }
 
 // Server is a CoAP server that bridges CoAP to MQTT.
@@ -252,10 +241,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		s.sendResponse(w, r, codes.Unauthorized, "unauthorized")
 		return
 	}
-	props := map[string]string{corebroker.ProtocolProperty: corebroker.ProtocolCoAP}
-	if externalID != "" {
-		props[corebroker.ExternalIDProperty] = externalID
-	}
+	var props map[string]string
 	hookReq, ok := s.broker.ApplyPublishHooks(r.Context(), corebroker.BlockingHookRequest{
 		ClientID:   clientID,
 		ExternalID: externalID,
@@ -274,6 +260,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 	topic, payload, props = hookReq.Topic, hookReq.Payload, hookReq.Properties
+	externalID = hookReq.ExternalID
 	if !s.broker.CanPublish(r.Context(), clientID, topic) {
 		s.logger.Warn("coap_publish_forbidden",
 			slog.String("client_id", clientID),
@@ -288,7 +275,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	}
 
 	msg := buildPublishMessage(topic, payload, clientID, externalID, contentType)
-	msg.Properties = props
+	msg.User.Properties = message.FilterUserProperties(props)
 
 	s.logger.Debug("coap_publish",
 		slog.String("topic", topic),

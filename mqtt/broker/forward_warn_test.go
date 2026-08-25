@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,11 +40,7 @@ func TestForwardPublishWarnsWhenNoLocalSubscription(t *testing.T) {
 	b := NewBroker(nil, nil, WithLogger(slog.New(slog.NewTextHandler(&logBuf, nil))))
 	defer b.Close()
 
-	err := b.ForwardPublish(context.Background(), &cluster.Message{
-		Topic:   "no/subscribers/here",
-		Payload: []byte("lost?"),
-		QoS:     1,
-	})
+	err := b.ForwardPublish(context.Background(), message.NewDelivery("no/subscribers/here", []byte("lost?"), 1, false))
 	require.NoError(t, err)
 
 	logged := logBuf.String()
@@ -52,11 +48,7 @@ func TestForwardPublishWarnsWhenNoLocalSubscription(t *testing.T) {
 	require.Contains(t, logged, "no/subscribers/here")
 
 	// Immediately repeated misses are throttled to one warning.
-	err = b.ForwardPublish(context.Background(), &cluster.Message{
-		Topic:   "still/no/subscribers",
-		Payload: []byte("lost?"),
-		QoS:     1,
-	})
+	err = b.ForwardPublish(context.Background(), message.NewDelivery("still/no/subscribers", []byte("lost?"), 1, false))
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(logBuf.String(), "forwarded publish matched no local subscription"))
 }
@@ -68,11 +60,7 @@ func TestForwardPublishDoesNotWarnWhenSubscriptionMatches(t *testing.T) {
 
 	require.NoError(t, b.router.Subscribe("local-sub", "telemetry/#", 1, storage.SubscribeOptions{}))
 
-	err := b.ForwardPublish(context.Background(), &cluster.Message{
-		Topic:   testTelemetryRoom,
-		Payload: []byte("hello"),
-		QoS:     1,
-	})
+	err := b.ForwardPublish(context.Background(), message.NewDelivery(testTelemetryRoom, []byte("hello"), 1, false))
 	require.NoError(t, err)
 	assert.NotContains(t, logBuf.String(), "forwarded publish matched no local subscription")
 }

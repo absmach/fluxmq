@@ -6,14 +6,15 @@ package queue
 import (
 	"context"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 )
 
 // Deliverer is the output boundary for queue message delivery.
 // Protocol brokers implement this interface so the delivery engine
 // can push messages to connected clients without knowing protocol details.
+// Deliver takes ownership of msg on every return path.
 type Deliverer interface {
-	Deliver(ctx context.Context, clientID string, msg *storage.Message) error
+	Deliver(ctx context.Context, clientID string, msg *message.Envelope) error
 }
 
 // ClientDeliveryTargetChecker is optionally implemented by a Deliverer that can
@@ -30,9 +31,9 @@ type ClientConnectionChecker interface {
 	IsClientConnected(clientID string) bool
 }
 
-// DeliveryTargetFunc adapts a plain function to the DeliveryTarget interface.
-type DeliveryTargetFunc func(ctx context.Context, clientID string, msg *storage.Message) error
+// DeliveryTargetFunc adapts a plain function to the Deliverer interface.
+type DeliveryTargetFunc func(ctx context.Context, clientID string, msg *message.Envelope) error
 
-func (f DeliveryTargetFunc) Deliver(ctx context.Context, clientID string, msg *storage.Message) error {
+func (f DeliveryTargetFunc) Deliver(ctx context.Context, clientID string, msg *message.Envelope) error {
 	return f(ctx, clientID, msg)
 }

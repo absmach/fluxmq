@@ -4,15 +4,12 @@
 package session
 
 import (
-	"encoding/base64"
-	"strconv"
 	"time"
 
-	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/storage"
 )
 
 // EncodePublish builds a PUBLISH control packet for the given protocol version
@@ -29,23 +26,23 @@ import (
 // takes its own reference to it, which pkt.Release() drops. The caller may
 // therefore release the message as soon as this returns, even though the packet
 // may not be serialized until later on an asynchronous send queue.
-func EncodePublish(msg *storage.Message, packetID uint16, version byte, dup bool) packets.ControlPacket {
+func EncodePublish(msg *message.Envelope, packetID uint16, version byte, dup bool) packets.ControlPacket {
 	if version == packets.V5 {
 		p := v5.AcquirePublish()
 		p.FixedHeader = packets.FixedHeader{
 			PacketType: packets.PublishType,
-			QoS:        msg.QoS,
-			Retain:     msg.Retain,
+			QoS:        msg.Broker.Delivery.QoS,
+			Retain:     msg.Broker.Delivery.Retain,
 			Dup:        dup,
 		}
 		p.TopicName = msg.Topic
-		p.Payload = msg.GetPayload()
+		p.Payload = msg.PayloadBytes()
 		p.PayloadRef = retainPayload(msg)
 		p.ID = packetID
 
 		// Send the remaining message-expiry interval, not the original.
-		if msg.MessageExpiry != nil && !msg.Expiry.IsZero() {
-			if remaining := time.Until(msg.Expiry); remaining > 0 {
+		if msg.User.MessageExpiry != nil && !msg.Broker.Delivery.ExpiresAt.IsZero() {
+			if remaining := time.Until(msg.Broker.Delivery.ExpiresAt); remaining > 0 {
 				remainingSec := uint32(remaining.Seconds())
 				p.Properties.MessageExpiry = &remainingSec
 			}
@@ -57,106 +54,42 @@ func EncodePublish(msg *storage.Message, packetID uint16, version byte, dup bool
 	p := v3.AcquirePublish()
 	p.FixedHeader = packets.FixedHeader{
 		PacketType: packets.PublishType,
-		QoS:        msg.QoS,
-		Retain:     msg.Retain,
+		QoS:        msg.Broker.Delivery.QoS,
+		Retain:     msg.Broker.Delivery.Retain,
 		Dup:        dup,
 	}
 	p.TopicName = msg.Topic
-	p.Payload = msg.GetPayload()
+	p.Payload = msg.PayloadBytes()
 	p.PayloadRef = retainPayload(msg)
 	p.ID = packetID
 	return p
 }
 
 // retainPayload takes a reference to the message's payload buffer on behalf of
-// an outbound packet. It returns nil for messages whose payload is a plain
-// slice, which is owned by the message and needs no reference counting.
-func retainPayload(msg *storage.Message) packets.PayloadRef {
-	if msg.PayloadBuf == nil {
+// an outbound packet.
+func retainPayload(msg *message.Envelope) packets.PayloadRef {
+	if msg.Payload == nil {
 		return nil
 	}
-	msg.PayloadBuf.Retain()
-	return msg.PayloadBuf
+	msg.Payload.Retain()
+	return msg.Payload
 }
 
-func applyPublishProperties(props *v5.PublishProperties, msg *storage.Message) {
+func applyPublishProperties(props *v5.PublishProperties, msg *message.Envelope) {
 	if props == nil || msg == nil {
 		return
 	}
 
-	// Prefer explicit fields; fall back to mapped properties.
-	if msg.ContentType != "" {
-		props.ContentType = msg.ContentType
-	} else if v := msg.Properties["content-type"]; v != "" {
-		props.ContentType = v
-	}
+	props.ContentType = msg.User.ContentType
+	props.ResponseTopic = msg.User.ResponseTopic
+	props.CorrelationData = msg.User.CorrelationData
+	props.PayloadFormat = msg.User.PayloadFormat
 
-	if msg.ResponseTopic != "" {
-		props.ResponseTopic = msg.ResponseTopic
-	} else if v := msg.Properties["response-topic"]; v != "" {
-		props.ResponseTopic = v
-	}
-
-	if len(msg.CorrelationData) > 0 {
-		props.CorrelationData = msg.CorrelationData
-	} else if v := msg.Properties["correlation-id"]; v != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
-			props.CorrelationData = decoded
-		} else {
-			props.CorrelationData = []byte(v)
+	projected := message.ProjectProperties(msg, message.PublicProjection)
+	if len(projected) > 0 {
+		props.User = make([]v5.User, 0, len(projected))
+		for key, value := range projected {
+			props.User = append(props.User, v5.User{Key: key, Value: value})
 		}
-	}
-
-	if msg.PayloadFormat != nil {
-		props.PayloadFormat = msg.PayloadFormat
-	} else if v := msg.Properties["payload-format"]; v != "" {
-		if n, err := strconv.ParseUint(v, 10, 8); err == nil {
-			pf := byte(n)
-			props.PayloadFormat = &pf
-		}
-	}
-
-	// Build User properties slice directly without intermediate map.
-	// Skip entirely when no properties exist (common case).
-	var userCount int
-	if msg.Properties != nil {
-		for k := range msg.Properties {
-			if !isReservedUserPropertyKey(k) {
-				userCount++
-			}
-		}
-	}
-	for k := range msg.UserProperties {
-		if !broker.IsReservedProperty(k) {
-			userCount++
-		}
-	}
-
-	if userCount > 0 {
-		props.User = make([]v5.User, 0, userCount)
-		if msg.Properties != nil {
-			for k, v := range msg.Properties {
-				if isReservedUserPropertyKey(k) {
-					continue
-				}
-				props.User = append(props.User, v5.User{Key: k, Value: v})
-			}
-		}
-		for k, v := range msg.UserProperties {
-			if broker.IsReservedProperty(k) {
-				continue
-			}
-			props.User = append(props.User, v5.User{Key: k, Value: v})
-		}
-	}
-}
-
-func isReservedUserPropertyKey(key string) bool {
-	switch key {
-	case "content-type", "response-topic", "correlation-id", "payload-format":
-		return true
-	default:
-		// Broker-internal properties are never revealed to a subscribing device.
-		return broker.IsReservedProperty(key)
 	}
 }

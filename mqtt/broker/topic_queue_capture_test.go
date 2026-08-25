@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -36,11 +37,8 @@ func TestPublishCapturesOrdinaryTopicInMatchingQueues(t *testing.T) {
 		t.Fatalf("SetQueueManager failed: %v", err)
 	}
 
-	msg := &storage.Message{
-		ClientID: topicCapturePublisherID,
-		Topic:    topicCaptureTopic,
-	}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.New(topicCaptureTopic, []byte("payload"))
+	msg.Broker.Source.ClientID = topicCapturePublisherID
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -64,8 +62,7 @@ func TestPublishDoesNotRecaptureExplicitQueueTopic(t *testing.T) {
 		t.Fatalf("SetQueueManager failed: %v", err)
 	}
 
-	msg := &storage.Message{Topic: "$queue/events/item"}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.New("$queue/events/item", []byte("payload"))
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -105,11 +102,8 @@ func TestPublishSurvivesQueueCaptureFailure(t *testing.T) {
 		delivered++
 	})
 
-	msg := &storage.Message{
-		ClientID: topicCapturePublisherID,
-		Topic:    topicCaptureTopic,
-	}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.New(topicCaptureTopic, []byte("payload"))
+	msg.Broker.Source.ClientID = topicCapturePublisherID
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("capture failure must not fail the publish, got %v", err)
 	}

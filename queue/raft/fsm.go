@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/hashicorp/raft"
@@ -57,10 +58,10 @@ type Operation struct {
 	ConsumerID string `json:"consumer_id,omitempty"`
 
 	// For OpAppend
-	Message *types.Message `json:"message,omitempty"`
+	Message *message.Envelope `json:"message,omitempty"`
 
 	// For OpAppendBatch
-	Messages []*types.Message `json:"messages,omitempty"`
+	Messages []*message.Envelope `json:"messages,omitempty"`
 
 	// For OpTruncate
 	MinOffset uint64 `json:"min_offset,omitempty"`
@@ -227,10 +228,13 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	if op.Message == nil {
 		return &ApplyResult{Error: fmt.Errorf("nil message in append operation")}
 	}
+	messageID := op.Message.Broker.Queue.MessageID
 
 	offset, err := f.queueStore.Append(ctx, op.QueueName, op.Message)
 	if err == storage.ErrQueueNotFound {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
+			message.Release(op.Message)
+			op.Message = nil
 			f.logger.Error("failed to auto-create queue for append",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
@@ -239,17 +243,20 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 		offset, err = f.queueStore.Append(ctx, op.QueueName, op.Message)
 	}
 	if err != nil {
+		message.Release(op.Message)
+		op.Message = nil
 		f.logger.Error("failed to apply append",
 			slog.String("queue", op.QueueName),
-			slog.String("message_id", op.Message.ID),
+			slog.String("message_id", messageID),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
 	}
 
 	f.logger.Debug("applied append",
 		slog.String("queue", op.QueueName),
-		slog.String("message_id", op.Message.ID),
+		slog.String("message_id", messageID),
 		slog.Uint64("offset", offset))
+	op.Message = nil
 
 	return &ApplyResult{Offset: offset}
 }
@@ -262,6 +269,8 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
 	if err == storage.ErrQueueNotFound {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
+			releaseMessages(op.Messages)
+			op.Messages = nil
 			f.logger.Error("failed to auto-create queue for append batch",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
@@ -270,19 +279,30 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 		offset, err = f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
 	}
 	if err != nil {
+		count := len(op.Messages)
+		releaseMessages(op.Messages)
+		op.Messages = nil
 		f.logger.Error("failed to apply append batch",
 			slog.String("queue", op.QueueName),
-			slog.Int("count", len(op.Messages)),
+			slog.Int("count", count),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
 	}
 
+	count := len(op.Messages)
 	f.logger.Debug("applied append batch",
 		slog.String("queue", op.QueueName),
-		slog.Int("count", len(op.Messages)),
+		slog.Int("count", count),
 		slog.Uint64("first_offset", offset))
+	op.Messages = nil
 
 	return &ApplyResult{Offset: offset}
+}
+
+func releaseMessages(messages []*message.Envelope) {
+	for _, msg := range messages {
+		message.Release(msg)
+	}
 }
 
 func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {

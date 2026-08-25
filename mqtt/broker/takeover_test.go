@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -753,7 +754,7 @@ func TestCreateSession_InflightTrackerSizedByServerLimit(t *testing.T) {
 	// The store accepts several inbound QoS 2 transactions even though the
 	// outbound send quota is one.
 	for i := uint16(1); i <= 5; i++ {
-		m := &storage.Message{Topic: "t", QoS: 2}
+		m := message.NewDelivery("t", nil, 2, false)
 		require.NoError(t, s.Inflight().Add(i, m, messages.Inbound),
 			"inbound QoS 2 must not be limited by the client's outbound Receive Maximum")
 	}
@@ -767,15 +768,15 @@ func TestDeliverMessage_EncodesForLeaseVersion(t *testing.T) {
 	b := NewBroker(memory.New(), nil)
 	defer b.Close()
 
-	v3msg := &storage.Message{Topic: "t", QoS: 1, PacketID: 1}
-	v3msg.SetPayloadFromBytes([]byte("x"))
+	v3msg := message.NewDelivery("t", []byte("x"), 1, false)
+	v3msg.Broker.Delivery.PacketID = 1
 	v3conn := newSyncConn()
 	require.NoError(t, b.DeliverMessage(v3conn, 4, v3msg, nil))
 	require.Len(t, v3conn.writtenPackets(), 1)
 	require.IsType(t, &v3.Publish{}, v3conn.writtenPackets()[0])
 
-	v5msg := &storage.Message{Topic: "t", QoS: 1, PacketID: 2}
-	v5msg.SetPayloadFromBytes([]byte("x"))
+	v5msg := message.NewDelivery("t", []byte("x"), 1, false)
+	v5msg.Broker.Delivery.PacketID = 2
 	v5conn := newSyncConn()
 	require.NoError(t, b.DeliverMessage(v5conn, 5, v5msg, nil))
 	require.Len(t, v5conn.writtenPackets(), 1)
@@ -796,8 +797,7 @@ func TestDeliverQoS_SupersededLeaseRetriesCurrentGeneration(t *testing.T) {
 	require.NoError(t, err)
 	gen := s.Epoch()
 
-	msg := &storage.Message{Topic: "t", QoS: 1}
-	msg.SetPayloadFromBytes([]byte("x"))
+	msg := message.NewDelivery("t", []byte("x"), 1, false)
 
 	// Deliver under a stale (superseded) generation: it must re-lease against the
 	// current generation and deliver, not fall back to the offline/pending path.
@@ -910,8 +910,7 @@ func TestDelivery_StaleOnSentDoesNotMarkSent(t *testing.T) {
 	_, err = s.Connect(oldConn)
 	require.NoError(t, err)
 
-	msg := &storage.Message{Topic: "t", QoS: 1}
-	msg.SetPayloadFromBytes([]byte("x"))
+	msg := message.NewDelivery("t", []byte("x"), 1, false)
 	pid, err := b.DeliverToSession(context.Background(), s, msg)
 	require.NoError(t, err)
 	require.NotZero(t, pid)
@@ -940,8 +939,12 @@ func TestRestoreInflightFromStorage_PreservesDirection(t *testing.T) {
 	defer b.Close()
 
 	const clientID = "c"
-	out := &storage.Message{Topic: "out", PacketID: 5, QoS: 2, InflightDirection: byte(messages.Outbound)}
-	in := &storage.Message{Topic: "in", PacketID: 5, QoS: 2, InflightDirection: byte(messages.Inbound)}
+	out := message.NewDelivery("out", nil, 2, false)
+	out.Broker.Delivery.PacketID = 5
+	out.Broker.Delivery.InflightDirection = byte(messages.Outbound)
+	in := message.NewDelivery("in", nil, 2, false)
+	in.Broker.Delivery.PacketID = 5
+	in.Broker.Delivery.InflightDirection = byte(messages.Inbound)
 	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Outbound, 5), out))
 	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Inbound, 5), in))
 
@@ -978,13 +981,13 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	gotOut, err := tracker.Ack(5)
 	require.NoError(t, err)
 	require.Equal(t, "out", gotOut.Topic)
-	require.Equal(t, "op", string(gotOut.GetPayload()), "payload must survive cluster transfer")
-	require.Equal(t, "sensors/temperature", gotOut.Properties["x-source-topic"])
-	require.Equal(t, "abc", gotOut.Properties["trace"])
+	require.Equal(t, "op", string(gotOut.PayloadBytes()), "payload must survive cluster transfer")
+	require.Equal(t, "sensors/temperature", gotOut.Broker.Source.Topic)
+	require.Equal(t, "abc", gotOut.User.Properties["trace"])
 	gotIn, err := tracker.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "in", gotIn.Topic)
-	require.Equal(t, "ip", string(gotIn.GetPayload()))
+	require.Equal(t, "ip", string(gotIn.PayloadBytes()))
 }
 
 // TestRestoreInflightFromTakeover_SkipsInvalidDirection guards finding #2: a
@@ -1014,7 +1017,7 @@ func TestSession_AckInbound_UsesDirectionalAck(t *testing.T) {
 	s, _, err := b.CreateSession("c", 5, session.Options{CleanStart: true})
 	require.NoError(t, err)
 
-	require.NoError(t, s.Inflight().Add(9, &storage.Message{Topic: "in"}, messages.Inbound))
+	require.NoError(t, s.Inflight().Add(9, message.New("in", nil), messages.Inbound))
 	got, err := s.AckInbound(9)
 	require.NoError(t, err)
 	require.Equal(t, "in", got.Topic)

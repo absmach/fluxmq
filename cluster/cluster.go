@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -169,14 +170,16 @@ type Cluster interface {
 
 	// RouteQueueMessage sends a queue message to a remote consumer.
 	// This is called in proxy mode when the worker needs to deliver a message
-	// to a consumer connected to a different node.
-	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error
+	// to a consumer connected to a different node. It borrows msg for the
+	// duration of the call.
+	RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error
 }
 
 // ForwardPublishHandler handles topic-based message forwarding from remote nodes.
 // The receiving node matches its own local subscriptions and delivers to them.
 type ForwardPublishHandler interface {
-	ForwardPublish(ctx context.Context, msg *Message) error
+	// ForwardPublish takes ownership of msg on every return path.
+	ForwardPublish(ctx context.Context, msg *message.Envelope) error
 }
 
 // MessageHandler handles message delivery and session management for the cluster.
@@ -186,9 +189,10 @@ type ForwardPublishHandler interface {
 // - Fetching retained messages from local storage
 // - Fetching will messages from local storage.
 type MessageHandler interface {
-	// DeliverToClient delivers a message to a local MQTT client.
+	// DeliverToClient delivers a message to a local MQTT client and takes
+	// ownership of msg on every return path.
 	// This is called when a message is routed from another broker node.
-	DeliverToClient(ctx context.Context, clientID string, msg *Message) error
+	DeliverToClient(ctx context.Context, clientID string, msg *message.Envelope) error
 
 	// GetSessionStateAndClose captures the full state of a session and closes it.
 	// This is called when another node is taking over the session.
@@ -200,10 +204,11 @@ type MessageHandler interface {
 	// node begins acquiring ownership under a replacement lease.
 	HandleSessionLeaseLost(ctx context.Context, clientIDs []string)
 
-	// GetRetainedMessage fetches a retained message from the local store.
+	// GetRetainedMessage fetches an owned retained message from the local store.
+	// The caller must release it.
 	// This is called when another node requests a large retained message payload.
 	// Returns (nil, nil) if the message doesn't exist.
-	GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error)
+	GetRetainedMessage(ctx context.Context, topic string) (*message.Envelope, error)
 
 	// GetWillMessage fetches a will message from the local store.
 	// This is called when another node requests a large will message payload.

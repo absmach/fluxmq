@@ -18,7 +18,8 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
+	"github.com/absmach/fluxmq/payload"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,11 +65,7 @@ func TestStress_HighThroughputPublish(t *testing.T) {
 
 	for time.Now().Before(endTime) {
 		<-ticker.C
-		msg := &storage.Message{
-			Topic: "stress/test",
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery("stress/test", payload, 0, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 		messageCount.Add(1)
 	}
@@ -133,11 +130,7 @@ func TestStress_ConcurrentPublishers(t *testing.T) {
 			}
 
 			for j := 0; j < messagesPerPublisher; j++ {
-				msg := &storage.Message{
-					Topic: "stress/concurrent",
-					QoS:   0,
-				}
-				msg.SetPayloadFromBytes(payload)
+				msg := message.NewDelivery("stress/concurrent", payload, 0, false)
 
 				if err := broker.Publish(context.Background(), msg); err != nil {
 					errors.Add(1)
@@ -199,11 +192,7 @@ func TestStress_MemoryPressure(t *testing.T) {
 
 		// Publish 100 messages of this size
 		for i := 0; i < 100; i++ {
-			msg := &storage.Message{
-				Topic: "stress/memory",
-				QoS:   0,
-			}
-			msg.SetPayloadFromBytes(payload)
+			msg := message.NewDelivery("stress/memory", payload, 0, false)
 			require.NoError(t, broker.Publish(context.Background(), msg))
 		}
 
@@ -272,11 +261,7 @@ func TestStress_SustainedLoad(t *testing.T) {
 					payload[i] = byte(i % 256)
 				}
 
-				msg := &storage.Message{
-					Topic: topic,
-					QoS:   0,
-				}
-				msg.SetPayloadFromBytes(payload)
+				msg := message.NewDelivery(topic, payload, 0, false)
 
 				if err := broker.Publish(context.Background(), msg); err != nil {
 					errors.Add(1)
@@ -326,7 +311,7 @@ func TestStress_BufferPoolExhaustion(t *testing.T) {
 	}
 
 	// Create a pool with limited capacity
-	pool := core.NewBufferPoolWithCapacity(10, 10, 10)
+	pool := payload.NewPoolWithCapacity(10, 10, 10)
 
 	const numGoroutines = 100
 	const operationsPerGoroutine = 10000
@@ -346,10 +331,8 @@ func TestStress_BufferPoolExhaustion(t *testing.T) {
 				size := 512 + (id*j)%1024
 				buf := pool.Get(size)
 
-				// Simulate some work
-				data := buf.Bytes()
-				data[0] = byte(id)
-				data[len(data)-1] = byte(j)
+				// Simulate a consumer inspecting the immutable payload.
+				_ = buf.Len()
 
 				// Sometimes retain and release multiple times
 				if j%10 == 0 {
@@ -416,11 +399,7 @@ func TestStress_FanOutExtreme(t *testing.T) {
 	t.Logf("Publishing %d messages to %d subscribers...", numMessages, numSubscribers)
 
 	for i := 0; i < numMessages; i++ {
-		msg := &storage.Message{
-			Topic: "fanout/extreme",
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery("fanout/extreme", payload, 0, false)
 		require.NoError(t, broker.Publish(context.Background(), msg))
 
 		if (i+1)%100 == 0 {
@@ -510,11 +489,7 @@ func TestStress_RapidSubscribeUnsubscribe(t *testing.T) {
 			<-ticker.C
 
 			topic := fmt.Sprintf("churn/topic/%d", int(pubCount.Load())%5)
-			msg := &storage.Message{
-				Topic: topic,
-				QoS:   0,
-			}
-			msg.SetPayloadFromBytes(payload)
+			msg := message.NewDelivery(topic, payload, 0, false)
 			broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			pubCount.Add(1)
 		}

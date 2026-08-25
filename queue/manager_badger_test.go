@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	queueLogBadger "github.com/absmach/fluxmq/queue/storage/badger/log"
-	brokerstorage "github.com/absmach/fluxmq/storage"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -39,9 +39,9 @@ func TestWildcardQueueSubscriptionBadger(t *testing.T) {
 	// Create stores
 	logStore := queueLogBadger.New(db)
 
-	deliveredMsgs := make(chan *brokerstorage.Message, 10)
+	deliveredMsgs := make(chan *message.Envelope, 10)
 
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		t.Logf("Delivered message to %s: topic=%s", clientID, msg.Topic)
 		deliveredMsgs <- msg
 		return nil
@@ -104,12 +104,12 @@ func TestWildcardQueueSubscriptionBadger(t *testing.T) {
 	t.Log("Waiting for message delivery...")
 	select {
 	case msg := <-deliveredMsgs:
-		t.Logf("Received message: topic=%s payload=%s", msg.Topic, string(msg.GetPayload()))
+		t.Logf("Received message: topic=%s payload=%s", msg.Topic, string(msg.PayloadBytes()))
 		if msg.Topic != publishTopic {
 			t.Errorf("Expected topic %s, got %s", publishTopic, msg.Topic)
 		}
-		if string(msg.GetPayload()) != string(payload) {
-			t.Errorf("Expected payload %s, got %s", payload, msg.GetPayload())
+		if string(msg.PayloadBytes()) != string(payload) {
+			t.Errorf("Expected payload %s, got %s", payload, msg.PayloadBytes())
 		}
 	case <-time.After(2 * time.Second):
 		// Debug: check state

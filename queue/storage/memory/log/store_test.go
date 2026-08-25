@@ -7,7 +7,8 @@ import (
 	"context"
 	"testing"
 
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
+	"github.com/absmach/fluxmq/payload"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/require"
 )
@@ -19,59 +20,54 @@ func newTestStore(t *testing.T, queueName string) *Store {
 	return store
 }
 
-func TestStore_AppendCopiesPayloadBuffer(t *testing.T) {
+func TestStore_AppendTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, "buffered")
 
-	// Cap-1 pool: releasing then re-acquiring returns the same underlying
-	// buffer, so a reused Get overwrites the bytes the store may alias.
-	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
-	msg := &types.Message{ID: "append-buf", Topic: "$queue/buffered"}
-	msg.SetPayloadFromBuffer(pool.GetWithData([]byte("remote-payload")))
+	pool := payload.NewPoolWithCapacity(1, 0, 0)
+	buf := pool.FromBytes([]byte("remote-payload"))
+	msg := message.NewWithBuffer("$queue/buffered", buf)
+	msg.Broker.Queue.MessageID = "append-buf"
 
 	_, err := store.Append(ctx, "buffered", msg)
 	require.NoError(t, err)
 
-	msg.ReleasePayload()
-	reused := pool.GetWithData([]byte("overwritten!!!"))
-	defer reused.Release()
-
 	got, err := store.Read(ctx, "buffered", 0)
 	require.NoError(t, err)
-	require.Equal(t, "remote-payload", string(got.GetPayload()))
+	require.Same(t, buf, got.Payload)
+	require.Equal(t, "remote-payload", string(got.PayloadBytes()))
 }
 
-func TestStore_AppendBatchCopiesPayloadBuffers(t *testing.T) {
+func TestStore_AppendBatchTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, "buffered-batch")
 
-	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
-	msg := &types.Message{ID: "batch-buf", Topic: "$queue/buffered-batch"}
-	msg.SetPayloadFromBuffer(pool.GetWithData([]byte("remote-payload")))
+	pool := payload.NewPoolWithCapacity(1, 0, 0)
+	buf := pool.FromBytes([]byte("remote-payload"))
+	msg := message.NewWithBuffer("$queue/buffered-batch", buf)
+	msg.Broker.Queue.MessageID = "batch-buf"
 
-	_, err := store.AppendBatch(ctx, "buffered-batch", []*types.Message{msg})
+	_, err := store.AppendBatch(ctx, "buffered-batch", []*message.Envelope{msg})
 	require.NoError(t, err)
-
-	msg.ReleasePayload()
-	reused := pool.GetWithData([]byte("overwritten!!!"))
-	defer reused.Release()
 
 	got, err := store.Read(ctx, "buffered-batch", 0)
 	require.NoError(t, err)
-	require.Equal(t, "remote-payload", string(got.GetPayload()))
+	require.Same(t, buf, got.Payload)
+	require.Equal(t, "remote-payload", string(got.PayloadBytes()))
 }
 
 func TestStore_AppendPlainPayloadNotCopied(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, "plain")
 
-	payload := []byte("plain-payload")
-	msg := &types.Message{ID: "plain-1", Topic: "$queue/plain", Payload: payload}
+	data := []byte("plain-payload")
+	msg := message.New("$queue/plain", data)
+	msg.Broker.Queue.MessageID = "plain-1"
 
 	_, err := store.Append(ctx, "plain", msg)
 	require.NoError(t, err)
 
 	got, err := store.Read(ctx, "plain", 0)
 	require.NoError(t, err)
-	require.Equal(t, &payload[0], &got.GetPayload()[0], "plain payload must be retained without copying")
+	require.Same(t, msg.Payload, got.Payload, "append must retain the envelope payload without copying")
 }

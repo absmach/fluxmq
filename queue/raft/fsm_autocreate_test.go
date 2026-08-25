@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -85,6 +85,14 @@ func newTestLogFSM() (*LogFSM, *memlog.Store) {
 	return NewLogFSM(queueStore, noopGroupStore{}, logger), queueStore
 }
 
+func newQueuedEnvelope(id, topic string, data []byte) *message.Envelope {
+	envelope := message.New(topic, data)
+	envelope.Broker.Queue.MessageID = id
+	envelope.Broker.Queue.State = message.QueueStateQueued
+	envelope.Broker.Queue.CreatedAt = time.Now()
+	return envelope
+}
+
 func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 	fsm, store := newTestLogFSM()
 	ctx := context.Background()
@@ -92,13 +100,7 @@ func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 
 	result := fsm.applyAppend(ctx, &Operation{
 		QueueName: queueName,
-		Message: &types.Message{
-			ID:        "msg-1",
-			Topic:     "$queue/" + queueName,
-			Payload:   []byte("payload-1"),
-			State:     types.StateQueued,
-			CreatedAt: time.Now(),
-		},
+		Message:   newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("payload-1")),
 	})
 	if result.Error != nil {
 		t.Fatalf("applyAppend returned error: %v", result.Error)
@@ -115,7 +117,7 @@ func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected appended message at offset 0, got error: %v", err)
 	}
-	if got := string(msg.GetPayload()); got != "payload-1" {
+	if got := string(msg.PayloadBytes()); got != "payload-1" {
 		t.Fatalf("unexpected payload: %q", got)
 	}
 }
@@ -125,13 +127,7 @@ func TestLogFSM_ApplyAppendWithPayloadBufferAfterJSONRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	queueName := "demo-buffered"
 
-	msg := &types.Message{
-		ID:        "buffered-msg-1",
-		Topic:     "$queue/" + queueName,
-		State:     types.StateQueued,
-		CreatedAt: time.Now(),
-	}
-	msg.SetPayloadFromBuffer(core.GetBufferWithData([]byte("buffered payload")))
+	msg := newQueuedEnvelope("buffered-msg-1", "$queue/"+queueName, []byte("buffered payload"))
 	defer msg.ReleasePayload()
 
 	data, err := json.Marshal(&Operation{
@@ -157,7 +153,7 @@ func TestLogFSM_ApplyAppendWithPayloadBufferAfterJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected appended message at offset 0, got error: %v", err)
 	}
-	if gotPayload := string(got.GetPayload()); gotPayload != "buffered payload" {
+	if gotPayload := string(got.PayloadBytes()); gotPayload != "buffered payload" {
 		t.Fatalf("expected buffered payload, got %q", gotPayload)
 	}
 }
@@ -169,21 +165,9 @@ func TestLogFSM_ApplyAppendBatchAutoCreatesMissingQueue(t *testing.T) {
 
 	result := fsm.applyAppendBatch(ctx, &Operation{
 		QueueName: queueName,
-		Messages: []*types.Message{
-			{
-				ID:        "msg-1",
-				Topic:     "$queue/" + queueName,
-				Payload:   []byte("one"),
-				State:     types.StateQueued,
-				CreatedAt: time.Now(),
-			},
-			{
-				ID:        "msg-2",
-				Topic:     "$queue/" + queueName,
-				Payload:   []byte("two"),
-				State:     types.StateQueued,
-				CreatedAt: time.Now(),
-			},
+		Messages: []*message.Envelope{
+			newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("one")),
+			newQueuedEnvelope("msg-2", "$queue/"+queueName, []byte("two")),
 		},
 	})
 	if result.Error != nil {
@@ -207,17 +191,15 @@ func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterJSONRoundTrip(t *testing.
 	ctx := context.Background()
 	queueName := "demo-buffered-batch"
 
-	first := &types.Message{ID: "batch-msg-1", Topic: "$queue/" + queueName, State: types.StateQueued, CreatedAt: time.Now()}
-	first.SetPayloadFromBuffer(core.GetBufferWithData([]byte("one")))
+	first := newQueuedEnvelope("batch-msg-1", "$queue/"+queueName, []byte("one"))
 	defer first.ReleasePayload()
-	second := &types.Message{ID: "batch-msg-2", Topic: "$queue/" + queueName, State: types.StateQueued, CreatedAt: time.Now()}
-	second.SetPayloadFromBuffer(core.GetBufferWithData([]byte("two")))
+	second := newQueuedEnvelope("batch-msg-2", "$queue/"+queueName, []byte("two"))
 	defer second.ReleasePayload()
 
 	data, err := json.Marshal(&Operation{
 		Type:      OpAppendBatch,
 		QueueName: queueName,
-		Messages:  []*types.Message{first, second},
+		Messages:  []*message.Envelope{first, second},
 	})
 	if err != nil {
 		t.Fatalf("marshal append batch operation failed: %v", err)
@@ -237,7 +219,7 @@ func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterJSONRoundTrip(t *testing.
 	if err != nil {
 		t.Fatalf("expected first appended message, got error: %v", err)
 	}
-	if gotPayload := string(got.GetPayload()); gotPayload != "one" {
+	if gotPayload := string(got.PayloadBytes()); gotPayload != "one" {
 		t.Fatalf("expected first payload one, got %q", gotPayload)
 	}
 
@@ -245,7 +227,7 @@ func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterJSONRoundTrip(t *testing.
 	if err != nil {
 		t.Fatalf("expected second appended message, got error: %v", err)
 	}
-	if gotPayload := string(got.GetPayload()); gotPayload != "two" {
+	if gotPayload := string(got.PayloadBytes()); gotPayload != "two" {
 		t.Fatalf("expected second payload two, got %q", gotPayload)
 	}
 }

@@ -7,20 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
 const (
-	// headerTopic is the message header key that carries the original topic.
-	headerTopic = "_topic"
-	// headerUserHeaders carries QueueService's opaque byte-valued headers as one
-	// encoded value so they cannot collide with broker-owned storage metadata.
-	headerUserHeaders = "_queue_user_headers"
+	headerEnvelope = "_envelope"
 )
 
 var (
@@ -235,41 +232,44 @@ func (a *Adapter) queueConfigExists(queueName string) error {
 	return nil
 }
 
-func encodeMessage(msg *types.Message) ([]byte, []byte, map[string][]byte) {
-	value := msg.GetPayload()
-	key := msg.Key
+type persistedQueueEnvelope struct {
+	Version message.Version        `json:"version"`
+	Topic   string                 `json:"topic"`
+	User    message.UserMetadata   `json:"user,omitempty"`
+	Broker  message.BrokerMetadata `json:"broker,omitempty"`
+}
 
-	headers := make(map[string][]byte)
-	for k, v := range msg.Properties {
-		headers[k] = []byte(v)
+func encodeMessage(envelope *message.Envelope) ([]byte, []byte, map[string][]byte, error) {
+	if err := envelope.Validate(); err != nil {
+		return nil, nil, nil, err
 	}
-
-	headers[headerTopic] = []byte(msg.Topic)
-	headers["_id"] = []byte(msg.ID)
-	if msg.State != "" {
-		headers["_state"] = []byte(msg.State)
+	metadata, err := json.Marshal(persistedQueueEnvelope{
+		Version: envelope.Version,
+		Topic:   envelope.Topic,
+		User:    envelope.User,
+		Broker:  envelope.Broker,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("marshal queue envelope metadata: %w", err)
 	}
-	if !msg.ExpiresAt.IsZero() {
-		headers["_expires_at"] = []byte(strconv.FormatInt(msg.ExpiresAt.UnixMilli(), 10))
-	}
-	if len(msg.Headers) > 0 {
-		// map[string][]byte has no unsupported JSON value type.
-		if encoded, err := json.Marshal(msg.Headers); err == nil {
-			headers[headerUserHeaders] = encoded
-		}
-	}
-
-	return value, key, headers
+	return envelope.PayloadBytes(), envelope.User.Key, map[string][]byte{headerEnvelope: metadata}, nil
 }
 
 // Append adds a message to the end of a queue's log.
-func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (a *Adapter) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	if err := a.queueConfigExists(queueName); err != nil {
 		return 0, err
 	}
 
-	value, key, headers := encodeMessage(msg)
-	return a.store.Append(queueName, value, key, headers)
+	value, key, headers, err := encodeMessage(msg)
+	if err != nil {
+		return 0, err
+	}
+	offset, err := a.store.Append(queueName, value, key, headers)
+	if err == nil {
+		message.Release(msg)
+	}
+	return offset, err
 }
 
 // AppendAndSync appends a message and syncs the exact segment containing it as
@@ -277,7 +277,7 @@ func (a *Adapter) Append(ctx context.Context, queueName string, msg *types.Messa
 // A cancelled context aborts before the append, so the caller can NACK without
 // the record ever reaching the log; the append and its fsync are not
 // interruptible once started.
-func (a *Adapter) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (a *Adapter) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -285,8 +285,15 @@ func (a *Adapter) AppendAndSync(ctx context.Context, queueName string, msg *type
 		return 0, err
 	}
 
-	value, key, headers := encodeMessage(msg)
-	return a.store.AppendAndSync(queueName, value, key, headers)
+	value, key, headers, err := encodeMessage(msg)
+	if err != nil {
+		return 0, err
+	}
+	offset, err := a.store.AppendAndSync(queueName, value, key, headers)
+	if err == nil {
+		message.Release(msg)
+	}
+	return offset, err
 }
 
 // SupportsDurableSync reports that AppendAndSync establishes a real crash
@@ -301,7 +308,7 @@ func (a *Adapter) SyncQueue(_ context.Context, queueName string) error {
 }
 
 // AppendBatch adds multiple messages to a queue's log.
-func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error) {
+func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*message.Envelope) (uint64, error) {
 	if len(msgs) == 0 {
 		return 0, ErrEmptyBatch
 	}
@@ -313,15 +320,24 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*typ
 	batch := NewBatch(0)
 
 	for _, msg := range msgs {
-		value, key, headers := encodeMessage(msg)
+		value, key, headers, err := encodeMessage(msg)
+		if err != nil {
+			return 0, err
+		}
 		batch.Append(value, key, headers)
 	}
 
-	return a.store.AppendBatch(queueName, batch)
+	offset, err := a.store.AppendBatch(queueName, batch)
+	if err == nil {
+		for _, msg := range msgs {
+			message.Release(msg)
+		}
+	}
+	return offset, err
 }
 
 // Read retrieves a message at a specific offset.
-func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*types.Message, error) {
+func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*message.Envelope, error) {
 	msg, err := a.store.Read(queueName, offset)
 	if err != nil {
 		if err == ErrOffsetOutOfRange {
@@ -333,13 +349,13 @@ func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*t
 		return nil, err
 	}
 
-	return logMessageToTypes(msg), nil
+	return logMessageToEnvelope(msg)
 }
 
 // ReadBatch reads messages starting from offset up to limit.
-func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error) {
+func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*message.Envelope, error) {
 	if limit <= 0 {
-		return []*types.Message{}, nil
+		return []*message.Envelope{}, nil
 	}
 
 	tail, err := a.store.Tail(queueName)
@@ -351,10 +367,10 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 	}
 
 	if startOffset >= tail {
-		return []*types.Message{}, nil
+		return []*message.Envelope{}, nil
 	}
 
-	result := make([]*types.Message, 0, limit)
+	result := make([]*message.Envelope, 0, limit)
 	current := startOffset
 
 	for current < tail && len(result) < limit {
@@ -364,8 +380,10 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 				break
 			}
 			if err == ErrQueueNotFound {
+				releaseEnvelopes(result)
 				return nil, storage.ErrQueueNotFound
 			}
+			releaseEnvelopes(result)
 			return nil, err
 		}
 
@@ -376,7 +394,12 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 			if msg.Offset >= tail {
 				return result, nil
 			}
-			result = append(result, logMessageToTypes(&msg))
+			envelope, err := logMessageToEnvelope(&msg)
+			if err != nil {
+				releaseEnvelopes(result)
+				return nil, err
+			}
+			result = append(result, envelope)
 			if len(result) >= limit {
 				return result, nil
 			}
@@ -390,6 +413,12 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 	}
 
 	return result, nil
+}
+
+func releaseEnvelopes(envelopes []*message.Envelope) {
+	for _, envelope := range envelopes {
+		message.Release(envelope)
+	}
 }
 
 // Head returns the first valid offset in the queue.
@@ -716,36 +745,24 @@ func (a *Adapter) syncPELFromStore(queueName, groupID string, group *types.Consu
 	group.ReplacePEL(pel)
 }
 
-// logMessageToTypes converts a log Message to a types.Message.
-func logMessageToTypes(msg *Message) *types.Message {
-	result := &types.Message{
-		Sequence:   msg.Offset,
-		Payload:    msg.Value,
-		Key:        msg.Key,
-		CreatedAt:  msg.Timestamp,
-		Properties: make(map[string]string),
+func logMessageToEnvelope(msg *Message) (*message.Envelope, error) {
+	var metadata persistedQueueEnvelope
+	if err := json.Unmarshal(msg.Headers[headerEnvelope], &metadata); err != nil {
+		return nil, fmt.Errorf("decode queue envelope metadata at offset %d: %w", msg.Offset, err)
 	}
-
-	for k, v := range msg.Headers {
-		switch k {
-		case headerTopic:
-			result.Topic = string(v)
-		case "_id":
-			result.ID = string(v)
-		case "_state":
-			result.State = types.MessageState(v)
-		case "_expires_at":
-			if ms, err := strconv.ParseInt(string(v), 10, 64); err == nil {
-				result.ExpiresAt = time.UnixMilli(ms)
-			}
-		case headerUserHeaders:
-			_ = json.Unmarshal(v, &result.Headers)
-		default:
-			result.Properties[k] = string(v)
-		}
+	if metadata.Version != message.Version1 {
+		return nil, fmt.Errorf("%w: %d", message.ErrUnsupportedVersion, metadata.Version)
 	}
-
-	return result
+	envelope := message.New(metadata.Topic, msg.Value)
+	envelope.Version = metadata.Version
+	envelope.User = metadata.User
+	envelope.User.Key = msg.Key
+	envelope.Broker = metadata.Broker
+	envelope.Broker.Queue.Offset = msg.Offset
+	if envelope.Broker.Queue.CreatedAt.IsZero() {
+		envelope.Broker.Queue.CreatedAt = msg.Timestamp
+	}
+	return envelope, nil
 }
 
 // pelEntryToTypes converts a log PELEntry to a types.PendingEntry.

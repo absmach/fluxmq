@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
@@ -133,7 +134,7 @@ type EtcdCluster struct {
 
 	// Local retained message cache for fast wildcard matching (deprecated, use hybridRetained).
 	// retainedCacheRev: see subCacheRev.
-	retainedCache    map[string]*storage.Message // key: topic
+	retainedCache    map[string]*message.Envelope // key: topic
 	retainedCacheRev int64
 	retainedCacheMu  sync.RWMutex
 
@@ -306,7 +307,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		queueConsumersAll:     make(map[string]*QueueConsumerInfo),
 		queueConsumersByQueue: make(map[string]map[string]*QueueConsumerInfo),
 		queueConsumersByGroup: make(map[string]map[string]map[string]*QueueConsumerInfo),
-		retainedCache:         make(map[string]*storage.Message),
+		retainedCache:         make(map[string]*message.Envelope),
 		localStore:            localStore,
 		leasedKeys:            make(map[string]string),
 		stopCh:                make(chan struct{}),
@@ -649,9 +650,9 @@ func (c *EtcdCluster) loadRetainedCache() error {
 
 	// Rebuild from scratch so reloads after watch interruptions also evict
 	// entries whose delete events were missed.
-	fresh := make(map[string]*storage.Message, len(resp.Kvs))
+	fresh := make(map[string]*message.Envelope, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
-		var msg storage.Message
+		var msg message.Envelope
 		if err := json.Unmarshal(kv.Value, &msg); err != nil {
 			c.logger.Warn("failed to unmarshal retained message during cache load", slog.String("error", err.Error()))
 			continue
@@ -663,9 +664,13 @@ func (c *EtcdCluster) loadRetainedCache() error {
 	}
 
 	c.retainedCacheMu.Lock()
+	previous := c.retainedCache
 	c.retainedCache = fresh
 	c.retainedCacheRev = resp.Header.Revision
 	c.retainedCacheMu.Unlock()
+	for _, envelope := range previous {
+		message.Release(envelope)
+	}
 
 	c.logger.Info("loaded retained messages into cache", slog.Int("count", len(fresh)))
 	return nil
@@ -708,14 +713,16 @@ func (c *EtcdCluster) watchRetained() {
 
 					switch event.Type {
 					case clientv3.EventTypePut:
-						var msg storage.Message
+						var msg message.Envelope
 						if err := json.Unmarshal(event.Kv.Value, &msg); err != nil {
 							c.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
 							continue
 						}
+						message.Release(c.retainedCache[topic])
 						c.retainedCache[topic] = &msg
 
 					case clientv3.EventTypeDelete:
+						message.Release(c.retainedCache[topic])
 						delete(c.retainedCache, topic)
 					}
 				}
@@ -1447,11 +1454,11 @@ type etcdRetainedStore struct {
 	cluster *EtcdCluster
 }
 
-func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
+func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *message.Envelope) error {
 	key := retainedPrefix + topic
 
 	// Empty payload means delete
-	if len(msg.GetPayload()) == 0 {
+	if len(msg.PayloadBytes()) == 0 {
 		return s.Delete(ctx, topic)
 	}
 
@@ -1464,7 +1471,7 @@ func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *storage.
 	return err
 }
 
-func (s *etcdRetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
+func (s *etcdRetainedStore) Get(ctx context.Context, topic string) (*message.Envelope, error) {
 	key := retainedPrefix + topic
 
 	resp, err := s.client.Get(ctx, key)
@@ -1476,7 +1483,7 @@ func (s *etcdRetainedStore) Get(ctx context.Context, topic string) (*storage.Mes
 		return nil, storage.ErrNotFound
 	}
 
-	var msg storage.Message
+	var msg message.Envelope
 	if err := json.Unmarshal(resp.Kvs[0].Value, &msg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal retained message: %w", err)
 	}
@@ -1490,17 +1497,16 @@ func (s *etcdRetainedStore) Delete(ctx context.Context, topic string) error {
 	return err
 }
 
-func (s *etcdRetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
+func (s *etcdRetainedStore) Match(ctx context.Context, filter string) ([]*message.Envelope, error) {
 	// Use local cache for fast wildcard matching instead of etcd scan
 	s.cluster.retainedCacheMu.RLock()
 	defer s.cluster.retainedCacheMu.RUnlock()
 
-	var matched []*storage.Message
+	var matched []*message.Envelope
 	for topic, msg := range s.cluster.retainedCache {
 		if topicMatchesFilter(topic, filter) {
 			// Create a copy to avoid returning cached pointers
-			msgCopy := *msg
-			matched = append(matched, &msgCopy)
+			matched = append(matched, msg.Clone())
 		}
 	}
 
@@ -1873,11 +1879,11 @@ func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 }
 
 // RouteQueueMessage sends a queue message to a remote consumer.
-func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error {
+func (c *EtcdCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
 	}
-	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, queueName, msg)
+	return c.transport.SendRouteQueueMessage(ctx, nodeID, clientID, msg)
 }
 
 // RouteQueueBatch sends multiple queue messages to a remote node.
@@ -1904,7 +1910,7 @@ func (c *EtcdCluster) SetQueueHandler(handler QueueHandler) {
 
 // DeliverToClient implements MessageHandler.DeliverToClient.
 // Delegates to the broker to deliver a message to a local client.
-func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg *Message) error {
+func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg *message.Envelope) error {
 	if c.msgHandler == nil {
 		return ErrNoMessageHandlerConfigured
 	}
@@ -1922,7 +1928,7 @@ func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID stri
 
 // GetRetainedMessage implements MessageHandler.GetRetainedMessage.
 // Fetches a retained message from the local BadgerDB store.
-func (c *EtcdCluster) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+func (c *EtcdCluster) GetRetainedMessage(ctx context.Context, topic string) (*message.Envelope, error) {
 	if c.localStore == nil {
 		return nil, ErrNoLocalStoreConfigured
 	}
@@ -1945,14 +1951,7 @@ func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string,
 		return ErrNoMessageHandlerConfigured
 	}
 
-	msg := &Message{
-		Topic:      topic,
-		Payload:    payload,
-		QoS:        qos,
-		Retain:     retain,
-		Dup:        dup,
-		Properties: properties,
-	}
+	msg := envelopeFromWire(topic, payload, qos, retain, dup, properties)
 
 	return c.msgHandler.DeliverToClient(ctx, clientID, msg)
 }

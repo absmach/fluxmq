@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	corebroker "github.com/absmach/fluxmq/broker"
+	coremessage "github.com/absmach/fluxmq/message"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -29,13 +29,13 @@ func TestPublishCapturesAMQP1PubSubTopic(t *testing.T) {
 	b := New(nil, nil, nil)
 	b.queueLinkManager = qm
 
-	props := map[string]string{corebroker.ClientIDProperty: "amqp:publisher"}
+	props := map[string]string{coremessage.PropertyClientID: "amqp:publisher"}
 	b.Publish(context.Background(), "m/domain/c/channel/tst", []byte("payload"), props)
 
 	if len(qm.captures) != 1 {
 		t.Fatalf("expected one queue capture, got %d", len(qm.captures))
 	}
-	if got := qm.captures[0].ClientID; got != "amqp:publisher" {
+	if got := qm.captures[0].Source.ClientID; got != "amqp:publisher" {
 		t.Fatalf("captured client ID = %q", got)
 	}
 }

@@ -6,7 +6,8 @@ package cluster
 import (
 	"testing"
 
-	queueTypes "github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/message"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 )
 
 const (
@@ -17,20 +18,18 @@ const (
 func TestRouteQueueMessageWirePreservesDeliveryTopic(t *testing.T) {
 	const deliveryTopic = "$queue/m/domain/c/channel/tst"
 
-	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
-		MessageID: testQueueMessageID,
-		QueueName: "m",
-		GroupID:   "rules-engine",
-		Topic:     deliveryTopic,
-		Payload:   []byte("payload"),
-		Sequence:  1,
-		Stream:    true,
-	})
+	envelope := queueTestEnvelope(deliveryTopic, "domain/c/channel/tst")
+	defer message.Release(envelope)
+	wire := encodeRouteQueueMessage("consumer", envelope)
 	if wire.Topic != deliveryTopic {
 		t.Fatalf("wire topic = %q, want %q", wire.Topic, deliveryTopic)
 	}
 
-	decoded := decodeRouteQueueMessage(wire)
+	decoded, err := decodeRouteQueueMessage(wire)
+	if err != nil {
+		t.Fatalf("decode queue message: %v", err)
+	}
+	defer message.Release(decoded)
 	if decoded.Topic != deliveryTopic {
 		t.Fatalf("decoded topic = %q, want %q", decoded.Topic, deliveryTopic)
 	}
@@ -41,60 +40,74 @@ func TestRouteQueueMessageWirePreservesDeliveryTopic(t *testing.T) {
 func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 	const sourceTopic = "domain/c/channel/tst"
 
-	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
-		MessageID:      testQueueMessageID,
-		QueueName:      "m",
-		GroupID:        "rules-engine",
-		Topic:          "$queue/m/domain/c/channel/tst",
-		SourceTopic:    sourceTopic,
-		Payload:        []byte("payload"),
-		Sequence:       1,
-		UserProperties: map[string]string{"user": testUserPropertyVal},
-	})
+	envelope := queueTestEnvelope("$queue/m/domain/c/channel/tst", sourceTopic)
+	defer message.Release(envelope)
+	envelope.User.Properties = map[string]string{"user": testUserPropertyVal}
+	wire := encodeRouteQueueMessage("consumer", envelope)
 
-	decoded := decodeRouteQueueMessage(wire)
-	if decoded.SourceTopic != sourceTopic {
-		t.Fatalf("decoded source topic = %q, want %q", decoded.SourceTopic, sourceTopic)
+	decoded, err := decodeRouteQueueMessage(wire)
+	if err != nil {
+		t.Fatalf("decode queue message: %v", err)
+	}
+	defer message.Release(decoded)
+	if decoded.Broker.Source.Topic != sourceTopic {
+		t.Fatalf("decoded source topic = %q, want %q", decoded.Broker.Source.Topic, sourceTopic)
 	}
 	// Queue-owned metadata must not leak into the user properties a consumer
 	// sees as its own.
-	if _, leaked := decoded.UserProperties[queueTypes.PropSourceTopic]; leaked {
+	if _, leaked := decoded.User.Properties[message.PropertySourceTopic]; leaked {
 		t.Fatal("the source topic leaked into user properties")
 	}
-	if decoded.UserProperties["user"] != testUserPropertyVal {
-		t.Fatalf("an ordinary user property was dropped: %v", decoded.UserProperties)
+	if decoded.User.Properties["user"] != testUserPropertyVal {
+		t.Fatalf("an ordinary user property was dropped: %v", decoded.User.Properties)
 	}
 }
 
 // Source topic is broker-owned even when its real value is empty. The encoder
 // must overwrite a publisher-supplied value before the decoder promotes the
-// reserved property into QueueMessage.SourceTopic.
+// reserved property into the typed source namespace.
 func TestRouteQueueMessageWireClearsForgedEmptySourceTopic(t *testing.T) {
-	wire := encodeRouteQueueMessage("consumer", "m", &QueueMessage{
-		MessageID:   testQueueMessageID,
-		QueueName:   "m",
-		Topic:       "$queue/m",
-		SourceTopic: "",
-		Payload:     []byte("payload"),
-		Sequence:    1,
-		UserProperties: map[string]string{
-			queueTypes.PropSourceTopic: "forged/topic",
-			"user":                     testUserPropertyVal,
-		},
-	})
+	envelope := queueTestEnvelope("$queue/m", "")
+	defer message.Release(envelope)
+	envelope.User.Properties = map[string]string{
+		message.PropertySourceTopic: "forged/topic",
+		"user":                      testUserPropertyVal,
+	}
+	wire := encodeRouteQueueMessage("consumer", envelope)
 
-	if sourceTopic, ok := wire.Properties[queueTypes.PropSourceTopic]; !ok || sourceTopic != "" {
+	if sourceTopic, ok := wire.Properties[message.PropertySourceTopic]; !ok || sourceTopic != "" {
 		t.Fatalf("wire source topic = %q, present=%t; want an explicit empty broker value", sourceTopic, ok)
 	}
 
-	decoded := decodeRouteQueueMessage(wire)
-	if decoded.SourceTopic != "" {
-		t.Fatalf("decoded source topic = %q, want the real empty source topic", decoded.SourceTopic)
+	decoded, err := decodeRouteQueueMessage(wire)
+	if err != nil {
+		t.Fatalf("decode queue message: %v", err)
 	}
-	if _, leaked := decoded.UserProperties[queueTypes.PropSourceTopic]; leaked {
+	defer message.Release(decoded)
+	if decoded.Broker.Source.Topic != "" {
+		t.Fatalf("decoded source topic = %q, want the real empty source topic", decoded.Broker.Source.Topic)
+	}
+	if _, leaked := decoded.User.Properties[message.PropertySourceTopic]; leaked {
 		t.Fatal("the source topic leaked into user properties")
 	}
-	if decoded.UserProperties["user"] != testUserPropertyVal {
-		t.Fatalf("an ordinary user property was dropped: %v", decoded.UserProperties)
+	if decoded.User.Properties["user"] != testUserPropertyVal {
+		t.Fatalf("an ordinary user property was dropped: %v", decoded.User.Properties)
 	}
+}
+
+func TestDecodeRouteQueueMessageRequiresCanonicalTopic(t *testing.T) {
+	if _, err := decodeRouteQueueMessage(&clusterv1.RouteQueueMessageRequest{Payload: []byte("payload")}); err == nil {
+		t.Fatal("missing canonical queue delivery topic was accepted")
+	}
+}
+
+func queueTestEnvelope(topic, sourceTopic string) *message.Envelope {
+	envelope := message.New(topic, []byte("payload"))
+	envelope.Broker.Source.Topic = sourceTopic
+	envelope.Broker.Queue.MessageID = testQueueMessageID
+	envelope.Broker.Queue.Name = "m"
+	envelope.Broker.Queue.GroupID = "rules-engine"
+	envelope.Broker.Queue.Offset = 1
+	envelope.Broker.Queue.Stream = &message.StreamMetadata{}
+	return envelope
 }

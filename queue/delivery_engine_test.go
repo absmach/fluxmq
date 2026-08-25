@@ -15,11 +15,10 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/consumer"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
-	brokerstorage "github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +30,14 @@ const (
 	testOfflineClientID  = "offline-client"
 	testClientOneID      = "client-1"
 )
+
+func newQueueEnvelope(id, topic string, data []byte) *message.Envelope {
+	envelope := message.New(topic, data)
+	envelope.Broker.Queue.MessageID = id
+	envelope.Broker.Queue.State = message.QueueStateQueued
+	envelope.Broker.Queue.CreatedAt = time.Now()
+	return envelope
+}
 
 func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*DeliveryEngine, *memlog.Store, *mockGroupStore) {
 	t.Helper()
@@ -66,11 +73,11 @@ type checkingDeliverer struct {
 	mu         sync.Mutex
 	targets    map[string]bool
 	connected  map[string]bool
-	delivered  []*brokerstorage.Message
+	delivered  []*message.Envelope
 	deliverErr error
 }
 
-func (d *checkingDeliverer) Deliver(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+func (d *checkingDeliverer) Deliver(ctx context.Context, clientID string, msg *message.Envelope) error {
 	if d.deliverErr != nil {
 		return d.deliverErr
 	}
@@ -95,10 +102,10 @@ func (d *checkingDeliverer) IsClientConnected(clientID string) bool {
 	return d.connected[clientID]
 }
 
-func (d *checkingDeliverer) deliveredMessages() []*brokerstorage.Message {
+func (d *checkingDeliverer) deliveredMessages() []*message.Envelope {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	result := make([]*brokerstorage.Message, len(d.delivered))
+	result := make([]*message.Envelope, len(d.delivered))
 	copy(result, d.delivered)
 	return result
 }
@@ -189,9 +196,9 @@ func TestUnschedule(t *testing.T) {
 
 func TestDeliverQueueLocalConsumer(t *testing.T) {
 	var mu sync.Mutex
-	var delivered []*brokerstorage.Message
+	var delivered []*message.Envelope
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		delivered = append(delivered, msg)
 		mu.Unlock()
@@ -211,11 +218,7 @@ func TestDeliverQueueLocalConsumer(t *testing.T) {
 	})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testQueueTasksNew,
-		Payload: []byte("job1"),
-	})
+	logStore.Append(ctx, "tasks", newQueueEnvelope("1", testQueueTasksNew, []byte("job1"))) //nolint:errcheck // test setup
 
 	ok := engine.DeliverQueue(ctx, "tasks")
 	if !ok {
@@ -230,8 +233,8 @@ func TestDeliverQueueLocalConsumer(t *testing.T) {
 		t.Fatalf("expected 1 delivered message, got %d", count)
 	}
 
-	if delivered[0].Properties[types.PropQueueName] != "tasks" { //nolint:goconst // test value
-		t.Fatalf("expected queue name tasks, got %s", delivered[0].Properties[types.PropQueueName])
+	if delivered[0].Broker.Queue.Name != "tasks" { //nolint:goconst // test value
+		t.Fatalf("expected queue name tasks, got %s", delivered[0].Broker.Queue.Name)
 	}
 }
 
@@ -259,11 +262,7 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 	}
 	mockRemote.mu.Unlock()
 
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testQueueTasksNew,
-		Payload: []byte("job1"),
-	})
+	logStore.Append(ctx, "tasks", newQueueEnvelope("1", testQueueTasksNew, []byte("job1"))) //nolint:errcheck // test setup
 
 	ok := engine.DeliverQueue(ctx, "tasks")
 	if !ok {
@@ -278,8 +277,8 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 		t.Fatalf("expected 1 routed message, got %d", count)
 	}
 
-	if mockRemote.routed[0].msg.QueueName != "tasks" {
-		t.Fatalf("expected queue tasks, got %s", mockRemote.routed[0].msg.QueueName)
+	if mockRemote.routed[0].msg.Broker.Queue.Name != "tasks" {
+		t.Fatalf("expected queue tasks, got %s", mockRemote.routed[0].msg.Broker.Queue.Name)
 	}
 	if mockRemote.routed[0].nodeID != testNode2 { //nolint:goconst // test value
 		t.Fatalf("expected node-2, got %s", mockRemote.routed[0].nodeID)
@@ -290,7 +289,7 @@ func TestDeliverAllSweep(t *testing.T) {
 	var mu sync.Mutex
 	deliveryCount := 0
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		deliveryCount++
 		mu.Unlock()
@@ -310,11 +309,7 @@ func TestDeliverAllSweep(t *testing.T) {
 		})
 		groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-		logStore.Append(ctx, name, &types.Message{ //nolint:errcheck // test setup
-			ID:      "msg-" + name,
-			Topic:   "$queue/" + name + "/test",
-			Payload: []byte("data"),
-		})
+		logStore.Append(ctx, name, newQueueEnvelope("msg-"+name, "$queue/"+name+"/test", []byte("data"))) //nolint:errcheck // test setup
 	}
 
 	engine.DeliverAll(ctx)
@@ -330,7 +325,7 @@ func TestDeliverQueueNilRemoteRouter(t *testing.T) {
 	var mu sync.Mutex
 	deliveryCount := 0
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		deliveryCount++
 		mu.Unlock()
@@ -350,11 +345,7 @@ func TestDeliverQueueNilRemoteRouter(t *testing.T) {
 	})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "q1", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   "$queue/q1/test",
-		Payload: []byte("data"),
-	})
+	logStore.Append(ctx, "q1", newQueueEnvelope("1", "$queue/q1/test", []byte("data"))) //nolint:errcheck // test setup
 
 	ok := engine.DeliverQueue(ctx, "q1")
 	if !ok {
@@ -383,7 +374,7 @@ type routedEntry struct {
 	nodeID    string
 	clientID  string
 	queueName string
-	msg       *cluster.QueueMessage
+	msg       *message.Envelope
 }
 
 type mockRemoteRouter struct {
@@ -407,14 +398,14 @@ func (r *mockRemoteRouter) ListQueueConsumers(ctx context.Context, queueName str
 	return result, nil
 }
 
-func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error {
+func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.routed = append(r.routed, routedEntry{
 		nodeID:    nodeID,
 		clientID:  clientID,
-		queueName: queueName,
-		msg:       msg,
+		queueName: msg.Broker.Queue.Name,
+		msg:       msg.Clone(),
 	})
 	return r.routeErr
 }
@@ -442,8 +433,8 @@ func (r *batchRemoteRouter) RouteQueueBatch(ctx context.Context, nodeID string, 
 		r.routed = append(r.routed, routedEntry{
 			nodeID:    nodeID,
 			clientID:  delivery.ClientID,
-			queueName: delivery.QueueName,
-			msg:       delivery.Message,
+			queueName: delivery.Message.Broker.Queue.Name,
+			msg:       delivery.Message.Clone(),
 		})
 	}
 	return r.batchErr
@@ -458,7 +449,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 		deliveryCount int
 	}
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	})
 
@@ -473,14 +464,14 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 		MaxPELSize:         100_000,
 		AutoCommitInterval: DefaultConfig().AutoCommitInterval,
 		VisibilityTimeout:  1 * time.Millisecond, // very short so entries are immediately stealable
-		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, _ uint64, deliveryCount int, _ string) error {
+		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *message.Envelope, _ uint64, deliveryCount int, _ string) error {
 			mu.Lock()
 			dlqCalls = append(dlqCalls, struct {
 				queueName     string
 				groupID       string
 				msgID         string
 				deliveryCount int
-			}{queueName, groupID, msg.ID, deliveryCount})
+			}{queueName, groupID, msg.Broker.Queue.MessageID, deliveryCount})
 			mu.Unlock()
 			return nil
 		},
@@ -503,11 +494,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:      testPoisonMsg,
-		Topic:   testQueueTasksJob,
-		Payload: []byte("bad-job"),
-	})
+	logStore.Append(ctx, "tasks", newQueueEnvelope(testPoisonMsg, testQueueTasksJob, []byte("bad-job"))) //nolint:errcheck // test setup
 
 	// Claim as c1 to put it in PEL
 	_, err := consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c1", nil)
@@ -551,7 +538,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 }
 
 func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	})
 
@@ -585,11 +572,7 @@ func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
 	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:      testPoisonMsg,
-		Topic:   testQueueTasksJob,
-		Payload: []byte("bad-job"),
-	})
+	logStore.Append(ctx, "tasks", newQueueEnvelope(testPoisonMsg, testQueueTasksJob, []byte("bad-job"))) //nolint:errcheck // test setup
 
 	// Claim as c1, then simulate poison
 	consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c1", nil) //nolint:errcheck // test setup
@@ -617,7 +600,7 @@ func TestDLQCallbackFailureLeavesMessagePending(t *testing.T) {
 		MaxDeliveryCount:  3,
 		VisibilityTimeout: time.Millisecond,
 		MaxPELSize:        100,
-		OnDLQ: func(context.Context, string, string, *types.Message, uint64, int, string) error {
+		OnDLQ: func(context.Context, string, string, *message.Envelope, uint64, int, string) error {
 			return errors.New("DLQ unavailable")
 		},
 	})
@@ -627,7 +610,7 @@ func TestDLQCallbackFailureLeavesMessagePending(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
 	group.SetConsumer("c2", &types.ConsumerInfo{ID: "c2", ClientID: "c2"})
 	require.NoError(t, groupStore.CreateConsumerGroup(ctx, group))
-	_, err := logStore.Append(ctx, "tasks", &types.Message{ID: testPoisonMsg, Topic: testQueueTasksJob})
+	_, err := logStore.Append(ctx, "tasks", newQueueEnvelope(testPoisonMsg, testQueueTasksJob, nil))
 	require.NoError(t, err)
 	_, err = consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c1", nil)
 	require.NoError(t, err)
@@ -643,9 +626,9 @@ func TestDLQCallbackFailureLeavesMessagePending(t *testing.T) {
 
 func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
 	var mu sync.Mutex
-	var delivered []*brokerstorage.Message
+	var delivered []*message.Envelope
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		delivered = append(delivered, msg)
 		mu.Unlock()
@@ -663,17 +646,10 @@ func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
 	// Append an expired message then a valid one.
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:        "expired",
-		Topic:     "$queue/tasks/old",
-		Payload:   []byte("stale"),
-		ExpiresAt: time.Now().Add(-time.Second),
-	})
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:      "valid",
-		Topic:   testQueueTasksNew,
-		Payload: []byte("fresh"),
-	})
+	expired := newQueueEnvelope("expired", "$queue/tasks/old", []byte("stale"))
+	expired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Second)
+	logStore.Append(ctx, "tasks", expired)                                                       //nolint:errcheck // test setup
+	logStore.Append(ctx, "tasks", newQueueEnvelope("valid", testQueueTasksNew, []byte("fresh"))) //nolint:errcheck // test setup
 
 	engine.DeliverQueue(ctx, "tasks")
 
@@ -684,16 +660,16 @@ func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 delivered message (expired skipped), got %d", count)
 	}
-	if string(delivered[0].GetPayload()) != "fresh" {
-		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	if string(delivered[0].PayloadBytes()) != "fresh" {
+		t.Fatalf("expected fresh payload, got %s", string(delivered[0].PayloadBytes()))
 	}
 }
 
 func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	var mu sync.Mutex
-	var delivered []*brokerstorage.Message
+	var delivered []*message.Envelope
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		delivered = append(delivered, msg)
 		mu.Unlock()
@@ -712,17 +688,10 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, testQueueEvents, &types.Message{ //nolint:errcheck // test setup
-		ID:        "expired",
-		Topic:     "$queue/events/old",
-		Payload:   []byte("stale"),
-		ExpiresAt: time.Now().Add(-time.Second),
-	})
-	logStore.Append(ctx, testQueueEvents, &types.Message{ //nolint:errcheck // test setup
-		ID:      "valid",
-		Topic:   testEventsTopic,
-		Payload: []byte("fresh"),
-	})
+	expired := newQueueEnvelope("expired", "$queue/events/old", []byte("stale"))
+	expired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Second)
+	logStore.Append(ctx, testQueueEvents, expired)                                                     //nolint:errcheck // test setup
+	logStore.Append(ctx, testQueueEvents, newQueueEnvelope("valid", testEventsTopic, []byte("fresh"))) //nolint:errcheck // test setup
 
 	engine.DeliverQueue(ctx, testQueueEvents)
 
@@ -733,27 +702,22 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 delivered message (expired skipped), got %d", count)
 	}
-	if string(delivered[0].GetPayload()) != "fresh" {
-		t.Fatalf("expected fresh payload, got %s", string(delivered[0].GetPayload()))
+	if string(delivered[0].PayloadBytes()) != "fresh" {
+		t.Fatalf("expected fresh payload, got %s", string(delivered[0].PayloadBytes()))
 	}
 }
 
-func TestCreateRoutedQueueMessageCopiesPayloadBuffer(t *testing.T) {
-	pool := core.NewBufferPoolWithCapacity(1, 0, 0)
-	msg := &types.Message{
-		ID:       "routed-msg-1",
-		Topic:    testEventsTopic,
-		Sequence: 7,
-	}
-	msg.SetPayloadFromBuffer(pool.GetWithData([]byte("remote-payload")))
+func TestCreateRoutedQueueMessageSharesImmutablePayload(t *testing.T) {
+	msg := newQueueEnvelope("routed-msg-1", testEventsTopic, []byte("remote-payload"))
+	msg.Broker.Queue.Offset = 7
 
 	routeMsg := createRoutedQueueMessage(msg, "readers", testQueueEvents, false, 0, false, "")
-	msg.ReleasePayload()
-	reused := pool.GetWithData([]byte("overwritten!!!"))
-	defer reused.Release()
-
-	if got := string(routeMsg.Payload); got != "remote-payload" {
-		t.Fatalf("expected routed payload copy, got %q", got)
+	defer message.Release(routeMsg)
+	if routeMsg.Payload != msg.Payload {
+		t.Fatal("routed message copied the immutable payload")
+	}
+	if got := string(routeMsg.PayloadBytes()); got != "remote-payload" {
+		t.Fatalf("expected routed payload, got %q", got)
 	}
 }
 
@@ -774,11 +738,7 @@ func TestDeliverStreamDoesNotAdvanceCursorForMissingLocalTarget(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testDeadClientID})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testEventsTopic,
-		Payload: []byte("payload"),
-	})
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
 
 	if engine.DeliverQueue(ctx, "events") {
 		t.Fatal("expected no delivery for disconnected consumer")
@@ -818,11 +778,7 @@ func TestDeliverStreamKeepsConsumerForQueueableOfflineTarget(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testOfflineClientID})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testEventsTopic,
-		Payload: []byte("payload"),
-	})
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
 
 	if !engine.DeliverQueue(ctx, "events") {
 		t.Fatal("expected delivery to queueable offline target")
@@ -857,11 +813,7 @@ func TestDeliverStreamCommitsCursorAfterSuccessfulDelivery(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testClientOneID})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testEventsTopic,
-		Payload: []byte("payload"),
-	})
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
 
 	if !engine.DeliverQueue(ctx, "events") {
 		t.Fatal("expected successful delivery")
@@ -898,11 +850,7 @@ func TestDeliverStreamRemovesConsumerOnClientNotConnectedError(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: testClientOneID})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testEventsTopic,
-		Payload: []byte("payload"),
-	})
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
 
 	if engine.DeliverQueue(ctx, "events") {
 		t.Fatal("expected no successful delivery")
@@ -944,11 +892,7 @@ func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *tes
 	})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testEventsTopic,
-		Payload: []byte("payload"),
-	})
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
 
 	if engine.DeliverQueue(ctx, "events") {
 		t.Fatal("expected no successful delivery")
@@ -992,11 +936,7 @@ func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccess
 	})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "events", &types.Message{ //nolint:errcheck // test setup
-		ID:      "1",
-		Topic:   testEventsTopic,
-		Payload: []byte("payload"),
-	})
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
 
 	if !engine.DeliverQueue(ctx, "events") {
 		t.Fatal("expected fallback delivery to succeed")
@@ -1021,7 +961,7 @@ func TestDeliverQueueAllExpiredReturnsNoDelivery(t *testing.T) {
 	var mu sync.Mutex
 	deliveryCount := 0
 
-	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		mu.Lock()
 		deliveryCount++
 		mu.Unlock()
@@ -1038,18 +978,12 @@ func TestDeliverQueueAllExpiredReturnsNoDelivery(t *testing.T) {
 	group.SetConsumer("c1", &types.ConsumerInfo{ID: "c1", ClientID: "c1"})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:        "e1",
-		Topic:     "$queue/tasks/a",
-		Payload:   []byte("old1"),
-		ExpiresAt: time.Now().Add(-time.Minute),
-	})
-	logStore.Append(ctx, "tasks", &types.Message{ //nolint:errcheck // test setup
-		ID:        "e2",
-		Topic:     "$queue/tasks/b",
-		Payload:   []byte("old2"),
-		ExpiresAt: time.Now().Add(-time.Minute),
-	})
+	firstExpired := newQueueEnvelope("e1", "$queue/tasks/a", []byte("old1"))
+	firstExpired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Minute)
+	logStore.Append(ctx, "tasks", firstExpired) //nolint:errcheck // test setup
+	secondExpired := newQueueEnvelope("e2", "$queue/tasks/b", []byte("old2"))
+	secondExpired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Minute)
+	logStore.Append(ctx, "tasks", secondExpired) //nolint:errcheck // test setup
 
 	ok := engine.DeliverQueue(ctx, "tasks")
 	if ok {

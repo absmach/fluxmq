@@ -198,21 +198,20 @@ func TestCrossNode_StreamReplayFromFirstOffsetAfterLateConsumer(t *testing.T) {
 	}
 
 	deliveries := subNode.QueueDeliveries()
-	offsets := make([]string, 0, messageCount)
+	offsets := make([]uint64, 0, messageCount)
 	for _, d := range deliveries {
 		if d.ClientID != consumer.ClientID || d.Message == nil {
 			continue
 		}
-		if d.Message.Properties[qtypes.PropQueueName] != queueName {
+		if d.Message.Broker.Queue.Name != queueName {
 			continue
 		}
-		offset := d.Message.Properties[qtypes.PropStreamOffset]
-		if offset != "" {
-			offsets = append(offsets, offset)
+		if d.Message.Broker.Queue.Stream != nil {
+			offsets = append(offsets, d.Message.Broker.Queue.Stream.Offset)
 		}
 	}
 	require.GreaterOrEqual(t, len(offsets), messageCount)
-	assert.Equal(t, []string{"0", "1", "2", "3", "4"}, offsets[:messageCount])
+	assert.Equal(t, []uint64{0, 1, 2, 3, 4}, offsets[:messageCount])
 }
 
 // TestCrossNode_MultipleSubscribers verifies message delivery to multiple subscribers on different nodes.

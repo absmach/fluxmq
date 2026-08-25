@@ -10,11 +10,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func queueEnvelope(id, topic string, data []byte) *message.Envelope {
+	envelope := message.New(topic, data)
+	envelope.Broker.Queue.MessageID = id
+	return envelope
+}
 
 func TestAdapter_ReadBatch(t *testing.T) {
 	dir := t.TempDir()
@@ -26,11 +33,11 @@ func TestAdapter_ReadBatch(t *testing.T) {
 	cfg := types.DefaultQueueConfig("q1", "$queue/q1/#")
 	require.NoError(t, adapter.CreateQueue(ctx, cfg))
 
-	msgs := []*types.Message{
-		{ID: "1", Topic: "t", Payload: []byte("a")},
-		{ID: "2", Topic: "t", Payload: []byte("b")},
-		{ID: "3", Topic: "t", Payload: []byte("c")},
-		{ID: "4", Topic: "t", Payload: []byte("d")},
+	msgs := []*message.Envelope{
+		queueEnvelope("1", "t", []byte("a")),
+		queueEnvelope("2", "t", []byte("b")),
+		queueEnvelope("3", "t", []byte("c")),
+		queueEnvelope("4", "t", []byte("d")),
 	}
 
 	_, err = adapter.AppendBatch(ctx, "q1", msgs[:3])
@@ -41,14 +48,14 @@ func TestAdapter_ReadBatch(t *testing.T) {
 	got, err := adapter.ReadBatch(ctx, "q1", 1, 2)
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
-	assert.Equal(t, []byte("b"), got[0].Payload)
-	assert.Equal(t, []byte("c"), got[1].Payload)
+	assert.Equal(t, []byte("b"), got[0].PayloadBytes())
+	assert.Equal(t, []byte("c"), got[1].PayloadBytes())
 
 	got, err = adapter.ReadBatch(ctx, "q1", 2, 10)
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
-	assert.Equal(t, []byte("c"), got[0].Payload)
-	assert.Equal(t, []byte("d"), got[1].Payload)
+	assert.Equal(t, []byte("c"), got[0].PayloadBytes())
+	assert.Equal(t, []byte("d"), got[1].PayloadBytes())
 
 	got, err = adapter.ReadBatch(ctx, "q1", 10, 10)
 	require.NoError(t, err)
@@ -62,7 +69,7 @@ func TestAdapter_AppendRequiresQueueConfig(t *testing.T) {
 	defer adapter.Close()
 
 	ctx := context.Background()
-	_, err = adapter.Append(ctx, "missing", &types.Message{ID: "1", Topic: "$queue/missing", Payload: []byte("x")})
+	_, err = adapter.Append(ctx, "missing", queueEnvelope("1", "$queue/missing", []byte("x")))
 	require.ErrorIs(t, err, storage.ErrQueueNotFound)
 }
 
@@ -137,19 +144,15 @@ func TestAdapter_ExpiresAtRoundtrip(t *testing.T) {
 	require.NoError(t, adapter.CreateQueue(ctx, cfg))
 
 	expiry := time.Now().Add(5 * time.Minute).Truncate(time.Millisecond)
-	msg := &types.Message{
-		ID:        "1",
-		Topic:     "$queue/q1/test",
-		Payload:   []byte("data"),
-		ExpiresAt: expiry,
-	}
+	msg := queueEnvelope("1", "$queue/q1/test", []byte("data"))
+	msg.Broker.Queue.ExpiresAt = expiry
 
 	offset, err := adapter.Append(ctx, "q1", msg)
 	require.NoError(t, err)
 
 	got, err := adapter.Read(ctx, "q1", offset)
 	require.NoError(t, err)
-	assert.Equal(t, expiry, got.ExpiresAt)
+	assert.Equal(t, expiry, got.Broker.Queue.ExpiresAt)
 }
 
 func TestAdapter_ExpiresAtZeroNotPersisted(t *testing.T) {
@@ -162,18 +165,14 @@ func TestAdapter_ExpiresAtZeroNotPersisted(t *testing.T) {
 	cfg := types.DefaultQueueConfig("q1", "$queue/q1/#")
 	require.NoError(t, adapter.CreateQueue(ctx, cfg))
 
-	msg := &types.Message{
-		ID:      "1",
-		Topic:   "$queue/q1/test",
-		Payload: []byte("data"),
-	}
+	msg := queueEnvelope("1", "$queue/q1/test", []byte("data"))
 
 	offset, err := adapter.Append(ctx, "q1", msg)
 	require.NoError(t, err)
 
 	got, err := adapter.Read(ctx, "q1", offset)
 	require.NoError(t, err)
-	assert.True(t, got.ExpiresAt.IsZero())
+	assert.True(t, got.Broker.Queue.ExpiresAt.IsZero())
 }
 
 func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
@@ -187,21 +186,20 @@ func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
 	require.NoError(t, adapter.CreateQueue(ctx, cfg))
 
 	expiry := time.Now().Add(10 * time.Minute).Truncate(time.Millisecond)
-	msgs := []*types.Message{
-		{ID: "1", Topic: "$queue/q1/a", Payload: []byte("a"), ExpiresAt: expiry},
-		{ID: "2", Topic: "$queue/q1/b", Payload: []byte("b")},
-	}
+	first := queueEnvelope("1", "$queue/q1/a", []byte("a"))
+	first.Broker.Queue.ExpiresAt = expiry
+	msgs := []*message.Envelope{first, queueEnvelope("2", "$queue/q1/b", []byte("b"))}
 
 	_, err = adapter.AppendBatch(ctx, "q1", msgs)
 	require.NoError(t, err)
 
 	got0, err := adapter.Read(ctx, "q1", 0)
 	require.NoError(t, err)
-	assert.Equal(t, expiry, got0.ExpiresAt)
+	assert.Equal(t, expiry, got0.Broker.Queue.ExpiresAt)
 
 	got1, err := adapter.Read(ctx, "q1", 1)
 	require.NoError(t, err)
-	assert.True(t, got1.ExpiresAt.IsZero())
+	assert.True(t, got1.Broker.Queue.ExpiresAt.IsZero())
 }
 
 func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
@@ -214,22 +212,17 @@ func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
 	cfg := types.DefaultQueueConfig("api", "$queue/api/#")
 	require.NoError(t, adapter.CreateQueue(ctx, cfg))
 
-	messages := []*types.Message{
-		{
-			ID:      "1",
-			Topic:   "$queue/api/one",
-			Payload: []byte("one"),
-			Key:     []byte{0x00, 0xff},
-			Headers: map[string][]byte{"binary": {0x00, 0xff}},
-		},
-		{
-			ID:      "2",
-			Topic:   "$queue/api/two",
-			Payload: []byte("two"),
-			Key:     []byte("key-2"),
-			Headers: map[string][]byte{"text": []byte("value")},
-		},
-	}
+	firstMessage := queueEnvelope("1", "$queue/api/one", []byte("one"))
+	firstKey := []byte{0x00, 0xff}
+	firstHeaders := map[string][]byte{"binary": {0x00, 0xff}}
+	firstMessage.User.Key = firstKey
+	firstMessage.User.Headers = firstHeaders
+	secondMessage := queueEnvelope("2", "$queue/api/two", []byte("two"))
+	secondKey := []byte("key-2")
+	secondHeaders := map[string][]byte{"text": []byte("value")}
+	secondMessage.User.Key = secondKey
+	secondMessage.User.Headers = secondHeaders
+	messages := []*message.Envelope{firstMessage, secondMessage}
 
 	_, err = adapter.AppendBatch(ctx, "api", messages)
 	require.NoError(t, err)
@@ -237,10 +230,35 @@ func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
 	got, err := adapter.ReadBatch(ctx, "api", 0, 2)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	assert.Equal(t, messages[0].Key, got[0].Key)
-	assert.Equal(t, messages[0].Headers, got[0].Headers)
-	assert.Equal(t, messages[1].Key, got[1].Key)
-	assert.Equal(t, messages[1].Headers, got[1].Headers)
+	defer message.Release(got[0])
+	defer message.Release(got[1])
+	assert.Equal(t, firstKey, got[0].User.Key)
+	assert.Equal(t, firstHeaders, got[0].User.Headers)
+	assert.Equal(t, secondKey, got[1].User.Key)
+	assert.Equal(t, secondHeaders, got[1].User.Headers)
+}
+
+func TestAdapterAppendOwnershipContract(t *testing.T) {
+	dir := t.TempDir()
+	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	defer adapter.Close()
+
+	ctx := context.Background()
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig("owned", "$queue/owned/#")))
+
+	stored := queueEnvelope("1", "$queue/owned/one", []byte("stored"))
+	storedPayload := stored.Payload
+	_, err = adapter.Append(ctx, "owned", stored)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), storedPayload.RefCount(), "successful append must consume the envelope")
+
+	rejected := queueEnvelope("2", "$queue/missing/two", []byte("rejected"))
+	rejectedPayload := rejected.Payload
+	_, err = adapter.Append(ctx, "missing", rejected)
+	require.Error(t, err)
+	require.Equal(t, int32(1), rejectedPayload.RefCount(), "failed append must leave ownership with the caller")
+	message.Release(rejected)
 }
 
 func TestAdapter_AppendAndSyncHonorsContextAndReportsDurability(t *testing.T) {
@@ -257,14 +275,14 @@ func TestAdapter_AppendAndSyncHonorsContextAndReportsDurability(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, err = adapter.AppendAndSync(cancelled, "audit", &types.Message{ID: "1", Topic: "t", Payload: []byte("a")})
+	_, err = adapter.AppendAndSync(cancelled, "audit", queueEnvelope("1", "t", []byte("a")))
 	require.ErrorIs(t, err, context.Canceled)
 
 	count, err := adapter.Count(ctx, "audit")
 	require.NoError(t, err)
 	assert.Zero(t, count, "cancelled publish must not reach the log")
 
-	_, err = adapter.AppendAndSync(ctx, "audit", &types.Message{ID: "2", Topic: "t", Payload: []byte("b")})
+	_, err = adapter.AppendAndSync(ctx, "audit", queueEnvelope("2", "t", []byte("b")))
 	require.NoError(t, err)
 	count, err = adapter.Count(ctx, "audit")
 	require.NoError(t, err)
@@ -286,7 +304,7 @@ func TestAdapter_CreateQueueRestoresMetadataLostAfterCrash(t *testing.T) {
 	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
 	require.NoError(t, err)
 	require.NoError(t, adapter.CreateQueue(ctx, cfg))
-	_, err = adapter.AppendAndSync(ctx, "audit", &types.Message{ID: "1", Topic: "t", Payload: []byte("a")})
+	_, err = adapter.AppendAndSync(ctx, "audit", queueEnvelope("1", "t", []byte("a")))
 	require.NoError(t, err)
 	require.NoError(t, adapter.Close())
 
@@ -309,7 +327,7 @@ func TestAdapter_CreateQueueRestoresMetadataLostAfterCrash(t *testing.T) {
 
 	msg, err := reopened.Read(ctx, "audit", 0)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("a"), msg.Payload)
+	assert.Equal(t, []byte("a"), msg.PayloadBytes())
 
 	// A queue whose metadata is intact is still reported as already existing.
 	assert.ErrorIs(t, reopened.CreateQueue(ctx, cfg), storage.ErrQueueAlreadyExists)

@@ -10,6 +10,7 @@ import (
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -20,13 +21,13 @@ type mqttClusterHandler interface {
 }
 
 type amqp1ForwardHandler interface {
-	DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error
-	ForwardPublish(ctx context.Context, msg *cluster.Message) error
+	DeliverToClusterMessage(ctx context.Context, clientID string, msg *message.Envelope) error
+	ForwardPublish(ctx context.Context, msg *message.Envelope) error
 }
 
 type amqp091ForwardHandler interface {
-	DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error
-	ForwardPublish(ctx context.Context, msg *cluster.Message) error
+	DeliverToClusterMessage(ctx context.Context, clientID string, msg *message.Envelope) error
+	ForwardPublish(ctx context.Context, msg *message.Envelope) error
 }
 
 // MessageDispatcher routes cluster-delivered messages to the appropriate protocol broker.
@@ -50,7 +51,8 @@ func NewMessageDispatcher(mqtt mqttClusterHandler, amqp amqp1ForwardHandler, amq
 	}
 }
 
-func (d *MessageDispatcher) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
+func (d *MessageDispatcher) DeliverToClient(ctx context.Context, clientID string, msg *message.Envelope) error {
+	defer message.Release(msg)
 	if amqp1broker.IsAMQPClient(clientID) {
 		return d.amqp.DeliverToClusterMessage(ctx, clientID, msg)
 	}
@@ -60,7 +62,8 @@ func (d *MessageDispatcher) DeliverToClient(ctx context.Context, clientID string
 	return d.mqtt.DeliverToClient(ctx, clientID, msg)
 }
 
-func (d *MessageDispatcher) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+func (d *MessageDispatcher) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
+	defer message.Release(msg)
 	var errs []error
 	if err := d.mqtt.ForwardPublish(ctx, msg); err != nil {
 		errs = append(errs, err)
@@ -82,7 +85,7 @@ func (d *MessageDispatcher) HandleSessionLeaseLost(ctx context.Context, clientID
 	d.mqtt.HandleSessionLeaseLost(ctx, clientIDs)
 }
 
-func (d *MessageDispatcher) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+func (d *MessageDispatcher) GetRetainedMessage(ctx context.Context, topic string) (*message.Envelope, error) {
 	return d.mqtt.GetRetainedMessage(ctx, topic)
 }
 

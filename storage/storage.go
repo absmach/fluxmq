@@ -5,12 +5,10 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
-	"github.com/absmach/fluxmq/internal/payload"
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
 )
 
 // Common errors.
@@ -45,151 +43,6 @@ type Store interface {
 	// are in flight and safe to call more than once. Operations that race with
 	// Close either complete or return ErrClosed; they never panic.
 	Close() error
-}
-
-// Message represents a stored MQTT message.
-type Message struct {
-	Expiry          time.Time
-	PublishTime     time.Time
-	Payload         []byte                 // Deprecated: Use PayloadBuf for zero-copy
-	PayloadBuf      *core.RefCountedBuffer `json:"-"` // Zero-copy payload buffer; not serialized (use Payload for persistence)
-	CorrelationData []byte
-	SubscriptionIDs []uint32
-	Topic           string
-	ClientID        string
-	ContentType     string
-	ResponseTopic   string
-	Properties      map[string]string
-	UserProperties  map[string]string
-	MessageExpiry   *uint32
-	PayloadFormat   *byte
-	PacketID        uint16
-	QoS             byte
-	Retain          bool
-
-	// InflightDirection and InflightState carry inflight metadata when a message
-	// is persisted as an inflight entry (0 for non-inflight messages): direction
-	// distinguishes inbound from outbound so a restored QoS 2 transaction keeps
-	// its direction, and state preserves the QoS 2 delivery phase.
-	InflightDirection byte
-	InflightState     byte
-}
-
-// GetPayload returns the message payload, preferring PayloadBuf if available.
-// This provides backward compatibility during migration to zero-copy.
-func (m *Message) GetPayload() []byte {
-	return payload.Get(m.Payload, m.PayloadBuf)
-}
-
-// StablePayload returns the effective payload as a slice that stays valid
-// after ReleasePayload. Buffer-backed payloads are copied out of the pooled
-// buffer; plain payloads are returned as-is without allocating.
-func (m *Message) StablePayload() []byte {
-	return payload.Stable(m.Payload, m.PayloadBuf)
-}
-
-// MarshalJSON serializes the in-memory zero-copy payload as the legacy Payload
-// field so JSON-backed stores do not lose buffer-backed messages.
-// No copy is made: encoding/json reads the slice synchronously and does not
-// retain it. The value receiver ensures non-addressable Message values (map
-// entries, plain values) also route through this method rather than dropping
-// the buffer-backed payload.
-func (m Message) MarshalJSON() ([]byte, error) {
-	type messageAlias Message
-	cp := messageAlias(m)
-	cp.Payload = m.GetPayload()
-	return json.Marshal(cp)
-}
-
-// SetPayloadFromBuffer sets the payload from a RefCountedBuffer.
-// The message takes ownership of one reference.
-func (m *Message) SetPayloadFromBuffer(buf *core.RefCountedBuffer) {
-	m.Payload, m.PayloadBuf = payload.FromBuffer(m.PayloadBuf, buf)
-}
-
-// SetPayloadFromBytes creates a new buffer from bytes (for backward compatibility).
-// This will eventually be phased out in favor of direct buffer creation.
-func (m *Message) SetPayloadFromBytes(data []byte) {
-	m.Payload, m.PayloadBuf = payload.FromBytes(m.PayloadBuf, data)
-}
-
-// ReleasePayload releases the payload buffer if using zero-copy.
-// Must be called when message is no longer needed.
-func (m *Message) ReleasePayload() {
-	m.PayloadBuf = payload.ReleaseBuffer(m.PayloadBuf)
-}
-
-// RetainPayload increments the reference count for sharing the message.
-// Must be called before passing message to another goroutine.
-func (m *Message) RetainPayload() {
-	payload.Retain(m.PayloadBuf)
-}
-
-// CopyMessage creates a deep copy of a message.
-func CopyMessage(msg *Message) *Message {
-	if msg == nil {
-		return nil
-	}
-
-	cp := &Message{
-		Topic:             msg.Topic,
-		ClientID:          msg.ClientID,
-		QoS:               msg.QoS,
-		Retain:            msg.Retain,
-		PacketID:          msg.PacketID,
-		Expiry:            msg.Expiry,
-		ContentType:       msg.ContentType,
-		ResponseTopic:     msg.ResponseTopic,
-		PublishTime:       msg.PublishTime,
-		InflightDirection: msg.InflightDirection,
-		InflightState:     msg.InflightState,
-	}
-
-	if msg.MessageExpiry != nil {
-		exp := *msg.MessageExpiry
-		cp.MessageExpiry = &exp
-	}
-
-	if msg.PayloadFormat != nil {
-		pf := *msg.PayloadFormat
-		cp.PayloadFormat = &pf
-	}
-
-	// Zero-copy: Share the buffer instead of copying
-	if msg.PayloadBuf != nil {
-		msg.PayloadBuf.Retain() // Retain for the copy
-		cp.PayloadBuf = msg.PayloadBuf
-	} else if len(msg.Payload) > 0 {
-		// Fallback for legacy code still using Payload field
-		cp.Payload = make([]byte, len(msg.Payload))
-		copy(cp.Payload, msg.Payload)
-	}
-
-	if len(msg.CorrelationData) > 0 {
-		cp.CorrelationData = make([]byte, len(msg.CorrelationData))
-		copy(cp.CorrelationData, msg.CorrelationData)
-	}
-
-	if len(msg.Properties) > 0 {
-		cp.Properties = make(map[string]string, len(msg.Properties))
-		for k, v := range msg.Properties {
-			cp.Properties[k] = v
-		}
-	}
-
-	if len(msg.UserProperties) > 0 {
-		cp.UserProperties = make(map[string]string, len(msg.UserProperties))
-		for k, v := range msg.UserProperties {
-			cp.UserProperties[k] = v
-		}
-	}
-
-	if len(msg.SubscriptionIDs) > 0 {
-		cp.SubscriptionIDs = make([]uint32, len(msg.SubscriptionIDs))
-		copy(cp.SubscriptionIDs, msg.SubscriptionIDs)
-	}
-
-	return cp
 }
 
 // Session represents persisted session state.
@@ -260,16 +113,17 @@ type WillMessage struct {
 type MessageStore interface {
 	// Store stores a message with optional TTL.
 	// key format: "{clientID}/{packetID}" for inflight, "{clientID}/queue/{seq}" for offline queue
-	Store(key string, msg *Message) error
+	// Store borrows msg only for the duration of the call.
+	Store(key string, msg *message.Envelope) error
 
-	// Get retrieves a message by key.
-	Get(key string) (*Message, error)
+	// Get retrieves an owned envelope. The caller must release it.
+	Get(key string) (*message.Envelope, error)
 
 	// Delete removes a message.
 	Delete(key string) error
 
-	// List returns all messages matching a key prefix.
-	List(prefix string) ([]*Message, error)
+	// List returns owned envelopes. The caller must release every element.
+	List(prefix string) ([]*message.Envelope, error)
 
 	// DeleteByPrefix removes all messages matching a prefix.
 	DeleteByPrefix(prefix string) error
@@ -322,16 +176,18 @@ type SubscriptionStore interface {
 type RetainedStore interface {
 	// Set stores or updates a retained message.
 	// Empty payload deletes the retained message.
-	Set(ctx context.Context, topic string, msg *Message) error
+	// Set borrows msg only for the duration of the call.
+	Set(ctx context.Context, topic string, msg *message.Envelope) error
 
-	// Get retrieves a retained message by exact topic.
-	Get(ctx context.Context, topic string) (*Message, error)
+	// Get retrieves an owned retained envelope. The caller must release it.
+	Get(ctx context.Context, topic string) (*message.Envelope, error)
 
 	// Delete removes a retained message.
 	Delete(ctx context.Context, topic string) error
 
-	// Match returns all retained messages matching a filter (supports wildcards).
-	Match(ctx context.Context, filter string) ([]*Message, error)
+	// Match returns owned retained envelopes matching a filter. The caller must
+	// release every element.
+	Match(ctx context.Context, filter string) ([]*message.Envelope, error)
 }
 
 // WillStore handles will message persistence.

@@ -12,38 +12,34 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
-	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/session"
-	"github.com/absmach/fluxmq/queue/types"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 )
 
-// DeliverToSession queues a message for delivery to a session.
-// Returns packet ID (>0) if session is connected and QoS>0, otherwise 0.
-func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *storage.Message) (uint16, error) {
+// DeliverToSession queues a message for delivery to a session. It takes
+// ownership of msg on every return path. Returns packet ID (>0) if the session
+// is connected and QoS>0, otherwise 0.
+func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *message.Envelope) (uint16, error) {
 	// Check if message has expired
-	if msg.MessageExpiry != nil && !msg.Expiry.IsZero() && time.Now().After(msg.Expiry) {
+	if msg.User.MessageExpiry != nil && !msg.Broker.Delivery.ExpiresAt.IsZero() && time.Now().After(msg.Broker.Delivery.ExpiresAt) {
 		b.logOp("message_expired",
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic),
-			slog.Time("expiry", msg.Expiry))
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
+			slog.Time("expiry", msg.Broker.Delivery.ExpiresAt))
+		message.Release(msg)
 		return 0, nil
 	}
 
 	if !s.IsConnected() {
-		if msg.QoS > 0 {
+		if msg.Broker.Delivery.QoS > 0 {
 			// Offline queue copies the message internally, so we always release the original
 			err := s.OfflineQueue().Enqueue(msg)
-			msg.ReleasePayload()
-			storage.ReleaseMessage(msg)
+			message.Release(msg)
 			return 0, err
 		}
-		msg.ReleasePayload() // Drop QoS 0 message for offline client - release buffer
-		storage.ReleaseMessage(msg)
+		message.Release(msg)
 		return 0, nil
 	}
 
@@ -57,18 +53,17 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 		return b.deliverOffline(s, msg)
 	}
 
-	if msg.QoS == 0 {
+	if msg.Broker.Delivery.QoS == 0 {
 		err := b.DeliverMessage(conn, version, msg, nil)
 		if err == nil && b.telemetry.webhooks != nil {
 			b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
 				ClientID:     s.ID,
 				MessageTopic: msg.Topic,
-				QoS:          msg.QoS,
-				PayloadSize:  len(msg.GetPayload()),
+				QoS:          msg.Broker.Delivery.QoS,
+				PayloadSize:  len(msg.PayloadBytes()),
 			})
 		}
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
+		message.Release(msg)
 		return 0, err
 	}
 
@@ -84,7 +79,7 @@ const maxLeaseRetries = 8
 // retries delivery when gen was superseded by a takeover. retried reports
 // whether a retry was performed (bounded by maxLeaseRetries); when it is false
 // the caller handles genuine quota exhaustion or an offline session.
-func (b *Broker) retrySupersededLease(ctx context.Context, s *session.Session, msg *storage.Message, gen uint64, attempt int) (packetID uint16, retried bool, err error) {
+func (b *Broker) retrySupersededLease(ctx context.Context, s *session.Session, msg *message.Envelope, gen uint64, attempt int) (packetID uint16, retried bool, err error) {
 	if newConn, newVersion, curGen := s.DeliveryLease(); curGen != gen && newConn != nil && attempt < maxLeaseRetries {
 		packetID, err = b.deliverQoS(ctx, s, msg, newConn, newVersion, curGen, attempt+1)
 		return packetID, true, err
@@ -96,9 +91,9 @@ func (b *Broker) retrySupersededLease(ctx context.Context, s *session.Session, m
 // the generation is superseded by a takeover, it re-leases against the current
 // connection and retries, rather than mis-routing the message to capacity
 // handling that the replacement connection may never drain.
-func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storage.Message, conn core.Connection, version byte, gen uint64, attempt int) (uint16, error) {
+func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *message.Envelope, conn core.Connection, version byte, gen uint64, attempt int) (uint16, error) {
 	packetID := s.NextPacketID()
-	msg.PacketID = packetID
+	msg.Broker.Delivery.PacketID = packetID
 
 	// Acquire a send-quota (Receive Maximum) token for this outbound PUBLISH.
 	// Backpressure mode blocks until a token frees; queue mode falls back to the
@@ -118,8 +113,7 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 		if s.TryEnqueuePending(msg, nil) {
 			return 0, nil
 		}
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
+		message.Release(msg)
 		return 0, nil
 	}
 
@@ -133,8 +127,7 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 			return 0, nil
 		}
 		// Both inflight and pending queue are full — drop with error.
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
+		message.Release(msg)
 		return 0, err
 	}
 
@@ -165,8 +158,8 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
 			ClientID:     s.ID,
 			MessageTopic: msg.Topic,
-			QoS:          msg.QoS,
-			PayloadSize:  len(msg.GetPayload()),
+			QoS:          msg.Broker.Delivery.QoS,
+			PayloadSize:  len(msg.PayloadBytes()),
 		})
 	}
 
@@ -175,7 +168,7 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *storag
 
 // releaseLease handles a backpressure acquire that returned false: a takeover
 // (retry against the new generation) or a disconnect (offline queue).
-func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *storage.Message, gen uint64, attempt int) (uint16, error) {
+func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *message.Envelope, gen uint64, attempt int) (uint16, error) {
 	if pid, retried, err := b.retrySupersededLease(ctx, s, msg, gen, attempt); retried {
 		return pid, err
 	}
@@ -184,13 +177,12 @@ func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *stor
 
 // deliverOffline parks a message for an offline (or unreachable) session: QoS>0
 // goes to the offline queue, QoS 0 is dropped.
-func (b *Broker) deliverOffline(s *session.Session, msg *storage.Message) (uint16, error) {
+func (b *Broker) deliverOffline(s *session.Session, msg *message.Envelope) (uint16, error) {
 	var err error
-	if msg.QoS > 0 {
+	if msg.Broker.Delivery.QoS > 0 {
 		err = s.OfflineQueue().Enqueue(msg)
 	}
-	msg.ReleasePayload()
-	storage.ReleaseMessage(msg)
+	message.Release(msg)
 	return 0, err
 }
 
@@ -209,14 +201,14 @@ func (b *Broker) deliverOffline(s *session.Session, msg *storage.Message) (uint1
 // This means "received", not "processed", which is exactly what QoS 1 means
 // everywhere else in this broker. A consumer that needs to reject or retry a
 // message explicitly needs properties, and therefore MQTT 5.0 or AMQP.
-func (b *Broker) ackQueueDelivery(msg *storage.Message) {
-	if b.queueManager == nil || msg == nil || msg.Properties == nil {
+func (b *Broker) ackQueueDelivery(msg *message.Envelope) {
+	if b.queueManager == nil || msg == nil {
 		return
 	}
 
-	queueName := msg.Properties[types.PropQueueName]
-	messageID := msg.Properties[types.PropMessageID]
-	groupID := msg.Properties[types.PropGroupID]
+	queueName := msg.Broker.Queue.Name
+	messageID := msg.Broker.Queue.MessageID
+	groupID := msg.Broker.Queue.GroupID
 	if queueName == "" || messageID == "" || groupID == "" {
 		return
 	}
@@ -237,8 +229,7 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	if msg != nil {
 		// Read the queue metadata before the message goes back to the pool.
 		b.ackQueueDelivery(msg)
-		msg.ReleasePayload()
-		storage.ReleaseMessage(msg)
+		message.Release(msg)
 	}
 
 	// Release the send-quota token (PUBACK/PUBCOMP) under the current generation
@@ -246,7 +237,7 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	// re-acquires under the new generation) — and pull through one pending
 	// message (queue mode) to keep the pipeline full.
 	s.ReleaseSendQuota(packetID, s.Epoch())
-	s.DrainOnePending(func(pending *storage.Message, _ func()) error {
+	s.DrainOnePending(func(pending *message.Envelope, _ func()) error {
 		_, err := b.DeliverToSession(context.Background(), s, pending)
 		return err
 	})
@@ -259,13 +250,13 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 // stays bound to the generation it acquired quota for, and a cross-version
 // takeover cannot encode a packet for one protocol and write it to a connection
 // of the other.
-func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *storage.Message, onSent func()) error {
+func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *message.Envelope, onSent func()) error {
 	b.telemetry.stats.IncrementPublishSent()
-	b.telemetry.stats.AddBytesSent(uint64(len(msg.GetPayload())))
+	b.telemetry.stats.AddBytesSent(uint64(len(msg.PayloadBytes())))
 
 	// First send (dup=false). EncodePublish is the single encoder shared with the
 	// retransmission path so the two cannot drift on v5 properties.
-	pub := session.EncodePublish(msg, msg.PacketID, version, false)
+	pub := session.EncodePublish(msg, msg.Broker.Delivery.PacketID, version, false)
 
 	// TryWriteDataPacket owns pub from here on and releases it on every path,
 	// which is also what keeps the payload buffer alive until Pack() has copied
@@ -275,19 +266,13 @@ func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *storage
 }
 
 // DeliverToClient implements cluster.MessageHandler.DeliverToClient.
-func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
+func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *message.Envelope) error {
 	s := b.Get(clientID)
 	if s == nil {
 		return fmt.Errorf("%w: session not found: %s", corebroker.ErrClientNotConnected, clientID)
 	}
 
-	// cluster.Message comes from cluster - create storage.Message with zero-copy buffer
-	storeMsg := storage.AcquireMessage()
-	storeMsg.Topic = msg.Topic
-	storeMsg.QoS = msg.QoS
-	storeMsg.Retain = msg.Retain
-	storeMsg.Properties = msg.Properties
-	storeMsg.SetPayloadFromBytes(msg.Payload)
+	storeMsg := msg.Clone()
 
 	_, err := b.DeliverToSession(ctx, s, storeMsg)
 	// Note: DeliverToSession will release the message for QoS 0
@@ -297,18 +282,13 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *clus
 
 // DeliverToSessionByID delivers a message to a client by client ID.
 // This implements the BrokerInterface required by the queue manager.
-func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg any) error {
+func (b *Broker) DeliverToSessionByID(ctx context.Context, clientID string, msg *message.Envelope) error {
 	s := b.Get(clientID)
 	if s == nil {
+		message.Release(msg)
 		return fmt.Errorf("%w: session not found: %s", corebroker.ErrClientNotConnected, clientID)
 	}
 
-	// Convert queue message to storage message
-	queueMsg, ok := msg.(*storage.Message)
-	if !ok {
-		return fmt.Errorf("invalid message type")
-	}
-
-	_, err := b.DeliverToSession(ctx, s, queueMsg)
+	_, err := b.DeliverToSession(ctx, s, msg)
 	return err
 }

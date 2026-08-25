@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -242,7 +243,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return ErrPacketTooLarge
 	}
 
-	props := setOriginProperties(nil, s.ExternalID)
+	var props map[string]string
 	requestedTopic := topic
 	hookReq, ok := h.broker.ApplyPublishHooks(context.Background(), corebroker.BlockingHookRequest{
 		ClientID:   s.ID,
@@ -269,7 +270,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	}
 	// QoS is carried through unchanged: hooks that mutate it were rejected
 	// above, and the wire QoS still owns the acknowledgement handshake.
-	topic, payload, retain, props = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
+	topic, payload, retain, props = hookReq.Topic, hookReq.Payload, hookReq.Retain, hookReq.Properties
+	sourceExternalID := hookReq.ExternalID
 	// A hook can rewrite the payload, so the limit is re-checked on the result.
 	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
 		h.broker.telemetry.logger.Warn("v3_publish_hook_payload_too_large",
@@ -295,16 +297,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 
 	switch qos {
 	case 0:
-		buf := core.GetBufferWithData(payload)
-		msg := storage.AcquireMessage()
-		msg.Topic = topic
-		msg.ClientID = s.ID
-		msg.QoS = qos
-		msg.Retain = retain
-		msg.Properties = props
-		msg.SetPayloadFromBuffer(buf)
+		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
 		err := h.broker.Publish(context.Background(), msg)
-		storage.ReleaseMessage(msg)
 		h.broker.telemetry.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -313,19 +307,10 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return err
 
 	case 1:
-		buf := core.GetBufferWithData(payload)
-		msg := storage.AcquireMessage()
-		msg.Topic = topic
-		msg.ClientID = s.ID
-		msg.QoS = qos
-		msg.Retain = retain
-		msg.Properties = props
-		msg.SetPayloadFromBuffer(buf)
+		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
-			storage.ReleaseMessage(msg)
 			return err
 		}
-		storage.ReleaseMessage(msg)
 		h.broker.telemetry.logger.Debug("v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -337,18 +322,11 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return s.WritePacket(ack)
 
 	case 2:
-		buf := core.GetBufferWithData(payload)
-		storeMsg := storage.AcquireMessage()
-		storeMsg.Topic = topic
-		storeMsg.ClientID = s.ID
-		storeMsg.QoS = qos
-		storeMsg.Retain = retain
-		storeMsg.PacketID = packetID
-		storeMsg.Properties = props
-		storeMsg.SetPayloadFromBuffer(buf)
+		storeMsg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
+		storeMsg.Broker.Delivery.PacketID = packetID
 		accepted, err := s.AddInbound(packetID, storeMsg)
 		if !accepted {
-			storage.ReleaseMessage(storeMsg)
+			message.Release(storeMsg)
 		}
 		if err != nil {
 			return err
@@ -424,38 +402,36 @@ func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 			return err
 		}
 		submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
+			topic := owned.Topic
 			if err := h.broker.Publish(context.Background(), owned); err != nil {
 				h.broker.logError("v3_pubrel_publish", err,
 					slog.String("client_id", s.ID),
-					slog.String("topic", owned.Topic))
+					slog.String("topic", topic))
 			}
-			storage.ReleaseMessage(owned)
 		})
 		if !submitted {
+			topic := owned.Topic
 			if err := h.broker.Publish(context.Background(), owned); err != nil {
 				h.broker.logError("v3_pubrel_publish", err,
 					slog.String("client_id", s.ID),
-					slog.String("topic", owned.Topic))
+					slog.String("topic", topic))
 			}
-			storage.ReleaseMessage(owned)
 		}
 		return s.WritePacket(comp)
 	}
 
-	publish := storage.CopyMessage(msg)
+	publish := msg.Clone()
 	if err := h.broker.Publish(context.Background(), publish); err != nil {
-		storage.ReleaseMessage(publish)
 		h.broker.logError("v3_pubrel_publish", err,
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic))
 		return err
 	}
-	storage.ReleaseMessage(publish)
 	owned, err := s.AckInbound(packetID)
 	if err != nil {
 		return err
 	}
-	storage.ReleaseMessage(owned)
+	message.Release(owned)
 	return s.WritePacket(comp)
 }
 
@@ -544,24 +520,13 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 		retained, err := h.broker.GetRetainedMatching(filter)
 		if err == nil {
 			for _, msg := range retained {
-				deliverQoS := msg.QoS
+				deliverQoS := msg.Broker.Delivery.QoS
 				if grantedQoS < deliverQoS {
 					deliverQoS = grantedQoS
 				}
-				deliverMsg := &storage.Message{
-					Topic:  msg.Topic,
-					QoS:    deliverQoS,
-					Retain: true,
-				}
-				// Zero-copy: Share buffer from retained message if available
-				if msg.PayloadBuf != nil {
-					msg.PayloadBuf.Retain()
-					deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
-				} else {
-					// Legacy fallback for messages without PayloadBuf
-					deliverMsg.SetPayloadFromBytes(msg.Payload)
-				}
-				h.broker.DeliverToSession(context.Background(), s.Session, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
+				msg.Broker.Delivery.QoS = deliverQoS
+				msg.Broker.Delivery.Retain = true
+				h.broker.DeliverToSession(context.Background(), s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
 			}
 		}
 	}

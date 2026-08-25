@@ -18,8 +18,8 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	qtypes "github.com/absmach/fluxmq/queue/types"
-	"github.com/absmach/fluxmq/storage"
 )
 
 type channelQueueManager interface {
@@ -297,10 +297,15 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueManager.(corebroker.TopicQueuePublisher); ok {
 		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-			ClientID:   corebroker.ClientIDFromProperties(props),
+			Source: message.SourceMetadata{
+				ClientID:   props[message.PropertyClientID],
+				ExternalID: props[message.PropertyExternalID],
+				Protocol:   message.Protocol(props[message.PropertyProtocol]),
+			},
+			Trace:      message.TraceFromProperties(props),
 			Topic:      topic,
 			Payload:    payload,
-			Properties: props,
+			Properties: message.FilterUserProperties(props),
 		}); err != nil {
 			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
@@ -348,7 +353,7 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.
 // It matches local AMQP 0.9.1 subscriptions and delivers without re-routing to the cluster.
-func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
+func (b *Broker) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
 	subs, err := b.router.Match(msg.Topic)
 	if err != nil {
 		return err
@@ -364,14 +369,19 @@ func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error
 			continue
 		}
 		c := val.(*Connection)
-		c.deliverMessage(msg.Topic, msg.Payload, msg.Properties)
+		projection := message.PublicProjection
+		if c.connectionPolicy().carriesReservedProperties() {
+			projection = message.TrustedServiceProjection
+		}
+		c.deliverMessage(msg.Topic, msg.PayloadBytes(), message.ProjectProperties(msg, projection))
 	}
 
 	return nil
 }
 
 // DeliverToClient delivers a queue message to a specific AMQP 0.9.1 client.
-func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) error {
+func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *message.Envelope) error {
+	defer message.Release(msg)
 	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 
 	val, ok := b.connections.Load(connID)
@@ -381,18 +391,16 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg any) 
 
 	c := val.(*Connection)
 
-	switch m := msg.(type) {
-	case *storage.Message:
-		payload := m.GetPayload()
-		c.deliverMessage(m.Topic, payload, m.Properties)
-		return nil
-	default:
-		return fmt.Errorf("unsupported message type: %T", msg)
+	projection := message.PublicProjection
+	if c.connectionPolicy().carriesReservedProperties() {
+		projection = message.TrustedServiceProjection
 	}
+	c.deliverMessage(msg.Topic, msg.PayloadBytes(), message.ProjectProperties(msg, projection))
+	return nil
 }
 
 // DeliverToClusterMessage delivers a message routed from another cluster node to a local AMQP 0.9.1 client.
-func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
+func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, msg *message.Envelope) error {
 	connID := strings.TrimPrefix(clientID, corebroker.AMQP091ClientPrefix)
 
 	val, ok := b.connections.Load(connID)
@@ -401,7 +409,11 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 	}
 
 	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.Payload, msg.Properties)
+	projection := message.PublicProjection
+	if c.connectionPolicy().carriesReservedProperties() {
+		projection = message.TrustedServiceProjection
+	}
+	c.deliverMessage(msg.Topic, msg.PayloadBytes(), message.ProjectProperties(msg, projection))
 	return nil
 }
 

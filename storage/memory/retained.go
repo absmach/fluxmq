@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 )
@@ -17,34 +18,38 @@ var _ storage.RetainedStore = (*RetainedStore)(nil)
 // RetainedStore is an in-memory implementation of store.RetainedStore.
 type RetainedStore struct {
 	mu   sync.RWMutex
-	data map[string]*storage.Message // topic -> message
+	data map[string]*message.Envelope // topic -> message
 }
 
 // NewRetainedStore creates a new in-memory retained message store.
 func NewRetainedStore() *RetainedStore {
 	return &RetainedStore{
-		data: make(map[string]*storage.Message),
+		data: make(map[string]*message.Envelope),
 	}
 }
 
 // Set stores or updates a retained message.
 // Empty payload deletes the retained message.
-func (s *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
+func (s *RetainedStore) Set(ctx context.Context, topic string, msg *message.Envelope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Empty payload means delete
-	if msg == nil || len(msg.GetPayload()) == 0 {
+	if msg == nil || len(msg.PayloadBytes()) == 0 {
+		message.Release(s.data[topic])
 		delete(s.data, topic)
 		return nil
 	}
 
-	s.data[topic] = storage.CopyMessage(msg)
+	replacement := msg.Clone()
+	previous := s.data[topic]
+	s.data[topic] = replacement
+	message.Release(previous)
 	return nil
 }
 
 // Get retrieves a retained message by exact topic.
-func (s *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
+func (s *RetainedStore) Get(ctx context.Context, topic string) (*message.Envelope, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -52,7 +57,7 @@ func (s *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message
 	if !ok {
 		return nil, storage.ErrNotFound
 	}
-	return storage.CopyMessage(msg), nil
+	return msg.Clone(), nil
 }
 
 // Delete removes a retained message.
@@ -60,22 +65,24 @@ func (s *RetainedStore) Delete(ctx context.Context, topic string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := s.data[topic]
 	delete(s.data, topic)
+	message.Release(previous)
 	return nil
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (s *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
+func (s *RetainedStore) Match(ctx context.Context, filter string) ([]*message.Envelope, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*storage.Message
+	var result []*message.Envelope
 
 	// Special case: "#" matches all non-system topics
 	if filter == "#" {
 		for topic, msg := range s.data {
 			if !strings.HasPrefix(topic, "$") {
-				result = append(result, storage.CopyMessage(msg))
+				result = append(result, msg.Clone())
 			}
 		}
 		return result, nil
@@ -83,7 +90,7 @@ func (s *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Me
 
 	for topic, msg := range s.data {
 		if topics.TopicMatch(filter, topic) {
-			result = append(result, storage.CopyMessage(msg))
+			result = append(result, msg.Clone())
 		}
 	}
 

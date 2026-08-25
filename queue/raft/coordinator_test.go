@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
@@ -62,7 +63,7 @@ func (m *mockReplicator) ApplyCreateQueue(context.Context, types.QueueConfig) er
 func (m *mockReplicator) ApplyUpdateQueue(context.Context, types.QueueConfig) error { return nil }
 func (m *mockReplicator) ApplyDeleteQueue(context.Context, string) error            { return nil }
 
-func (m *mockReplicator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *types.Message, _ ApplyOptions) (uint64, error) {
+func (m *mockReplicator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ ApplyOptions) (uint64, error) {
 	m.appendQueues = append(m.appendQueues, queueName)
 	return m.offset, nil
 }
@@ -233,7 +234,7 @@ func TestLogicalGroupCoordinatorRoutesByQueueGroup(t *testing.T) {
 		t.Fatalf("unexpected leader id: got %q", got)
 	}
 
-	offset, err := coordinator.ApplyAppendWithOptions(context.Background(), "jobs", &types.Message{}, ApplyOptions{})
+	offset, err := coordinator.ApplyAppendWithOptions(context.Background(), "jobs", message.New("jobs", nil), ApplyOptions{})
 	if err != nil {
 		t.Fatalf("ApplyAppendWithOptions failed: %v", err)
 	}

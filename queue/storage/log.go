@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
@@ -41,20 +42,22 @@ type QueueStore interface {
 	// This is used to route a published message to all relevant queues.
 	FindMatchingQueues(ctx context.Context, topic string) ([]string, error)
 
-	// Append adds a message to the end of a queue's log.
-	// Returns the assigned offset.
-	Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error)
+	// Append adds a message to the end of a queue's log and returns the
+	// assigned offset. A successful call takes ownership of msg. On error the
+	// caller retains ownership and may retry or release it.
+	Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error)
 
-	// AppendBatch adds multiple messages to a queue's log.
-	// Returns the first assigned offset.
-	AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error)
+	// AppendBatch adds multiple messages to a queue's log and returns the first
+	// assigned offset. A successful call takes ownership of every envelope. On
+	// error the caller retains ownership of the entire batch.
+	AppendBatch(ctx context.Context, queueName string, msgs []*message.Envelope) (uint64, error)
 
-	// Read retrieves a message at a specific offset.
-	Read(ctx context.Context, queueName string, offset uint64) (*types.Message, error)
+	// Read retrieves an owned envelope. The caller must release it.
+	Read(ctx context.Context, queueName string, offset uint64) (*message.Envelope, error)
 
-	// ReadBatch reads messages starting from offset up to limit.
-	// Returns messages in offset order.
-	ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error)
+	// ReadBatch returns owned envelopes in offset order. The caller must release
+	// every element.
+	ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*message.Envelope, error)
 
 	// Head returns the first valid offset in the queue (after truncation).
 	Head(ctx context.Context, queueName string) (uint64, error)
@@ -75,7 +78,9 @@ type QueueStore interface {
 // segment rotation with the entire operation; Append followed by a separate
 // active-segment sync does not satisfy this contract.
 type DurableQueueStore interface {
-	AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error)
+	// AppendAndSync follows QueueStore.Append's ownership contract: success
+	// transfers ownership to the store; errors leave ownership with the caller.
+	AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error)
 
 	// SupportsDurableSync reports whether AppendAndSync survives process and
 	// machine crashes. Implementing the interface is not sufficient evidence:

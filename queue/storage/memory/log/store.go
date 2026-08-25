@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -28,9 +29,10 @@ type Store struct {
 
 type log struct {
 	config   types.QueueConfig
-	messages []*types.Message // Append-only message log
-	head     uint64           // First valid offset (after truncation)
-	tail     uint64           // Next offset to assign
+	messages []*message.Envelope // Append-only message log
+	head     uint64              // First valid offset (after truncation)
+	tail     uint64              // Next offset to assign
+	deleted  bool
 	mu       sync.RWMutex
 }
 
@@ -71,7 +73,7 @@ func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error
 
 	sl := &log{
 		config:   config,
-		messages: make([]*types.Message, 0, s.config.InitialCapacity),
+		messages: make([]*message.Envelope, 0, s.config.InitialCapacity),
 		head:     0,
 		tail:     0,
 	}
@@ -108,6 +110,10 @@ func (s *Store) UpdateQueue(ctx context.Context, config types.QueueConfig) error
 
 	sl := val.(*log)
 	sl.mu.Lock()
+	if sl.deleted {
+		sl.mu.Unlock()
+		return storage.ErrQueueNotFound
+	}
 	sl.config = config
 	sl.mu.Unlock()
 	return nil
@@ -122,6 +128,10 @@ func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueCon
 
 	sl := val.(*log)
 	sl.mu.RLock()
+	if sl.deleted {
+		sl.mu.RUnlock()
+		return nil, storage.ErrQueueNotFound
+	}
 	configCopy := sl.config
 	sl.mu.RUnlock()
 	return &configCopy, nil
@@ -132,15 +142,28 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 	val, exists := s.logs.Load(queueName)
 	if exists {
 		sl := val.(*log)
-		sl.mu.RLock()
+		sl.mu.Lock()
+		if sl.deleted {
+			sl.mu.Unlock()
+			return storage.ErrQueueNotFound
+		}
 		isReserved := sl.config.Reserved
-		sl.mu.RUnlock()
 		if isReserved {
+			sl.mu.Unlock()
 			return storage.ErrQueueNotFound // Cannot delete reserved queue
 		}
+		if !s.logs.CompareAndDelete(queueName, sl) {
+			sl.mu.Unlock()
+			return storage.ErrQueueNotFound
+		}
+		sl.deleted = true
+		for _, envelope := range sl.messages {
+			message.Release(envelope)
+		}
+		sl.messages = nil
+		sl.mu.Unlock()
 	}
 
-	s.logs.Delete(queueName)
 	s.groups.Delete(queueName)
 	s.consumers.Delete(queueName)
 	s.topicIndex.RemoveQueue(queueName)
@@ -154,7 +177,9 @@ func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	s.logs.Range(func(key, value any) bool {
 		sl := value.(*log)
 		sl.mu.RLock()
-		configs = append(configs, sl.config)
+		if !sl.deleted {
+			configs = append(configs, sl.config)
+		}
 		sl.mu.RUnlock()
 		return true
 	})
@@ -167,22 +192,8 @@ func (s *Store) FindMatchingQueues(ctx context.Context, topic string) ([]string,
 	return s.topicIndex.FindMatching(topic), nil
 }
 
-// stabilizeForStore returns a message safe for the log to retain after the
-// caller releases its payload buffer. A buffer-backed payload is copied into a
-// detached shallow copy so the log never aliases pooled memory; a plain payload
-// is returned unchanged (no allocation).
-func stabilizeForStore(msg *types.Message) *types.Message {
-	if msg.PayloadBuf == nil {
-		return msg
-	}
-	cp := *msg
-	cp.PayloadBuf = nil
-	cp.Payload = msg.StablePayload()
-	return &cp
-}
-
 // Append adds a message to the end of a queue's log.
-func (s *Store) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *Store) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	sl, err := s.getQueueLog(queueName)
 	if err != nil {
 		return 0, err
@@ -190,15 +201,18 @@ func (s *Store) Append(ctx context.Context, queueName string, msg *types.Message
 
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	offset := sl.tail
 	sl.tail++
 
 	// Set message metadata
-	msg.Sequence = offset
+	msg.Broker.Queue.Offset = offset
 
 	// Append to log
-	sl.messages = append(sl.messages, stabilizeForStore(msg))
+	sl.messages = append(sl.messages, msg)
 
 	return offset, nil
 }
@@ -207,7 +221,7 @@ func (s *Store) Append(ctx context.Context, queueName string, msg *types.Message
 // ordering half of the durable-append contract. Nothing in this store survives
 // process exit, so SupportsDurableSync reports false and callers must not
 // acknowledge writes as durable on top of it.
-func (s *Store) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *Store) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	return s.Append(ctx, queueName, msg)
 }
 
@@ -215,7 +229,7 @@ func (s *Store) AppendAndSync(ctx context.Context, queueName string, msg *types.
 func (s *Store) SupportsDurableSync() bool { return false }
 
 // AppendBatch adds multiple messages to a queue's log.
-func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*types.Message) (uint64, error) {
+func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*message.Envelope) (uint64, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
@@ -227,6 +241,9 @@ func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*types
 
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	firstOffset := sl.tail
 
@@ -234,15 +251,15 @@ func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*types
 		offset := sl.tail
 		sl.tail++
 
-		msg.Sequence = offset
-		sl.messages = append(sl.messages, stabilizeForStore(msg))
+		msg.Broker.Queue.Offset = offset
+		sl.messages = append(sl.messages, msg)
 	}
 
 	return firstOffset, nil
 }
 
 // Read retrieves a message at a specific offset.
-func (s *Store) Read(ctx context.Context, queueName string, offset uint64) (*types.Message, error) {
+func (s *Store) Read(ctx context.Context, queueName string, offset uint64) (*message.Envelope, error) {
 	sl, err := s.getQueueLog(queueName)
 	if err != nil {
 		return nil, err
@@ -250,6 +267,9 @@ func (s *Store) Read(ctx context.Context, queueName string, offset uint64) (*typ
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return nil, storage.ErrQueueNotFound
+	}
 
 	if offset < sl.head || offset >= sl.tail {
 		return nil, storage.ErrOffsetOutOfRange
@@ -261,11 +281,11 @@ func (s *Store) Read(ctx context.Context, queueName string, offset uint64) (*typ
 		return nil, storage.ErrOffsetOutOfRange
 	}
 
-	return sl.messages[idx], nil
+	return sl.messages[idx].Clone(), nil
 }
 
 // ReadBatch reads messages starting from offset up to limit.
-func (s *Store) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*types.Message, error) {
+func (s *Store) ReadBatch(ctx context.Context, queueName string, startOffset uint64, limit int) ([]*message.Envelope, error) {
 	sl, err := s.getQueueLog(queueName)
 	if err != nil {
 		return nil, err
@@ -273,6 +293,9 @@ func (s *Store) ReadBatch(ctx context.Context, queueName string, startOffset uin
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return nil, storage.ErrQueueNotFound
+	}
 
 	// Adjust start offset if before head
 	if startOffset < sl.head {
@@ -280,7 +303,7 @@ func (s *Store) ReadBatch(ctx context.Context, queueName string, startOffset uin
 	}
 
 	if startOffset >= sl.tail {
-		return []*types.Message{}, nil
+		return []*message.Envelope{}, nil
 	}
 
 	startIdx := int(startOffset - sl.head)
@@ -289,8 +312,10 @@ func (s *Store) ReadBatch(ctx context.Context, queueName string, startOffset uin
 		endIdx = len(sl.messages)
 	}
 
-	result := make([]*types.Message, endIdx-startIdx)
-	copy(result, sl.messages[startIdx:endIdx])
+	result := make([]*message.Envelope, 0, endIdx-startIdx)
+	for _, envelope := range sl.messages[startIdx:endIdx] {
+		result = append(result, envelope.Clone())
+	}
 
 	return result, nil
 }
@@ -304,6 +329,9 @@ func (s *Store) Head(ctx context.Context, queueName string) (uint64, error) {
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	return sl.head, nil
 }
@@ -317,6 +345,9 @@ func (s *Store) Tail(ctx context.Context, queueName string) (uint64, error) {
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	return sl.tail, nil
 }
@@ -330,13 +361,16 @@ func (s *Store) OffsetByTime(ctx context.Context, queueName string, ts time.Time
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	if len(sl.messages) == 0 {
 		return sl.head, nil
 	}
 
 	for i, msg := range sl.messages {
-		if !msg.CreatedAt.IsZero() && !msg.CreatedAt.Before(ts) {
+		if !msg.Broker.Queue.CreatedAt.IsZero() && !msg.Broker.Queue.CreatedAt.Before(ts) {
 			return sl.head + uint64(i), nil
 		}
 	}
@@ -345,14 +379,14 @@ func (s *Store) OffsetByTime(ctx context.Context, queueName string, ts time.Time
 }
 
 // messageSize estimates the memory footprint of a message.
-func messageSize(msg *types.Message) int64 {
+func messageSize(msg *message.Envelope) int64 {
 	if msg == nil {
 		return 0
 	}
-	size := int64(len(msg.GetPayload()))
+	size := int64(len(msg.PayloadBytes()))
 	size += int64(len(msg.Topic))
-	size += int64(len(msg.ID))
-	for k, v := range msg.Properties {
+	size += int64(len(msg.Broker.Queue.MessageID))
+	for k, v := range msg.User.Properties {
 		size += int64(len(k) + len(v))
 	}
 	const fixedOverhead = 200 // struct fields, pointers, timestamps
@@ -368,6 +402,9 @@ func (s *Store) OffsetBySize(ctx context.Context, queueName string, retentionByt
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	if retentionBytes <= 0 || len(sl.messages) == 0 {
 		return sl.head, nil
@@ -393,6 +430,9 @@ func (s *Store) Truncate(ctx context.Context, queueName string, minOffset uint64
 
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
+	if sl.deleted {
+		return storage.ErrQueueNotFound
+	}
 
 	if minOffset <= sl.head {
 		return nil // Nothing to truncate
@@ -408,11 +448,9 @@ func (s *Store) Truncate(ctx context.Context, queueName string, minOffset uint64
 		removeCount = len(sl.messages)
 	}
 
-	// Release payload buffers for removed messages
+	// Release removed envelopes and their payload references.
 	for i := 0; i < removeCount; i++ {
-		if sl.messages[i] != nil {
-			sl.messages[i].ReleasePayload()
-		}
+		message.Release(sl.messages[i])
 	}
 
 	// Truncate slice
@@ -431,6 +469,9 @@ func (s *Store) Count(ctx context.Context, queueName string) (uint64, error) {
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return 0, storage.ErrQueueNotFound
+	}
 
 	return sl.tail - sl.head, nil
 }

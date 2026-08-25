@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -117,7 +118,7 @@ func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 	return nil, nil
 }
 
-func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error {
+func (m *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
 	return nil
 }
 

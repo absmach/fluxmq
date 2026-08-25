@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -167,23 +168,16 @@ func (h *RetainedStore) loadMetadataCache() error {
 }
 
 // Set stores a retained message using the hybrid strategy.
-func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
-	// Stabilize the payload: publish-path messages carry it in a pooled
-	// PayloadBuf (with the legacy Payload field cleared), while a retained
-	// message must outlive the buffer and survive serialization.
-	payload := msg.StablePayload()
+func (h *RetainedStore) Set(ctx context.Context, topic string, msg *message.Envelope) error {
+	payload := msg.PayloadBytes()
 
 	// Empty payload = delete
 	if len(payload) == 0 {
 		return h.Delete(ctx, topic)
 	}
 
-	stored := *msg
-	stored.PayloadBuf = nil
-	stored.Payload = payload
-
 	// Always write to local BadgerDB first
-	if err := h.localStore.Set(ctx, topic, &stored); err != nil {
+	if err := h.localStore.Set(ctx, topic, msg); err != nil {
 		return fmt.Errorf("failed to write to local store: %w", err)
 	}
 
@@ -191,7 +185,7 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 	metadata := &RetainedMetadata{
 		NodeID:     h.nodeID,
 		Topic:      topic,
-		QoS:        msg.QoS,
+		QoS:        msg.Broker.Delivery.QoS,
 		Size:       len(payload),
 		Replicated: len(payload) < h.sizeThreshold,
 		Timestamp:  time.Now(),
@@ -200,7 +194,7 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 	// Publish to etcd based on size
 	var etcdErr error
 	if metadata.Replicated {
-		etcdErr = h.publishReplicatedMessage(ctx, topic, &stored, metadata)
+		etcdErr = h.publishReplicatedMessage(ctx, topic, msg, metadata)
 	} else {
 		etcdErr = h.publishMetadata(ctx, topic, metadata)
 	}
@@ -217,7 +211,7 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 }
 
 // Get retrieves a retained message, fetching from remote nodes if necessary.
-func (h *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
+func (h *RetainedStore) Get(ctx context.Context, topic string) (*message.Envelope, error) {
 	// Try local store first (fast path)
 	msg, err := h.localStore.Get(ctx, topic)
 	if err == nil && msg != nil {
@@ -275,7 +269,7 @@ func (h *RetainedStore) Delete(ctx context.Context, topic string) error {
 // deadline and return a different partial subset on every call. Fetching in
 // parallel keeps the wall-clock cost close to a single round-trip so the full
 // set resolves within budget and in a stable order.
-func (h *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
+func (h *RetainedStore) Match(ctx context.Context, filter string) ([]*message.Envelope, error) {
 	// Snapshot matching topics (with their metadata pointer) from the cache.
 	h.metadataCacheMu.RLock()
 	refs := make([]retainedRef, 0, len(h.metadataCache))
@@ -296,7 +290,7 @@ func (h *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Me
 	})
 
 	// Resolve payloads concurrently, preserving the sorted order by index.
-	results := make([]*storage.Message, len(refs))
+	results := make([]*message.Envelope, len(refs))
 	fetchErrs := make([]error, len(refs))
 	missing := make([]bool, len(refs))
 
@@ -320,7 +314,7 @@ func (h *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Me
 	}
 	_ = g.Wait() // per-topic outcomes are recorded above; no worker returns an error
 
-	messages := make([]*storage.Message, 0, len(refs))
+	messages := make([]*message.Envelope, 0, len(refs))
 	var errs []error
 	var prune []retainedRef
 	for i := range refs {
@@ -386,11 +380,11 @@ func (h *RetainedStore) Close() error {
 }
 
 // publishReplicatedMessage publishes a small message with full payload to etcd.
-func (h *RetainedStore) publishReplicatedMessage(ctx context.Context, topic string, msg *storage.Message, metadata *RetainedMetadata) error {
+func (h *RetainedStore) publishReplicatedMessage(ctx context.Context, topic string, msg *message.Envelope, metadata *RetainedMetadata) error {
 	entry := &RetainedDataEntry{
 		Metadata:   *metadata,
-		Payload:    base64.StdEncoding.EncodeToString(msg.Payload),
-		Properties: msg.Properties,
+		Payload:    base64.StdEncoding.EncodeToString(msg.PayloadBytes()),
+		Properties: message.ProjectProperties(msg, message.TrustedServiceProjection),
 	}
 
 	data, err := json.Marshal(entry)
@@ -449,7 +443,7 @@ func (h *RetainedStore) deleteFromEtcd(ctx context.Context, topic string) error 
 }
 
 // fetchRemoteRetained fetches a large retained message from a remote node via gRPC.
-func (h *RetainedStore) fetchRemoteRetained(ctx context.Context, topic, nodeID string) (*storage.Message, error) {
+func (h *RetainedStore) fetchRemoteRetained(ctx context.Context, topic, nodeID string) (*message.Envelope, error) {
 	if h.transport == nil {
 		return nil, fmt.Errorf("no transport configured, cannot fetch from node %s", nodeID)
 	}
@@ -467,15 +461,11 @@ func (h *RetainedStore) fetchRemoteRetained(ctx context.Context, topic, nodeID s
 		return nil, storage.ErrNotFound
 	}
 
-	// Convert grpc.RetainedMessage to storage.Message
-	msg := &storage.Message{
-		Topic:       grpcMsg.Topic,
-		Payload:     grpcMsg.Payload,
-		QoS:         byte(grpcMsg.Qos),
-		Retain:      grpcMsg.Retain,
-		Properties:  grpcMsg.Properties,
-		PublishTime: time.Unix(grpcMsg.Timestamp, 0),
-	}
+	msg := message.New(grpcMsg.Topic, grpcMsg.Payload)
+	msg.Broker.Delivery.QoS = byte(grpcMsg.Qos)
+	msg.Broker.Delivery.Retain = grpcMsg.Retain
+	msg.Broker.Delivery.PublishedAt = time.Unix(grpcMsg.Timestamp, 0)
+	message.ApplyTrustedProperties(msg, grpcMsg.Properties)
 
 	// Cache it locally for future reads
 	if err := h.localStore.Set(ctx, topic, msg); err != nil {
@@ -619,14 +609,11 @@ func (h *RetainedStore) storeReplicatedEntry(ctx context.Context, topic string, 
 		return
 	}
 
-	msg := &storage.Message{
-		Topic:       topic,
-		Payload:     payload,
-		QoS:         entry.Metadata.QoS,
-		Retain:      true,
-		Properties:  entry.Properties,
-		PublishTime: entry.Metadata.Timestamp,
-	}
+	msg := message.New(topic, payload)
+	msg.Broker.Delivery.QoS = entry.Metadata.QoS
+	msg.Broker.Delivery.Retain = true
+	msg.Broker.Delivery.PublishedAt = entry.Metadata.Timestamp
+	message.ApplyTrustedProperties(msg, entry.Properties)
 
 	if err := h.localStore.Set(ctx, topic, msg); err != nil {
 		h.logger.Warn("failed to store replicated message locally",

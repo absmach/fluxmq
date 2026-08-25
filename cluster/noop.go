@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -90,11 +91,11 @@ func (n *NoopCluster) Wills() storage.WillStore {
 // noopRetainedStore is a no-op implementation of storage.RetainedStore.
 type noopRetainedStore struct{}
 
-func (s *noopRetainedStore) Set(ctx context.Context, _ string, _ *storage.Message) error {
+func (s *noopRetainedStore) Set(ctx context.Context, _ string, _ *message.Envelope) error {
 	return nil
 }
 
-func (s *noopRetainedStore) Get(ctx context.Context, _ string) (*storage.Message, error) {
+func (s *noopRetainedStore) Get(ctx context.Context, _ string) (*message.Envelope, error) {
 	return nil, ErrClusterNotEnabled
 }
 
@@ -102,7 +103,7 @@ func (s *noopRetainedStore) Delete(ctx context.Context, _ string) error {
 	return nil
 }
 
-func (s *noopRetainedStore) Match(ctx context.Context, _ string) ([]*storage.Message, error) {
+func (s *noopRetainedStore) Match(ctx context.Context, _ string) ([]*message.Envelope, error) {
 	return nil, ErrClusterNotEnabled
 }
 
@@ -146,7 +147,7 @@ func (n *NoopCluster) EnqueueRemote(ctx context.Context, nodeID, queueName strin
 	return "", ErrClusterNotEnabled
 }
 
-func (n *NoopCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error {
+func (n *NoopCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
 	// Single-node: no remote nodes to route to
 	return ErrClusterNotEnabled
 }

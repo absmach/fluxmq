@@ -7,15 +7,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/stretchr/testify/require"
 )
 
 const testTopic = "test"
 
+func testEnvelope(topic string, data ...[]byte) *message.Envelope {
+	var payload []byte
+	if len(data) > 0 {
+		payload = data[0]
+	}
+	envelope := message.New(topic, payload)
+	envelope.Broker.Delivery.QoS = 1
+	return envelope
+}
+
 func TestInflightAddInitialSentAtZero(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: testTopic, QoS: 1}
+	msg := testEnvelope(testTopic)
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 
@@ -24,9 +34,32 @@ func TestInflightAddInitialSentAtZero(t *testing.T) {
 	require.True(t, inf.SentAt.IsZero())
 }
 
+func TestInflightReplacementRemoveAndClearReleaseOwnership(t *testing.T) {
+	tracker := NewInflightTracker(10)
+	first := testEnvelope(testTopic, []byte("first"))
+	firstPayload := first.Payload
+	second := testEnvelope(testTopic, []byte("second"))
+	secondPayload := second.Payload
+
+	require.NoError(t, tracker.Add(1, first, Outbound))
+	require.NoError(t, tracker.Add(1, second, Outbound))
+	require.Equal(t, int32(0), firstPayload.RefCount())
+	require.Equal(t, int32(1), secondPayload.RefCount())
+
+	tracker.Remove(1)
+	require.Equal(t, int32(0), secondPayload.RefCount())
+
+	third := testEnvelope(testTopic, []byte("third"))
+	thirdPayload := third.Payload
+	require.NoError(t, tracker.Add(2, third, Outbound))
+	tracker.Clear()
+	require.Equal(t, int32(0), thirdPayload.RefCount())
+	require.Zero(t, tracker.Count())
+}
+
 func TestInflightGetExpiredSkipsUnsent(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: testTopic, QoS: 1}
+	msg := testEnvelope(testTopic)
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 
@@ -36,7 +69,7 @@ func TestInflightGetExpiredSkipsUnsent(t *testing.T) {
 
 func TestInflightMarkSentEnablesExpiry(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: testTopic, QoS: 1}
+	msg := testEnvelope(testTopic)
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 	tracker.MarkSent(1)
@@ -51,7 +84,7 @@ func TestInflightMarkSentEnablesExpiry(t *testing.T) {
 
 func TestInflightMarkRetryUpdatesTimestampAndCount(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	msg := &storage.Message{Topic: testTopic, QoS: 1}
+	msg := testEnvelope(testTopic)
 
 	require.NoError(t, tracker.Add(1, msg, Outbound))
 	tracker.MarkSent(1)
@@ -70,14 +103,14 @@ func TestInflightMarkRetryUpdatesTimestampAndCount(t *testing.T) {
 
 func TestGetExpired_NeverSentNotEligibleWithoutDeliveryAttempt(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	require.NoError(t, tracker.Add(1, &storage.Message{Topic: "t", QoS: 1}, Outbound))
+	require.NoError(t, tracker.Add(1, testEnvelope("t"), Outbound))
 
 	require.Empty(t, tracker.GetExpired(0))
 }
 
 func TestGetExpired_NeverSentEligibleAfterDelay(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	require.NoError(t, tracker.Add(1, &storage.Message{Topic: "t", QoS: 1}, Outbound))
+	require.NoError(t, tracker.Add(1, testEnvelope("t"), Outbound))
 	tracker.MarkDeliveryAttempted(1)
 
 	// Not eligible immediately after mark.
@@ -93,7 +126,7 @@ func TestGetExpired_NeverSentEligibleAfterDelay(t *testing.T) {
 
 func TestMarkDeliveryAttempted_ResetsBackoffTimer(t *testing.T) {
 	tracker := NewInflightTracker(10)
-	require.NoError(t, tracker.Add(1, &storage.Message{Topic: "t", QoS: 1}, Outbound))
+	require.NoError(t, tracker.Add(1, testEnvelope("t"), Outbound))
 
 	// Simulate: delay elapsed, message is eligible.
 	tracker.MarkDeliveryAttempted(1)
@@ -110,22 +143,22 @@ func TestMarkDeliveryAttempted_ResetsBackoffTimer(t *testing.T) {
 func TestInflight_IndependentDirectionalCapacity(t *testing.T) {
 	tr := NewInflightTracker(2)
 
-	require.NoError(t, tr.Add(1, &storage.Message{Topic: "t"}, Outbound))
-	require.NoError(t, tr.Add(2, &storage.Message{Topic: "t"}, Outbound))
-	require.ErrorIs(t, tr.Add(3, &storage.Message{Topic: "t"}, Outbound), ErrInflightFull)
+	require.NoError(t, tr.Add(1, testEnvelope("t"), Outbound))
+	require.NoError(t, tr.Add(2, testEnvelope("t"), Outbound))
+	require.ErrorIs(t, tr.Add(3, testEnvelope("t"), Outbound), ErrInflightFull)
 
 	// Inbound has its own capacity; a full outbound direction must not reject
 	// inbound up to the advertised Receive Maximum.
-	require.NoError(t, tr.Add(1, &storage.Message{Topic: "t"}, Inbound))
-	require.NoError(t, tr.Add(2, &storage.Message{Topic: "t"}, Inbound))
-	require.ErrorIs(t, tr.Add(3, &storage.Message{Topic: "t"}, Inbound), ErrInflightFull)
+	require.NoError(t, tr.Add(1, testEnvelope("t"), Inbound))
+	require.NoError(t, tr.Add(2, testEnvelope("t"), Inbound))
+	require.ErrorIs(t, tr.Add(3, testEnvelope("t"), Inbound), ErrInflightFull)
 }
 
 func TestInflight_DirectionalKeysDoNotCollide(t *testing.T) {
 	tr := NewInflightTracker(8)
 
-	out := &storage.Message{Topic: "outbound"}
-	in := &storage.Message{Topic: "inbound"}
+	out := testEnvelope("outbound")
+	in := testEnvelope("inbound")
 	require.NoError(t, tr.Add(5, out, Outbound))
 	require.NoError(t, tr.Add(5, in, Inbound)) // same packet ID, opposite direction
 
@@ -142,13 +175,13 @@ func TestInflight_InvalidDirectionReturnsErrorNotPanic(t *testing.T) {
 	tr := NewInflightTracker(4)
 	// A corrupt/out-of-range direction must be rejected, not index counts[] out
 	// of range and panic.
-	err := tr.Add(1, &storage.Message{Topic: "t"}, Direction(99))
+	err := tr.Add(1, testEnvelope("t"), Direction(99))
 	require.ErrorIs(t, err, ErrInvalidDirection)
 }
 
 func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T) {
 	tr := NewInflightTracker(1)
-	first := &storage.Message{Topic: "first", Payload: []byte("original")}
+	first := testEnvelope("first", []byte("original"))
 	accepted, err := tr.AddInbound(7, first)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -158,14 +191,14 @@ func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T)
 	// The inbound window is full (capacity 1). A retransmitted PUBLISH reusing
 	// the same packet ID is acknowledged without replacing the first accepted
 	// transaction or taking ownership of the duplicate message.
-	duplicate := &storage.Message{Topic: "second", Payload: []byte("replacement")}
+	duplicate := testEnvelope("second", []byte("replacement"))
 	accepted, err = tr.AddInbound(7, duplicate)
 	require.NoError(t, err)
 	require.False(t, accepted)
 	require.Equal(t, StatePubRecReceived, tr.messages[inflightKey{direction: Inbound, packetID: 7}].State)
 
 	// A different packet ID is still rejected.
-	accepted, err = tr.AddInbound(8, &storage.Message{Topic: "t"})
+	accepted, err = tr.AddInbound(8, testEnvelope("t"))
 	require.ErrorIs(t, err, ErrInflightFull)
 	require.False(t, accepted)
 	require.NotContains(t, tr.messages, inflightKey{direction: Inbound, packetID: 8}, "failed admission must not create phantom duplicate state")
@@ -174,13 +207,13 @@ func TestInflight_AddInboundDuplicatePreservesOriginalOnFullWindow(t *testing.T)
 	require.NoError(t, err)
 	require.Same(t, first, got)
 	require.Equal(t, "first", got.Topic)
-	require.Equal(t, []byte("original"), got.Payload)
+	require.Equal(t, []byte("original"), got.PayloadBytes())
 }
 
 func TestInflight_AddInboundRejectsInvalidDirection(t *testing.T) {
 	tr := NewInflightTracker(1)
 
-	accepted, err := tr.addInbound(1, &storage.Message{Topic: "t"}, Outbound)
+	accepted, err := tr.addInbound(1, testEnvelope("t"), Outbound)
 	require.ErrorIs(t, err, ErrInvalidDirection)
 	require.False(t, accepted)
 	require.Empty(t, tr.GetAll())

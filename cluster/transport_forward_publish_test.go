@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 )
 
@@ -18,7 +19,7 @@ type stubForwardPublishHandler struct {
 	errByTopic map[string]error
 }
 
-func (s *stubForwardPublishHandler) ForwardPublish(ctx context.Context, msg *Message) error {
+func (s *stubForwardPublishHandler) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
 	if s.errByTopic == nil {
 		return nil
 	}

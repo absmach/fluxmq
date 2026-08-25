@@ -6,7 +6,7 @@ package badger
 import (
 	"testing"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 )
 
 func benchMessageStore(b *testing.B) *MessageStore {
@@ -25,7 +25,7 @@ func benchMessageStore(b *testing.B) *MessageStore {
 
 func BenchmarkMessageStore_Store(b *testing.B) {
 	store := benchMessageStore(b)
-	msg := &storage.Message{Topic: "bench/topic", Payload: make([]byte, 256), QoS: 1}
+	msg := message.NewDelivery("bench/topic", make([]byte, 256), 1, false)
 
 	b.ReportAllocs()
 	for b.Loop() {
@@ -37,7 +37,7 @@ func BenchmarkMessageStore_Store(b *testing.B) {
 
 func BenchmarkMessageStore_Get(b *testing.B) {
 	store := benchMessageStore(b)
-	msg := &storage.Message{Topic: "bench/topic", Payload: make([]byte, 256), QoS: 1}
+	msg := message.NewDelivery("bench/topic", make([]byte, 256), 1, false)
 	if err := store.Store("bench-client/queue/0", msg); err != nil {
 		b.Fatalf("store failed: %v", err)
 	}

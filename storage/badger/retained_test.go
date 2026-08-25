@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,11 +19,7 @@ func TestRetainedStore_Set(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   testTopic,
-		Payload: []byte("retained message"),
-		QoS:     1,
-	}
+	msg := message.NewDelivery(testTopic, []byte("retained message"), 1, true)
 
 	err := store.Set(ctx, testTopic, msg)
 	require.NoError(t, err)
@@ -30,19 +27,15 @@ func TestRetainedStore_Set(t *testing.T) {
 	retrieved, err := store.Get(ctx, testTopic)
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
-	assert.Equal(t, msg.Payload, retrieved.Payload)
-	assert.Equal(t, msg.QoS, retrieved.QoS)
+	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
+	assert.Equal(t, msg.Broker.Delivery.QoS, retrieved.Broker.Delivery.QoS)
 }
 
 func TestRetainedStore_SetWithPayloadBuffer(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	msg := &storage.Message{
-		Topic: testTopic,
-		QoS:   1,
-	}
-	msg.SetPayloadFromBytes([]byte("buffered retained"))
+	msg := message.NewDelivery(testTopic, []byte("buffered retained"), 1, true)
 	defer msg.ReleasePayload()
 
 	err := store.Set(ctx, testTopic, msg)
@@ -50,28 +43,20 @@ func TestRetainedStore_SetWithPayloadBuffer(t *testing.T) {
 
 	retrieved, err := store.Get(ctx, testTopic)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("buffered retained"), retrieved.GetPayload())
-	assert.Equal(t, byte(1), retrieved.QoS)
+	assert.Equal(t, []byte("buffered retained"), retrieved.PayloadBytes())
+	assert.Equal(t, byte(1), retrieved.Broker.Delivery.QoS)
 }
 
 func TestRetainedStore_SetEmptyPayload(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   testTopic,
-		Payload: []byte("initial message"),
-		QoS:     1,
-	}
+	msg := message.NewDelivery(testTopic, []byte("initial message"), 1, true)
 
 	err := store.Set(ctx, testTopic, msg)
 	require.NoError(t, err)
 
-	emptyMsg := &storage.Message{
-		Topic:   testTopic,
-		Payload: []byte{},
-		QoS:     0,
-	}
+	emptyMsg := message.NewDelivery(testTopic, nil, 0, true)
 	err = store.Set(ctx, testTopic, emptyMsg)
 	require.NoError(t, err)
 
@@ -84,11 +69,7 @@ func TestRetainedStore_Get(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   "sensor/temperature",
-		Payload: []byte("25.5"),
-		QoS:     2,
-	}
+	msg := message.NewDelivery("sensor/temperature", []byte("25.5"), 2, true)
 
 	err := store.Set(ctx, "sensor/temperature", msg)
 	require.NoError(t, err)
@@ -96,8 +77,8 @@ func TestRetainedStore_Get(t *testing.T) {
 	retrieved, err := store.Get(ctx, "sensor/temperature")
 	require.NoError(t, err)
 	assert.Equal(t, "sensor/temperature", retrieved.Topic)
-	assert.Equal(t, []byte("25.5"), retrieved.Payload)
-	assert.Equal(t, byte(2), retrieved.QoS)
+	assert.Equal(t, []byte("25.5"), retrieved.PayloadBytes())
+	assert.Equal(t, byte(2), retrieved.Broker.Delivery.QoS)
 }
 
 func TestRetainedStore_GetNotFound(t *testing.T) {
@@ -113,11 +94,7 @@ func TestRetainedStore_Delete(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   "test/delete",
-		Payload: []byte("to be deleted"),
-		QoS:     1,
-	}
+	msg := message.NewDelivery("test/delete", []byte("to be deleted"), 1, true)
 
 	err := store.Set(ctx, "test/delete", msg)
 	require.NoError(t, err)
@@ -134,11 +111,7 @@ func TestRetainedStore_MatchExact(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   "sensor/temp",
-		Payload: []byte("20"),
-		QoS:     1,
-	}
+	msg := message.NewDelivery("sensor/temp", []byte("20"), 1, true)
 
 	err := store.Set(ctx, "sensor/temp", msg)
 	require.NoError(t, err)
@@ -153,10 +126,10 @@ func TestRetainedStore_MatchSingleLevelWildcard(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	messages := []*storage.Message{
-		{Topic: "sensor/temp/room1", Payload: []byte("20"), QoS: 1},
-		{Topic: "sensor/temp/room2", Payload: []byte("21"), QoS: 1},
-		{Topic: "sensor/humidity/room1", Payload: []byte("60"), QoS: 1},
+	messages := []*message.Envelope{
+		message.NewDelivery("sensor/temp/room1", []byte("20"), 1, true),
+		message.NewDelivery("sensor/temp/room2", []byte("21"), 1, true),
+		message.NewDelivery("sensor/humidity/room1", []byte("60"), 1, true),
 	}
 
 	for _, msg := range messages {
@@ -173,11 +146,11 @@ func TestRetainedStore_MatchMultiLevelWildcard(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	messages := []*storage.Message{
-		{Topic: "sensor/temp/room1", Payload: []byte("20"), QoS: 1},
-		{Topic: "sensor/temp/room2", Payload: []byte("21"), QoS: 1},
-		{Topic: "sensor/humidity/room1", Payload: []byte("60"), QoS: 1},
-		{Topic: testAlertsCritical, Payload: []byte("fire"), QoS: 2},
+	messages := []*message.Envelope{
+		message.NewDelivery("sensor/temp/room1", []byte("20"), 1, true),
+		message.NewDelivery("sensor/temp/room2", []byte("21"), 1, true),
+		message.NewDelivery("sensor/humidity/room1", []byte("60"), 1, true),
+		message.NewDelivery(testAlertsCritical, []byte("fire"), 2, true),
 	}
 
 	for _, msg := range messages {
@@ -211,11 +184,7 @@ func TestRetainedStore_ConcurrentSetGet(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		go func(id int) {
-			msg := &storage.Message{
-				Topic:   "concurrent/topic",
-				Payload: []byte("message"),
-				QoS:     1,
-			}
+			msg := message.NewDelivery("concurrent/topic", []byte("message"), 1, true)
 			err := store.Set(ctx, "concurrent/topic", msg)
 			assert.NoError(t, err)
 			done <- true
@@ -238,28 +207,20 @@ func TestRetainedStore_UpdateExisting(t *testing.T) {
 	store := setupRetainedStore(t)
 	defer cleanupRetainedStore(t, store)
 
-	original := &storage.Message{
-		Topic:   "test/update",
-		Payload: []byte("original"),
-		QoS:     1,
-	}
+	original := message.NewDelivery("test/update", []byte("original"), 1, true)
 
 	err := store.Set(ctx, "test/update", original)
 	require.NoError(t, err)
 
-	updated := &storage.Message{
-		Topic:   "test/update",
-		Payload: []byte("updated"),
-		QoS:     2,
-	}
+	updated := message.NewDelivery("test/update", []byte("updated"), 2, true)
 
 	err = store.Set(ctx, "test/update", updated)
 	require.NoError(t, err)
 
 	retrieved, err := store.Get(ctx, "test/update")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("updated"), retrieved.Payload)
-	assert.Equal(t, byte(2), retrieved.QoS)
+	assert.Equal(t, []byte("updated"), retrieved.PayloadBytes())
+	assert.Equal(t, byte(2), retrieved.Broker.Delivery.QoS)
 }
 
 func setupRetainedStore(t *testing.T) *RetainedStore {

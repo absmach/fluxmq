@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/require"
@@ -132,7 +133,7 @@ func (c *testCluster) TakeoverSession(_ context.Context, _, _, _ string) (*clust
 	return nil, nil
 }
 
-func (c *testCluster) RouteQueueMessage(_ context.Context, _, _, _ string, _ *cluster.QueueMessage) error {
+func (c *testCluster) RouteQueueMessage(_ context.Context, _, _ string, _ *message.Envelope) error {
 	return nil
 }
 

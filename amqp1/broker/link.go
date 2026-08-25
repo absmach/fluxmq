@@ -12,6 +12,7 @@ import (
 	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/absmach/fluxmq/amqp1/performatives"
 	corebroker "github.com/absmach/fluxmq/broker"
+	coremessage "github.com/absmach/fluxmq/message"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -286,7 +287,7 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	// cannot be forged by a publisher.
 	props := make(map[string]string, len(msg.ApplicationProperties)+1)
 	for k, v := range msg.ApplicationProperties {
-		if corebroker.IsReservedProperty(k) {
+		if coremessage.IsReservedProperty(k) {
 			continue
 		}
 		if s, ok := v.(string); ok {
@@ -296,11 +297,11 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 	// Identity and origin are stamped from the authenticated connection, never
 	// read from the message: a sender may not attribute its publication to
 	// another principal or to another protocol.
-	props = corebroker.AddClientIDProperty(props, clientID)
-	props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP1
-	delete(props, corebroker.ExternalIDProperty)
+	props[coremessage.PropertyClientID] = clientID
+	props[coremessage.PropertyProtocol] = string(coremessage.ProtocolAMQP1)
+	delete(props, coremessage.PropertyExternalID)
 	if externalID != "" {
-		props[corebroker.ExternalIDProperty] = externalID
+		props[coremessage.PropertyExternalID] = externalID
 	}
 	hookReq, ok := l.session.conn.broker.ApplyPublishHooks(l.session.conn.ctx, clientID, externalID, topic, data, props)
 	if !ok {
@@ -329,10 +330,11 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 			}
 
 			queuePublishErr = qm.Publish(l.session.conn.ctx, qtypes.PublishRequest{
-				ClientID:   clientID,
+				Source:     coremessage.SourceFromProperties(props),
+				Trace:      coremessage.TraceFromProperties(props),
 				Topic:      publishTopic,
 				Payload:    data,
-				Properties: props,
+				Properties: coremessage.FilterUserProperties(props),
 			})
 			if queuePublishErr != nil {
 				l.logger.Error("queue publish failed", "topic", publishTopic, "error", queuePublishErr)
@@ -400,7 +402,7 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 		msg.ApplicationProperties = make(map[string]any, len(props))
 		for k, v := range props {
 			// Broker-internal state is never revealed to a remote receiver.
-			if corebroker.IsReservedProperty(k) {
+			if coremessage.IsReservedProperty(k) {
 				continue
 			}
 			msg.ApplicationProperties[k] = v
@@ -438,10 +440,10 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 	if !settled {
 		l.pendingMu.Lock()
 		pd := &pendingDelivery{deliveryID: deliveryID}
-		if msgID, ok := props[qtypes.PropMessageID]; ok {
+		if msgID, ok := props[coremessage.PropertyMessageID]; ok {
 			pd.messageID = msgID
-			pd.queueName, _ = props[qtypes.PropQueueName]
-			pd.groupID, _ = props[qtypes.PropGroupID]
+			pd.queueName, _ = props[coremessage.PropertyQueueName]
+			pd.groupID, _ = props[coremessage.PropertyGroupID]
 		}
 		l.pending[deliveryID] = pd
 		l.pendingMu.Unlock()
@@ -498,13 +500,13 @@ func (l *Link) sendAMQPMessage(msg any, qos byte) {
 	if !settled && amqpMsg.ApplicationProperties != nil {
 		l.pendingMu.Lock()
 		pd := &pendingDelivery{deliveryID: deliveryID}
-		if msgID, ok := amqpMsg.ApplicationProperties[qtypes.PropMessageID]; ok {
+		if msgID, ok := amqpMsg.ApplicationProperties[coremessage.PropertyMessageID]; ok {
 			pd.messageID, _ = msgID.(string)
 		}
-		if qn, ok := amqpMsg.ApplicationProperties[qtypes.PropQueueName]; ok {
+		if qn, ok := amqpMsg.ApplicationProperties[coremessage.PropertyQueueName]; ok {
 			pd.queueName, _ = qn.(string)
 		}
-		if gid, ok := amqpMsg.ApplicationProperties[qtypes.PropGroupID]; ok {
+		if gid, ok := amqpMsg.ApplicationProperties[coremessage.PropertyGroupID]; ok {
 			pd.groupID, _ = gid.(string)
 		}
 		l.pending[deliveryID] = pd

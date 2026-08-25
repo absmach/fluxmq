@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -265,10 +266,19 @@ func (b *Broker) snapshotFromStoredSession(ctx context.Context, stored *storage.
 		}
 		queue, err := b.stores.messages.List(stored.ClientID + queuePrefix)
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			for _, envelope := range inflight {
+				message.Release(envelope)
+			}
 			return nil, err
 		}
 		snapshot.InflightCount = len(inflight)
 		snapshot.OfflineQueueDepth = len(queue)
+		for _, envelope := range inflight {
+			message.Release(envelope)
+		}
+		for _, envelope := range queue {
+			message.Release(envelope)
+		}
 	}
 
 	if b.stores.wills != nil {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -20,12 +21,10 @@ func TestMessageStore(t *testing.T) {
 	s := NewMessageStore()
 
 	// Test Store and Get
-	msg := &storage.Message{
-		Topic:    "test/topic",
-		Payload:  []byte("hello"),
-		QoS:      1,
-		PacketID: 123,
-	}
+	input := []byte("hello")
+	msg := message.New("test/topic", input)
+	msg.Broker.Delivery.QoS = 1
+	msg.Broker.Delivery.PacketID = 123
 
 	if err := s.Store("client1/123", msg); err != nil {
 		t.Fatalf("Store failed: %v", err)
@@ -39,20 +38,20 @@ func TestMessageStore(t *testing.T) {
 	if got.Topic != msg.Topic {
 		t.Errorf("Topic mismatch: got %s, want %s", got.Topic, msg.Topic)
 	}
-	if string(got.Payload) != string(msg.Payload) {
-		t.Errorf("Payload mismatch: got %s, want %s", got.Payload, msg.Payload)
+	if string(got.PayloadBytes()) != string(msg.PayloadBytes()) {
+		t.Errorf("Payload mismatch: got %s, want %s", got.PayloadBytes(), msg.PayloadBytes())
 	}
 
 	// Test mutation isolation
-	msg.Payload[0] = 'x'
+	input[0] = 'x'
 	got2, _ := s.Get("client1/123")
-	if string(got2.Payload) != "hello" {
+	if string(got2.PayloadBytes()) != "hello" {
 		t.Errorf("Mutation affected stored message")
 	}
 
 	// Test List with prefix
-	s.Store("client1/456", &storage.Message{Topic: "t2"}) //nolint:errcheck // test setup
-	s.Store("client2/789", &storage.Message{Topic: "t3"}) //nolint:errcheck // test setup
+	s.Store("client1/456", message.New("t2", nil)) //nolint:errcheck // test setup
+	s.Store("client2/789", message.New("t3", nil)) //nolint:errcheck // test setup
 
 	list, err := s.List("client1/")
 	if err != nil {
@@ -245,12 +244,9 @@ func TestRetainedStore(t *testing.T) {
 	ctx := context.Background()
 
 	// Test Set and Get
-	msg := &storage.Message{
-		Topic:   "sensors/temp",
-		Payload: []byte("23.5"),
-		QoS:     1,
-		Retain:  true,
-	}
+	msg := message.New("sensors/temp", []byte("23.5"))
+	msg.Broker.Delivery.QoS = 1
+	msg.Broker.Delivery.Retain = true
 
 	if err := s.Set(ctx, "sensors/temp", msg); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -260,13 +256,13 @@ func TestRetainedStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if string(got.Payload) != "23.5" {
+	if string(got.PayloadBytes()) != "23.5" {
 		t.Errorf("Payload mismatch")
 	}
 
 	// Test Match with exact filter
-	s.Set(ctx, "sensors/humidity", &storage.Message{Payload: []byte("60")})   //nolint:errcheck // test setup
-	s.Set(ctx, "sensors/pressure", &storage.Message{Payload: []byte("1013")}) //nolint:errcheck // test setup
+	s.Set(ctx, "sensors/humidity", message.New("sensors/humidity", []byte("60")))   //nolint:errcheck // test setup
+	s.Set(ctx, "sensors/pressure", message.New("sensors/pressure", []byte("1013"))) //nolint:errcheck // test setup
 
 	matched, err := s.Match(ctx, "sensors/+")
 	if err != nil {
@@ -286,7 +282,7 @@ func TestRetainedStore(t *testing.T) {
 	}
 
 	// Test Delete via empty payload
-	if err := s.Set(ctx, "sensors/temp", &storage.Message{Payload: nil}); err != nil {
+	if err := s.Set(ctx, "sensors/temp", message.New("sensors/temp", nil)); err != nil {
 		t.Fatalf("Set with empty payload failed: %v", err)
 	}
 	_, err = s.Get(ctx, "sensors/temp")
@@ -308,8 +304,8 @@ func TestRetainedStoreSystemTopics(t *testing.T) {
 	s := NewRetainedStore()
 	ctx := context.Background()
 
-	s.Set(ctx, "$SYS/broker/clients", &storage.Message{Payload: []byte("10")}) //nolint:errcheck // test setup
-	s.Set(ctx, "normal/topic", &storage.Message{Payload: []byte("data")})      //nolint:errcheck // test setup
+	s.Set(ctx, "$SYS/broker/clients", message.New("$SYS/broker/clients", []byte("10"))) //nolint:errcheck // test setup
+	s.Set(ctx, "normal/topic", message.New("normal/topic", []byte("data")))             //nolint:errcheck // test setup
 
 	// # should not match $SYS topics
 	matched, _ := s.Match(ctx, "#")

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/dgraph-io/badger/v4"
@@ -488,12 +489,12 @@ func (m *Manager) ApplyWithOptions(ctx context.Context, op *Operation, opts Appl
 }
 
 // ApplyAppend submits an append operation to Raft.
-func (m *Manager) ApplyAppend(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (m *Manager) ApplyAppend(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	return m.ApplyAppendWithOptions(ctx, queueName, msg, ApplyOptions{})
 }
 
 // ApplyAppendWithOptions submits an append operation to Raft with per-call options.
-func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error) {
+func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, msg *message.Envelope, opts ApplyOptions) (uint64, error) {
 	if !m.IsEnabled() {
 		return 0, ErrRaftDisabled
 	}

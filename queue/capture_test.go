@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -27,7 +28,7 @@ type blockingQueueStore struct {
 	once    sync.Once
 }
 
-func (s *blockingQueueStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *blockingQueueStore) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.once.Do(func() { close(s.entered) })
 	<-s.release
 	return s.QueueStore.Append(ctx, queueName, msg)
@@ -186,7 +187,7 @@ func TestCapturePreservesPerQueueOrder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read offset %d failed: %v", i, err)
 		}
-		if got := msg.GetPayload()[0]; got != byte(i%256) {
+		if got := msg.PayloadBytes()[0]; got != byte(i%256) {
 			t.Fatalf("offset %d holds payload %d, want %d; capture reordered a queue", i, got, i%256)
 		}
 	}
@@ -198,7 +199,7 @@ type countingQueueStore struct {
 	appended atomic.Int64
 }
 
-func (s *countingQueueStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *countingQueueStore) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.appended.Add(1)
 	return s.QueueStore.Append(ctx, queueName, msg)
 }

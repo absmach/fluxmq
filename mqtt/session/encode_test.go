@@ -7,11 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,19 +23,14 @@ import (
 func TestEncodePublish_V5RetransmitCarriesProperties(t *testing.T) {
 	pf := byte(1)
 	expiry := uint32(120)
-	msg := &storage.Message{
-		Topic:           testTopic,
-		QoS:             1,
-		Retain:          true,
-		ContentType:     "application/json",
-		ResponseTopic:   "responses/123",
-		CorrelationData: []byte("corr-1"),
-		PayloadFormat:   &pf,
-		MessageExpiry:   &expiry,
-		Expiry:          time.Now().Add(60 * time.Second),
-		UserProperties:  map[string]string{testTraceKey: testTraceVal},
-	}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.NewDelivery(testTopic, []byte("payload"), 1, true)
+	msg.User.ContentType = "application/json"
+	msg.User.ResponseTopic = "responses/123"
+	msg.User.CorrelationData = []byte("corr-1")
+	msg.User.PayloadFormat = &pf
+	msg.User.MessageExpiry = &expiry
+	msg.User.Properties = map[string]string{testTraceKey: testTraceVal}
+	msg.Broker.Delivery.ExpiresAt = time.Now().Add(60 * time.Second)
 
 	pkt := EncodePublish(msg, 42, packets.V5, true)
 	pub, ok := pkt.(*v5.Publish)
@@ -64,8 +58,7 @@ func TestEncodePublish_V5RetransmitCarriesProperties(t *testing.T) {
 // TestEncodePublish_V3FirstSendNoDup verifies the v3 path encodes a *v3.Publish
 // and honours the dup flag.
 func TestEncodePublish_V3FirstSendNoDup(t *testing.T) {
-	msg := &storage.Message{Topic: "t", QoS: 2}
-	msg.SetPayloadFromBytes([]byte("p"))
+	msg := message.NewDelivery("t", []byte("p"), 2, false)
 
 	pkt := EncodePublish(msg, 7, packets.V311, false)
 	pub, ok := pkt.(*v3.Publish)
@@ -87,7 +80,7 @@ const (
 // must never be encoded into a v5 PUBLISH, or every subscribing device would
 // read the internal state services pass to one another.
 func TestEncodePublish_V5OmitsReservedProperties(t *testing.T) {
-	reserved := broker.ReservedPropertyPrefix + "re.trace"
+	reserved := message.ReservedPropertyPrefix + "re.trace"
 
 	tests := []struct {
 		name           string
@@ -114,13 +107,14 @@ func TestEncodePublish_V5OmitsReservedProperties(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			msg := &storage.Message{
-				Topic:          testTopic,
-				QoS:            1,
-				Properties:     tc.properties,
-				UserProperties: tc.userProperties,
+			msg := message.NewDelivery(testTopic, []byte("payload"), 1, false)
+			msg.User.Properties = make(map[string]string, len(tc.properties)+len(tc.userProperties))
+			for key, value := range tc.properties {
+				msg.User.Properties[key] = value
 			}
-			msg.SetPayloadFromBytes([]byte("payload"))
+			for key, value := range tc.userProperties {
+				msg.User.Properties[key] = value
+			}
 
 			pkt := EncodePublish(msg, 1, packets.V5, false)
 			pub, ok := pkt.(*v5.Publish)

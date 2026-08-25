@@ -19,6 +19,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
@@ -403,8 +404,8 @@ func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 		BodySize: 2,
 		Properties: codec.BasicProperties{
 			Headers: map[string]any{
-				corebroker.ExternalIDProperty: "pub-123",
-				corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
+				message.PropertyExternalID: "pub-123",
+				message.PropertyProtocol:   string(message.ProtocolHTTP),
 			},
 		},
 	}
@@ -414,11 +415,14 @@ func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 	if qm.exactPublishCalls != 1 {
 		t.Fatalf("exact stream publish calls = %d, want 1", qm.exactPublishCalls)
 	}
-	if got := qm.exactPublish.Properties[corebroker.ExternalIDProperty]; got != testLocalPrincipal {
+	if got := qm.exactPublish.Source.ExternalID; got != testLocalPrincipal {
 		t.Fatalf("external_id = %q, want %q", got, testLocalPrincipal)
 	}
-	if got := qm.exactPublish.Properties[corebroker.ProtocolProperty]; got != corebroker.ProtocolAMQP091 {
-		t.Fatalf("protocol = %q, want %q", got, corebroker.ProtocolAMQP091)
+	if got := qm.exactPublish.Source.Protocol; got != message.ProtocolAMQP091 {
+		t.Fatalf("protocol = %q, want %q", got, message.ProtocolAMQP091)
+	}
+	if _, ok := qm.exactPublish.Properties[message.PropertyExternalID]; ok {
+		t.Fatal("broker source identity leaked into user properties")
 	}
 }
 

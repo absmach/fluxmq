@@ -15,6 +15,7 @@ import (
 
 	"connectrpc.com/connect"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
 )
@@ -50,6 +51,13 @@ func newTestTransport(nodeID string, mock *mockBrokerClient) *Transport {
 		stopCh:      make(chan struct{}),
 	}
 	return t
+}
+
+func newQueueDelivery(clientID, queueName, messageID, body string) QueueDelivery {
+	envelope := message.New("", []byte(body))
+	envelope.Broker.Queue.Name = queueName
+	envelope.Broker.Queue.MessageID = messageID
+	return QueueDelivery{ClientID: clientID, Message: envelope}
 }
 
 // --- SendForwardPublishBatch tests ---
@@ -391,8 +399,8 @@ func TestSendRouteQueueBatch_AllSucceed(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
-		{ClientID: "c2", QueueName: "q2", Message: &QueueMessage{MessageID: "m2", Payload: []byte("2")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
+		newQueueDelivery("c2", "q2", "m2", "2"),
 	}
 	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -440,8 +448,8 @@ func TestSendRouteQueueBatch_PartialFailureRetriesSubset(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
-		{ClientID: "c2", QueueName: "q2", Message: &QueueMessage{MessageID: "m2", Payload: []byte("2")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
+		newQueueDelivery("c2", "q2", "m2", "2"),
 	}
 	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -495,8 +503,8 @@ func TestSendRouteQueueBatch_ClearsFailuresBetweenTransportRetries(t *testing.T)
 	tr := newTestTransport(peerID, mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: failedClient, QueueName: queueName, Message: &QueueMessage{MessageID: "retry-route-message", Payload: []byte("retry-route-payload")}},
-		{ClientID: "delivered-route-client", QueueName: queueName, Message: &QueueMessage{MessageID: "delivered-route-message", Payload: []byte("delivered-route-payload")}},
+		newQueueDelivery(failedClient, queueName, "retry-route-message", "retry-route-payload"),
+		newQueueDelivery("delivered-route-client", queueName, "delivered-route-message", "delivered-route-payload"),
 	}
 	if err := tr.SendRouteQueueBatch(context.Background(), peerID, deliveries); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -515,7 +523,7 @@ func TestSendRouteQueueBatch_TransportError(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
 	}
 	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err == nil {
 		t.Fatal("expected transport error to propagate")
@@ -539,7 +547,7 @@ func TestSendRouteQueueBatch_ExhaustsPartialRetriesReturnsError(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
 	}
 	err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries)
 	if err == nil {
@@ -568,7 +576,7 @@ func TestSendRouteQueueBatch_WrapsSentinelWhenAllFailuresNotConnected(t *testing
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
 	}
 	err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries)
 	if err == nil {
@@ -595,8 +603,8 @@ func TestSendRouteQueueBatch_DoesNotWrapSentinelOnMixedFailures(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
-		{ClientID: "c2", QueueName: "q2", Message: &QueueMessage{MessageID: "m2", Payload: []byte("2")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
+		newQueueDelivery("c2", "q2", "m2", "2"),
 	}
 	err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries)
 	if err == nil {
@@ -619,7 +627,7 @@ func TestSendRouteQueueBatch_FailedWithoutIndexedFailures(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
+		newQueueDelivery("c1", "q1", "m1", "1"),
 	}
 	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err == nil {
 		t.Fatal("expected error when response is unsuccessful without indexed failures")
@@ -665,9 +673,9 @@ func TestSendRouteQueueBatch_PartialFailureWithNilDeliveryRetriesCorrectSubset(t
 	tr := newTestTransport("peer1", mock)
 
 	deliveries := []QueueDelivery{
-		{ClientID: "nil", QueueName: "q0", Message: nil},
-		{ClientID: "c1", QueueName: "q1", Message: &QueueMessage{MessageID: "m1", Payload: []byte("1")}},
-		{ClientID: "c2", QueueName: "q2", Message: &QueueMessage{MessageID: "m2", Payload: []byte("2")}},
+		{ClientID: "nil", Message: nil},
+		newQueueDelivery("c1", "q1", "m1", "1"),
+		newQueueDelivery("c2", "q2", "m2", "2"),
 	}
 
 	if err := tr.SendRouteQueueBatch(context.Background(), "peer1", deliveries); err != nil {

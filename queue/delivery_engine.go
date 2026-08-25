@@ -13,17 +13,17 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
-	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
 // RemoteRouter is the subset of cluster.Cluster needed by the delivery engine
 // for cross-node message routing.
 type RemoteRouter interface {
 	ListQueueConsumers(ctx context.Context, queueName string) ([]*cluster.QueueConsumerInfo, error)
-	RouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *cluster.QueueMessage) error
+	RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error
 	UnregisterQueueConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 }
 
@@ -285,10 +285,12 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			Limit:      e.batchSize,
 		})
 		if err == consumer.ErrNoMessages {
+			releaseDeliverySources(outcome.Messages)
 			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
 			continue
 		}
 		if err != nil {
+			releaseDeliverySources(outcome.Messages)
 			continue
 		}
 		msgs := outcome.Messages
@@ -308,8 +310,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			deliveries := make([]cluster.QueueDelivery, 0, len(msgs))
 			for _, msg := range msgs {
 				deliveries = append(deliveries, cluster.QueueDelivery{
-					ClientID:  consumerInfo.ClientID,
-					QueueName: config.Name,
+					ClientID: consumerInfo.ClientID,
 					Message: createRoutedQueueMessage(
 						msg,
 						group.ID,
@@ -321,6 +322,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 					),
 				})
 			}
+			releaseDeliverySources(msgs)
 			if err := e.routeRemoteBatch(ctx, consumerInfo.ProxyNodeID, deliveries); err != nil {
 				e.logger.Warn("queue message remote routing failed",
 					slog.String("client", consumerInfo.ClientID),
@@ -371,10 +373,11 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 				deliveredAny = true
 				delivered = true
 				if group.Mode == types.GroupModeStream {
-					committedCursor = msg.Sequence + 1
+					committedCursor = msg.Broker.Queue.Offset + 1
 				}
 			}
 		}
+		releaseDeliverySources(msgs)
 
 		if group.Mode == types.GroupModeStream && deliveredAny {
 			if allDelivered {
@@ -437,6 +440,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 				Limit:      e.batchSize,
 			})
 			if err != nil {
+				releaseDeliverySources(outcome.Messages)
 				continue
 			}
 			msgs := outcome.Messages
@@ -449,8 +453,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 			deliveries := make([]cluster.QueueDelivery, 0, len(msgs))
 			for _, msg := range msgs {
 				deliveries = append(deliveries, cluster.QueueDelivery{
-					ClientID:  consumerInfo.ClientID,
-					QueueName: config.Name,
+					ClientID: consumerInfo.ClientID,
 					Message: createRoutedQueueMessage(
 						msg,
 						groupID,
@@ -462,6 +465,8 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 					),
 				})
 			}
+			lastOffset := msgs[len(msgs)-1].Broker.Queue.Offset
+			releaseDeliverySources(msgs)
 
 			if err := e.routeRemoteBatch(ctx, consumerInfo.ProxyNodeID, deliveries); err != nil {
 				e.logger.Warn("remote queue message delivery failed",
@@ -484,7 +489,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 				slog.String("node", consumerInfo.ProxyNodeID),
 				slog.String("queue", config.Name),
 				slog.Int("batch_size", len(deliveries)),
-				slog.Uint64("last_offset", msgs[len(msgs)-1].Sequence))
+				slog.Uint64("last_offset", lastOffset))
 		}
 	}
 
@@ -568,6 +573,11 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 	if len(deliveries) == 0 {
 		return nil
 	}
+	defer func() {
+		for _, delivery := range deliveries {
+			message.Release(delivery.Message)
+		}
+	}()
 	if batchRouter, ok := e.remote.(RemoteBatchRouter); ok {
 		err := batchRouter.RouteQueueBatch(ctx, nodeID, deliveries)
 		if err == nil {
@@ -581,7 +591,7 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 		if delivery.Message == nil {
 			continue
 		}
-		if err := e.remote.RouteQueueMessage(ctx, nodeID, delivery.ClientID, delivery.QueueName, delivery.Message); err != nil {
+		if err := e.remote.RouteQueueMessage(ctx, nodeID, delivery.ClientID, delivery.Message); err != nil {
 			return err
 		}
 	}
@@ -590,77 +600,52 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 
 // --- Message building helpers (stateless) ---
 
-func createDeliveryMessage(msg *types.Message, groupID string, queueName string) *brokerstorage.Message {
-	props := createRouteProperties(msg, groupID, queueName)
-
-	deliveryMsg := &brokerstorage.Message{
-		Topic:      queueDeliveryTopic(queueName, msg.Topic),
-		QoS:        1,
-		Properties: props,
+func createDeliveryMessage(msg *message.Envelope, groupID string, queueName string) *message.Envelope {
+	delivery := msg.Clone()
+	delivery.Topic = queueDeliveryTopic(queueName, msg.Topic)
+	delivery.Broker.Source.Topic = msg.Topic
+	delivery.Broker.Delivery = message.DeliveryMetadata{
+		PublishedAt: msg.Broker.Delivery.PublishedAt,
+		ExpiresAt:   msg.Broker.Delivery.ExpiresAt,
+		QoS:         1,
 	}
-	deliveryMsg.SetPayloadFromBytes(msg.GetPayload())
-
-	return deliveryMsg
+	delivery.Broker.Queue = message.QueueMetadata{
+		MessageID: queueName + ":" + strconv.FormatUint(msg.Broker.Queue.Offset, 10),
+		Name:      queueName,
+		GroupID:   groupID,
+		Offset:    msg.Broker.Queue.Offset,
+	}
+	return delivery
 }
 
-func decorateStreamDelivery(delivery *brokerstorage.Message, msg *types.Message, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
+func releaseDeliverySources(envelopes []*message.Envelope) {
+	for _, envelope := range envelopes {
+		message.Release(envelope)
+	}
+}
+
+func decorateStreamDelivery(delivery *message.Envelope, msg *message.Envelope, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
 	if delivery == nil || msg == nil {
 		return
 	}
-	if delivery.Properties == nil {
-		delivery.Properties = make(map[string]string)
+	delivery.Broker.Queue.Stream = &message.StreamMetadata{
+		Offset:    msg.Broker.Queue.Offset,
+		Timestamp: msg.Broker.Queue.CreatedAt.UnixMilli(),
 	}
-	decorateStreamProperties(delivery.Properties, msg, workCommitted, hasWorkCommitted, primaryGroup)
+	if hasWorkCommitted {
+		delivery.Broker.Queue.Stream.HasCommittedOffset = true
+		delivery.Broker.Queue.Stream.CommittedOffset = workCommitted
+		delivery.Broker.Queue.Stream.WorkAcknowledged = msg.Broker.Queue.Offset < workCommitted
+		delivery.Broker.Queue.Stream.WorkGroup = primaryGroup
+	}
 }
 
-func createRouteProperties(msg *types.Message, groupID, queueName string) map[string]string {
-	props := make(map[string]string, len(msg.Properties)+4)
-	for k, v := range msg.Properties {
-		props[k] = v
-	}
-	// Stamped after the publisher's own properties are copied in, so a
-	// publisher cannot forge the origin of its own message.
-	props[types.PropMessageID] = queueName + ":" + strconv.FormatUint(msg.Sequence, 10)
-	props[types.PropGroupID] = groupID
-	props[types.PropQueueName] = queueName
-	props[types.PropOffset] = strconv.FormatUint(msg.Sequence, 10)
-	props[types.PropSourceTopic] = msg.Topic
-
-	return props
-}
-
-func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, stream bool, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) *cluster.QueueMessage {
-	userProps := make(map[string]string, len(msg.Properties))
-	for k, v := range msg.Properties {
-		userProps[k] = v
-	}
-
-	routeMsg := &cluster.QueueMessage{
-		MessageID:      queueName + ":" + strconv.FormatUint(msg.Sequence, 10),
-		QueueName:      queueName,
-		GroupID:        groupID,
-		Topic:          queueDeliveryTopic(queueName, msg.Topic),
-		SourceTopic:    msg.Topic,
-		Payload:        msg.StablePayload(),
-		Sequence:       int64(msg.Sequence),
-		UserProperties: userProps,
-		Stream:         stream,
-	}
-
+func createRoutedQueueMessage(msg *message.Envelope, groupID, queueName string, stream bool, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) *message.Envelope {
+	routed := createDeliveryMessage(msg, groupID, queueName)
 	if stream {
-		routeMsg.StreamOffset = int64(msg.Sequence)
-		if !msg.CreatedAt.IsZero() {
-			routeMsg.StreamTimestamp = msg.CreatedAt.UnixMilli()
-		}
-		if hasWorkCommitted {
-			routeMsg.HasWorkCommitted = true
-			routeMsg.WorkCommittedOffset = int64(workCommitted)
-			routeMsg.WorkAcked = msg.Sequence < workCommitted
-			routeMsg.WorkGroup = primaryGroup
-		}
+		decorateStreamDelivery(routed, msg, workCommitted, hasWorkCommitted, primaryGroup)
 	}
-
-	return routeMsg
+	return routed
 }
 
 // queueDeliveryTopic converts a queue's stored source topic into the canonical
@@ -674,8 +659,8 @@ func createRoutedQueueMessage(msg *types.Message, groupID, queueName string, str
 // queue m, and an explicit publish to $queue/m/acme/temp all deliver as
 // $queue/m/acme/temp, because the leading level is absorbed when it already
 // equals the queue name. Consumers must not parse a source topic back out of
-// it; the v1 contract carries the origin in the types.PropSourceTopic property,
-// which the broker stamps and a publisher cannot forge.
+// it; the v1 contract carries the origin in typed SourceMetadata, which the
+// broker stamps and a publisher cannot forge.
 //
 // That contract reaches every protocol that can encode message properties —
 // MQTT 5.0, AMQP 0.9.1 and AMQP 1.0. MQTT 3.1.1 has no property field, so a
@@ -699,24 +684,5 @@ func queueDeliveryTopic(queueName, topic string) string {
 		return "$queue/" + topic
 	default:
 		return root + "/" + topic
-	}
-}
-
-func decorateStreamProperties(properties map[string]string, msg *types.Message, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) {
-	if properties == nil || msg == nil {
-		return
-	}
-
-	properties[types.PropStreamOffset] = strconv.FormatUint(msg.Sequence, 10)
-	if !msg.CreatedAt.IsZero() {
-		properties[types.PropStreamTimestamp] = strconv.FormatInt(msg.CreatedAt.UnixMilli(), 10)
-	}
-
-	if hasWorkCommitted {
-		properties[types.PropWorkCommittedOffset] = strconv.FormatUint(workCommitted, 10)
-		properties[types.PropWorkAcked] = strconv.FormatBool(msg.Sequence < workCommitted)
-		if primaryGroup != "" {
-			properties[types.PropWorkGroup] = primaryGroup
-		}
 	}
 }

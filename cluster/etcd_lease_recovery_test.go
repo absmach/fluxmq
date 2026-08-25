@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
@@ -37,7 +38,9 @@ func newLeaseLossRecorder() *leaseLossRecorder {
 	return &leaseLossRecorder{clients: make(map[string]struct{})}
 }
 
-func (r *leaseLossRecorder) DeliverToClient(context.Context, string, *Message) error { return nil }
+func (r *leaseLossRecorder) DeliverToClient(context.Context, string, *message.Envelope) error {
+	return nil
+}
 
 func (r *leaseLossRecorder) GetSessionStateAndClose(context.Context, string) (*clusterv1.SessionState, error) {
 	return nil, nil
@@ -51,7 +54,7 @@ func (r *leaseLossRecorder) HandleSessionLeaseLost(_ context.Context, clientIDs 
 	}
 }
 
-func (r *leaseLossRecorder) GetRetainedMessage(context.Context, string) (*storage.Message, error) {
+func (r *leaseLossRecorder) GetRetainedMessage(context.Context, string) (*message.Envelope, error) {
 	return nil, nil
 }
 

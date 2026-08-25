@@ -19,8 +19,8 @@ import (
 	"github.com/absmach/fluxmq/amqp1/sasl"
 	"github.com/absmach/fluxmq/amqp1/types"
 	"github.com/absmach/fluxmq/broker"
+	coremessage "github.com/absmach/fluxmq/message"
 	amqpserver "github.com/absmach/fluxmq/server/amqp1"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -468,12 +468,8 @@ func TestIntegrationDeliverToClient(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Deliver via DeliverToClient
-	msg := &storage.Message{
-		Topic:      "test/deliver",
-		Payload:    []byte("deliver-payload"),
-		Properties: map[string]string{"key": "val"},
-		QoS:        0,
-	}
+	msg := coremessage.New("test/deliver", []byte("deliver-payload"))
+	msg.User.Properties = map[string]string{"key": "val"}
 	err = b.DeliverToClient(context.Background(), "amqp:deliver-client", msg)
 	require.NoError(t, err)
 

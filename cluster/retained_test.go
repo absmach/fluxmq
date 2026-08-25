@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,14 +73,10 @@ func TestRetainedStore_SmallMessageReplication(t *testing.T) {
 	defer store2.Close()
 
 	// Create a small message (<1KB)
-	msg := &storage.Message{
-		Topic:       "test/small",
-		Payload:     []byte("small payload"),
-		QoS:         1,
-		Retain:      true,
-		Properties:  map[string]string{"test": testValue},
-		PublishTime: time.Now(),
-	}
+	msg := message.NewDelivery("test/small", []byte("small payload"), 1, true)
+	msg.User.Properties = map[string]string{"test": testValue}
+	msg.Broker.Delivery.PublishedAt = time.Now()
+	defer msg.ReleasePayload()
 
 	// Store message on node1
 	err = store1.Set(ctx, msg.Topic, msg)
@@ -94,8 +90,9 @@ func TestRetainedStore_SmallMessageReplication(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, retrieved)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
-	assert.Equal(t, msg.Payload, retrieved.Payload)
-	assert.Equal(t, msg.QoS, retrieved.QoS)
+	defer retrieved.ReleasePayload()
+	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
+	assert.Equal(t, msg.Broker.Delivery.QoS, retrieved.Broker.Delivery.QoS)
 }
 
 // TestRetainedStore_LargeMessageFetchOnDemand tests that large messages (≥threshold) are not replicated.
@@ -142,13 +139,9 @@ func newTestRetainedStore(t *testing.T, nodeID string) *RetainedStore {
 // the local store and the metadata cache, so Get resolves it from local.
 func seedLocalRetained(t *testing.T, h *RetainedStore, topic string, payload []byte) {
 	t.Helper()
-	msg := &storage.Message{
-		Topic:       topic,
-		Payload:     payload,
-		QoS:         1,
-		Retain:      true,
-		PublishTime: time.Now(),
-	}
+	msg := message.NewDelivery(topic, payload, 1, true)
+	msg.Broker.Delivery.PublishedAt = time.Now()
+	defer msg.ReleasePayload()
 	require.NoError(t, h.localStore.Set(context.Background(), topic, msg))
 	h.metadataCache[topic] = &RetainedMetadata{
 		NodeID:     h.nodeID,
@@ -175,7 +168,7 @@ func seedMetadataOnly(h *RetainedStore, topic, ownerNode string, replicated bool
 	}
 }
 
-func matchedTopics(msgs []*storage.Message) []string {
+func matchedTopics(msgs []*message.Envelope) []string {
 	out := make([]string, len(msgs))
 	for i, m := range msgs {
 		out[i] = m.Topic

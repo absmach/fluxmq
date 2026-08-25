@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
@@ -45,7 +46,7 @@ type ConsumeCommand struct {
 // ConsumeOutcome contains records selected by Consume. Queue-mode records are
 // already in the PEL. Stream-mode records must be committed after delivery.
 type ConsumeOutcome struct {
-	Messages       []*types.Message
+	Messages       []*message.Envelope
 	Mode           types.ConsumerGroupMode
 	NextOffset     uint64
 	CommitRequired bool
@@ -104,7 +105,7 @@ type ClaimCommand struct {
 
 // ClaimOutcome describes pending records whose ownership was transferred.
 type ClaimOutcome struct {
-	Messages []*types.Message
+	Messages []*message.Envelope
 	Offsets  []uint64
 }
 
@@ -250,6 +251,7 @@ func (s *stateMachine) Consume(ctx context.Context, command ConsumeCommand) (Con
 	}
 	fresh, err := s.groupStore.GetConsumerGroup(ctx, command.QueueName, command.GroupID)
 	if err != nil {
+		releaseEnvelopes(messages)
 		return ConsumeOutcome{}, err
 	}
 	return ConsumeOutcome{Messages: messages, Mode: types.GroupModeQueue, NextOffset: fresh.GetCursor().Cursor}, nil
@@ -379,7 +381,7 @@ func (s *stateMachine) Claim(ctx context.Context, command ClaimCommand) (ClaimOu
 	}
 	outcome := ClaimOutcome{Messages: messages, Offsets: make([]uint64, len(messages))}
 	for i, message := range messages {
-		outcome.Offsets[i] = message.Sequence
+		outcome.Offsets[i] = message.Broker.Queue.Offset
 	}
 	return outcome, nil
 }
@@ -423,16 +425,25 @@ func (s *stateMachine) Seek(ctx context.Context, command SeekCommand) (SeekOutco
 			if len(batch) == 0 {
 				break
 			}
-			for _, message := range batch {
-				if !message.CreatedAt.Before(command.Timestamp) {
-					return SeekOutcome{Offset: message.Sequence, Timestamp: message.CreatedAt, ExactMatch: message.CreatedAt.Equal(command.Timestamp)}, nil
+			for _, envelope := range batch {
+				if !envelope.Broker.Queue.CreatedAt.Before(command.Timestamp) {
+					outcome := SeekOutcome{Offset: envelope.Broker.Queue.Offset, Timestamp: envelope.Broker.Queue.CreatedAt, ExactMatch: envelope.Broker.Queue.CreatedAt.Equal(command.Timestamp)}
+					releaseEnvelopes(batch)
+					return outcome, nil
 				}
 			}
-			offset = batch[len(batch)-1].Sequence + 1
+			offset = batch[len(batch)-1].Broker.Queue.Offset + 1
+			releaseEnvelopes(batch)
 		}
 		return SeekOutcome{Offset: tail, Timestamp: command.Timestamp}, nil
 	default:
 		return SeekOutcome{}, fmt.Errorf("%w: unsupported seek kind %q", ErrInvalidCommand, command.Kind)
+	}
+}
+
+func releaseEnvelopes(envelopes []*message.Envelope) {
+	for _, envelope := range envelopes {
+		message.Release(envelope)
 	}
 }
 

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
-	"github.com/absmach/fluxmq/storage"
 )
 
 // expiryLoop periodically checks for expired sessions.
@@ -105,16 +105,11 @@ func (b *Broker) publishStats() {
 	}
 
 	for _, s := range stats {
-		msg := &storage.Message{
-			Topic:  s.topic,
-			QoS:    0,
-			Retain: true,
-		}
-		msg.SetPayloadFromBytes([]byte(s.value))
+		msg := message.New(s.topic, []byte(s.value))
+		msg.Broker.Delivery.Retain = true
 
 		b.distribute(context.Background(), msg) //nolint:errcheck // fire-and-forget stats distribution
 
-		// Release the message buffer after distribution
-		msg.ReleasePayload()
+		message.Release(msg)
 	}
 }

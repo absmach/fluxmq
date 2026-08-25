@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -15,27 +16,30 @@ var _ storage.MessageStore = (*MessageStore)(nil)
 // MessageStore is an in-memory implementation of store.MessageStore.
 type MessageStore struct {
 	mu   sync.RWMutex
-	data map[string]*storage.Message
+	data map[string]*message.Envelope
 }
 
 // NewMessageStore creates a new in-memory message store.
 func NewMessageStore() *MessageStore {
 	return &MessageStore{
-		data: make(map[string]*storage.Message),
+		data: make(map[string]*message.Envelope),
 	}
 }
 
 // Store stores a message.
-func (s *MessageStore) Store(key string, msg *storage.Message) error {
+func (s *MessageStore) Store(key string, msg *message.Envelope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.data[key] = storage.CopyMessage(msg)
+	replacement := msg.Clone()
+	previous := s.data[key]
+	s.data[key] = replacement
+	message.Release(previous)
 	return nil
 }
 
 // Get retrieves a message by key.
-func (s *MessageStore) Get(key string) (*storage.Message, error) {
+func (s *MessageStore) Get(key string) (*message.Envelope, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -43,7 +47,7 @@ func (s *MessageStore) Get(key string) (*storage.Message, error) {
 	if !ok {
 		return nil, storage.ErrNotFound
 	}
-	return storage.CopyMessage(msg), nil
+	return msg.Clone(), nil
 }
 
 // Delete removes a message.
@@ -51,19 +55,21 @@ func (s *MessageStore) Delete(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous := s.data[key]
 	delete(s.data, key)
+	message.Release(previous)
 	return nil
 }
 
 // List returns all messages matching a key prefix.
-func (s *MessageStore) List(prefix string) ([]*storage.Message, error) {
+func (s *MessageStore) List(prefix string) ([]*message.Envelope, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*storage.Message
+	var result []*message.Envelope
 	for key, msg := range s.data {
 		if strings.HasPrefix(key, prefix) {
-			result = append(result, storage.CopyMessage(msg))
+			result = append(result, msg.Clone())
 		}
 	}
 	return result, nil
@@ -76,6 +82,7 @@ func (s *MessageStore) DeleteByPrefix(prefix string) error {
 
 	for key := range s.data {
 		if strings.HasPrefix(key, prefix) {
+			message.Release(s.data[key])
 			delete(s.data, key)
 		}
 	}

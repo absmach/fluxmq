@@ -3,45 +3,20 @@
 
 package cluster
 
-// Message is a lightweight wire format used for inter-broker communication.
-// Contains only the essential publish fields needed for cross-node delivery.
-type Message struct {
-	Topic      string
-	Payload    []byte
-	QoS        byte
-	Retain     bool
-	Dup        bool
-	Properties map[string]string
-}
+import "github.com/absmach/fluxmq/message"
 
-// QueueMessage is a typed envelope for cross-node queue delivery.
-// It separates queue metadata from user-defined message properties.
-type QueueMessage struct {
-	MessageID string
-	QueueName string
-	GroupID   string
-	Topic     string
-	// SourceTopic is the topic the message was published to, before queue
-	// addressing. Topic identifies the queue; only this recovers the origin.
-	SourceTopic    string
-	Payload        []byte
-	Sequence       int64
-	UserProperties map[string]string
-
-	Stream          bool
-	StreamOffset    int64
-	StreamTimestamp int64 // Unix milliseconds
-
-	HasWorkCommitted    bool
-	WorkCommittedOffset int64
-	WorkAcked           bool
-	WorkGroup           string
+func envelopeFromWire(topic string, data []byte, qos byte, retain, duplicate bool, properties map[string]string) *message.Envelope {
+	envelope := message.New(topic, data)
+	message.ApplyTrustedProperties(envelope, properties)
+	envelope.Broker.Delivery.QoS = qos
+	envelope.Broker.Delivery.Retain = retain
+	envelope.Broker.Delivery.Duplicate = duplicate
+	return envelope
 }
 
 // QueueDelivery pairs a queue message envelope with its target local client.
 // Used for batched cross-node queue delivery.
 type QueueDelivery struct {
-	ClientID  string
-	QueueName string
-	Message   *QueueMessage
+	ClientID string
+	Message  *message.Envelope
 }

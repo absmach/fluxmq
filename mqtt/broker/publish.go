@@ -13,40 +13,38 @@ import (
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/broker/router"
-	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.
-// Publish always releases msg's payload buffer before returning; callers must not
-// use the payload afterwards.
-func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
+// Publish takes ownership of msg on every path; callers must not use it after
+// the call.
+func (b *Broker) Publish(ctx context.Context, msg *message.Envelope) error {
+	defer message.Release(msg)
 	if b.telemetry.logger.Enabled(ctx, slog.LevelDebug) {
-		b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.QoS)), slog.Bool("retain", msg.Retain))
+		b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.Broker.Delivery.QoS)), slog.Bool("retain", msg.Broker.Delivery.Retain))
 	}
 	b.telemetry.stats.IncrementPublishReceived()
 
-	payloadLen := len(msg.GetPayload())
+	payloadLen := len(msg.PayloadBytes())
 	b.telemetry.stats.AddBytesReceived(uint64(payloadLen))
 
 	// Record metrics
 	if b.telemetry.metrics != nil {
-		b.telemetry.metrics.RecordMessageReceived(msg.QoS, int64(payloadLen)) //nolint:contextcheck // metrics recording uses background context internally
+		b.telemetry.metrics.RecordMessageReceived(msg.Broker.Delivery.QoS, int64(payloadLen)) //nolint:contextcheck // metrics recording uses background context internally
 	}
-
-	msg.Properties = broker.AddClientIDProperty(msg.Properties, msg.ClientID)
 
 	route := b.routeResolver.Resolve(msg.Topic)
 
 	// Handle retained messages before routing — ensures queue topics also
 	// store retained state so new subscribers receive the last known value.
-	if msg.Retain {
+	if msg.Broker.Delivery.Retain {
 		if err := b.handleRetained(ctx, msg, payloadLen); err != nil {
 			if route.Kind == broker.RouteQueue {
 				b.logError("retained_store_failed", err, slog.String("topic", msg.Topic))
 			} else {
-				msg.ReleasePayload()
 				return err
 			}
 		}
@@ -55,7 +53,6 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 		// enqueued — the queue handles the ordered stream of non-retained
 		// messages separately, avoiding duplicates on subscribe.
 		if route.Kind == broker.RouteQueue {
-			msg.ReleasePayload()
 			return nil
 		}
 	}
@@ -64,27 +61,16 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 	if b.queueManager != nil {
 		switch route.Kind {
 		case broker.RouteQueueMalformed:
-			msg.ReleasePayload()
 			b.logError("queue_control_verb_misplaced",
 				fmt.Errorf("%q must be the last level of a queue address", route.ControlVerb),
 				slog.String("topic", msg.Topic))
 			return fmt.Errorf("queue address %q: %s must be the last level", msg.Topic, route.ControlVerb)
 		case broker.RouteQueueAck:
-			msg.ReleasePayload()
 			return b.handleQueueAck(ctx, msg, route)
 		case broker.RouteQueue:
-			// Copy payload: the queue manager stores the slice by reference,
-			// so it must outlive the RefCountedBuffer.
-			src := msg.GetPayload()
-			payloadCopy := make([]byte, len(src))
-			copy(payloadCopy, src)
-			msg.ReleasePayload()
-			return b.queueManager.Publish(ctx, types.PublishRequest{
-				ClientID:   msg.ClientID,
-				Topic:      msg.Topic,
-				Payload:    payloadCopy,
-				Properties: msg.Properties,
-			})
+			// PublishRequest is a byte-slice ingress contract. The queue creates
+			// its own immutable buffer before this envelope is released.
+			return b.queueManager.Publish(ctx, queuePublishRequest(msg))
 		}
 	}
 
@@ -94,12 +80,7 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 	//
 	// A capture failure never fails the publish: see broker.TopicQueuePublisher.
 	if publisher, ok := b.queueManager.(broker.TopicQueuePublisher); ok {
-		if err := publisher.PublishToMatchingQueues(ctx, types.PublishRequest{
-			ClientID:   msg.ClientID,
-			Topic:      msg.Topic,
-			Payload:    msg.GetPayload(),
-			Properties: msg.Properties,
-		}); err != nil {
+		if err := publisher.PublishToMatchingQueues(ctx, queuePublishRequest(msg)); err != nil {
 			b.logError("queue_topic_capture", err, slog.String("topic", msg.Topic))
 		}
 	}
@@ -112,8 +93,8 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 		b.telemetry.webhooks.Notify(ctx, events.MessagePublished{ //nolint:errcheck // fire-and-forget webhook notification
 			ClientID:     "", // Set by handler
 			MessageTopic: msg.Topic,
-			QoS:          msg.QoS,
-			Retained:     msg.Retain,
+			QoS:          msg.Broker.Delivery.QoS,
+			Retained:     msg.Broker.Delivery.Retain,
 			PayloadSize:  payloadLen,
 			Payload:      payload, // Will be set if includePayload is true
 		})
@@ -121,16 +102,13 @@ func (b *Broker) Publish(ctx context.Context, msg *storage.Message) error {
 
 	// Event hook: message published
 	if b.eventHook != nil {
-		if err := b.eventHook.OnPublish(ctx, msg.ClientID, msg.Topic, msg.QoS, msg.GetPayload()); err != nil {
+		if err := b.eventHook.OnPublish(ctx, msg.Broker.Source.ClientID, msg.Topic, msg.Broker.Delivery.QoS, msg.PayloadBytes()); err != nil {
 			b.logError("event_hook_publish", err, slog.String("topic", msg.Topic))
 		}
 	}
 
 	// Distribute message to subscribers (this will retain the buffer as needed)
 	err := b.distribute(ctx, msg)
-
-	// Release the original message's buffer - Publish "consumes" the message
-	msg.ReleasePayload()
 
 	return err
 }
@@ -159,23 +137,21 @@ func (b *Broker) PublishWill(ctx context.Context, clientID string) error {
 // publishWillMessage distributes a Will message. Used both for stored Wills
 // (PublishWill) and for the Will of a connection displaced by a takeover.
 func (b *Broker) publishWillMessage(ctx context.Context, will *storage.WillMessage) error {
-	// Will payload is []byte, not a RefCountedBuffer.
-	msg := &storage.Message{
-		Topic:      will.Topic,
-		ClientID:   will.ClientID,
-		QoS:        will.QoS,
-		Retain:     will.Retain,
-		Properties: will.Properties,
-	}
-	msg.SetPayloadFromBytes(will.Payload)
+	// Persisted Will payloads are byte slices; ingress copies them into an
+	// immutable broker buffer.
+	msg := message.New(will.Topic, will.Payload)
+	msg.Broker.Source.ClientID = will.ClientID
+	msg.Broker.Delivery.QoS = will.QoS
+	msg.Broker.Delivery.Retain = will.Retain
+	msg.User.Properties = will.Properties
 
 	err := b.distribute(ctx, msg)
-	msg.ReleasePayload()
+	message.Release(msg)
 	return err
 }
 
 // handleRetained stores or clears a retained message.
-func (b *Broker) handleRetained(ctx context.Context, msg *storage.Message, payloadLen int) error {
+func (b *Broker) handleRetained(ctx context.Context, msg *message.Envelope, payloadLen int) error {
 	if payloadLen == 0 {
 		if err := b.stores.retained.Delete(ctx, msg.Topic); err != nil {
 			return err
@@ -195,16 +171,14 @@ func (b *Broker) handleRetained(ctx context.Context, msg *storage.Message, paylo
 		return nil
 	}
 
-	retainedMsg := storage.CopyMessage(msg)
-	retainedMsg.Retain = true
+	retainedMsg := msg.Clone()
+	defer message.Release(retainedMsg)
+	retainedMsg.Broker.Delivery.Retain = true
 	if err := b.stores.retained.Set(ctx, msg.Topic, retainedMsg); err != nil {
-		retainedMsg.ReleasePayload()
 		return err
 	}
 	if b.cluster != nil {
-		retainedMsg.RetainPayload()
 		if err := b.cluster.Retained().Set(ctx, msg.Topic, retainedMsg); err != nil {
-			retainedMsg.ReleasePayload()
 			b.logError("cluster_set_retained", err, slog.String("topic", msg.Topic))
 		}
 	}
@@ -220,26 +194,20 @@ func (b *Broker) handleRetained(ctx context.Context, msg *storage.Message, paylo
 
 // Distribute distributes a message to all matching subscribers (implements Service interface).
 func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool, props map[string]string) error {
-	msg := &storage.Message{
-		Topic:      topic,
-		QoS:        qos,
-		Retain:     retain,
-		Properties: props,
-	}
-	msg.SetPayloadFromBytes(payload)
+	msg := message.New(topic, payload)
+	msg.Broker.Delivery.QoS = qos
+	msg.Broker.Delivery.Retain = retain
+	msg.User.Properties = props
 
 	err := b.distribute(context.Background(), msg)
 
-	// Release the message buffer after distribution
-	msg.ReleasePayload()
+	message.Release(msg)
 
 	return err
 }
 
 // distribute distributes a message to all matching subscribers (local and remote).
-func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
-	msg.Properties = broker.AddClientIDProperty(msg.Properties, msg.ClientID)
-
+func (b *Broker) distribute(ctx context.Context, msg *message.Envelope) error {
 	if _, err := b.distributeLocal(ctx, msg, true); err != nil {
 		return err
 	}
@@ -254,10 +222,11 @@ func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
 		defer cancel()
 
 		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
-		payload := msg.GetPayload()
-		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.QoS, false, msg.Properties); err != nil {
+		payload := msg.PayloadBytes()
+		properties := message.ProjectProperties(msg, message.TrustedServiceProjection)
+		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.Broker.Delivery.QoS, false, properties); err != nil {
 			b.logError("cluster_route_publish", err, slog.String("topic", msg.Topic))
-			if msg.QoS > 0 {
+			if msg.Broker.Delivery.QoS > 0 {
 				return fmt.Errorf("cluster route publish: %w", err)
 			}
 		}
@@ -269,7 +238,7 @@ func (b *Broker) distribute(ctx context.Context, msg *storage.Message) error {
 // distributeLocal delivers a message to local subscribers and returns the
 // number of matched subscriptions.
 // allowCross controls whether cross-protocol delivery callbacks may run.
-func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allowCross bool) (int, error) {
+func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, allowCross bool) (int, error) {
 	matched := router.AcquireSubscriptionSlice()
 	defer router.ReleaseSubscriptionSlice(matched)
 
@@ -313,19 +282,14 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allo
 				continue
 			}
 
-			deliverQoS := msg.QoS
+			deliverQoS := msg.Broker.Delivery.QoS
 			if sub.QoS < deliverQoS {
 				deliverQoS = sub.QoS
 			}
 
-			// Zero-copy: Retain buffer for this subscriber's message
-			msg.RetainPayload()
-			deliverMsg := storage.AcquireMessage()
-			deliverMsg.Topic = msg.Topic
-			deliverMsg.QoS = deliverQoS
-			deliverMsg.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
-			deliverMsg.Properties = msg.Properties
-			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
+			deliverMsg := msg.Clone()
+			deliverMsg.Broker.Delivery.QoS = deliverQoS
+			deliverMsg.Broker.Delivery.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
 
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
@@ -339,12 +303,12 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allo
 				continue
 			}
 		} else {
-			if sub.Options.NoLocal && clientID == msg.ClientID {
+			if sub.Options.NoLocal && clientID == msg.Broker.Source.ClientID {
 				continue
 			}
 			if broker.IsAMQP091Client(clientID) || broker.IsAMQP1Client(clientID) {
 				if allowCross && b.crossDeliver != nil {
-					b.crossDeliver(ctx, clientID, msg.Topic, msg.GetPayload(), sub.QoS, msg.Properties)
+					b.crossDeliver(ctx, clientID, msg.Topic, msg.PayloadBytes(), sub.QoS, message.ProjectProperties(msg, message.TrustedServiceProjection))
 				}
 				continue
 			}
@@ -354,19 +318,14 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allo
 				continue
 			}
 
-			deliverQoS := msg.QoS
+			deliverQoS := msg.Broker.Delivery.QoS
 			if sub.QoS < deliverQoS {
 				deliverQoS = sub.QoS
 			}
 
-			// Zero-copy: Retain buffer for this subscriber's message
-			msg.RetainPayload()
-			deliverMsg := storage.AcquireMessage()
-			deliverMsg.Topic = msg.Topic
-			deliverMsg.QoS = deliverQoS
-			deliverMsg.Retain = msg.Retain && sub.Options.RetainAsPublished
-			deliverMsg.Properties = msg.Properties
-			deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
+			deliverMsg := msg.Clone()
+			deliverMsg.Broker.Delivery.QoS = deliverQoS
+			deliverMsg.Broker.Delivery.Retain = msg.Broker.Delivery.Retain && sub.Options.RetainAsPublished
 
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
@@ -387,17 +346,11 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *storage.Message, allo
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.
 // It converts the cluster message to a storage message and delivers locally.
-func (b *Broker) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
-	storeMsg := storage.AcquireMessage()
-	storeMsg.Topic = msg.Topic
-	storeMsg.QoS = msg.QoS
-	storeMsg.Retain = msg.Retain
-	storeMsg.Properties = msg.Properties
-	storeMsg.ClientID = broker.ClientIDFromProperties(msg.Properties)
-	storeMsg.SetPayloadFromBytes(msg.Payload)
+func (b *Broker) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
+	storeMsg := msg.Clone()
 
 	matched, err := b.distributeLocal(ctx, storeMsg, false)
-	storeMsg.ReleasePayload()
+	message.Release(storeMsg)
 	if err == nil && matched == 0 {
 		// The sending node believed a subscriber lives here (stale owner
 		// route); without this the message vanishes with no trace.
@@ -420,7 +373,7 @@ func (b *Broker) warnUnroutableForward(topic string) {
 }
 
 // handleQueueAck handles queue acknowledgment messages ($ack, $nack, $reject).
-func (b *Broker) handleQueueAck(ctx context.Context, msg *storage.Message, route broker.RouteResult) error {
+func (b *Broker) handleQueueAck(ctx context.Context, msg *message.Envelope, route broker.RouteResult) error {
 	queueName := route.QueueName
 
 	if queueName == "" {
@@ -430,11 +383,8 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *storage.Message, route
 	}
 
 	// Extract message ID and group ID from properties
-	var messageID, groupID string
-	if msg.Properties != nil {
-		messageID = msg.Properties[types.PropMessageID]
-		groupID = msg.Properties[types.PropGroupID]
-	}
+	messageID := msg.Broker.Queue.MessageID
+	groupID := msg.Broker.Queue.GroupID
 
 	if messageID == "" {
 		b.logError("queue_ack_missing_message_id", fmt.Errorf("message-id not found in properties"),
@@ -457,8 +407,8 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *storage.Message, route
 		return b.queueManager.Nack(ctx, queueName, messageID, groupID)
 	case broker.AckReject:
 		reason := "rejected by consumer"
-		if msg.Properties != nil && msg.Properties[types.PropRejectReason] != "" {
-			reason = msg.Properties[types.PropRejectReason]
+		if msg.User.Properties != nil && msg.User.Properties[types.PropRejectReason] != "" {
+			reason = msg.User.Properties[types.PropRejectReason]
 		}
 		b.logOp("queue_reject", slog.String("queue", queueName), slog.String("message_id", messageID), slog.String("group_id", groupID), slog.String("reason", reason))
 		return b.queueManager.Reject(ctx, queueName, messageID, groupID, reason)
@@ -469,7 +419,7 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *storage.Message, route
 
 // GetRetainedMatching returns all retained messages matching a topic filter.
 // In clustered mode, queries the cluster; otherwise uses local storage.
-func (b *Broker) GetRetainedMatching(filter string) ([]*storage.Message, error) {
+func (b *Broker) GetRetainedMatching(filter string) ([]*message.Envelope, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if b.cluster != nil {
@@ -497,20 +447,16 @@ func (b *Broker) triggerWills() {
 			continue
 		}
 
-		// Create message from will (will payload is []byte, not RefCountedBuffer)
-		msg := &storage.Message{
-			Topic:      will.Topic,
-			ClientID:   will.ClientID,
-			QoS:        will.QoS,
-			Retain:     will.Retain,
-			Properties: will.Properties,
-		}
-		msg.SetPayloadFromBytes(will.Payload)
+		// Create a broker-owned envelope from the persisted Will payload.
+		msg := message.New(will.Topic, will.Payload)
+		msg.Broker.Source.ClientID = will.ClientID
+		msg.Broker.Delivery.QoS = will.QoS
+		msg.Broker.Delivery.Retain = will.Retain
+		msg.User.Properties = will.Properties
 
 		b.distribute(ctx, msg) //nolint:errcheck // fire-and-forget will message distribution
 
-		// Release the message buffer after distribution
-		msg.ReleasePayload()
+		message.Release(msg)
 
 		b.stores.wills.Delete(ctx, will.ClientID) //nolint:errcheck // best-effort will cleanup after distribution
 	}
@@ -518,7 +464,7 @@ func (b *Broker) triggerWills() {
 
 // GetRetainedMessage implements cluster.MessageHandler.GetRetainedMessage.
 // Fetches a retained message from the local storage for remote node requests.
-func (b *Broker) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+func (b *Broker) GetRetainedMessage(ctx context.Context, topic string) (*message.Envelope, error) {
 	if b.stores.retained == nil {
 		return nil, fmt.Errorf("retained store not configured")
 	}

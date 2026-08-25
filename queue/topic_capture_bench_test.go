@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -55,9 +56,9 @@ func BenchmarkPublishToMatchingQueues(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				if err := manager.PublishToMatchingQueues(ctx, types.PublishRequest{
-					ClientID: "publisher",
-					Topic:    "m/acme/c/temp/reading",
-					Payload:  payload,
+					Source:  message.SourceMetadata{ClientID: "publisher", Protocol: message.ProtocolMQTT},
+					Topic:   "m/acme/c/temp/reading",
+					Payload: payload,
 				}); err != nil {
 					b.Fatalf("PublishToMatchingQueues failed: %v", err)
 				}

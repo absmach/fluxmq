@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 )
 
 // InflightState represents the state of an inflight message.
@@ -28,7 +28,7 @@ type InflightMessage struct {
 	DeliveryAttemptedAt time.Time
 	// SentAt is set only after a successful socket write (via onSent callback).
 	SentAt    time.Time
-	Message   *storage.Message
+	Message   *message.Envelope
 	State     InflightState
 	Retries   int
 	Direction Direction
@@ -52,17 +52,24 @@ const (
 // the optional InboundAdder and InboundAcker extensions so external
 // implementations that do not isolate directions fail explicitly.
 type Inflight interface {
-	Add(packetID uint16, msg *storage.Message, direction Direction) error
-	// Ack acknowledges and removes an outbound message (PUBACK/PUBCOMP).
-	Ack(packetID uint16) (*storage.Message, error)
+	// Add takes ownership of msg on success. On error the caller retains it.
+	Add(packetID uint16, msg *message.Envelope, direction Direction) error
+	// Ack acknowledges and removes an outbound message, transferring ownership
+	// of the returned envelope to the caller.
+	Ack(packetID uint16) (*message.Envelope, error)
+	// Get returns a borrowed snapshot. Its Message remains tracker-owned.
 	Get(packetID uint16) (*InflightMessage, bool)
 	Has(packetID uint16) bool
 	UpdateState(packetID uint16, state InflightState) error
+	// GetExpired and GetAll return borrowed snapshots. Their Message fields
+	// remain tracker-owned.
 	GetExpired(expiry time.Duration) []*InflightMessage
 	MarkSent(packetID uint16)
 	MarkDeliveryAttempted(packetID uint16)
 	MarkRetry(packetID uint16) error
 	GetAll() []*InflightMessage
+	// Clear releases every tracker-owned envelope.
+	Clear()
 }
 
 // InboundAdder is an optional extension of Inflight for atomic inbound QoS 2
@@ -71,7 +78,7 @@ type Inflight interface {
 // accepted transaction. Keeping this out of the base Inflight interface
 // preserves source compatibility for external implementations.
 type InboundAdder interface {
-	AddInbound(packetID uint16, msg *storage.Message) (accepted bool, err error)
+	AddInbound(packetID uint16, msg *message.Envelope) (accepted bool, err error)
 }
 
 // InboundGetter is an optional extension used to inspect an inbound QoS 2
@@ -86,7 +93,7 @@ type InboundGetter interface {
 // of the base Inflight interface preserves source compatibility for external
 // implementations. The built-in tracker implements it.
 type InboundAcker interface {
-	AckInbound(packetID uint16) (*storage.Message, error)
+	AckInbound(packetID uint16) (*message.Envelope, error)
 }
 
 // inflightKey identifies an inflight entry. Inbound and outbound flows have
@@ -120,7 +127,7 @@ func NewInflightTracker(maxSize int) *inflight {
 
 // Add adds a message to the inflight tracker. Each direction is capped at
 // maxSize independently.
-func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Direction) error {
+func (t *inflight) Add(packetID uint16, msg *message.Envelope, direction Direction) error {
 	if direction != Outbound && direction != Inbound {
 		return fmt.Errorf("add packet ID %d: %w", packetID, ErrInvalidDirection)
 	}
@@ -129,7 +136,7 @@ func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Directio
 	defer t.mu.Unlock()
 
 	key := inflightKey{direction: direction, packetID: packetID}
-	_, exists := t.messages[key]
+	existing, exists := t.messages[key]
 	// Capacity only gates new keys. An existing key (e.g. a retransmitted QoS 2
 	// PUBLISH with a known packet ID) must be accepted even when the direction
 	// is at capacity, so duplicates are not rejected with ErrInflightFull.
@@ -138,6 +145,8 @@ func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Directio
 			return ErrInflightFull
 		}
 		t.counts[direction]++
+	} else if existing.Message != msg {
+		message.Release(existing.Message)
 	}
 	t.messages[key] = &InflightMessage{
 		PacketID: packetID,
@@ -155,11 +164,11 @@ func (t *inflight) Add(packetID uint16, msg *storage.Message, direction Directio
 // duplicate by packet ID. It never replaces an existing transaction with the
 // same packet ID. accepted is true only when the tracker takes ownership of
 // msg.
-func (t *inflight) AddInbound(packetID uint16, msg *storage.Message) (bool, error) {
+func (t *inflight) AddInbound(packetID uint16, msg *message.Envelope) (bool, error) {
 	return t.addInbound(packetID, msg, Inbound)
 }
 
-func (t *inflight) addInbound(packetID uint16, msg *storage.Message, direction Direction) (bool, error) {
+func (t *inflight) addInbound(packetID uint16, msg *message.Envelope, direction Direction) (bool, error) {
 	if direction != Inbound {
 		return false, fmt.Errorf("add inbound packet ID %d: %w", packetID, ErrInvalidDirection)
 	}
@@ -239,16 +248,16 @@ func (t *inflight) UpdateState(packetID uint16, state InflightState) error {
 }
 
 // Ack acknowledges and removes an outbound message (PUBACK/PUBCOMP).
-func (t *inflight) Ack(packetID uint16) (*storage.Message, error) {
+func (t *inflight) Ack(packetID uint16) (*message.Envelope, error) {
 	return t.ackDirection(packetID, Outbound)
 }
 
 // AckInbound acknowledges and removes an inbound message (PUBREL).
-func (t *inflight) AckInbound(packetID uint16) (*storage.Message, error) {
+func (t *inflight) AckInbound(packetID uint16) (*message.Envelope, error) {
 	return t.ackDirection(packetID, Inbound)
 }
 
-func (t *inflight) ackDirection(packetID uint16, direction Direction) (*storage.Message, error) {
+func (t *inflight) ackDirection(packetID uint16, direction Direction) (*message.Envelope, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -268,9 +277,10 @@ func (t *inflight) Remove(packetID uint16) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := inflightKey{direction: Outbound, packetID: packetID}
-	if _, ok := t.messages[key]; ok {
+	if existing, ok := t.messages[key]; ok {
 		delete(t.messages, key)
 		t.counts[Outbound]--
+		message.Release(existing.Message)
 	}
 }
 
@@ -381,6 +391,9 @@ func (t *inflight) GetAll() []*InflightMessage {
 func (t *inflight) Clear() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for _, inflight := range t.messages {
+		message.Release(inflight.Message)
+	}
 	t.messages = make(map[inflightKey]*InflightMessage)
 	t.counts = [2]int{}
 }

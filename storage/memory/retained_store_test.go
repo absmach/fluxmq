@@ -7,7 +7,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,11 +15,10 @@ func TestRetainedStoreSet_WithPayloadBuffer(t *testing.T) {
 	s := NewRetainedStore()
 	ctx := context.Background()
 
-	msg := &storage.Message{Topic: "devices/one"}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.New("devices/one", []byte("payload"))
 	require.NoError(t, s.Set(ctx, "devices/one", msg))
 
 	got, err := s.Get(ctx, "devices/one")
 	require.NoError(t, err)
-	require.Equal(t, []byte("payload"), got.GetPayload())
+	require.Equal(t, []byte("payload"), got.PayloadBytes())
 }

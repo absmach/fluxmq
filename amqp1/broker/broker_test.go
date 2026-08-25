@@ -18,6 +18,7 @@ import (
 	"github.com/absmach/fluxmq/amqp1/sasl"
 	"github.com/absmach/fluxmq/amqp1/types"
 	corebroker "github.com/absmach/fluxmq/broker"
+	coremessage "github.com/absmach/fluxmq/message"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -421,7 +422,7 @@ func TestTransferFromClientClientIDProperty(t *testing.T) {
 	select {
 	case gotProps := <-propsCh:
 		require.Equal(t, testTraceValue, gotProps[testTraceKey])
-		require.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.ClientIDProperty])
+		require.Equal(t, PrefixedClientID("sender-client"), gotProps[coremessage.PropertyClientID])
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for cross-deliver callback")
 	}
@@ -434,7 +435,7 @@ func TestTransferFromClientDropsReservedProperties(t *testing.T) {
 	defer b.Close()
 	defer c.Close()
 
-	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+	reserved := coremessage.ReservedPropertyPrefix + "re.trace"
 
 	require.NoError(t, b.router.Subscribe("mqtt-client", "test/ingest", 1, storage.SubscribeOptions{}))
 
@@ -533,9 +534,9 @@ func TestTransferFromClientRejectsForgedIdentity(t *testing.T) {
 	msg := &message.Message{
 		Properties: &message.Properties{To: testIngestAddress},
 		ApplicationProperties: map[string]any{
-			corebroker.ExternalIDProperty: "victim-tenant",
-			corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
-			corebroker.ClientIDProperty:   "someone-else",
+			coremessage.PropertyExternalID: "victim-tenant",
+			coremessage.PropertyProtocol:   string(coremessage.ProtocolHTTP),
+			coremessage.PropertyClientID:   "someone-else",
 		},
 		Data: [][]byte{[]byte("payload")},
 	}
@@ -557,9 +558,9 @@ func TestTransferFromClientRejectsForgedIdentity(t *testing.T) {
 	case gotProps := <-propsCh:
 		// No auth engine is configured, so no external identity resolves and the
 		// forged one must be discarded rather than left in place.
-		assert.NotContains(t, gotProps, corebroker.ExternalIDProperty)
-		assert.Equal(t, corebroker.ProtocolAMQP1, gotProps[corebroker.ProtocolProperty])
-		assert.Equal(t, PrefixedClientID("sender-client"), gotProps[corebroker.ClientIDProperty])
+		assert.NotContains(t, gotProps, coremessage.PropertyExternalID)
+		assert.Equal(t, string(coremessage.ProtocolAMQP1), gotProps[coremessage.PropertyProtocol])
+		assert.Equal(t, PrefixedClientID("sender-client"), gotProps[coremessage.PropertyClientID])
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for cross-deliver callback")
 	}
@@ -572,7 +573,7 @@ func TestPublishOmitsReservedPropertiesFromDelivery(t *testing.T) {
 	defer b.Close()
 	defer c.Close()
 
-	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+	reserved := coremessage.ReservedPropertyPrefix + "re.trace"
 
 	doAMQPHandshake(t, c, "pubsub-client")
 	doBeginSession(t, c, 0)
@@ -593,18 +594,15 @@ func TestDeliverToClientOmitsReservedProperties(t *testing.T) {
 	defer b.Close()
 	defer c.Close()
 
-	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+	reserved := coremessage.ReservedPropertyPrefix + "re.trace"
 
 	doAMQPHandshake(t, c, "queue-client")
 	doBeginSession(t, c, 0)
 
 	attachReceiver(t, b, c, "queue-client", "test/pubsub")
 
-	stored := &storage.Message{
-		Topic:      "test/pubsub",
-		Payload:    []byte("hello queue"),
-		Properties: map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue},
-	}
+	stored := coremessage.New("test/pubsub", []byte("hello queue"))
+	stored.User.Properties = map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue}
 	go b.DeliverToClient(context.Background(), corebroker.AMQP1ClientPrefix+"queue-client", stored) //nolint:errcheck // delivery error surfaces as a read timeout below
 
 	msg := readDeliveredMessage(t, c)
@@ -748,9 +746,10 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 
 	select {
 	case publish := <-mockQM.publishCh:
-		require.Equal(t, PrefixedClientID("sender-client"), publish.ClientID)
+		require.Equal(t, PrefixedClientID("sender-client"), publish.Source.ClientID)
+		require.Equal(t, coremessage.ProtocolAMQP1, publish.Source.Protocol)
 		require.Equal(t, testTraceValue, publish.Properties[testTraceKey])
-		require.Equal(t, PrefixedClientID("sender-client"), publish.Properties[corebroker.ClientIDProperty])
+		require.NotContains(t, publish.Properties, coremessage.PropertyClientID)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for queue publish")
 	}

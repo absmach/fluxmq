@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -82,12 +83,8 @@ func TestV5NoLocalPreventsSelfDelivery(t *testing.T) {
 	require.NoError(t, errConn)
 	require.NoError(t, b.subscribe(s, "devices/one", 1, storage.SubscribeOptions{NoLocal: true}))
 
-	msg := &storage.Message{
-		Topic:    "devices/one",
-		ClientID: "client-1",
-		QoS:      1,
-	}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.NewDelivery("devices/one", []byte("payload"), 1, false)
+	msg.Broker.Source.ClientID = "client-1"
 	require.NoError(t, b.Publish(context.Background(), msg))
 
 	require.Len(t, conn.packets, 0)
@@ -111,13 +108,8 @@ func TestV5RetainAsPublishedAffectsDeliveryFlag(t *testing.T) {
 	require.NoError(t, b.subscribe(s1, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: false}))
 	require.NoError(t, b.subscribe(s2, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: true}))
 
-	msg := &storage.Message{
-		Topic:    "devices/two",
-		ClientID: "publisher",
-		QoS:      1,
-		Retain:   true,
-	}
-	msg.SetPayloadFromBytes([]byte("payload"))
+	msg := message.NewDelivery("devices/two", []byte("payload"), 1, true)
+	msg.Broker.Source.ClientID = "publisher"
 	require.NoError(t, b.Publish(context.Background(), msg))
 
 	require.Len(t, conn1.packets, 1)
@@ -141,13 +133,8 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	_, errConn := s.Connect(conn)
 	require.NoError(t, errConn)
 
-	retained := &storage.Message{
-		Topic:    testRetainTopic,
-		ClientID: "publisher",
-		QoS:      1,
-		Retain:   true,
-	}
-	retained.SetPayloadFromBytes([]byte("retained"))
+	retained := message.NewDelivery(testRetainTopic, []byte("retained"), 1, true)
+	retained.Broker.Source.ClientID = "publisher"
 	require.NoError(t, b.Publish(context.Background(), retained))
 	matchedRetained, err := b.GetRetainedMatching(testRetainTopic)
 	require.NoError(t, err)

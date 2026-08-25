@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,12 +26,8 @@ func TestMessageStore_StoreInflight(t *testing.T) {
 	store := setupMessageStore(t)
 	defer cleanupMessageStore(t, store)
 
-	msg := &storage.Message{
-		Topic:    testTopic,
-		Payload:  []byte("test payload"),
-		QoS:      1,
-		PacketID: 100,
-	}
+	msg := message.NewDelivery(testTopic, []byte("test payload"), 1, false)
+	msg.Broker.Delivery.PacketID = 100
 
 	key := "client-1/inflight/100"
 	err := store.Store(key, msg)
@@ -41,20 +37,16 @@ func TestMessageStore_StoreInflight(t *testing.T) {
 	retrieved, err := store.Get(key)
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
-	assert.Equal(t, msg.Payload, retrieved.Payload)
-	assert.Equal(t, msg.QoS, retrieved.QoS)
-	assert.Equal(t, msg.PacketID, retrieved.PacketID)
+	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
+	assert.Equal(t, msg.Broker.Delivery.QoS, retrieved.Broker.Delivery.QoS)
+	assert.Equal(t, msg.Broker.Delivery.PacketID, retrieved.Broker.Delivery.PacketID)
 }
 
 func TestMessageStore_StoreQueue(t *testing.T) {
 	store := setupMessageStore(t)
 	defer cleanupMessageStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   testTopic,
-		Payload: []byte("queued message"),
-		QoS:     2,
-	}
+	msg := message.NewDelivery(testTopic, []byte("queued message"), 2, false)
 
 	key := "client-1/queue/0"
 	err := store.Store(key, msg)
@@ -63,18 +55,14 @@ func TestMessageStore_StoreQueue(t *testing.T) {
 	retrieved, err := store.Get(key)
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
-	assert.Equal(t, msg.Payload, retrieved.Payload)
+	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
 }
 
 func TestMessageStore_StoreWithPayloadBuffer(t *testing.T) {
 	store := setupMessageStore(t)
 	defer cleanupMessageStore(t, store)
 
-	msg := &storage.Message{
-		Topic: testTopic,
-		QoS:   1,
-	}
-	msg.SetPayloadFromBytes([]byte("buffered message"))
+	msg := message.NewDelivery(testTopic, []byte("buffered message"), 1, false)
 	defer msg.ReleasePayload()
 
 	err := store.Store("client-1/queue/buffered", msg)
@@ -82,7 +70,7 @@ func TestMessageStore_StoreWithPayloadBuffer(t *testing.T) {
 
 	retrieved, err := store.Get("client-1/queue/buffered")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("buffered message"), retrieved.GetPayload())
+	assert.Equal(t, []byte("buffered message"), retrieved.PayloadBytes())
 }
 
 func TestMessageStore_GetNotFound(t *testing.T) {
@@ -97,11 +85,7 @@ func TestMessageStore_Delete(t *testing.T) {
 	store := setupMessageStore(t)
 	defer cleanupMessageStore(t, store)
 
-	msg := &storage.Message{
-		Topic:   testTopic,
-		Payload: []byte("test"),
-		QoS:     1,
-	}
+	msg := message.NewDelivery(testTopic, []byte("test"), 1, false)
 
 	key := "client-1/inflight/200"
 	err := store.Store(key, msg)
@@ -120,11 +104,7 @@ func TestMessageStore_ListByPrefix(t *testing.T) {
 
 	// Store multiple messages with same prefix
 	for i := 0; i < 5; i++ {
-		msg := &storage.Message{
-			Topic:   fmt.Sprintf("test/topic/%d", i),
-			Payload: []byte(fmt.Sprintf("payload-%d", i)),
-			QoS:     1,
-		}
+		msg := message.NewDelivery(fmt.Sprintf("test/topic/%d", i), []byte(fmt.Sprintf("payload-%d", i)), 1, false)
 		key := fmt.Sprintf("client-1/queue/%d", i)
 		err := store.Store(key, msg)
 		require.NoError(t, err)
@@ -142,11 +122,7 @@ func TestMessageStore_DeleteByPrefix(t *testing.T) {
 
 	// Store multiple messages
 	for i := 0; i < 3; i++ {
-		msg := &storage.Message{
-			Topic:   testTopic,
-			Payload: []byte("test"),
-			QoS:     1,
-		}
+		msg := message.NewDelivery(testTopic, []byte("test"), 1, false)
 		key := fmt.Sprintf("client-2/inflight/%d", i)
 		err := store.Store(key, msg)
 		require.NoError(t, err)
@@ -171,11 +147,7 @@ func TestMessageStore_ConcurrentOperations(t *testing.T) {
 	// Concurrent writes
 	for i := 0; i < 10; i++ {
 		go func(id int) {
-			msg := &storage.Message{
-				Topic:   fmt.Sprintf("concurrent/topic/%d", id),
-				Payload: []byte("test"),
-				QoS:     1,
-			}
+			msg := message.NewDelivery(fmt.Sprintf("concurrent/topic/%d", id), []byte("test"), 1, false)
 			key := fmt.Sprintf("concurrent-client/inflight/%d", id)
 			err := store.Store(key, msg)
 			assert.NoError(t, err)
@@ -213,18 +185,14 @@ func TestMessageStore_QoSLevels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := &storage.Message{
-				Topic:   testTopic,
-				Payload: []byte("test"),
-				QoS:     tt.qos,
-			}
+			msg := message.NewDelivery(testTopic, []byte("test"), tt.qos, false)
 			key := fmt.Sprintf("client/inflight/%d", tt.qos)
 			err := store.Store(key, msg)
 			require.NoError(t, err)
 
 			retrieved, err := store.Get(key)
 			require.NoError(t, err)
-			assert.Equal(t, tt.qos, retrieved.QoS)
+			assert.Equal(t, tt.qos, retrieved.Broker.Delivery.QoS)
 		})
 	}
 }
@@ -239,11 +207,7 @@ func TestMessageStore_LargePayload(t *testing.T) {
 		largePayload[i] = byte(i % 256)
 	}
 
-	msg := &storage.Message{
-		Topic:   "test/large",
-		Payload: largePayload,
-		QoS:     2,
-	}
+	msg := message.NewDelivery("test/large", largePayload, 2, false)
 
 	key := "client/large/1"
 	err := store.Store(key, msg)
@@ -251,8 +215,8 @@ func TestMessageStore_LargePayload(t *testing.T) {
 
 	retrieved, err := store.Get(key)
 	require.NoError(t, err)
-	assert.Equal(t, len(largePayload), len(retrieved.Payload))
-	assert.Equal(t, largePayload, retrieved.Payload)
+	assert.Equal(t, len(largePayload), len(retrieved.PayloadBytes()))
+	assert.Equal(t, largePayload, retrieved.PayloadBytes())
 }
 
 // Helper functions

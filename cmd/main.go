@@ -33,6 +33,7 @@ import (
 	"github.com/absmach/fluxmq/internal/httpclient"
 	"github.com/absmach/fluxmq/internal/wiring"
 	logStorage "github.com/absmach/fluxmq/logstorage"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
@@ -331,7 +332,7 @@ func localPrincipalPublishTargetContracts(principals []config.LocalPrincipalConf
 	return contracts, nil
 }
 
-func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg *storage.Message) error {
+func (t *brokerDeliveryTarget) Deliver(ctx context.Context, clientID string, msg *message.Envelope) error {
 	if amqp1broker.IsAMQPClient(clientID) {
 		return t.amqp.DeliverToClient(ctx, clientID, msg)
 	}
@@ -1072,11 +1073,9 @@ func main() {
 		if s == nil {
 			return
 		}
-		msg := storage.AcquireMessage()
-		msg.Topic = topic
-		msg.QoS = qos
-		msg.Properties = props
-		msg.SetPayloadFromBytes(payload)
+		msg := message.New(topic, payload)
+		msg.Broker.Delivery.QoS = qos
+		message.ApplyTrustedProperties(msg, props)
 		if _, err := b.DeliverToSession(ctx, s, msg); err != nil {
 			slog.Debug("cross-deliver to MQTT session failed", "client_id", clientID, "topic", topic, "error", err)
 		}

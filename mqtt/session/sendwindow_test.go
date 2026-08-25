@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
 )
@@ -124,9 +124,9 @@ func TestSendWindow_AcquireUnblocksWhenSuperseded(t *testing.T) {
 func TestProcessRetries_GatedBySendQuota(t *testing.T) {
 	f := &fakeInflight{
 		expired: []*messages.InflightMessage{
-			{PacketID: 1, Direction: messages.Outbound, State: messages.StatePublishSent, Message: &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")}},
-			{PacketID: 2, Direction: messages.Outbound, State: messages.StatePublishSent, Message: &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")}},
-			{PacketID: 3, Direction: messages.Outbound, State: messages.StatePublishSent, Message: &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")}},
+			{PacketID: 1, Direction: messages.Outbound, State: messages.StatePublishSent, Message: message.NewDelivery("t", []byte("a"), 1, false)},
+			{PacketID: 2, Direction: messages.Outbound, State: messages.StatePublishSent, Message: message.NewDelivery("t", []byte("a"), 1, false)},
+			{PacketID: 3, Direction: messages.Outbound, State: messages.StatePublishSent, Message: message.NewDelivery("t", []byte("a"), 1, false)},
 		},
 	}
 	h := newMessageHandler(f, nil, packets.V5)
@@ -220,7 +220,7 @@ func TestMarkSentIfEpoch_StaleGenerationNoOp(t *testing.T) {
 	require.NoError(t, err)
 	gen := s.Epoch()
 
-	require.NoError(t, s.Inflight().Add(1, &storage.Message{Topic: "t", QoS: 1}, messages.Outbound))
+	require.NoError(t, s.Inflight().Add(1, message.NewDelivery("t", nil, 1, false), messages.Outbound))
 
 	// Stale generation: must not mark sent.
 	s.MarkSentIfEpoch(1, gen-1)

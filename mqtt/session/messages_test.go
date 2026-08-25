@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +24,7 @@ func TestProcessRetriesSkipsInbound(t *testing.T) {
 				PacketID:  1,
 				Direction: messages.Inbound,
 				State:     messages.StatePublishSent,
-				Message:   &storage.Message{Topic: "t", QoS: 1},
+				Message:   message.NewDelivery("t", nil, 1, false),
 			},
 		},
 	}
@@ -45,7 +45,7 @@ func TestProcessRetriesOutboundQoS1UsesPublish(t *testing.T) {
 				PacketID:  10,
 				Direction: messages.Outbound,
 				State:     messages.StatePublishSent,
-				Message:   &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 1, false),
 			},
 		},
 	}
@@ -67,7 +67,7 @@ func TestProcessRetriesOutboundQoS2PublishSentUsesPublish(t *testing.T) {
 				PacketID:  20,
 				Direction: messages.Outbound,
 				State:     messages.StatePublishSent,
-				Message:   &storage.Message{Topic: "t", QoS: 2, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 2, false),
 			},
 		},
 	}
@@ -89,7 +89,7 @@ func TestProcessRetriesOutboundQoS2PubRecReceivedUsesPubRelV3(t *testing.T) {
 				PacketID:  30,
 				Direction: messages.Outbound,
 				State:     messages.StatePubRecReceived,
-				Message:   &storage.Message{Topic: "t", QoS: 2, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 2, false),
 			},
 		},
 	}
@@ -111,7 +111,7 @@ func TestProcessRetriesOutboundQoS2PubRecReceivedUsesPubRelV5(t *testing.T) {
 				PacketID:  40,
 				Direction: messages.Outbound,
 				State:     messages.StatePubRecReceived,
-				Message:   &storage.Message{Topic: "t", QoS: 2, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 2, false),
 			},
 		},
 	}
@@ -133,7 +133,7 @@ func TestProcessRetriesTo_EncodesForConnectionVersionAfterReconnect(t *testing.T
 				PacketID:  50,
 				Direction: messages.Outbound,
 				State:     messages.StatePublishSent,
-				Message:   &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 1, false),
 			},
 		},
 	}
@@ -156,7 +156,7 @@ func TestProcessRetriesTo_StaleOnSentDoesNotMarkRetry(t *testing.T) {
 				PacketID:  60,
 				Direction: messages.Outbound,
 				State:     messages.StatePublishSent,
-				Message:   &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 1, false),
 			},
 		},
 	}
@@ -247,15 +247,15 @@ type fakeInflight struct {
 	deliveryAttemptedCalls []uint16
 	addCalls               []uint16
 	ackCalls               []uint16
-	ackResult              *storage.Message
+	ackResult              *message.Envelope
 }
 
-func (f *fakeInflight) Add(packetID uint16, msg *storage.Message, direction messages.Direction) error {
+func (f *fakeInflight) Add(packetID uint16, msg *message.Envelope, direction messages.Direction) error {
 	f.addCalls = append(f.addCalls, packetID)
 	return nil
 }
 
-func (f *fakeInflight) Ack(packetID uint16) (*storage.Message, error) {
+func (f *fakeInflight) Ack(packetID uint16) (*message.Envelope, error) {
 	f.ackCalls = append(f.ackCalls, packetID)
 	return f.ackResult, nil
 }
@@ -289,11 +289,13 @@ func (f *fakeInflight) MarkRetry(packetID uint16) error {
 
 func (f *fakeInflight) GetAll() []*messages.InflightMessage { return nil }
 
+func (f *fakeInflight) Clear() {}
+
 func TestInboundOperationsRequireDirectionalExtensions(t *testing.T) {
-	f := &fakeInflight{ackResult: &storage.Message{Topic: "outbound"}}
+	f := &fakeInflight{ackResult: message.New("outbound", nil)}
 	s := New("client", packets.V5, Options{}, f, nil, config.SessionConfig{})
 
-	accepted, err := s.AddInbound(7, &storage.Message{Topic: "inbound"})
+	accepted, err := s.AddInbound(7, message.New("inbound", nil))
 	require.ErrorIs(t, err, messages.ErrInboundUnsupported)
 	require.False(t, accepted)
 	require.Empty(t, f.addCalls, "unsupported inbound admission must not call base Add")
@@ -330,7 +332,7 @@ func TestProcessRetries_ResetsBackoffOnQueueFull(t *testing.T) {
 				PacketID:  1,
 				Direction: messages.Outbound,
 				State:     messages.StatePublishSent,
-				Message:   &storage.Message{Topic: "t", QoS: 1, Payload: []byte("a")},
+				Message:   message.NewDelivery("t", []byte("a"), 1, false),
 			},
 		},
 	}

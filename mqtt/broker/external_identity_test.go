@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -152,14 +153,14 @@ func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 		TopicName:   "telemetry/room1",
 		Payload:     []byte("hello"),
 		Properties: &v5.PublishProperties{
-			User: []v5.User{{Key: corebroker.ExternalIDProperty, Value: "spoofed"}},
+			User: []v5.User{{Key: message.PropertyExternalID, Value: "spoofed"}},
 		},
 	}
 
 	require.NoError(t, handler.HandlePublish(bindConn(s), pub))
 	require.NotNil(t, gotProps)
-	require.Equal(t, "mqtt-client", gotProps[corebroker.ClientIDProperty])
-	require.Equal(t, "ext-456", gotProps[corebroker.ExternalIDProperty])
+	require.Equal(t, "mqtt-client", gotProps[message.PropertyClientID])
+	require.Equal(t, "ext-456", gotProps[message.PropertyExternalID])
 }
 
 func TestV5PublishRejectsHookQoSMutation(t *testing.T) {

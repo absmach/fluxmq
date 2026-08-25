@@ -4,19 +4,21 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/pkg/proto/cluster/v1/clusterv1connect"
 	queueTypes "github.com/absmach/fluxmq/queue/types"
@@ -35,8 +37,9 @@ type QueueHandler interface {
 	// EnqueueLocal enqueues a message on this node (called by remote RPC).
 	EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) (string, error)
 
-	// DeliverQueueMessage delivers a queue message to a local consumer.
-	DeliverQueueMessage(ctx context.Context, clientID string, msg *QueueMessage) error
+	// DeliverQueueMessage delivers a queue message to a local consumer and takes
+	// ownership of msg on every return path.
+	DeliverQueueMessage(ctx context.Context, clientID string, msg *message.Envelope) error
 
 	// HandleQueuePublish handles a publish with the given mode.
 	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
@@ -244,14 +247,7 @@ func (t *Transport) RoutePublish(ctx context.Context, req *PublishReq) (*Publish
 		}), nil
 	}
 
-	msg := &Message{
-		Topic:      req.Msg.Topic,
-		Payload:    req.Msg.Payload,
-		QoS:        byte(req.Msg.Qos),
-		Retain:     req.Msg.Retain,
-		Dup:        req.Msg.Dup,
-		Properties: req.Msg.Properties,
-	}
+	msg := envelopeFromWire(req.Msg.Topic, req.Msg.Payload, byte(req.Msg.Qos), req.Msg.Retain, req.Msg.Dup, req.Msg.Properties)
 
 	err := t.handler.DeliverToClient(ctx, req.Msg.ClientId, msg)
 	if err != nil {
@@ -289,14 +285,7 @@ func (t *Transport) RoutePublishBatch(ctx context.Context, req *PublishBatchReq)
 			continue
 		}
 
-		msg := &Message{
-			Topic:      m.Topic,
-			Payload:    m.Payload,
-			QoS:        byte(m.Qos),
-			Retain:     m.Retain,
-			Dup:        m.Dup,
-			Properties: m.Properties,
-		}
+		msg := envelopeFromWire(m.Topic, m.Payload, byte(m.Qos), m.Retain, m.Dup, m.Properties)
 
 		if err := t.handler.DeliverToClient(ctx, m.ClientId, msg); err != nil {
 			failures = append(failures, &clusterv1.PublishBatchError{
@@ -367,14 +356,15 @@ func (t *Transport) FetchRetained(ctx context.Context, req *FetchRetainedReq) (*
 			Found: false,
 		}), nil
 	}
+	defer message.Release(msg)
 
 	grpcMsg := &clusterv1.RetainedMessage{
 		Topic:      msg.Topic,
-		Payload:    msg.Payload,
-		Qos:        uint32(msg.QoS),
-		Retain:     msg.Retain,
-		Properties: msg.Properties,
-		Timestamp:  msg.PublishTime.Unix(),
+		Payload:    bytes.Clone(msg.PayloadBytes()),
+		Qos:        uint32(msg.Broker.Delivery.QoS),
+		Retain:     msg.Broker.Delivery.Retain,
+		Properties: message.ProjectProperties(msg, message.TrustedServiceProjection),
+		Timestamp:  msg.Broker.Delivery.PublishedAt.Unix(),
 	}
 
 	return connect.NewResponse(&clusterv1.FetchRetainedResponse{
@@ -446,9 +436,12 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 		}
 
 		err := handler.HandleQueuePublish(ctx, queueTypes.PublishRequest{
-			Topic:      topic,
-			Payload:    req.Msg.Payload,
-			Properties: req.Msg.Properties,
+			Source:              message.SourceFromProperties(req.Msg.Properties),
+			Trace:               message.TraceFromProperties(req.Msg.Properties),
+			Topic:               topic,
+			Payload:             req.Msg.Payload,
+			Properties:          message.FilterUserProperties(req.Msg.Properties),
+			ForwardTargetQueues: splitPropertyList(req.Msg.Properties[message.PropertyForwardTargetQueues]),
 		}, mode)
 		if err != nil {
 			return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
@@ -489,9 +482,15 @@ func (t *Transport) RouteQueueMessage(ctx context.Context, req *RouteQueueMessag
 		}), nil
 	}
 
-	msg := decodeRouteQueueMessage(req.Msg)
+	msg, err := decodeRouteQueueMessage(req.Msg)
+	if err != nil {
+		return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
 
-	err := handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
+	err = handler.DeliverQueueMessage(ctx, req.Msg.ClientId, msg)
 	if err != nil {
 		return connect.NewResponse(&clusterv1.RouteQueueMessageResponse{
 			Success:            false,
@@ -532,7 +531,16 @@ func (t *Transport) RouteQueueBatch(ctx context.Context, req *RouteQueueBatchReq
 			continue
 		}
 
-		msg := decodeRouteQueueMessage(wire)
+		msg, err := decodeRouteQueueMessage(wire)
+		if err != nil {
+			failures = append(failures, &clusterv1.RouteQueueBatchError{
+				Index:     uint32(idx),
+				ClientId:  wire.ClientId,
+				QueueName: wire.QueueName,
+				Error:     err.Error(),
+			})
+			continue
+		}
 		if err := handler.DeliverQueueMessage(ctx, wire.ClientId, msg); err != nil {
 			failures = append(failures, &clusterv1.RouteQueueBatchError{
 				Index:              uint32(idx),
@@ -609,13 +617,7 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 			continue
 		}
 
-		msg := &Message{
-			Topic:      m.Topic,
-			Payload:    m.Payload,
-			QoS:        byte(m.Qos),
-			Retain:     m.Retain,
-			Properties: m.Properties,
-		}
+		msg := envelopeFromWire(m.Topic, m.Payload, byte(m.Qos), m.Retain, false, m.Properties)
 
 		if err := handler.ForwardPublish(ctx, msg); err != nil {
 			t.logger.Warn("forward publish delivery failed",
@@ -817,7 +819,7 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 }
 
 // SendRouteQueueMessage sends a queue message delivery request to a peer node with retry and circuit breaker.
-func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID, queueName string, msg *QueueMessage) error {
+func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
 	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
@@ -828,7 +830,7 @@ func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID,
 			return fmt.Errorf("queue message is nil")
 		}
 
-		req := connect.NewRequest(encodeRouteQueueMessage(clientID, queueName, msg))
+		req := connect.NewRequest(encodeRouteQueueMessage(clientID, msg))
 
 		resp, err := client.RouteQueueMessage(ctx, req)
 		if err != nil {
@@ -1010,7 +1012,7 @@ func (t *Transport) sendRouteQueueBatchOnce(
 			if delivery.Message == nil {
 				continue
 			}
-			wireMsgs = append(wireMsgs, encodeRouteQueueMessage(delivery.ClientID, delivery.QueueName, delivery.Message))
+			wireMsgs = append(wireMsgs, encodeRouteQueueMessage(delivery.ClientID, delivery.Message))
 			wireToDelivery = append(wireToDelivery, i)
 		}
 		if len(wireMsgs) == 0 {
@@ -1085,7 +1087,7 @@ func summarizeQueueBatchFailures(failures []queueBatchFailure) string {
 			reason = "unknown error"
 		}
 		parts = append(parts, fmt.Sprintf("client %s queue %s: %s",
-			failure.delivery.ClientID, failure.delivery.QueueName, reason))
+			failure.delivery.ClientID, failure.delivery.Message.Broker.Queue.Name, reason))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -1218,18 +1220,6 @@ func (t *Transport) sendForwardPublishBatchOnce(
 	return failedMsgs, err
 }
 
-func parseInt64Property(props map[string]string, key string) (int64, bool) {
-	raw, ok := props[key]
-	if !ok || raw == "" {
-		return 0, false
-	}
-	val, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return val, true
-}
-
 func allPublishBatchQoS0(messages []*clusterv1.PublishRequest) bool {
 	if len(messages) == 0 {
 		return false
@@ -1256,121 +1246,56 @@ func allForwardPublishBatchQoS0(messages []*clusterv1.ForwardPublishRequest) boo
 	return true
 }
 
-func encodeRouteQueueMessage(clientID, queueName string, msg *QueueMessage) *clusterv1.RouteQueueMessageRequest {
-	properties := make(map[string]string, len(msg.UserProperties)+8)
-	for k, v := range msg.UserProperties {
-		properties[k] = v
-	}
-	if msg.MessageID != "" {
-		properties[queueTypes.PropMessageID] = msg.MessageID
-	}
-	if msg.GroupID != "" {
-		properties[queueTypes.PropGroupID] = msg.GroupID
-	}
-	if queueName != "" {
-		properties[queueTypes.PropQueueName] = queueName
-	}
-	properties[queueTypes.PropOffset] = fmt.Sprintf("%d", msg.Sequence)
-	// Source topic is broker-owned even when empty. Stamping the zero value is
-	// what clears a publisher-supplied property copied above instead of letting
-	// the decoder promote it into trusted queue metadata.
-	properties[queueTypes.PropSourceTopic] = msg.SourceTopic
-	if msg.Stream {
-		properties[queueTypes.PropStreamOffset] = fmt.Sprintf("%d", msg.StreamOffset)
-		if msg.StreamTimestamp != 0 {
-			properties[queueTypes.PropStreamTimestamp] = fmt.Sprintf("%d", msg.StreamTimestamp)
-		}
-	}
-	if msg.HasWorkCommitted {
-		properties[queueTypes.PropWorkCommittedOffset] = fmt.Sprintf("%d", msg.WorkCommittedOffset)
-		properties[queueTypes.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
-		if msg.WorkGroup != "" {
-			properties[queueTypes.PropWorkGroup] = msg.WorkGroup
-		}
-	}
-
+func encodeRouteQueueMessage(clientID string, msg *message.Envelope) *clusterv1.RouteQueueMessageRequest {
 	return &clusterv1.RouteQueueMessageRequest{
 		ClientId:   clientID,
-		QueueName:  queueName,
-		MessageId:  msg.MessageID,
+		QueueName:  msg.Broker.Queue.Name,
+		MessageId:  msg.Broker.Queue.MessageID,
 		Topic:      msg.Topic,
-		Payload:    msg.Payload,
-		Properties: properties,
-		Sequence:   msg.Sequence,
+		Payload:    msg.PayloadBytes(),
+		Properties: message.ProjectProperties(msg, message.TrustedServiceProjection),
+		Sequence:   int64(msg.Broker.Queue.Offset),
 	}
 }
 
-func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) *QueueMessage {
-	rawProps := make(map[string]string, len(wire.Properties))
-	for k, v := range wire.Properties {
-		rawProps[k] = v
+func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) (*message.Envelope, error) {
+	if wire == nil {
+		return nil, errors.New(errMessageIsNil)
 	}
+	if wire.Topic == "" {
+		return nil, errors.New("queue delivery topic is required")
+	}
+	envelope := message.New(wire.Topic, wire.Payload)
+	message.ApplyTrustedProperties(envelope, wire.Properties)
+	if wire.MessageId != "" {
+		envelope.Broker.Queue.MessageID = wire.MessageId
+	}
+	if wire.QueueName != "" {
+		envelope.Broker.Queue.Name = wire.QueueName
+	}
+	if wire.Sequence >= 0 {
+		envelope.Broker.Queue.Offset = uint64(wire.Sequence)
+	}
+	envelope.Broker.Delivery.QoS = 1
+	return envelope, nil
+}
 
-	msg := &QueueMessage{
-		MessageID:      wire.MessageId,
-		QueueName:      wire.QueueName,
-		Topic:          wire.Topic,
-		Payload:        wire.Payload,
-		Sequence:       wire.Sequence,
-		UserProperties: make(map[string]string, len(rawProps)),
+func splitPropertyList(raw string) []string {
+	if raw == "" {
+		return nil
 	}
-	if msg.MessageID == "" {
-		msg.MessageID = rawProps[queueTypes.PropMessageID]
-	}
-
-	if groupID := rawProps[queueTypes.PropGroupID]; groupID != "" {
-		msg.GroupID = groupID
-	}
-	if msg.QueueName == "" {
-		if queueName := rawProps[queueTypes.PropQueueName]; queueName != "" {
-			msg.QueueName = queueName
-		}
-	}
-	if offset, ok := parseInt64Property(rawProps, queueTypes.PropOffset); ok {
-		msg.Sequence = offset
-	}
-	if sourceTopic := rawProps[queueTypes.PropSourceTopic]; sourceTopic != "" {
-		msg.SourceTopic = sourceTopic
-	}
-	if streamOffset, ok := parseInt64Property(rawProps, queueTypes.PropStreamOffset); ok {
-		msg.Stream = true
-		msg.StreamOffset = streamOffset
-	}
-	if streamTs, ok := parseInt64Property(rawProps, queueTypes.PropStreamTimestamp); ok {
-		msg.Stream = true
-		msg.StreamTimestamp = streamTs
-	}
-	if committed, ok := parseInt64Property(rawProps, queueTypes.PropWorkCommittedOffset); ok {
-		msg.HasWorkCommitted = true
-		msg.WorkCommittedOffset = committed
-	}
-	if workAcked, ok := parseBoolProperty(rawProps, queueTypes.PropWorkAcked); ok {
-		msg.HasWorkCommitted = true
-		msg.WorkAcked = workAcked
-	}
-	if workGroup := rawProps[queueTypes.PropWorkGroup]; workGroup != "" {
-		msg.HasWorkCommitted = true
-		msg.WorkGroup = workGroup
-	}
-
-	for k, v := range rawProps {
-		if queueTypes.IsReservedQueueDeliveryProperty(k) {
+	seen := make(map[string]struct{})
+	values := make([]string, 0, 4)
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
 			continue
 		}
-		msg.UserProperties[k] = v
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		values = append(values, item)
 	}
-
-	return msg
-}
-
-func parseBoolProperty(props map[string]string, key string) (bool, bool) {
-	raw, ok := props[key]
-	if !ok || raw == "" {
-		return false, false
-	}
-	val, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, false
-	}
-	return val, true
+	return values
 }

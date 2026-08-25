@@ -154,7 +154,7 @@ func TestMQTTQoS2QueueFailurePreservesInboundUntilRetry(t *testing.T) {
 			inbound, found, getErr := s.GetInbound(7)
 			require.NoError(t, getErr)
 			require.True(t, found)
-			require.Equal(t, []byte("payload"), inbound.GetPayload())
+			require.Equal(t, []byte("payload"), inbound.PayloadBytes())
 
 			queueManager.publishErr = nil
 			require.NoError(t, tt.pubrel(b, bound))

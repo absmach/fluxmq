@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/logstorage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -42,7 +43,7 @@ type Manager struct {
 // DLQHandler is called when a message exceeds MaxDeliveryCount.
 // The handler receives a stable source offset so retries can preserve transfer
 // identity. It must return nil only after the DLQ append has succeeded.
-type DLQHandler func(ctx context.Context, queueName, groupID string, msg *types.Message, offset uint64, deliveryCount int, reason string) error
+type DLQHandler func(ctx context.Context, queueName, groupID string, msg *message.Envelope, offset uint64, deliveryCount int, reason string) error
 
 // Config defines configuration for the consumer group manager.
 type Config struct {
@@ -160,7 +161,7 @@ func (m *Manager) UnregisterConsumer(ctx context.Context, queueName, groupID, co
 
 // Claim retrieves the next available message for a consumer.
 // It first tries to get a new message from the log, then falls back to work stealing.
-func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID string, filter *Filter) (*types.Message, error) {
+func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID string, filter *Filter) (*message.Envelope, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -185,7 +186,7 @@ func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID stri
 }
 
 // ClaimBatch retrieves multiple messages for a consumer.
-func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*types.Message, error) {
+func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*message.Envelope, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -199,7 +200,7 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 		return nil, err
 	}
 
-	var messages []*types.Message
+	var messages []*message.Envelope
 
 	// Claim from cursor
 	for len(messages) < limit {
@@ -235,7 +236,7 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 // ClaimPendingBatch transfers pending messages idle for at least minIdle to a
 // consumer. Unlike ClaimBatch it never consumes new log records. Entries are
 // considered oldest-first so all storage backends expose the same order.
-func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, consumerID string, minIdle time.Duration, limit int) ([]*types.Message, error) {
+func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, consumerID string, minIdle time.Duration, limit int) ([]*message.Envelope, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -261,22 +262,27 @@ func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, con
 		entries = entries[:limit]
 	}
 
-	messages := make([]*types.Message, 0, len(entries))
+	messages := make([]*message.Envelope, 0, len(entries))
 	for _, entry := range entries {
-		message, err := m.queueStore.Read(ctx, queueName, entry.Offset)
+		msg, err := m.queueStore.Read(ctx, queueName, entry.Offset)
 		if err != nil {
-			return messages, err
+			releaseMessages(messages)
+			return nil, err
 		}
-		if message.IsExpired() {
+		if msg.IsExpired() {
+			message.Release(msg)
 			if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, entry.ConsumerID, entry.Offset); err != nil {
-				return messages, err
+				releaseMessages(messages)
+				return nil, err
 			}
 			continue
 		}
 		if err := m.groupStore.TransferPendingEntry(ctx, queueName, groupID, entry.Offset, entry.ConsumerID, consumerID); err != nil {
-			return messages, err
+			message.Release(msg)
+			releaseMessages(messages)
+			return nil, err
 		}
-		messages = append(messages, message)
+		messages = append(messages, msg)
 	}
 	if len(messages) == 0 {
 		return nil, ErrNoMessages
@@ -286,7 +292,7 @@ func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, con
 
 // ClaimBatchStream retrieves multiple messages for a stream consumer without PEL tracking.
 // It advances the cursor once per batch for efficiency.
-func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*types.Message, error) {
+func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*message.Envelope, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -305,6 +311,7 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 	}
 
 	if err := m.updateStreamCursorLocked(ctx, group, newCursor); err != nil {
+		releaseMessages(messages)
 		return nil, err
 	}
 
@@ -313,7 +320,7 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 
 // PeekBatchStream retrieves stream messages without advancing the consumer
 // group cursor. Call CommitStreamCursor after successful delivery.
-func (m *Manager) PeekBatchStream(ctx context.Context, queueName, groupID, _ string, filter *Filter, limit int) ([]*types.Message, uint64, error) {
+func (m *Manager) PeekBatchStream(ctx context.Context, queueName, groupID, _ string, filter *Filter, limit int) ([]*message.Envelope, uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -346,14 +353,14 @@ func (m *Manager) CommitStreamCursor(ctx context.Context, queueName, groupID str
 	return m.updateStreamCursorLocked(ctx, group, cursor)
 }
 
-func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.ConsumerGroup, filter *Filter, limit int) ([]*types.Message, uint64, error) {
+func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.ConsumerGroup, filter *Filter, limit int) ([]*message.Envelope, uint64, error) {
 	cursor := group.GetCursor()
 	tail, err := m.queueStore.Tail(ctx, group.QueueName)
 	if err != nil {
 		return nil, cursor.Cursor, err
 	}
 
-	var messages []*types.Message
+	var messages []*message.Envelope
 	var newCursor uint64 = cursor.Cursor
 
 	for newCursor < tail && len(messages) < limit {
@@ -365,11 +372,13 @@ func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.Consum
 			if err == storage.ErrOffsetOutOfRange {
 				continue
 			}
+			releaseMessages(messages)
 			return nil, cursor.Cursor, err
 		}
 
 		// Skip expired messages
 		if msg.IsExpired() {
+			message.Release(msg)
 			continue
 		}
 
@@ -377,6 +386,7 @@ func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.Consum
 			queueRoot := "$queue/" + group.QueueName
 			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
 			if !filter.Matches(routingKey) {
+				message.Release(msg)
 				continue
 			}
 		}
@@ -421,7 +431,7 @@ func (m *Manager) updateStreamCursorLocked(ctx context.Context, group *types.Con
 }
 
 // claimFromCursor tries to claim a message from the cursor position.
-func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*types.Message, error) {
+func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*message.Envelope, error) {
 	// Check PEL capacity before claiming
 	if m.config.MaxPELSize > 0 {
 		pelCount := group.PendingCount()
@@ -454,6 +464,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 
 		// Skip expired messages
 		if msg.IsExpired() {
+			message.Release(msg)
 			continue
 		}
 
@@ -462,6 +473,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 			queueRoot := "$queue/" + group.QueueName
 			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
 			if !filter.Matches(routingKey) {
+				message.Release(msg)
 				continue // Skip non-matching messages
 			}
 		}
@@ -475,11 +487,13 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 		}
 
 		if err := m.groupStore.AddPendingEntry(ctx, group.QueueName, group.ID, entry); err != nil {
+			message.Release(msg)
 			return nil, err
 		}
 
 		// Update cursor
 		if err := m.groupStore.UpdateCursor(ctx, group.QueueName, group.ID, cursor.Cursor); err != nil {
+			message.Release(msg)
 			return nil, err
 		}
 
@@ -490,7 +504,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 }
 
 // stealWork tries to steal a message from another consumer's PEL.
-func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*types.Message, error) {
+func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*message.Envelope, error) {
 	// Get stealable entries
 	stealable := group.StealableEntries(m.config.VisibilityTimeout, consumerID)
 	if len(stealable) == 0 {
@@ -509,8 +523,10 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 				continue
 			}
 			if err := m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.Offset, entry.DeliveryCount, "max delivery count exceeded"); err != nil {
+				message.Release(msg)
 				continue
 			}
+			message.Release(msg)
 			if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset); err != nil {
 				continue
 			}
@@ -526,6 +542,7 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 		// Remove expired messages from PEL instead of redelivering
 		if msg.IsExpired() {
 			_ = m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset)
+			message.Release(msg)
 			continue
 		}
 
@@ -534,6 +551,7 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 			queueRoot := "$queue/" + group.QueueName
 			routingKey := types.ExtractRoutingKey(msg.Topic, queueRoot)
 			if !filter.Matches(routingKey) {
+				message.Release(msg)
 				continue
 			}
 		}
@@ -548,6 +566,7 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 			consumerID,
 		)
 		if err != nil {
+			message.Release(msg)
 			continue
 		}
 
@@ -660,6 +679,7 @@ func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID str
 	if err != nil {
 		return err
 	}
+	defer message.Release(msg)
 	if err := m.config.OnDLQ(ctx, queueName, groupID, msg, offset, entry.DeliveryCount, reason); err != nil {
 		return err
 	}
@@ -676,6 +696,12 @@ func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID str
 
 	// Advance committed offset if possible
 	return m.advanceCommitted(ctx, group)
+}
+
+func releaseMessages(envelopes []*message.Envelope) {
+	for _, envelope := range envelopes {
+		message.Release(envelope)
+	}
 }
 
 // advanceCommitted updates the committed offset to the minimum pending offset.

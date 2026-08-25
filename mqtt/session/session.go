@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -19,7 +20,7 @@ import (
 // pendingItem holds a message that overflowed the inflight window and is
 // waiting for an inflight slot to open before being sent on the wire.
 type pendingItem struct {
-	msg    *storage.Message
+	msg    *message.Envelope
 	onSent func()
 }
 
@@ -407,7 +408,7 @@ func (s *Session) ReleaseSendQuota(packetID uint16, gen uint64) {
 // whether the tracker took ownership of msg. Trackers that do not implement the
 // optional directional extension are rejected explicitly because their base
 // Add implementation may not isolate inbound and outbound packet-ID spaces.
-func (s *Session) AddInbound(packetID uint16, msg *storage.Message) (bool, error) {
+func (s *Session) AddInbound(packetID uint16, msg *message.Envelope) (bool, error) {
 	if ia, ok := s.msgHandler.Inflight().(messages.InboundAdder); ok {
 		return ia.AddInbound(packetID, msg)
 	}
@@ -415,7 +416,7 @@ func (s *Session) AddInbound(packetID uint16, msg *storage.Message) (bool, error
 }
 
 // GetInbound retrieves an inbound QoS 2 transaction without settling it.
-func (s *Session) GetInbound(packetID uint16) (*storage.Message, bool, error) {
+func (s *Session) GetInbound(packetID uint16) (*message.Envelope, bool, error) {
 	if getter, ok := s.msgHandler.Inflight().(messages.InboundGetter); ok {
 		inflight, found := getter.GetInbound(packetID)
 		if !found || inflight == nil {
@@ -429,7 +430,7 @@ func (s *Session) GetInbound(packetID uint16) (*storage.Message, bool, error) {
 // AckInbound acknowledges and removes an inbound message (PUBREL). Trackers
 // that do not implement the optional directional extension are rejected
 // explicitly so an inbound acknowledgement cannot remove an outbound entry.
-func (s *Session) AckInbound(packetID uint16) (*storage.Message, error) {
+func (s *Session) AckInbound(packetID uint16) (*message.Envelope, error) {
 	if ib, ok := s.msgHandler.Inflight().(messages.InboundAcker); ok {
 		return ib.AckInbound(packetID)
 	}
@@ -452,7 +453,7 @@ func (s *Session) MarkSentIfEpoch(packetID uint16, gen uint64) {
 // TryEnqueuePending attempts to push an overflow item into the pending queue.
 // Returns true on success, false if the pending queue is also full (caller drops).
 // Only meaningful when pendingCh is non-nil (pending queue mode).
-func (s *Session) TryEnqueuePending(msg *storage.Message, onSent func()) bool {
+func (s *Session) TryEnqueuePending(msg *message.Envelope, onSent func()) bool {
 	if s.pendingCh == nil {
 		return false
 	}
@@ -467,15 +468,14 @@ func (s *Session) TryEnqueuePending(msg *storage.Message, onSent func()) bool {
 // DrainOnePending moves one pending item into the inflight tracker and sends it.
 // Called from ACK handlers to refill the pipeline after a slot opens.
 // Returns without action if there is nothing pending or the session is disconnected.
-func (s *Session) DrainOnePending(deliver func(msg *storage.Message, onSent func()) error) {
+func (s *Session) DrainOnePending(deliver func(msg *message.Envelope, onSent func()) error) {
 	if s.pendingCh == nil {
 		return
 	}
 	select {
 	case item := <-s.pendingCh:
 		if err := deliver(item.msg, item.onSent); err != nil {
-			item.msg.ReleasePayload()
-			storage.ReleaseMessage(item.msg)
+			message.Release(item.msg)
 		}
 	default:
 	}
@@ -490,22 +490,40 @@ func (s *Session) drainPendingToOffline() {
 	for {
 		select {
 		case item := <-s.pendingCh:
-			if item.msg.QoS > 0 {
+			if item.msg.Broker.Delivery.QoS > 0 {
 				if err := s.OfflineQueue().Enqueue(item.msg); err != nil {
-					item.msg.ReleasePayload()
-					storage.ReleaseMessage(item.msg)
+					message.Release(item.msg)
 					continue
 				}
-				item.msg.ReleasePayload()
-				storage.ReleaseMessage(item.msg)
+				message.Release(item.msg)
 			} else {
-				item.msg.ReleasePayload()
-				storage.ReleaseMessage(item.msg)
+				message.Release(item.msg)
 			}
 		default:
 			return
 		}
 	}
+}
+
+// ClearMessages releases every envelope owned by the session. The session
+// must be disconnected before this terminal cleanup runs.
+func (s *Session) ClearMessages() {
+	if s.pendingCh != nil {
+		for {
+			select {
+			case item := <-s.pendingCh:
+				message.Release(item.msg)
+			default:
+				goto pendingDrained
+			}
+		}
+	}
+
+pendingDrained:
+	for _, msg := range s.OfflineQueue().Drain() {
+		message.Release(msg)
+	}
+	s.Inflight().Clear()
 }
 
 // Disconnect disconnects the session unconditionally.

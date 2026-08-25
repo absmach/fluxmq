@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -312,8 +313,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	}
 
 	// Extract MQTT v5 properties for queue functionality
-	properties := extractAllProperties(p.Properties)
-	properties = setOriginProperties(properties, s.ExternalID)
+	properties := extractUserProperties(p.Properties)
 
 	requestedTopic := topic
 	hookReq, ok := h.broker.ApplyPublishHooks(context.Background(), corebroker.BlockingHookRequest{
@@ -341,7 +341,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	}
 	// QoS is carried through unchanged: hooks that mutate it were rejected
 	// above, and the wire QoS still owns the acknowledgement handshake.
-	topic, payload, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.Retain, setOriginProperties(hookReq.Properties, hookReq.ExternalID)
+	topic, payload, retain, properties = hookReq.Topic, hookReq.Payload, hookReq.Retain, hookReq.Properties
+	sourceExternalID := hookReq.ExternalID
 	// A hook can rewrite the payload, so the limit is re-checked on the result.
 	// Overshooting here is the hook's doing, not the client's, so the publish is
 	// refused without tearing the connection down.
@@ -366,23 +367,9 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 
 	switch qos {
 	case 0:
-		buf := core.GetBufferWithData(payload)
-		msg := storage.AcquireMessage()
-		msg.Topic = topic
-		msg.ClientID = s.ID
-		msg.QoS = qos
-		msg.Retain = retain
-		msg.MessageExpiry = messageExpiry
-		msg.Expiry = expiryTime
-		msg.PublishTime = publishTime
-		msg.Properties = properties
-		msg.PayloadFormat = payloadFormat
-		msg.ContentType = contentType
-		msg.ResponseTopic = responseTopic
-		msg.CorrelationData = correlationData
-		msg.SetPayloadFromBuffer(buf)
+		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
+		setMQTT5Metadata(msg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
 		err := h.broker.Publish(context.Background(), msg)
-		storage.ReleaseMessage(msg)
 		h.broker.telemetry.logger.Debug("v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -391,27 +378,12 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return err
 
 	case 1:
-		buf := core.GetBufferWithData(payload)
-		msg := storage.AcquireMessage()
-		msg.Topic = topic
-		msg.ClientID = s.ID
-		msg.QoS = qos
-		msg.Retain = retain
-		msg.MessageExpiry = messageExpiry
-		msg.Expiry = expiryTime
-		msg.PublishTime = publishTime
-		msg.Properties = properties
-		msg.PayloadFormat = payloadFormat
-		msg.ContentType = contentType
-		msg.ResponseTopic = responseTopic
-		msg.CorrelationData = correlationData
-		msg.SetPayloadFromBuffer(buf)
+		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
+		setMQTT5Metadata(msg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
-			storage.ReleaseMessage(msg)
 			reasonCode, reason := mqtt5QueuePublishError(err)
 			return sendV5PubAck(s, packetID, reasonCode, reason)
 		}
-		storage.ReleaseMessage(msg)
 		h.broker.telemetry.logger.Debug("v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
@@ -419,25 +391,12 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return sendV5PubAck(s, packetID, v5.PubAckSuccess, "")
 
 	case 2:
-		buf := core.GetBufferWithData(payload)
-		storeMsg := storage.AcquireMessage()
-		storeMsg.Topic = topic
-		storeMsg.ClientID = s.ID
-		storeMsg.QoS = qos
-		storeMsg.Retain = retain
-		storeMsg.PacketID = packetID
-		storeMsg.MessageExpiry = messageExpiry
-		storeMsg.Expiry = expiryTime
-		storeMsg.PublishTime = publishTime
-		storeMsg.Properties = properties
-		storeMsg.PayloadFormat = payloadFormat
-		storeMsg.ContentType = contentType
-		storeMsg.ResponseTopic = responseTopic
-		storeMsg.CorrelationData = correlationData
-		storeMsg.SetPayloadFromBuffer(buf)
+		storeMsg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
+		storeMsg.Broker.Delivery.PacketID = packetID
+		setMQTT5Metadata(storeMsg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
 		accepted, err := s.AddInbound(packetID, storeMsg)
 		if !accepted {
-			storage.ReleaseMessage(storeMsg)
+			message.Release(storeMsg)
 		}
 		if err != nil {
 			return err
@@ -521,38 +480,36 @@ func (h *v5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 			return err
 		}
 		submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
+			topic := owned.Topic
 			if err := h.broker.Publish(context.Background(), owned); err != nil {
 				h.broker.logError("v5_pubrel_publish", err,
 					slog.String("client_id", s.ID),
-					slog.String("topic", owned.Topic))
+					slog.String("topic", topic))
 			}
-			storage.ReleaseMessage(owned)
 		})
 		if !submitted {
+			topic := owned.Topic
 			if err := h.broker.Publish(context.Background(), owned); err != nil {
 				h.broker.logError("v5_pubrel_publish", err,
 					slog.String("client_id", s.ID),
-					slog.String("topic", owned.Topic))
+					slog.String("topic", topic))
 			}
-			storage.ReleaseMessage(owned)
 		}
 		return s.WritePacket(comp)
 	}
 
-	publish := storage.CopyMessage(msg)
+	publish := msg.Clone()
 	if err := h.broker.Publish(context.Background(), publish); err != nil {
-		storage.ReleaseMessage(publish)
 		h.broker.logError("v5_pubrel_publish", err,
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic))
 		return err
 	}
-	storage.ReleaseMessage(publish)
 	owned, err := s.AckInbound(packetID)
 	if err != nil {
 		return err
 	}
-	storage.ReleaseMessage(owned)
+	message.Release(owned)
 	return s.WritePacket(comp)
 }
 
@@ -671,24 +628,13 @@ func (h *v5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 			retained, err := h.broker.GetRetainedMatching(filter)
 			if err == nil {
 				for _, msg := range retained {
-					deliverQoS := msg.QoS
+					deliverQoS := msg.Broker.Delivery.QoS
 					if grantedQoS < deliverQoS {
 						deliverQoS = grantedQoS
 					}
-					deliverMsg := &storage.Message{
-						Topic:  msg.Topic,
-						QoS:    deliverQoS,
-						Retain: true,
-					}
-					// Zero-copy: Share buffer from retained message if available
-					if msg.PayloadBuf != nil {
-						msg.PayloadBuf.Retain()
-						deliverMsg.SetPayloadFromBuffer(msg.PayloadBuf)
-					} else {
-						// Legacy fallback for messages without PayloadBuf
-						deliverMsg.SetPayloadFromBytes(msg.Payload)
-					}
-					h.broker.DeliverToSession(context.Background(), s.Session, deliverMsg) //nolint:errcheck // retained message delivery; errors are non-fatal
+					msg.Broker.Delivery.QoS = deliverQoS
+					msg.Broker.Delivery.Retain = true
+					h.broker.DeliverToSession(context.Background(), s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
 				}
 			}
 		}

@@ -21,6 +21,7 @@ import (
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/internal/bufpool"
+	"github.com/absmach/fluxmq/message"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
@@ -548,7 +549,7 @@ func (ch *Channel) completePublish() {
 		props["reply-to"] = header.Properties.ReplyTo
 	}
 	if header.Properties.MessageID != "" {
-		props[qtypes.PropMessageID] = header.Properties.MessageID
+		props[message.PropertyMessageID] = header.Properties.MessageID
 	}
 	if header.Properties.Type != "" {
 		props["type"] = header.Properties.Type
@@ -562,18 +563,18 @@ func (ch *Channel) completePublish() {
 	// attribute a message to another principal or to another protocol.
 	relayedID := ""
 	if ch.conn.propagatesOriginIdentity() {
-		relayedID, _ = header.Properties.Headers[corebroker.ExternalIDProperty].(string)
+		relayedID, _ = header.Properties.Headers[message.PropertyExternalID].(string)
 	}
 	if relayedID != "" {
-		props[corebroker.ExternalIDProperty] = relayedID
+		props[message.PropertyExternalID] = relayedID
 	} else if externalID := ch.conn.externalID(clientID); externalID != "" {
-		props[corebroker.ExternalIDProperty] = externalID
+		props[message.PropertyExternalID] = externalID
 	}
 
-	props[corebroker.ProtocolProperty] = corebroker.ProtocolAMQP091
+	props[message.PropertyProtocol] = string(message.ProtocolAMQP091)
 	if ch.conn.propagatesOriginIdentity() {
-		if v, ok := header.Properties.Headers[corebroker.ProtocolProperty].(string); ok && v != "" {
-			props[corebroker.ProtocolProperty] = v
+		if v, ok := header.Properties.Headers[message.PropertyProtocol].(string); ok && v != "" {
+			props[message.PropertyProtocol] = v
 		}
 	}
 
@@ -583,8 +584,14 @@ func (ch *Channel) completePublish() {
 	// than forwarded as broker state.
 	if policy.carriesReservedProperties() {
 		for key, value := range header.Properties.Headers {
-			if !corebroker.IsReservedProperty(key) {
+			if !message.IsReservedProperty(key) {
 				continue
+			}
+			if !ch.conn.propagatesOriginIdentity() {
+				switch key {
+				case message.PropertyClientID, message.PropertyExternalID, message.PropertyProtocol:
+					continue
+				}
 			}
 			if v, ok := value.(string); ok {
 				props[key] = v
@@ -601,7 +608,7 @@ func (ch *Channel) completePublish() {
 		topic = exchangeName + "/" + routingKey
 	}
 
-	props = corebroker.AddClientIDProperty(props, clientID)
+	props[message.PropertyClientID] = clientID
 	originalTopic := topic
 
 	grant := LocalPublishGrantNone
@@ -739,10 +746,11 @@ func (ch *Channel) completePublish() {
 			if qm != nil {
 				queueTopic := resolver.QueueTopic(b.queue, bindingRoutingKey)
 				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
-					ClientID:   clientID,
+					Source:     message.SourceFromProperties(props),
+					Trace:      message.TraceFromProperties(props),
 					Topic:      queueTopic,
 					Payload:    body,
-					Properties: props,
+					Properties: message.FilterUserProperties(props),
 				}); err != nil {
 					ch.conn.logger.Error("queue publish failed", "queue", b.queue, "error", err)
 					publishFailed = true
@@ -936,8 +944,8 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 			deliveryTag: deliveryTag,
 			routingKey:  topic,
 			queueName:   cons.queueName,
-			messageID:   props[qtypes.PropMessageID],
-			groupID:     props[qtypes.PropGroupID],
+			messageID:   props[message.PropertyMessageID],
+			groupID:     props[message.PropertyGroupID],
 		}
 		ch.unackedMu.Unlock()
 	}
@@ -971,25 +979,25 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 
 	headers := make(map[string]any)
 	for k, v := range props {
-		if !carryReserved && corebroker.IsReservedProperty(k) {
+		if !carryReserved && message.IsReservedProperty(k) {
 			continue
 		}
 		switch k {
-		case "content-type", "content-encoding", "correlation-id", "reply-to", qtypes.PropMessageID, "type":
+		case "content-type", "content-encoding", "correlation-id", "reply-to", message.PropertyMessageID, "type":
 			continue
-		case qtypes.PropStreamOffset, qtypes.PropWorkCommittedOffset:
+		case message.PropertyStreamOffset, message.PropertyWorkCommitted:
 			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 				headers[k] = int64(n) // AMQP uses signed integers
 			} else {
 				headers[k] = v
 			}
-		case qtypes.PropStreamTimestamp:
+		case message.PropertyStreamTimestamp:
 			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 				headers[k] = n
 			} else {
 				headers[k] = v
 			}
-		case qtypes.PropWorkAcked:
+		case message.PropertyWorkAcked:
 			headers[k] = v == "true"
 		default:
 			headers[k] = v
@@ -1008,7 +1016,7 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 		ContentType:   props["content-type"],
 		CorrelationID: correlationID,
 		ReplyTo:       props["reply-to"],
-		MessageID:     props[qtypes.PropMessageID],
+		MessageID:     props[message.PropertyMessageID],
 		Type:          props["type"],
 		Headers:       headers,
 	}
@@ -1906,12 +1914,20 @@ func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[
 	if qm == nil {
 		return
 	}
-	props = corebroker.AddClientIDProperty(props, clientID)
+	source := message.SourceFromProperties(props)
+	// clientID is the authenticated connection identity. Keep it typed at the
+	// queue boundary instead of depending on a reserved property surviving a
+	// user-property filter.
+	source.ClientID = clientID
+	if source.Protocol == "" {
+		source.Protocol = message.ProtocolAMQP091
+	}
 	err := qm.Publish(context.Background(), qtypes.PublishRequest{
-		ClientID:   clientID,
+		Source:     source,
+		Trace:      message.TraceFromProperties(props),
 		Topic:      queueTopic,
 		Payload:    body,
-		Properties: props,
+		Properties: message.FilterUserProperties(props),
 	})
 	if err != nil {
 		ch.conn.logger.Error("queue publish failed", "queue", queueTopic, "error", err)
@@ -1949,7 +1965,10 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 		return
 	}
 
-	props = corebroker.AddClientIDProperty(props, clientID)
+	if props == nil {
+		props = make(map[string]string, 1)
+	}
+	props[message.PropertyClientID] = clientID
 	ctx, cancel := context.WithTimeout(ch.conn.publishContext(), localPublishTimeout)
 	defer cancel()
 
@@ -1965,10 +1984,11 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 	go func() {
 		defer ch.conn.broker.durableAppends.release(queueName)
 		result <- publisher.PublishToDurableStream(ctx, queueName, qtypes.PublishRequest{
-			ClientID:   clientID,
+			Source:     message.SourceFromProperties(props),
+			Trace:      message.TraceFromProperties(props),
 			Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
 			Payload:    body,
-			Properties: props,
+			Properties: message.FilterUserProperties(props),
 		})
 	}()
 
@@ -2181,7 +2201,7 @@ func extractStreamOffset(args map[string]any) (*qtypes.CursorOption, bool) {
 	if len(args) == 0 {
 		return nil, false
 	}
-	val, ok := args[qtypes.PropStreamOffset]
+	val, ok := args[message.PropertyStreamOffset]
 	if !ok {
 		return nil, false
 	}

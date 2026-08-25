@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/payload"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
 )
@@ -75,10 +76,7 @@ var _ core.Connection = (*testConn)(nil)
 
 func TestNew_SendWindowCapacityRespectsReceiveMaximum(t *testing.T) {
 	inflight := messages.NewInflightTracker(16)
-	msg := storage.AcquireMessage()
-	msg.Topic = "topic"
-	msg.QoS = 1
-	msg.SetPayloadFromBytes([]byte("x"))
+	msg := message.NewDelivery("topic", []byte("x"), 1, false)
 	require.NoError(t, inflight.Add(1, msg, messages.Outbound))
 
 	s := New(
@@ -105,7 +103,7 @@ func TestNew_SendWindowCapacityRespectsReceiveMaximum(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, acked)
 	acked.ReleasePayload()
-	storage.ReleaseMessage(acked)
+	message.Release(acked)
 }
 
 func TestAcquireSendQuota_UnblocksOnDisconnect(t *testing.T) {
@@ -157,11 +155,9 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 	_, errConn := s.Connect(&testConn{})
 	require.NoError(t, errConn)
 
-	msg := storage.AcquireMessage()
-	msg.Topic = "topic"
-	msg.QoS = 1
-	msg.SetPayloadFromBuffer(core.GetBufferWithData([]byte("payload")))
-	buf := msg.PayloadBuf
+	msg := message.NewWithBuffer("topic", payload.FromBytes([]byte("payload")))
+	msg.Broker.Delivery.QoS = 1
+	buf := msg.Payload
 	require.NotNil(t, buf)
 	require.Equal(t, int32(1), buf.RefCount())
 
@@ -174,6 +170,6 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 	queued := s.OfflineQueue().Dequeue()
 	require.NotNil(t, queued)
 	queued.ReleasePayload()
-	storage.ReleaseMessage(queued)
+	message.Release(queued)
 	require.Equal(t, int32(0), buf.RefCount())
 }

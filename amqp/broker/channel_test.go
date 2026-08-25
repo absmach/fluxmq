@@ -14,6 +14,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
@@ -368,8 +369,8 @@ func TestPublishStateMachineStampsPublisherForCrossDeliver(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected 1 cross-deliver call, got %d", calls)
 	}
-	if gotProps[corebroker.ClientIDProperty] != PrefixedClientID(testConnectionID) {
-		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), gotProps[corebroker.ClientIDProperty])
+	if gotProps[message.PropertyClientID] != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), gotProps[message.PropertyClientID])
 	}
 }
 
@@ -460,14 +461,17 @@ func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	if mockQM.publishCalls != 1 {
 		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
 	}
-	if mockQM.lastPublish.ClientID != PrefixedClientID(testConnectionID) {
-		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.ClientID)
+	if mockQM.lastPublish.Source.ClientID != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.Source.ClientID)
 	}
 	if mockQM.lastPublish.Properties["trace"] != "1" {
 		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.Properties["trace"])
 	}
-	if mockQM.lastPublish.Properties[corebroker.ClientIDProperty] != PrefixedClientID(testConnectionID) {
-		t.Fatalf("expected client_id property %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.Properties[corebroker.ClientIDProperty])
+	if mockQM.lastPublish.Source.Protocol != message.ProtocolAMQP091 {
+		t.Fatalf("expected protocol %q, got %q", message.ProtocolAMQP091, mockQM.lastPublish.Source.Protocol)
+	}
+	if _, ok := mockQM.lastPublish.Properties[message.PropertyClientID]; ok {
+		t.Fatal("broker source identity leaked into user properties")
 	}
 }
 
@@ -481,7 +485,7 @@ func TestPrefetchBuffering(t *testing.T) {
 		noAck:      false,
 	}
 
-	props := map[string]string{qtypes.PropMessageID: "m1"}
+	props := map[string]string{message.PropertyMessageID: "m1"}
 	ch.deliverMessage("q", []byte("one"), props)
 	ch.deliverMessage("q", []byte("two"), props)
 
@@ -906,19 +910,19 @@ func TestPublishOriginHeadersTrustBoundary(t *testing.T) {
 			name:         "trusted policy relays origin identity and protocol",
 			policy:       trustedTestPolicy(),
 			wantID:       relayedID,
-			wantProtocol: corebroker.ProtocolHTTP,
+			wantProtocol: string(message.ProtocolHTTP),
 		},
 		{
 			name:         "external policy stamps authenticated identity",
 			policy:       NewExternalConnectionPolicy(nil, nil, 0),
 			wantID:       authedID,
-			wantProtocol: corebroker.ProtocolAMQP091,
+			wantProtocol: string(message.ProtocolAMQP091),
 		},
 		{
 			name:         "absent policy stamps authenticated identity",
 			policy:       nil,
 			wantID:       authedID,
-			wantProtocol: corebroker.ProtocolAMQP091,
+			wantProtocol: string(message.ProtocolAMQP091),
 		},
 	}
 
@@ -951,8 +955,8 @@ func TestPublishOriginHeadersTrustBoundary(t *testing.T) {
 				BodySize: uint64(len(payload)),
 				Properties: codec.BasicProperties{
 					Headers: map[string]any{
-						corebroker.ExternalIDProperty: relayedID,
-						corebroker.ProtocolProperty:   corebroker.ProtocolHTTP,
+						message.PropertyExternalID: relayedID,
+						message.PropertyProtocol:   string(message.ProtocolHTTP),
 					},
 				},
 			}
@@ -963,8 +967,8 @@ func TestPublishOriginHeadersTrustBoundary(t *testing.T) {
 			ch.handleBodyFrame(&codec.Frame{Type: codec.FrameBody, Channel: 1, Payload: payload})
 
 			require.NotNil(t, gotProps, "expected cross-deliver call")
-			assert.Equal(t, tc.wantID, gotProps[corebroker.ExternalIDProperty])
-			assert.Equal(t, tc.wantProtocol, gotProps[corebroker.ProtocolProperty])
+			assert.Equal(t, tc.wantID, gotProps[message.PropertyExternalID])
+			assert.Equal(t, tc.wantProtocol, gotProps[message.PropertyProtocol])
 		})
 	}
 }
@@ -975,7 +979,7 @@ func TestPublishOriginHeadersTrustBoundary(t *testing.T) {
 // its reserved headers are dropped and cannot be forged. Everything else a
 // client sets stays out of the property bag either way.
 func TestPublishReservedHeadersIngressTrustBoundary(t *testing.T) {
-	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+	reserved := message.ReservedPropertyPrefix + "re.trace"
 
 	tests := []struct {
 		name    string
@@ -1068,7 +1072,7 @@ func TestPublishReservedHeadersIngressTrustBoundary(t *testing.T) {
 // broker-internal state another service set, while ordinary properties are
 // delivered as headers to everyone.
 func TestDeliveryReservedHeadersEgressTrustBoundary(t *testing.T) {
-	reserved := corebroker.ReservedPropertyPrefix + "re.trace"
+	reserved := message.ReservedPropertyPrefix + "re.trace"
 
 	tests := []struct {
 		name   string

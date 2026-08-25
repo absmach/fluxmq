@@ -6,24 +6,28 @@ package messages
 import (
 	"sync"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 )
 
 // Queue defines operations on offline message queue.
 type Queue interface {
-	Enqueue(msg *storage.Message) error
-	Dequeue() *storage.Message
+	// Enqueue borrows msg and stores an independent envelope clone.
+	Enqueue(msg *message.Envelope) error
+	// Dequeue transfers ownership of the returned envelope to the caller.
+	Dequeue() *message.Envelope
 	Len() int
 	IsEmpty() bool
 	IsFull() bool
-	Peek() *storage.Message
-	Drain() []*storage.Message
+	// Peek returns a borrowed envelope owned by the queue.
+	Peek() *message.Envelope
+	// Drain transfers ownership of every returned envelope to the caller.
+	Drain() []*message.Envelope
 }
 
 // queue is a queue for offline messages (QoS > 0).
 type queue struct {
 	mu          sync.Mutex
-	messages    []*storage.Message
+	messages    []*message.Envelope
 	maxSize     int
 	evictOnFull bool
 }
@@ -36,7 +40,7 @@ func NewMessageQueue(maxSize int, evictOnFull bool) *queue {
 		maxSize = 1000
 	}
 	return &queue{
-		messages:    make([]*storage.Message, 0),
+		messages:    make([]*message.Envelope, 0),
 		maxSize:     maxSize,
 		evictOnFull: evictOnFull,
 	}
@@ -44,7 +48,7 @@ func NewMessageQueue(maxSize int, evictOnFull bool) *queue {
 
 // Enqueue adds a message to the queue.
 // If the queue is at capacity, the oldest message is evicted.
-func (q *queue) Enqueue(msg *storage.Message) error {
+func (q *queue) Enqueue(msg *message.Envelope) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -53,19 +57,18 @@ func (q *queue) Enqueue(msg *storage.Message) error {
 			return ErrQueueFull
 		}
 		evicted := q.messages[0]
-		evicted.ReleasePayload()
-		storage.ReleaseMessage(evicted)
+		message.Release(evicted)
 		q.messages = q.messages[1:]
 	}
 
-	cp := storage.CopyMessage(msg)
+	cp := msg.Clone()
 	q.messages = append(q.messages, cp)
 	return nil
 }
 
 // Dequeue removes and returns the first message from the queue.
 // Returns nil if the queue is empty.
-func (q *queue) Dequeue() *storage.Message {
+func (q *queue) Dequeue() *message.Envelope {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -79,7 +82,7 @@ func (q *queue) Dequeue() *storage.Message {
 }
 
 // Peek returns the first message without removing it.
-func (q *queue) Peek() *storage.Message {
+func (q *queue) Peek() *message.Envelope {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -111,11 +114,11 @@ func (q *queue) IsFull() bool {
 }
 
 // Drain removes and returns all messages from the queue.
-func (q *queue) Drain() []*storage.Message {
+func (q *queue) Drain() []*message.Envelope {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	msgs := q.messages
-	q.messages = make([]*storage.Message, 0)
+	q.messages = make([]*message.Envelope, 0)
 	return msgs
 }

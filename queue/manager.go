@@ -13,7 +13,6 @@ import (
 	"maps"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,11 +20,11 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
-	brokerstorage "github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/topics"
 )
 
@@ -282,7 +281,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		StealBatchSize:     5,
 		AutoCommitInterval: config.AutoCommitInterval,
 		MaxPELSize:         config.MaxPELSize,
-		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *types.Message, offset uint64, deliveryCount int, reason string) error {
+		OnDLQ: func(ctx context.Context, queueName, groupID string, msg *message.Envelope, offset uint64, deliveryCount int, reason string) error {
 			if mgr == nil {
 				return consumer.ErrDLQHandlerUnavailable
 			}
@@ -1134,7 +1133,7 @@ func (m *Manager) appendBatchToQueue(ctx context.Context, queueName string, publ
 		return 0, 0, ErrAtomicBatchDurabilityUnsupported
 	}
 
-	messages := make([]*types.Message, len(publishes))
+	messages := make([]*message.Envelope, len(publishes))
 	for i, publish := range publishes {
 		publish = normalizePublishRequest(publish)
 		if publish.Topic == "" {
@@ -1145,6 +1144,7 @@ func (m *Manager) appendBatchToQueue(ctx context.Context, queueName string, publ
 
 	firstOffset, err := m.queueStore.AppendBatch(ctx, queueName, messages)
 	if err != nil {
+		releaseEnvelopes(messages)
 		return 0, 0, fmt.Errorf("append batch to queue %q: %w", queueName, err)
 	}
 	m.logger.Debug("message batch published",
@@ -1198,6 +1198,9 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 	publish.Key = bytes.Clone(publish.Key)
 	publish.Headers = cloneByteMap(publish.Headers)
 	publish.Properties = maps.Clone(publish.Properties)
+	publish.CorrelationData = bytes.Clone(publish.CorrelationData)
+	publish.PayloadFormat = clonePointer(publish.PayloadFormat)
+	publish.MessageExpiry = clonePointer(publish.MessageExpiry)
 	publish = normalizePublishRequest(publish)
 
 	// One job per target, so each queue is ordered by its own lane and a
@@ -1391,6 +1394,9 @@ func (m *Manager) publishToDurableStream(ctx context.Context, queueName string, 
 
 	msg := newQueuedMessage(publish, queueConfig)
 	offset, err := durableStore.AppendAndSync(ctx, queueName, msg)
+	if err != nil {
+		message.Release(msg)
+	}
 	if err := m.completeAppend(queueName, publish.Topic, offset, err); err != nil {
 		return 0, err
 	}
@@ -1415,7 +1421,7 @@ func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishR
 }
 
 func normalizePublishRequest(publish types.PublishRequest) types.PublishRequest {
-	publish.Properties = corebroker.AddClientIDProperty(publish.Properties, publish.ClientID)
+	publish.Properties = message.FilterUserProperties(publish.Properties)
 	return publish
 }
 
@@ -1433,7 +1439,7 @@ type queuePublishTarget struct {
 }
 
 func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.PublishRequest) ([]queuePublishTarget, error) {
-	forcedTargets := parseForwardTargetQueues(publish.Properties)
+	forcedTargets := publish.ForwardTargetQueues
 	if len(forcedTargets) > 0 {
 		targets := make([]queuePublishTarget, 0, len(forcedTargets))
 		for _, queueName := range forcedTargets {
@@ -1524,9 +1530,12 @@ func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRe
 	return err
 }
 
-func (m *Manager) appendConfiguredMessage(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *types.Message) (uint64, error) {
+func (m *Manager) appendConfiguredMessage(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *message.Envelope) (uint64, error) {
 	replicated := queueConfig.Replication.Enabled
 	if replicated {
+		// Raft serializes the caller's envelope and applies a decoded copy. The
+		// original is no longer needed after ApplyAppendWithOptions returns.
+		defer message.Release(msg)
 		if err := m.replicationWriteReadiness(queueName); err != nil {
 			return 0, err
 		}
@@ -1539,7 +1548,11 @@ func (m *Manager) appendConfiguredMessage(ctx context.Context, queueName string,
 			AckTimeout: queueConfig.Replication.AckTimeout,
 		})
 	}
-	return m.appendWithAckDurability(ctx, queueName, queueConfig, msg)
+	offset, err := m.appendWithAckDurability(ctx, queueName, queueConfig, msg)
+	if err != nil {
+		message.Release(msg)
+	}
+	return offset, err
 }
 
 // ackDurabilityFor resolves the policy for one queue: what the queue asks for,
@@ -1583,7 +1596,7 @@ func (m *Manager) validateQueueAckDurability(queueConfig types.QueueConfig) erro
 // acknowledgement mean something after a crash. Ephemeral queues are never
 // synced: they do not survive a restart either way, so paying for the barrier
 // would buy nothing.
-func (m *Manager) appendWithAckDurability(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *types.Message) (uint64, error) {
+func (m *Manager) appendWithAckDurability(ctx context.Context, queueName string, queueConfig *types.QueueConfig, msg *message.Envelope) (uint64, error) {
 	if m.ackDurabilityFor(queueConfig) != AckDurabilityFsync || !queueConfig.Durable {
 		return m.queueStore.Append(ctx, queueName, msg)
 	}
@@ -1594,22 +1607,40 @@ func (m *Manager) appendWithAckDurability(ctx context.Context, queueName string,
 	return durableStore.AppendAndSync(ctx, queueName, msg)
 }
 
-func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConfig) *types.Message {
+func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConfig) *message.Envelope {
 	now := time.Now()
-	msg := &types.Message{
-		ID:         generateMessageID(),
-		Payload:    publish.Payload,
-		Key:        bytes.Clone(publish.Key),
-		Headers:    cloneByteMap(publish.Headers),
-		Topic:      publish.Topic,
-		Properties: cloneWithoutForwardingMeta(publish.Properties),
-		State:      types.StateQueued,
-		CreatedAt:  now,
-	}
+	msg := message.New(publish.Topic, publish.Payload)
+	msg.User.Key = bytes.Clone(publish.Key)
+	msg.User.Headers = cloneByteMap(publish.Headers)
+	msg.User.Properties = message.FilterUserProperties(publish.Properties)
+	msg.User.ContentType = publish.ContentType
+	msg.User.ContentEncoding = publish.ContentEncoding
+	msg.User.ResponseTopic = publish.ResponseTopic
+	msg.User.CorrelationData = bytes.Clone(publish.CorrelationData)
+	msg.User.PayloadFormat = clonePointer(publish.PayloadFormat)
+	msg.User.MessageExpiry = clonePointer(publish.MessageExpiry)
+	msg.Broker.Source = publish.Source
+	msg.Broker.Trace = publish.Trace
+	msg.Broker.Delivery.PublishedAt = publish.PublishedAt
+	msg.Broker.Delivery.ExpiresAt = publish.ExpiresAt
+	msg.Broker.Queue.MessageID = generateMessageID()
+	msg.Broker.Queue.State = message.QueueStateQueued
+	msg.Broker.Queue.CreatedAt = now
 	if queueConfig.MessageTTL > 0 {
-		msg.ExpiresAt = now.Add(queueConfig.MessageTTL)
+		msg.Broker.Queue.ExpiresAt = now.Add(queueConfig.MessageTTL)
+	}
+	if !publish.ExpiresAt.IsZero() && (msg.Broker.Queue.ExpiresAt.IsZero() || publish.ExpiresAt.Before(msg.Broker.Queue.ExpiresAt)) {
+		msg.Broker.Queue.ExpiresAt = publish.ExpiresAt
 	}
 	return msg
+}
+
+func clonePointer[T any](src *T) *T {
+	if src == nil {
+		return nil
+	}
+	value := *src
+	return &value
 }
 
 func cloneByteMap(src map[string][]byte) map[string][]byte {
@@ -1642,7 +1673,7 @@ func (m *Manager) completeAppend(queueName, topic string, offset uint64, err err
 // moveToDLQ publishes a poison message to the dead-letter queue. It returns
 // success only after the destination append has completed, allowing callers to
 // keep the source delivery pending on every failure.
-func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg *types.Message, sourceOffset uint64, deliveryCount int, reason, dlqPrefix string) error {
+func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg *message.Envelope, sourceOffset uint64, deliveryCount int, reason, dlqPrefix string) error {
 	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
 		return fmt.Errorf("get source queue for DLQ transfer: %w", err)
@@ -1678,37 +1709,30 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 	}
 
 	transferID := dlqTransferID(queueName, groupID, sourceOffset)
-	props := make(map[string]string, len(msg.Properties)+8)
-	for k, v := range msg.Properties {
-		props[k] = v
+	dlqMsg := msg.Clone()
+	dlqMsg.Topic = dlqTopic
+	dlqMsg.Broker.Delivery = message.DeliveryMetadata{}
+	dlqMsg.Broker.Source.Topic = msg.Topic
+	dlqMsg.Broker.Queue = message.QueueMetadata{
+		MessageID: transferID,
+		State:     message.QueueStateDLQ,
+		CreatedAt: time.Now(),
 	}
-	props["_dlq_original_queue"] = queueName
-	props["_dlq_original_topic"] = msg.Topic
-	props["_dlq_group"] = groupID
-	props["_dlq_delivery_count"] = strconv.Itoa(deliveryCount)
-	props["_dlq_moved_at"] = time.Now().UTC().Format(time.RFC3339)
-	props[types.PropDLQTransferID] = transferID
-	if reason != "" {
-		props[types.PropDLQReason] = reason
-	}
-	if msg.ID != "" {
-		props["_dlq_original_id"] = msg.ID
-	}
-
-	dlqMsg := &types.Message{
-		ID:         transferID,
-		Payload:    msg.StablePayload(),
-		Topic:      dlqTopic,
-		Properties: props,
-		State:      types.StateDLQ,
-		CreatedAt:  time.Now(),
+	dlqMsg.Broker.Transfer = message.TransferMetadata{
+		ID:            transferID,
+		FailureReason: reason,
+		CompletedAt:   time.Now().UTC(),
+		SourceQueue:   queueName,
+		SourceGroup:   groupID,
+		SourceOffset:  sourceOffset,
+		DeliveryCount: deliveryCount,
 	}
 
 	if _, err := m.appendConfiguredMessage(ctx, dlqQueueName, dlqCfg, dlqMsg); err != nil {
 		m.logger.Warn("failed to append message to DLQ",
 			slog.String("queue", queueName),
 			slog.String("dlq_queue", dlqQueueName),
-			slog.String("message_id", msg.ID),
+			slog.String("message_id", msg.Broker.Queue.MessageID),
 			slog.String("error", err.Error()))
 		return fmt.Errorf("append DLQ transfer %q: %w", transferID, err)
 	}
@@ -1717,7 +1741,7 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 		slog.String("queue", queueName),
 		slog.String("group", groupID),
 		slog.String("dlq_queue", dlqQueueName),
-		slog.String("message_id", msg.ID),
+		slog.String("message_id", msg.Broker.Queue.MessageID),
 		slog.Int("delivery_count", deliveryCount))
 	return nil
 }
@@ -1800,8 +1824,9 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 	}
 
 	// Forward to each unique remote node
+	properties := projectPublishMetadata(message.FilterUserProperties(publish.Properties), publish.Source, publish.Trace)
 	for nodeID := range remoteNodes {
-		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, publish.Topic, publish.Payload, publish.Properties, false); err != nil {
+		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, publish.Topic, publish.Payload, properties, false); err != nil {
 			m.logger.Warn("failed to forward publish to remote node",
 				slog.String("node", nodeID),
 				slog.String("topic", publish.Topic),
@@ -1817,15 +1842,6 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 // matchesTopic checks if a filter pattern matches a topic using MQTT wildcard rules.
 func matchesTopic(filter, topic string) bool {
 	return topics.TopicMatch(filter, topic)
-}
-
-// Enqueue is an alias for Publish for backward compatibility.
-func (m *Manager) Enqueue(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
-	return m.Publish(ctx, types.PublishRequest{
-		Topic:      topic,
-		Payload:    payload,
-		Properties: properties,
-	})
 }
 
 // --- Subscribe Operations ---
@@ -2161,7 +2177,8 @@ func (m *Manager) rejectStream(ctx context.Context, queueName string, group *typ
 	if err != nil {
 		return err
 	}
-	deliveryCount := max(msg.RetryCount+1, 1)
+	defer message.Release(msg)
+	deliveryCount := max(msg.Broker.Queue.RetryCount+1, 1)
 	if err := m.moveToDLQ(ctx, queueName, group.ID, msg, offset, deliveryCount, reason, m.config.DLQTopicPrefix); err != nil {
 		return err
 	}
@@ -2251,7 +2268,8 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		return fmt.Errorf("raft leader unavailable")
 	}
 
-	props := cloneWithoutForwardingMeta(publish.Properties)
+	props := message.FilterUserProperties(publish.Properties)
+	props = projectPublishMetadata(props, publish.Source, publish.Trace)
 	if len(targetQueues) > 0 {
 		// Need a writable map — cloneWithoutForwardingMeta may have returned
 		// the original when no forwarding key was present.
@@ -2259,54 +2277,36 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		for k, v := range props {
 			writable[k] = v
 		}
-		writable[types.PropForwardTargetQueues] = strings.Join(targetQueues, ",")
+		writable[message.PropertyForwardTargetQueues] = strings.Join(targetQueues, ",")
 		props = writable
 	}
 
 	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, props, true)
 }
 
-func parseForwardTargetQueues(properties map[string]string) []string {
-	if len(properties) == 0 {
-		return nil
+func projectPublishMetadata(properties map[string]string, source message.SourceMetadata, trace message.TraceMetadata) map[string]string {
+	if properties == nil {
+		properties = make(map[string]string, 3)
 	}
-	raw := strings.TrimSpace(properties[types.PropForwardTargetQueues])
-	if raw == "" {
-		return nil
+	if source.ClientID != "" {
+		properties[message.PropertyClientID] = source.ClientID
 	}
-
-	seen := make(map[string]struct{})
-	out := make([]string, 0, 4)
-	for _, token := range strings.Split(raw, ",") {
-		queueName := strings.TrimSpace(token)
-		if queueName == "" {
-			continue
-		}
-		if _, ok := seen[queueName]; ok {
-			continue
-		}
-		seen[queueName] = struct{}{}
-		out = append(out, queueName)
+	if source.ExternalID != "" {
+		properties[message.PropertyExternalID] = source.ExternalID
 	}
-
-	return out
-}
-
-func cloneWithoutForwardingMeta(properties map[string]string) map[string]string {
-	if len(properties) == 0 {
-		return nil
+	if source.Protocol != "" {
+		properties[message.PropertyProtocol] = string(source.Protocol)
 	}
-	if _, has := properties[types.PropForwardTargetQueues]; !has {
-		return properties
+	if trace.TraceParent != "" {
+		properties[message.PropertyTraceParent] = trace.TraceParent
 	}
-	out := make(map[string]string, len(properties)-1)
-	for k, v := range properties {
-		if k == types.PropForwardTargetQueues {
-			continue
-		}
-		out[k] = v
+	if trace.TraceState != "" {
+		properties[message.PropertyTraceState] = trace.TraceState
 	}
-	return out
+	if trace.TraceID != "" {
+		properties[message.PropertyTraceID] = trace.TraceID
+	}
+	return properties
 }
 
 func (m *Manager) runStealLoop() {
@@ -2576,75 +2576,38 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 // EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.
 func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) (string, error) {
 	err := m.Publish(ctx, types.PublishRequest{
+		Source:     message.SourceFromProperties(properties),
+		Trace:      message.TraceFromProperties(properties),
 		Topic:      topic,
 		Payload:    payload,
-		Properties: properties,
+		Properties: message.FilterUserProperties(properties),
 	})
 	if err != nil {
 		return "", err
 	}
 
-	if properties != nil && properties[types.PropMessageID] != "" {
-		return properties[types.PropMessageID], nil
+	if properties != nil && properties[message.PropertyMessageID] != "" {
+		return properties[message.PropertyMessageID], nil
 	}
 
 	return generateMessageID(), nil
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.
-func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg *cluster.QueueMessage) error {
-	if m.deliveryTarget == nil {
-		return fmt.Errorf("no delivery function configured")
-	}
-
+func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg *message.Envelope) error {
 	if msg == nil {
 		return fmt.Errorf("queue message is nil")
 	}
-
-	queueName := msg.QueueName
-	props := make(map[string]string, len(msg.UserProperties)+8)
-	for k, v := range msg.UserProperties {
-		props[k] = v
+	if m.deliveryTarget == nil {
+		message.Release(msg)
+		return fmt.Errorf("no delivery function configured")
 	}
 
-	messageID := msg.MessageID
-	if messageID == "" {
-		messageID = queueName + ":" + strconv.FormatInt(msg.Sequence, 10)
+	if err := msg.Validate(); err != nil {
+		message.Release(msg)
+		return err
 	}
-
-	// Stamped after the user properties are copied in, matching the local
-	// delivery path: a publisher cannot forge queue-owned metadata.
-	props[types.PropMessageID] = messageID
-	props[types.PropGroupID] = msg.GroupID
-	props[types.PropQueueName] = queueName
-	props[types.PropOffset] = strconv.FormatInt(msg.Sequence, 10)
-	props[types.PropSourceTopic] = msg.SourceTopic
-
-	if msg.Stream {
-		props[types.PropStreamOffset] = strconv.FormatInt(msg.StreamOffset, 10)
-		if msg.StreamTimestamp != 0 {
-			props[types.PropStreamTimestamp] = strconv.FormatInt(msg.StreamTimestamp, 10)
-		}
-	}
-
-	if msg.HasWorkCommitted {
-		props[types.PropWorkCommittedOffset] = strconv.FormatInt(msg.WorkCommittedOffset, 10)
-		props[types.PropWorkAcked] = strconv.FormatBool(msg.WorkAcked)
-		if msg.WorkGroup != "" {
-			props[types.PropWorkGroup] = msg.WorkGroup
-		}
-	}
-
-	topic := queueDeliveryTopic(queueName, msg.Topic)
-
-	deliveryMsg := &brokerstorage.Message{
-		Topic:      topic,
-		QoS:        1,
-		Properties: props,
-	}
-	deliveryMsg.SetPayloadFromBytes(msg.Payload)
-
-	return m.deliveryTarget.Deliver(ctx, clientID, deliveryMsg)
+	return m.deliveryTarget.Deliver(ctx, clientID, msg)
 }
 
 // HandleForwardedGroupOp implements cluster.QueueHandler.HandleForwardedGroupOp.

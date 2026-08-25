@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -25,12 +26,12 @@ type syncRecordingStore struct {
 	synced  atomic.Int64
 }
 
-func (s *syncRecordingStore) Append(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *syncRecordingStore) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.appends.Add(1)
 	return s.QueueStore.Append(ctx, queueName, msg)
 }
 
-func (s *syncRecordingStore) AppendAndSync(ctx context.Context, queueName string, msg *types.Message) (uint64, error) {
+func (s *syncRecordingStore) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.synced.Add(1)
 	return s.QueueStore.Append(ctx, queueName, msg)
 }
@@ -73,9 +74,9 @@ func TestDLQTransferUsesConfiguredDurabilityPath(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, &types.Message{
-		ID: testPoison, Topic: testQueueTasksJob, Payload: []byte("bad"),
-	}, 7, 5, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+		newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")),
+		7, 5, "decode failed", "$dlq/"))
 
 	require.Equal(t, int64(1), store.synced.Load(), "DLQ append did not use the durable path")
 	require.Equal(t, int64(0), store.appends.Load(), "DLQ append bypassed fsync policy")

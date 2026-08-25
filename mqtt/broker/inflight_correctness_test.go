@@ -8,32 +8,32 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
-	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/messages"
 	"github.com/stretchr/testify/require"
 )
 
 type duplicateRejectingInflight struct {
-	rejected     *storage.Message
+	rejected     *message.Envelope
 	baseAddCalls int
 	addErr       error
 }
 
-func (f *duplicateRejectingInflight) Add(_ uint16, _ *storage.Message, _ messages.Direction) error {
+func (f *duplicateRejectingInflight) Add(_ uint16, _ *message.Envelope, _ messages.Direction) error {
 	f.baseAddCalls++
 	return nil
 }
 
-func (f *duplicateRejectingInflight) AddInbound(_ uint16, msg *storage.Message) (bool, error) {
+func (f *duplicateRejectingInflight) AddInbound(_ uint16, msg *message.Envelope) (bool, error) {
 	f.rejected = msg
 	return false, f.addErr
 }
 
-func (f *duplicateRejectingInflight) Ack(uint16) (*storage.Message, error) {
+func (f *duplicateRejectingInflight) Ack(uint16) (*message.Envelope, error) {
 	return nil, messages.ErrPacketNotFound
 }
 
@@ -64,6 +64,8 @@ func (f *duplicateRejectingInflight) MarkRetry(uint16) error {
 func (f *duplicateRejectingInflight) GetAll() []*messages.InflightMessage {
 	return nil
 }
+
+func (f *duplicateRejectingInflight) Clear() {}
 
 func newDuplicateReleaseSession(t *testing.T, version byte, inflight messages.Inflight) (*session.Session, *captureConnection) {
 	t.Helper()
@@ -97,7 +99,7 @@ func TestV3QoS2DuplicateReleasesUnacceptedMessage(t *testing.T) {
 	require.Zero(t, inflight.baseAddCalls)
 	require.NotNil(t, inflight.rejected)
 	require.Empty(t, inflight.rejected.Topic)
-	require.Nil(t, inflight.rejected.PayloadBuf)
+	require.Nil(t, inflight.rejected.Payload)
 	require.Len(t, conn.packets, 1)
 	require.IsType(t, &v3.PubRec{}, conn.packets[0])
 }
@@ -117,7 +119,7 @@ func TestV5QoS2DuplicateReleasesUnacceptedMessage(t *testing.T) {
 	require.Zero(t, inflight.baseAddCalls)
 	require.NotNil(t, inflight.rejected)
 	require.Empty(t, inflight.rejected.Topic)
-	require.Nil(t, inflight.rejected.PayloadBuf)
+	require.Nil(t, inflight.rejected.Payload)
 	require.Len(t, conn.packets, 1)
 	require.IsType(t, &v5.PubRec{}, conn.packets[0])
 }
@@ -137,6 +139,6 @@ func TestV5QoS2AdmissionFailureReleasesMessage(t *testing.T) {
 	require.Zero(t, inflight.baseAddCalls)
 	require.NotNil(t, inflight.rejected)
 	require.Empty(t, inflight.rejected.Topic)
-	require.Nil(t, inflight.rejected.PayloadBuf)
+	require.Nil(t, inflight.rejected.Payload)
 	require.Empty(t, conn.packets)
 }

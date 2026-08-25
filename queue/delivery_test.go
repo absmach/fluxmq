@@ -7,7 +7,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +18,7 @@ func TestDeliveryTargetFunc(t *testing.T) {
 		topic    string
 	}
 
-	dt := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *storage.Message) error {
+	dt := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		captured.clientID = clientID
 		captured.topic = msg.Topic
 		return nil
@@ -27,7 +27,7 @@ func TestDeliveryTargetFunc(t *testing.T) {
 	// Verify it satisfies the interface
 	var _ Deliverer = dt
 
-	msg := &storage.Message{Topic: "test/topic", QoS: 1}
+	msg := message.NewDelivery("test/topic", nil, 1, false)
 	err := dt.Deliver(context.Background(), "client-1", msg)
 	require.NoError(t, err)
 	assert.Equal(t, "client-1", captured.clientID)

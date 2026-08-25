@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,12 +91,8 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 	require.NoError(t, err)
 
 	// Save message
-	msg := &storage.Message{
-		Topic:    "integration/topic",
-		Payload:  []byte("integration test"),
-		QoS:      1,
-		PacketID: 123,
-	}
+	msg := message.NewDelivery("integration/topic", []byte("integration test"), 1, false)
+	msg.Broker.Delivery.PacketID = 123
 	err = store.Messages().Store("integration-client/inflight/123", msg)
 	require.NoError(t, err)
 
@@ -109,11 +106,7 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 	require.NoError(t, err)
 
 	// Save retained message
-	retainedMsg := &storage.Message{
-		Topic:   "integration/retained",
-		Payload: []byte("retained"),
-		QoS:     0,
-	}
+	retainedMsg := message.NewDelivery("integration/retained", []byte("retained"), 0, true)
 	err = store.Retained().Set(ctx, "integration/retained", retainedMsg)
 	require.NoError(t, err)
 
@@ -144,7 +137,7 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 	retrievedMsg, err := store.Messages().Get("integration-client/inflight/123")
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrievedMsg.Topic)
-	assert.Equal(t, msg.Payload, retrievedMsg.Payload)
+	assert.Equal(t, msg.PayloadBytes(), retrievedMsg.PayloadBytes())
 
 	retrievedSubs, err := store.Subscriptions().GetForClient("integration-client")
 	require.NoError(t, err)
@@ -153,7 +146,7 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 
 	retrievedRetained, err := store.Retained().Get(ctx, "integration/retained")
 	require.NoError(t, err)
-	assert.Equal(t, retainedMsg.Payload, retrievedRetained.Payload)
+	assert.Equal(t, retainedMsg.PayloadBytes(), retrievedRetained.PayloadBytes())
 
 	retrievedWill, err := store.Wills().Get(ctx, "integration-client")
 	require.NoError(t, err)
@@ -214,11 +207,7 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 		}(i)
 
 		go func(id int) {
-			msg := &storage.Message{
-				Topic:   "test",
-				Payload: []byte("data"),
-				QoS:     1,
-			}
+			msg := message.NewDelivery("test", []byte("data"), 1, false)
 			_ = store.Messages().Store("test/key", msg)
 			done <- true
 		}(i)

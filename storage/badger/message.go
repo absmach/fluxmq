@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/dgraph-io/badger/v4"
 )
@@ -35,7 +36,7 @@ func newMessageStore(db *db) *MessageStore {
 }
 
 // Store stores a message with the given key.
-func (m *MessageStore) Store(key string, msg *storage.Message) error {
+func (m *MessageStore) Store(key string, msg *message.Envelope) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
@@ -47,8 +48,8 @@ func (m *MessageStore) Store(key string, msg *storage.Message) error {
 }
 
 // Get retrieves a message by key.
-func (m *MessageStore) Get(key string) (*storage.Message, error) {
-	var msg *storage.Message
+func (m *MessageStore) Get(key string) (*message.Envelope, error) {
+	var msg *message.Envelope
 
 	err := m.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(key))
@@ -60,7 +61,7 @@ func (m *MessageStore) Get(key string) (*storage.Message, error) {
 		}
 
 		return item.Value(func(val []byte) error {
-			msg = &storage.Message{}
+			msg = &message.Envelope{}
 			return json.Unmarshal(val, msg)
 		})
 	})
@@ -79,8 +80,8 @@ func (m *MessageStore) Delete(key string) error {
 }
 
 // List returns all messages matching a key prefix.
-func (m *MessageStore) List(prefix string) ([]*storage.Message, error) {
-	var messages []*storage.Message
+func (m *MessageStore) List(prefix string) ([]*message.Envelope, error) {
+	var messages []*message.Envelope
 
 	err := m.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -92,7 +93,7 @@ func (m *MessageStore) List(prefix string) ([]*storage.Message, error) {
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				var msg storage.Message
+				var msg message.Envelope
 				if err := json.Unmarshal(val, &msg); err != nil {
 					return err
 				}
@@ -106,8 +107,14 @@ func (m *MessageStore) List(prefix string) ([]*storage.Message, error) {
 
 		return nil
 	})
+	if err != nil {
+		for _, msg := range messages {
+			message.Release(msg)
+		}
+		return nil, err
+	}
 
-	return messages, err
+	return messages, nil
 }
 
 // DeleteByPrefix removes all messages matching a prefix.

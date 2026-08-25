@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
@@ -37,7 +38,7 @@ type QueueLogReplicator interface {
 	ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error
 	ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error
 	ApplyDeleteQueue(ctx context.Context, queueName string) error
-	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
+	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *message.Envelope, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
 }
 
@@ -86,7 +87,7 @@ type GroupReplicator interface {
 	ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error
 	ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error
 	ApplyDeleteQueue(ctx context.Context, queueName string) error
-	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error)
+	ApplyAppendWithOptions(ctx context.Context, queueName string, msg *message.Envelope, opts ApplyOptions) (uint64, error)
 	ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error
 	ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
 	ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error
@@ -406,7 +407,7 @@ func (c *LogicalGroupCoordinator) LeaderIDForQueue(queueName string) string {
 }
 
 // ApplyAppendWithOptions replicates append operation in the queue's group.
-func (c *LogicalGroupCoordinator) ApplyAppendWithOptions(ctx context.Context, queueName string, msg *types.Message, opts ApplyOptions) (uint64, error) {
+func (c *LogicalGroupCoordinator) ApplyAppendWithOptions(ctx context.Context, queueName string, msg *message.Envelope, opts ApplyOptions) (uint64, error) {
 	replicator := c.replicatorForQueue(queueName)
 	if replicator == nil {
 		return 0, fmt.Errorf("no raft replicator configured for queue %q", queueName)

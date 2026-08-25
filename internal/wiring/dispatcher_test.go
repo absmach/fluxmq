@@ -8,8 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	corebroker "github.com/absmach/fluxmq/broker"
-	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -18,17 +17,17 @@ const pubProp = "mqtt-pub-1"
 
 type fakeMQTTClusterHandler struct {
 	deliverCalls []string
-	forwardMsgs  []*cluster.Message
+	forwardMsgs  []*message.Envelope
 	forwardErr   error
 }
 
-func (f *fakeMQTTClusterHandler) DeliverToClient(ctx context.Context, clientID string, msg *cluster.Message) error {
+func (f *fakeMQTTClusterHandler) DeliverToClient(ctx context.Context, clientID string, msg *message.Envelope) error {
 	f.deliverCalls = append(f.deliverCalls, clientID)
 	return nil
 }
 
-func (f *fakeMQTTClusterHandler) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
-	f.forwardMsgs = append(f.forwardMsgs, msg)
+func (f *fakeMQTTClusterHandler) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
+	f.forwardMsgs = append(f.forwardMsgs, msg.Clone())
 	return f.forwardErr
 }
 
@@ -38,7 +37,7 @@ func (f *fakeMQTTClusterHandler) GetSessionStateAndClose(ctx context.Context, cl
 
 func (f *fakeMQTTClusterHandler) HandleSessionLeaseLost(context.Context, []string) {}
 
-func (f *fakeMQTTClusterHandler) GetRetainedMessage(ctx context.Context, topic string) (*storage.Message, error) {
+func (f *fakeMQTTClusterHandler) GetRetainedMessage(ctx context.Context, topic string) (*message.Envelope, error) {
 	return nil, nil
 }
 
@@ -48,17 +47,17 @@ func (f *fakeMQTTClusterHandler) GetWillMessage(ctx context.Context, clientID st
 
 type fakeAMQPForwardHandler struct {
 	deliverCalls []string
-	forwardMsgs  []*cluster.Message
+	forwardMsgs  []*message.Envelope
 	forwardErr   error
 }
 
-func (f *fakeAMQPForwardHandler) DeliverToClusterMessage(ctx context.Context, clientID string, msg *cluster.Message) error {
+func (f *fakeAMQPForwardHandler) DeliverToClusterMessage(ctx context.Context, clientID string, msg *message.Envelope) error {
 	f.deliverCalls = append(f.deliverCalls, clientID)
 	return nil
 }
 
-func (f *fakeAMQPForwardHandler) ForwardPublish(ctx context.Context, msg *cluster.Message) error {
-	f.forwardMsgs = append(f.forwardMsgs, msg)
+func (f *fakeAMQPForwardHandler) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
+	f.forwardMsgs = append(f.forwardMsgs, msg.Clone())
 	return f.forwardErr
 }
 
@@ -68,14 +67,13 @@ func TestMessageDispatcherDeliverToClientRoutesByProtocol(t *testing.T) {
 	amqp091 := &fakeAMQPForwardHandler{}
 	d := NewMessageDispatcher(mqtt, amqp1, amqp091)
 
-	msg := &cluster.Message{Topic: testTopicForward, Payload: []byte("x")}
-	if err := d.DeliverToClient(context.Background(), "amqp:container-1", msg); err != nil {
+	if err := d.DeliverToClient(context.Background(), "amqp:container-1", message.New(testTopicForward, []byte("x"))); err != nil {
 		t.Fatalf("amqp1 delivery failed: %v", err)
 	}
-	if err := d.DeliverToClient(context.Background(), "amqp091:conn-1", msg); err != nil {
+	if err := d.DeliverToClient(context.Background(), "amqp091:conn-1", message.New(testTopicForward, []byte("x"))); err != nil {
 		t.Fatalf("amqp091 delivery failed: %v", err)
 	}
-	if err := d.DeliverToClient(context.Background(), "mqtt-client-1", msg); err != nil {
+	if err := d.DeliverToClient(context.Background(), "mqtt-client-1", message.New(testTopicForward, []byte("x"))); err != nil {
 		t.Fatalf("mqtt delivery failed: %v", err)
 	}
 
@@ -100,7 +98,7 @@ func TestMessageDispatcherForwardPublishJoinsErrors(t *testing.T) {
 		&fakeAMQPForwardHandler{},
 	)
 
-	err := d.ForwardPublish(context.Background(), &cluster.Message{Topic: testTopicForward})
+	err := d.ForwardPublish(context.Background(), message.New(testTopicForward, nil))
 	if err == nil {
 		t.Fatal("expected joined error, got nil")
 	}
@@ -118,20 +116,18 @@ func TestMessageDispatcherForwardPublishPreservesProperties(t *testing.T) {
 	amqp091 := &fakeAMQPForwardHandler{}
 	d := NewMessageDispatcher(mqtt, amqp1, amqp091)
 
-	msg := &cluster.Message{
-		Topic:      testTopicForward,
-		Properties: map[string]string{corebroker.ClientIDProperty: "mqtt-pub-1"},
-	}
+	msg := message.New(testTopicForward, nil)
+	msg.Broker.Source.ClientID = pubProp
 	if err := d.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}
-	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Properties[corebroker.ClientIDProperty] != pubProp {
+	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Broker.Source.ClientID != pubProp {
 		t.Fatalf("expected mqtt forward to preserve client_id property, got %+v", mqtt.forwardMsgs)
 	}
-	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Properties[corebroker.ClientIDProperty] != pubProp {
+	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Broker.Source.ClientID != pubProp {
 		t.Fatalf("expected amqp1 forward to preserve client_id property, got %+v", amqp1.forwardMsgs)
 	}
-	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Properties[corebroker.ClientIDProperty] != pubProp {
+	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Broker.Source.ClientID != pubProp {
 		t.Fatalf("expected amqp091 forward to preserve client_id property, got %+v", amqp091.forwardMsgs)
 	}
 }

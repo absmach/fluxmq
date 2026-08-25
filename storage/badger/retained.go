@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/dgraph-io/badger/v4"
 )
@@ -34,9 +35,9 @@ func newRetainedStore(db *db) *RetainedStore {
 
 // Set stores or updates a retained message.
 // Empty payload deletes the retained message.
-func (r *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Message) error {
+func (r *RetainedStore) Set(ctx context.Context, topic string, msg *message.Envelope) error {
 	// Empty payload means delete
-	if len(msg.GetPayload()) == 0 {
+	if len(msg.PayloadBytes()) == 0 {
 		return r.Delete(ctx, topic)
 	}
 
@@ -52,9 +53,9 @@ func (r *RetainedStore) Set(ctx context.Context, topic string, msg *storage.Mess
 }
 
 // Get retrieves a retained message by exact topic.
-func (r *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message, error) {
+func (r *RetainedStore) Get(ctx context.Context, topic string) (*message.Envelope, error) {
 	key := []byte("retained:" + topic)
-	var msg *storage.Message
+	var msg *message.Envelope
 
 	err := r.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
@@ -66,7 +67,7 @@ func (r *RetainedStore) Get(ctx context.Context, topic string) (*storage.Message
 		}
 
 		return item.Value(func(val []byte) error {
-			msg = &storage.Message{}
+			msg = &message.Envelope{}
 			return json.Unmarshal(val, msg)
 		})
 	})
@@ -87,8 +88,8 @@ func (r *RetainedStore) Delete(ctx context.Context, topic string) error {
 }
 
 // Match returns all retained messages matching a filter (supports wildcards).
-func (r *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Message, error) {
-	var matched []*storage.Message
+func (r *RetainedStore) Match(ctx context.Context, filter string) ([]*message.Envelope, error) {
+	var matched []*message.Envelope
 
 	err := r.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -106,7 +107,7 @@ func (r *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Me
 			// Check if topic matches the filter
 			if topicMatchesFilter(topic, filter) {
 				err := item.Value(func(val []byte) error {
-					var msg storage.Message
+					var msg message.Envelope
 					if err := json.Unmarshal(val, &msg); err != nil {
 						return err
 					}
@@ -121,6 +122,12 @@ func (r *RetainedStore) Match(ctx context.Context, filter string) ([]*storage.Me
 
 		return nil
 	})
+	if err != nil {
+		for _, msg := range matched {
+			message.Release(msg)
+		}
+		return nil, err
+	}
 
-	return matched, err
+	return matched, nil
 }

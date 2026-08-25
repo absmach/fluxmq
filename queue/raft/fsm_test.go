@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	badgerstore "github.com/absmach/fluxmq/queue/storage/badger"
 	"github.com/absmach/fluxmq/queue/types"
@@ -56,7 +57,7 @@ func TestFSM_ApplyEnqueue(t *testing.T) {
 	fsm, store, cleanup := setupTestFSM(t)
 	defer cleanup()
 
-	msg := &types.Message{
+	msg := &message.Envelope{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
@@ -104,7 +105,7 @@ func TestFSM_ApplyAck(t *testing.T) {
 	ctx := context.Background()
 
 	// First enqueue a message
-	msg := &types.Message{
+	msg := &message.Envelope{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
@@ -165,7 +166,7 @@ func TestFSM_ApplyNack(t *testing.T) {
 	ctx := context.Background()
 
 	// First enqueue a message
-	msg := &types.Message{
+	msg := &message.Envelope{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
@@ -239,7 +240,7 @@ func TestFSM_ApplyReject(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue a message
-	msg := &types.Message{
+	msg := &message.Envelope{
 		ID:       "msg-1",
 		Sequence: 1,
 		Payload:  []byte("test payload"),
@@ -301,7 +302,7 @@ func TestFSM_SnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue some messages to test snapshot contains actual data
-	messages := []*types.Message{
+	messages := []*message.Envelope{
 		{
 			ID:          "msg-1",
 			Sequence:    1,

@@ -16,26 +16,17 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/broker"
-	"github.com/absmach/fluxmq/storage"
 )
 
-func buildPublishMessage(topic string, payload []byte, qos byte, retain bool, clientID, externalID, contentType string) *storage.Message {
-	props := map[string]string{
-		corebroker.ProtocolProperty: corebroker.ProtocolHTTP,
-	}
-	if externalID != "" {
-		props[corebroker.ExternalIDProperty] = externalID
-	}
-	return &storage.Message{
-		Topic:       topic,
-		Payload:     payload,
-		QoS:         qos,
-		Retain:      retain,
-		ClientID:    clientID,
-		ContentType: contentType,
-		Properties:  props,
-	}
+func buildPublishMessage(topic string, data []byte, qos byte, retain bool, clientID, externalID, contentType string) *message.Envelope {
+	envelope := message.New(topic, data)
+	envelope.User.ContentType = contentType
+	envelope.Broker.Source = message.SourceMetadata{ClientID: clientID, ExternalID: externalID, Protocol: message.ProtocolHTTP}
+	envelope.Broker.Delivery.QoS = qos
+	envelope.Broker.Delivery.Retain = retain
+	return envelope
 }
 
 // defaultMaxBodySize is the default per-request body cap when Config.MaxBodySize is unset.
@@ -339,10 +330,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	props := map[string]string{corebroker.ProtocolProperty: corebroker.ProtocolHTTP}
-	if externalID != "" {
-		props[corebroker.ExternalIDProperty] = externalID
-	}
+	var props map[string]string
 	hookReq, ok := s.broker.ApplyPublishHooks(r.Context(), corebroker.BlockingHookRequest{
 		ClientID:   clientID,
 		ExternalID: externalID,
@@ -361,6 +349,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 		return
 	}
 	topic, payload, qos, retain, props = hookReq.Topic, hookReq.Payload, hookReq.QoS, hookReq.Retain, hookReq.Properties
+	externalID = hookReq.ExternalID
 	if !s.broker.CanPublish(r.Context(), clientID, topic) {
 		s.logger.Warn("http_publish_forbidden",
 			slog.String("client_id", clientID),
@@ -370,7 +359,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 	}
 
 	msg := buildPublishMessage(topic, payload, qos, retain, clientID, externalID, r.Header.Get("Content-Type"))
-	msg.Properties = props
+	msg.User.Properties = message.FilterUserProperties(props)
 
 	s.logger.Debug("http_publish",
 		slog.String("topic", topic),

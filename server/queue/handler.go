@@ -4,6 +4,7 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	coremessage "github.com/absmach/fluxmq/message"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
 	"github.com/absmach/fluxmq/queue"
@@ -305,7 +307,9 @@ func (h *Handler) Read(ctx context.Context, req *connect.Request[queuev1.ReadReq
 		return nil, newConnectError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(h.messageToProto(message)), nil
+	protoMessage := h.messageToProto(message)
+	coremessage.Release(message)
+	return connect.NewResponse(protoMessage), nil
 }
 
 func (h *Handler) ReadBatch(ctx context.Context, req *connect.Request[queuev1.ReadBatchRequest]) (*connect.Response[queuev1.ReadBatchResponse], error) {
@@ -321,10 +325,7 @@ func (h *Handler) ReadBatch(ctx context.Context, req *connect.Request[queuev1.Re
 		return nil, newConnectError(connect.CodeInternal, err)
 	}
 
-	protoMsgs := make([]*queuev1.Message, len(messages))
-	for i, m := range messages {
-		protoMsgs[i] = h.messageToProto(m)
-	}
+	protoMsgs := h.messagesToProto(messages)
 
 	return connect.NewResponse(&queuev1.ReadBatchResponse{
 		Messages: protoMsgs,
@@ -351,11 +352,12 @@ func (h *Handler) Tail(ctx context.Context, req *connect.Request[queuev1.TailReq
 			return newConnectError(connect.CodeInternal, err)
 		}
 
-		for _, m := range messages {
-			if err := stream.Send(h.messageToProto(m)); err != nil {
+		protoMessages := h.messagesToProto(messages)
+		for _, m := range protoMessages {
+			if err := stream.Send(m); err != nil {
 				return err
 			}
-			offset = m.Sequence + 1
+			offset = m.Offset + 1
 		}
 
 		if len(messages) == 0 {
@@ -449,16 +451,19 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 		}
 
 		for _, m := range batch {
-			if !m.CreatedAt.Before(target) {
-				return connect.NewResponse(&queuev1.SeekResponse{
-					Offset:     m.Sequence,
-					Timestamp:  timestamppb.New(m.CreatedAt),
-					ExactMatch: m.CreatedAt.Equal(target),
-				}), nil
+			if !m.Broker.Queue.CreatedAt.Before(target) {
+				response := &queuev1.SeekResponse{
+					Offset:     m.Broker.Queue.Offset,
+					Timestamp:  timestamppb.New(m.Broker.Queue.CreatedAt),
+					ExactMatch: m.Broker.Queue.CreatedAt.Equal(target),
+				}
+				releaseMessages(batch)
+				return connect.NewResponse(response), nil
 			}
 		}
 
-		offset = batch[len(batch)-1].Sequence + 1
+		offset = batch[len(batch)-1].Broker.Queue.Offset + 1
+		releaseMessages(batch)
 	}
 
 	return connect.NewResponse(&queuev1.SeekResponse{
@@ -622,12 +627,10 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 		return connect.NewResponse(&queuev1.ConsumeResponse{}), nil
 	}
 	if err != nil {
+		releaseMessages(outcome.Messages)
 		return nil, newConnectError(connect.CodeInternal, err)
 	}
-	protoMsgs := make([]*queuev1.Message, len(outcome.Messages))
-	for i, message := range outcome.Messages {
-		protoMsgs[i] = h.messageToProto(message)
-	}
+	protoMsgs := h.messagesToProto(outcome.Messages)
 	if outcome.CommitRequired {
 		if err := h.manager.StateMachine().CommitConsume(ctx, queue.CommitConsumeCommand{
 			QueueName: msg.QueueName,
@@ -670,10 +673,12 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 			continue
 		}
 		if err != nil {
+			releaseMessages(outcome.Messages)
 			return newConnectError(connect.CodeInternal, err)
 		}
-		for _, message := range outcome.Messages {
-			if err := stream.Send(h.messageToProto(message)); err != nil {
+		protoMessages := h.messagesToProto(outcome.Messages)
+		for _, message := range protoMessages {
+			if err := stream.Send(message); err != nil {
 				return err
 			}
 		}
@@ -757,12 +762,10 @@ func (h *Handler) Claim(ctx context.Context, req *connect.Request[queuev1.ClaimR
 		return connect.NewResponse(&queuev1.ClaimResponse{}), nil
 	}
 	if err != nil {
+		releaseMessages(outcome.Messages)
 		return nil, newConnectError(connect.CodeInternal, err)
 	}
-	claimed := make([]*queuev1.Message, len(outcome.Messages))
-	for i, message := range outcome.Messages {
-		claimed[i] = h.messageToProto(message)
-	}
+	claimed := h.messagesToProto(outcome.Messages)
 	return connect.NewResponse(&queuev1.ClaimResponse{
 		Messages: claimed,
 	}), nil
@@ -1009,25 +1012,40 @@ func replicationModeToProto(mode types.ReplicationMode) queuev1.ReplicationMode 
 	}
 }
 
-func (h *Handler) messageToProto(msg *types.Message) *queuev1.Message {
+func (h *Handler) messageToProto(msg *coremessage.Envelope) *queuev1.Message {
 	protoMsg := &queuev1.Message{
-		Offset:    msg.Sequence,
-		Timestamp: timestamppb.New(msg.CreatedAt),
-		Key:       msg.Key,
-		Value:     msg.GetPayload(),
+		Offset:    msg.Broker.Queue.Offset,
+		Timestamp: timestamppb.New(msg.Broker.Queue.CreatedAt),
+		Key:       bytes.Clone(msg.User.Key),
+		Value:     msg.StablePayload(),
 	}
 
-	if len(msg.Headers) > 0 || len(msg.Properties) > 0 {
-		protoMsg.Headers = make(map[string][]byte, len(msg.Headers)+len(msg.Properties))
-		for k, v := range msg.Properties {
+	if len(msg.User.Headers) > 0 || len(msg.User.Properties) > 0 {
+		protoMsg.Headers = make(map[string][]byte, len(msg.User.Headers)+len(msg.User.Properties))
+		for k, v := range msg.User.Properties {
 			protoMsg.Headers[k] = []byte(v)
 		}
-		for k, v := range msg.Headers {
-			protoMsg.Headers[k] = v
+		for k, v := range msg.User.Headers {
+			protoMsg.Headers[k] = bytes.Clone(v)
 		}
 	}
 
 	return protoMsg
+}
+
+func (h *Handler) messagesToProto(messages []*coremessage.Envelope) []*queuev1.Message {
+	converted := make([]*queuev1.Message, len(messages))
+	for i, msg := range messages {
+		converted[i] = h.messageToProto(msg)
+		coremessage.Release(msg)
+	}
+	return converted
+}
+
+func releaseMessages(messages []*coremessage.Envelope) {
+	for _, msg := range messages {
+		coremessage.Release(msg)
+	}
 }
 
 func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGroup {

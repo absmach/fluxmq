@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ func TestStore_OperationsAfterClose(t *testing.T) {
 	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
-	msg := &storage.Message{Topic: "test/topic", Payload: []byte("payload"), QoS: 1}
+	msg := message.NewDelivery("test/topic", []byte("payload"), 1, false)
 	require.NoError(t, store.Messages().Store("client-1/queue/0", msg))
 
 	require.NoError(t, store.Close())
@@ -127,7 +128,7 @@ func TestStore_CloseDuringOperations(t *testing.T) {
 	store, err := New(Config{Dir: t.TempDir()})
 	require.NoError(t, err)
 
-	msg := &storage.Message{Topic: "test/topic", Payload: []byte("payload"), QoS: 1}
+	msg := message.NewDelivery("test/topic", []byte("payload"), 1, false)
 	ctx := context.Background()
 
 	const workers = 8

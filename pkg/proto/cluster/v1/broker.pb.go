@@ -1305,7 +1305,7 @@ type RouteQueueMessageRequest struct {
 	Payload    []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
 	Properties map[string]string      `protobuf:"bytes,5,rep,name=properties,proto3" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Sequence   int64                  `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	// Canonical queue delivery topic. Empty means legacy queue-root delivery.
+	// Canonical queue delivery topic. Senders must set this field.
 	Topic         string `protobuf:"bytes,7,opt,name=topic,proto3" json:"topic,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

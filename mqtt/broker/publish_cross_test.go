@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	corebroker "github.com/absmach/fluxmq/broker"
-	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -34,13 +34,9 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 		gotProps = props
 	})
 
-	msg := &storage.Message{
-		Topic:      testTelemetryRoom,
-		ClientID:   "mqtt-pub-1",
-		QoS:        1,
-		Properties: map[string]string{"source": testSource},
-	}
-	msg.SetPayloadFromBytes([]byte("hello"))
+	msg := message.NewDelivery(testTelemetryRoom, []byte("hello"), 1, false)
+	msg.Broker.Source.ClientID = "mqtt-pub-1"
+	msg.User.Properties = map[string]string{"source": testSource}
 
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
@@ -61,8 +57,8 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 	if gotProps["source"] != testSource {
 		t.Fatalf("expected source property preserved, got %q", gotProps["source"])
 	}
-	if gotProps[corebroker.ClientIDProperty] != "mqtt-pub-1" {
-		t.Fatalf("expected client_id property %q, got %q", "mqtt-pub-1", gotProps[corebroker.ClientIDProperty])
+	if gotProps[message.PropertyClientID] != "mqtt-pub-1" {
+		t.Fatalf("expected client_id property %q, got %q", "mqtt-pub-1", gotProps[message.PropertyClientID])
 	}
 }
 
@@ -80,12 +76,9 @@ func TestForwardPublishDoesNotCrossDeliverToAMQP091(t *testing.T) {
 		calls++
 	})
 
-	if err := b.ForwardPublish(context.Background(), &cluster.Message{
-		Topic:      testTelemetryRoom,
-		Payload:    []byte("hello"),
-		QoS:        1,
-		Properties: map[string]string{"source": testSource},
-	}); err != nil {
+	msg := message.NewDelivery(testTelemetryRoom, []byte("hello"), 1, false)
+	msg.User.Properties = map[string]string{"source": testSource}
+	if err := b.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}
 

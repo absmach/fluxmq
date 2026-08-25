@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/require"
@@ -90,13 +91,9 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 		telemetry:     brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
-	msg := &storage.Message{
-		Topic: "$queue/orders/$ack",
-		Properties: map[string]string{
-			qtypes.PropMessageID: "orders:42",
-			qtypes.PropGroupID:   testGroupWorkers,
-		},
-	}
+	msg := message.New("$queue/orders/$ack", nil)
+	msg.Broker.Queue.MessageID = "orders:42"
+	msg.Broker.Queue.GroupID = testGroupWorkers
 
 	route := resolver.Resolve(msg.Topic)
 	require.NoError(t, b.handleQueueAck(context.Background(), msg, route))
@@ -115,13 +112,9 @@ func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
 		telemetry:     brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
-	msg := &storage.Message{
-		Topic: "$queue/orders/images/$nack",
-		Properties: map[string]string{
-			qtypes.PropMessageID: "orders:1",
-			qtypes.PropGroupID:   "workers@images/#",
-		},
-	}
+	msg := message.New("$queue/orders/images/$nack", nil)
+	msg.Broker.Queue.MessageID = "orders:1"
+	msg.Broker.Queue.GroupID = "workers@images/#"
 
 	route := resolver.Resolve(msg.Topic)
 	require.NoError(t, b.handleQueueAck(context.Background(), msg, route))
@@ -138,13 +131,9 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 		telemetry:     brokerTelemetry{logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	}
 
-	msg := &storage.Message{
-		Topic: "$queue/$ack",
-		Properties: map[string]string{
-			qtypes.PropMessageID: "orders:1",
-			qtypes.PropGroupID:   testGroupWorkers,
-		},
-	}
+	msg := message.New("$queue/$ack", nil)
+	msg.Broker.Queue.MessageID = "orders:1"
+	msg.Broker.Queue.GroupID = testGroupWorkers
 
 	route := resolver.Resolve(msg.Topic)
 	require.Error(t, b.handleQueueAck(context.Background(), msg, route))

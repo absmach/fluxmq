@@ -16,6 +16,7 @@ import (
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	mqtt "github.com/absmach/fluxmq/mqtt"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -462,20 +463,12 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 	}
 
 	if !connected {
-		msg := &storage.Message{
-			Topic:    filter,
-			Payload:  []byte("hello"),
-			QoS:      1,
-			PacketID: 7,
-		}
+		msg := message.NewDelivery(filter, []byte("hello"), 1, false)
+		msg.Broker.Delivery.PacketID = 7
 		if err := s.Inflight().Add(7, msg, messages.Outbound); err != nil {
 			t.Fatalf("failed to add inflight message: %v", err)
 		}
-		if err := s.OfflineQueue().Enqueue(&storage.Message{
-			Topic:   filter,
-			Payload: []byte("queued"),
-			QoS:     1,
-		}); err != nil {
+		if err := s.OfflineQueue().Enqueue(message.NewDelivery(filter, []byte("queued"), 1, false)); err != nil {
 			t.Fatalf("failed to enqueue offline message: %v", err)
 		}
 		if err := s.Disconnect(false, v5.DisconnectNormalDisconnection); err != nil {

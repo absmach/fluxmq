@@ -4,10 +4,7 @@
 package broker
 
 import (
-	"encoding/base64"
-	"strconv"
-
-	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/message"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 )
 
@@ -25,8 +22,9 @@ func extractConsumerGroup(id string, props *v5.SubscribeProperties) string {
 	return id
 }
 
-// extractAllProperties converts PUBLISH properties to a map.
-func extractAllProperties(props *v5.PublishProperties) map[string]string {
+// extractUserProperties copies publisher-owned MQTT user properties. Typed
+// MQTT properties are mapped directly to UserMetadata by the v5 adapter.
+func extractUserProperties(props *v5.PublishProperties) map[string]string {
 	result := make(map[string]string)
 
 	if props == nil {
@@ -38,28 +36,11 @@ func extractAllProperties(props *v5.PublishProperties) map[string]string {
 			// A device may not set broker-internal properties. They authenticate
 			// nothing, so a service reading one must be able to rely on it having
 			// come from another service rather than from a publishing client.
-			if corebroker.IsReservedProperty(prop.Key) {
+			if message.IsReservedProperty(prop.Key) {
 				continue
 			}
 			result[prop.Key] = prop.Value
 		}
-	}
-
-	// Add other MQTT v5 properties if present
-	if props.ContentType != "" {
-		result["content-type"] = props.ContentType
-	}
-
-	if props.ResponseTopic != "" {
-		result["response-topic"] = props.ResponseTopic
-	}
-
-	if props.CorrelationData != nil {
-		result["correlation-id"] = base64.StdEncoding.EncodeToString(props.CorrelationData)
-	}
-
-	if props.PayloadFormat != nil {
-		result["payload-format"] = strconv.FormatUint(uint64(*props.PayloadFormat), 10)
 	}
 
 	return result

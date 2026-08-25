@@ -14,8 +14,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	corebroker "github.com/absmach/fluxmq/broker"
-	"github.com/absmach/fluxmq/cluster"
-	qtypes "github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -80,11 +79,8 @@ func TestDeliverToClusterMessage(t *testing.T) {
 	c.channels[1] = ch
 	b.connections.Store(c.connID, c)
 
-	msg := &cluster.Message{
-		Topic:      testTelemetryRoom1,
-		Payload:    []byte("hello"),
-		Properties: map[string]string{qtypes.PropMessageID: "m1"},
-	}
+	msg := message.New(testTelemetryRoom1, []byte("hello"))
+	msg.Broker.Queue.MessageID = "m1"
 	if err := b.DeliverToClusterMessage(context.Background(), PrefixedClientID(c.connID), msg); err != nil {
 		t.Fatalf("DeliverToClusterMessage failed: %v", err)
 	}
@@ -127,10 +123,7 @@ func TestDeliverToClusterMessageClientNotFound(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(nil, logger)
 
-	err := b.DeliverToClusterMessage(context.Background(), PrefixedClientID("missing"), &cluster.Message{
-		Topic:   testTelemetryRoom1,
-		Payload: []byte("hello"),
-	})
+	err := b.DeliverToClusterMessage(context.Background(), PrefixedClientID("missing"), message.New(testTelemetryRoom1, []byte("hello")))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -176,7 +169,7 @@ func TestPublishDispatchesToLocalAndCross(t *testing.T) {
 		gotClientID = clientID
 	})
 
-	if err := b.Publish(context.Background(), testTelemetryRoom1, []byte("hello"), map[string]string{qtypes.PropMessageID: "m1"}); err != nil {
+	if err := b.Publish(context.Background(), testTelemetryRoom1, []byte("hello"), map[string]string{message.PropertyMessageID: "m1"}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -228,12 +221,8 @@ func TestForwardPublishSkipsCrossProtocolDispatch(t *testing.T) {
 		calls++
 	})
 
-	msg := &cluster.Message{
-		Topic:      testTelemetryRoom1,
-		Payload:    []byte("hello"),
-		QoS:        1,
-		Properties: map[string]string{qtypes.PropMessageID: "m1"},
-	}
+	msg := message.NewDelivery(testTelemetryRoom1, []byte("hello"), 1, false)
+	msg.Broker.Queue.MessageID = "m1"
 	if err := b.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}

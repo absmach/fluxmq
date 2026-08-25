@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -141,7 +142,7 @@ func TestRetainedStoreWatchSeesEarlyPut(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		msg, err := c.hybridRetained.Get(context.Background(), topic)
-		return err == nil && msg != nil && string(msg.Payload) == "hello"
+		return err == nil && msg != nil && string(msg.PayloadBytes()) == "hello"
 	}, recoveryWait, pollInterval, "retained entry written before watch registration never became readable")
 }
 
@@ -163,7 +164,8 @@ func TestRetainedStoreLoadSeesPreexistingEntries(t *testing.T) {
 	msg, err := c.hybridRetained.Get(ctx, topic)
 	require.NoError(t, err)
 	require.NotNil(t, msg)
-	require.Equal(t, "old", string(msg.Payload))
+	defer msg.ReleasePayload()
+	require.Equal(t, "old", string(msg.PayloadBytes()))
 }
 
 func TestRetainedStoreLoadRestoresOwnNodeEntries(t *testing.T) {
@@ -185,7 +187,8 @@ func TestRetainedStoreLoadRestoresOwnNodeEntries(t *testing.T) {
 	msg, err := c.hybridRetained.Get(ctx, topic)
 	require.NoError(t, err)
 	require.NotNil(t, msg)
-	require.Equal(t, "mine", string(msg.Payload))
+	defer msg.ReleasePayload()
+	require.Equal(t, "mine", string(msg.PayloadBytes()))
 }
 
 func TestWillStoreLoadRestoresOwnNodeEntries(t *testing.T) {
@@ -270,7 +273,8 @@ func TestRetainedWatchSeesEarlyPut(t *testing.T) {
 	defer cancel()
 
 	topic := "gap/retained"
-	msg := storage.Message{Topic: topic, Payload: []byte("hello"), QoS: 1}
+	msg := message.NewDelivery(topic, []byte("hello"), 1, false)
+	defer msg.ReleasePayload()
 	data, err := json.Marshal(msg)
 	require.NoError(t, err)
 
@@ -291,11 +295,8 @@ func TestRetainedStoreSetHandlesBufferBackedPayload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Publish-path messages carry the payload in PayloadBuf with the
-	// legacy Payload field cleared.
 	topic := "gap/retained-buffer"
-	msg := &storage.Message{Topic: topic, QoS: 1, Retain: true}
-	msg.SetPayloadFromBytes([]byte("buffered"))
+	msg := message.NewDelivery(topic, []byte("buffered"), 1, true)
 
 	require.NoError(t, c.hybridRetained.Set(ctx, topic, msg))
 	msg.ReleasePayload()
@@ -314,7 +315,8 @@ func TestRetainedStoreSetHandlesBufferBackedPayload(t *testing.T) {
 	got, err := c.hybridRetained.Get(ctx, topic)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	require.Equal(t, "buffered", string(got.GetPayload()))
+	defer got.ReleasePayload()
+	require.Equal(t, "buffered", string(got.PayloadBytes()))
 }
 
 func TestRetainedCacheReloadEvictsStaleEntries(t *testing.T) {
@@ -324,7 +326,7 @@ func TestRetainedCacheReloadEvictsStaleEntries(t *testing.T) {
 	// down: present in the cache, absent from etcd.
 	stale := "gap/retained-stale"
 	c.retainedCacheMu.Lock()
-	c.retainedCache[stale] = &storage.Message{Topic: stale}
+	c.retainedCache[stale] = message.New(stale, nil)
 	c.retainedCacheMu.Unlock()
 
 	require.NoError(t, c.loadRetainedCache())

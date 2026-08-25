@@ -31,8 +31,8 @@ func TestAppendToQueueReturnsAssignedOffsetAndTargetsExactlyOneQueue(t *testing.
 
 	msg, err := store.Read(ctx, "primary", offset)
 	require.NoError(t, err)
-	require.Equal(t, []byte{0x00, 0xff}, msg.Key)
-	require.Equal(t, []byte{0x00, 0xff}, msg.Headers["binary"])
+	require.Equal(t, []byte{0x00, 0xff}, msg.User.Key)
+	require.Equal(t, []byte{0x00, 0xff}, msg.User.Headers["binary"])
 
 	count, err := store.Count(ctx, "secondary")
 	require.NoError(t, err)
@@ -57,8 +57,8 @@ func TestAppendBatchToQueueReturnsContiguousOffsets(t *testing.T) {
 	require.NoError(t, err)
 	lastMessage, err := store.Read(ctx, "batch", first+uint64(count)-1)
 	require.NoError(t, err)
-	require.Equal(t, []byte("k1"), firstMessage.Key)
-	require.Equal(t, []byte("k2"), lastMessage.Key)
+	require.Equal(t, []byte("k1"), firstMessage.User.Key)
+	require.Equal(t, []byte("k2"), lastMessage.User.Key)
 }
 
 func TestAppendBatchToQueueRejectsUnsupportedAtomicContracts(t *testing.T) {

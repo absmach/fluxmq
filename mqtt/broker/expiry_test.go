@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -29,15 +30,7 @@ func TestMessageExpiry_ImmediateDelivery(t *testing.T) {
 	// Create message with 5 second expiry
 	expiry := uint32(5)
 	now := time.Now()
-	msg := &storage.Message{
-		Topic:         testTopic,
-		Payload:       []byte("data"),
-		QoS:           0,
-		Retain:        false,
-		MessageExpiry: &expiry,
-		Expiry:        now.Add(5 * time.Second),
-		PublishTime:   now,
-	}
+	msg := expiryTestEnvelope(testTopic, []byte("data"), 0, false, &expiry, now, now.Add(5*time.Second))
 
 	// Message should be delivered (not expired)
 	_, err := b.DeliverToSession(context.Background(), s, msg)
@@ -57,15 +50,7 @@ func TestMessageExpiry_ExpiredMessage(t *testing.T) {
 	// Create message that expired 1 second ago
 	expiry := uint32(1)
 	pastTime := time.Now().Add(-2 * time.Second)
-	msg := &storage.Message{
-		Topic:         testTopic,
-		Payload:       []byte("data"),
-		QoS:           0,
-		Retain:        false,
-		MessageExpiry: &expiry,
-		Expiry:        pastTime.Add(1 * time.Second), // Expired
-		PublishTime:   pastTime,
-	}
+	msg := expiryTestEnvelope(testTopic, []byte("data"), 0, false, &expiry, pastTime, pastTime.Add(time.Second))
 
 	// Message should be dropped silently
 	_, err := b.DeliverToSession(context.Background(), s, msg)
@@ -113,14 +98,7 @@ func TestMessageExpiry_NoExpiry(t *testing.T) {
 	s, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
 
 	// Create message without expiry
-	msg := &storage.Message{
-		Topic:         testTopic,
-		Payload:       []byte("data"),
-		QoS:           0,
-		Retain:        false,
-		MessageExpiry: nil,
-		PublishTime:   time.Now(),
-	}
+	msg := expiryTestEnvelope(testTopic, []byte("data"), 0, false, nil, time.Now(), time.Time{})
 
 	// Message should be delivered
 	_, err := b.DeliverToSession(context.Background(), s, msg)
@@ -142,18 +120,10 @@ func TestMessageExpiry_RemainingTime(t *testing.T) {
 	publishTime := time.Now().Add(-5 * time.Second)
 	expiryTime := publishTime.Add(10 * time.Second)
 
-	msg := &storage.Message{
-		Topic:         testTopic,
-		Payload:       []byte("data"),
-		QoS:           0,
-		Retain:        false,
-		MessageExpiry: &expiry,
-		Expiry:        expiryTime,
-		PublishTime:   publishTime,
-	}
+	msg := expiryTestEnvelope(testTopic, []byte("data"), 0, false, &expiry, publishTime, expiryTime)
 
 	// Remaining time should be approximately 5 seconds
-	remaining := time.Until(msg.Expiry)
+	remaining := time.Until(msg.Broker.Delivery.ExpiresAt)
 	if remaining < 4*time.Second || remaining > 6*time.Second {
 		t.Errorf("Expected remaining time ~5s, got %v", remaining)
 	}
@@ -169,25 +139,17 @@ func TestMessageExpiry_QoS1WithExpiry(t *testing.T) {
 	// Create message with QoS 1 and expiry
 	expiry := uint32(30)
 	now := time.Now()
-	msg := &storage.Message{
-		Topic:         testTopic,
-		Payload:       []byte("qos1 data"),
-		QoS:           1,
-		Retain:        false,
-		MessageExpiry: &expiry,
-		Expiry:        now.Add(30 * time.Second),
-		PublishTime:   now,
-	}
+	msg := expiryTestEnvelope(testTopic, []byte("qos1 data"), 1, false, &expiry, now, now.Add(30*time.Second))
 
 	// Test that message with expiry can be stored and delivered
-	if msg.MessageExpiry == nil {
+	if msg.User.MessageExpiry == nil {
 		t.Error("Message should have expiry set")
 	}
-	if msg.Expiry.IsZero() {
+	if msg.Broker.Delivery.ExpiresAt.IsZero() {
 		t.Error("Message expiry time should be set")
 	}
-	if *msg.MessageExpiry != 30 {
-		t.Errorf("Expected expiry of 30 seconds, got %d", *msg.MessageExpiry)
+	if *msg.User.MessageExpiry != 30 {
+		t.Errorf("Expected expiry of 30 seconds, got %d", *msg.User.MessageExpiry)
 	}
 }
 
@@ -200,15 +162,7 @@ func TestMessageExpiry_RetainedMessage(t *testing.T) {
 	// Create retained message with expiry
 	expiry := uint32(60)
 	now := time.Now()
-	msg := &storage.Message{
-		Topic:         "test/retained",
-		Payload:       []byte("retained data"),
-		QoS:           0,
-		Retain:        true,
-		MessageExpiry: &expiry,
-		Expiry:        now.Add(60 * time.Second),
-		PublishTime:   now,
-	}
+	msg := expiryTestEnvelope("test/retained", []byte("retained data"), 0, true, &expiry, now, now.Add(60*time.Second))
 
 	// Publish retained message
 	err := b.Publish(context.Background(), msg)
@@ -224,7 +178,15 @@ func TestMessageExpiry_RetainedMessage(t *testing.T) {
 	if len(retained) != 1 {
 		t.Fatalf("Expected 1 retained message, got %d", len(retained))
 	}
-	if retained[0].MessageExpiry == nil {
+	if retained[0].User.MessageExpiry == nil {
 		t.Error("Retained message should have expiry set")
 	}
+}
+
+func expiryTestEnvelope(topic string, payload []byte, qos byte, retain bool, expiry *uint32, publishedAt, expiresAt time.Time) *message.Envelope {
+	msg := message.NewDelivery(topic, payload, qos, retain)
+	msg.User.MessageExpiry = expiry
+	msg.Broker.Delivery.PublishedAt = publishedAt
+	msg.Broker.Delivery.ExpiresAt = expiresAt
+	return msg
 }

@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/absmach/fluxmq/mqtt"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/mqtt/session"
+	payloadbuf "github.com/absmach/fluxmq/payload"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -43,11 +44,7 @@ func BenchmarkMessagePublish_SingleSubscriber(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				msg := &storage.Message{
-					Topic: testTopic,
-					QoS:   0,
-				}
-				msg.SetPayloadFromBytes(payload)
+				msg := message.NewDelivery(testTopic, payload, 0, false)
 				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
@@ -78,11 +75,7 @@ func BenchmarkMessagePublish_MultipleSubscribers(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				msg := &storage.Message{
-					Topic: testTopic,
-					QoS:   0,
-				}
-				msg.SetPayloadFromBytes(payload)
+				msg := message.NewDelivery(testTopic, payload, 0, false)
 				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
@@ -105,11 +98,7 @@ func BenchmarkMessagePublish_QoS1(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		msg := &storage.Message{
-			Topic: testTopic,
-			QoS:   1,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(testTopic, payload, 1, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
@@ -130,11 +119,7 @@ func BenchmarkMessagePublish_QoS2(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		msg := &storage.Message{
-			Topic: testTopic,
-			QoS:   2,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(testTopic, payload, 2, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
@@ -163,11 +148,7 @@ func BenchmarkMessagePublish_SharedSubscription(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				msg := &storage.Message{
-					Topic: testTopic,
-					QoS:   0,
-				}
-				msg.SetPayloadFromBytes(payload)
+				msg := message.NewDelivery(testTopic, payload, 0, false)
 				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
@@ -206,11 +187,7 @@ func BenchmarkMessagePublish_MixedSizes(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		payload := payloads[i%len(payloads)]
-		msg := &storage.Message{
-			Topic: testTopic,
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(testTopic, payload, 0, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
@@ -239,11 +216,7 @@ func BenchmarkMessagePublish_FanOut(b *testing.B) {
 			b.ReportAllocs()
 
 			for b.Loop() {
-				msg := &storage.Message{
-					Topic: "sensor/data",
-					QoS:   0,
-				}
-				msg.SetPayloadFromBytes(payload)
+				msg := message.NewDelivery("sensor/data", payload, 0, false)
 				broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 			}
 		})
@@ -281,11 +254,7 @@ func BenchmarkMessagePublish_TopicVariety(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		topic := topics[i%len(topics)]
-		msg := &storage.Message{
-			Topic: topic,
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(topic, payload, 0, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
@@ -340,11 +309,7 @@ func BenchmarkMessagePublish_WildcardHeavy(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		msg := &storage.Message{
-			Topic: topics[i%len(topics)],
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(topics[i%len(topics)], payload, 0, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
@@ -392,11 +357,7 @@ func BenchmarkMessagePublish_WithChurn(b *testing.B) {
 			continue
 		}
 
-		msg := &storage.Message{
-			Topic: topics[i%len(topics)],
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(topics[i%len(topics)], payload, 0, false)
 		broker.Publish(context.Background(), msg) //nolint:errcheck // best-effort
 	}
 }
@@ -420,32 +381,28 @@ func BenchmarkMessageDistribute(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		msg := &storage.Message{
-			Topic: testTopic,
-			QoS:   0,
-		}
-		msg.SetPayloadFromBytes(payload)
+		msg := message.NewDelivery(testTopic, payload, 0, false)
 		broker.distribute(context.Background(), msg) //nolint:errcheck // best-effort
-		msg.ReleasePayload()
+		message.Release(msg)
 	}
 }
 
 // BenchmarkBufferPooling benchmarks the buffer pool performance.
 func BenchmarkBufferPooling(b *testing.B) {
-	pool := core.NewBufferPool()
+	pool := payloadbuf.NewPool()
 	payload := make([]byte, 1024)
 
 	b.ReportAllocs()
 
 	for b.Loop() {
-		buf := pool.GetWithData(payload)
+		buf := pool.FromBytes(payload)
 		buf.Release()
 	}
 }
 
 // BenchmarkBufferPooling_Parallel benchmarks parallel buffer pool usage.
 func BenchmarkBufferPooling_Parallel(b *testing.B) {
-	pool := core.NewBufferPool()
+	pool := payloadbuf.NewPool()
 	payload := make([]byte, 1024)
 
 	b.ResetTimer()
@@ -453,7 +410,7 @@ func BenchmarkBufferPooling_Parallel(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			buf := pool.GetWithData(payload)
+			buf := pool.FromBytes(payload)
 			buf.Release()
 		}
 	})
@@ -501,14 +458,14 @@ func BenchmarkMessageCopy_ZeroCopy(b *testing.B) {
 				payload[i] = byte(i % 256)
 			}
 
-			pool := core.NewBufferPool()
+			pool := payloadbuf.NewPool()
 
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for b.Loop() {
 				// Simulate zero-copy: create buffer, retain for sharing
-				buf := pool.GetWithData(payload)
+				buf := pool.FromBytes(payload)
 				buf.Retain()  // Share with subscriber 1
 				buf.Retain()  // Share with subscriber 2
 				buf.Release() // Original release

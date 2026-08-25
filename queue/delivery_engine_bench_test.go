@@ -7,37 +7,20 @@ import (
 	"bytes"
 	"testing"
 
-	core "github.com/absmach/fluxmq/mqtt"
-	"github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/message"
 )
 
 func BenchmarkCreateRoutedQueueMessage(b *testing.B) {
 	payload := bytes.Repeat([]byte("x"), 1024)
 
-	b.Run("plain_payload", func(b *testing.B) {
-		msg := &types.Message{
-			ID:       "bench",
-			Topic:    "$queue/bench",
-			Sequence: 42,
-			Payload:  payload,
-		}
-		b.ReportAllocs()
-		for b.Loop() {
-			_ = createRoutedQueueMessage(msg, "group", "bench", false, 0, false, "")
-		}
-	})
+	msg := message.New("$queue/bench", payload)
+	msg.Broker.Queue.MessageID = "bench"
+	msg.Broker.Queue.Offset = 42
+	defer message.Release(msg)
 
-	b.Run("buffer_backed", func(b *testing.B) {
-		msg := &types.Message{
-			ID:       "bench",
-			Topic:    "$queue/bench",
-			Sequence: 42,
-		}
-		msg.SetPayloadFromBuffer(core.GetBufferWithData(payload))
-		defer msg.ReleasePayload()
-		b.ReportAllocs()
-		for b.Loop() {
-			_ = createRoutedQueueMessage(msg, "group", "bench", false, 0, false, "")
-		}
-	})
+	b.ReportAllocs()
+	for b.Loop() {
+		routed := createRoutedQueueMessage(msg, "group", "bench", false, 0, false, "")
+		message.Release(routed)
+	}
 }

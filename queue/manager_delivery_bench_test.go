@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
-	brokerstorage "github.com/absmach/fluxmq/storage"
 )
 
 func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
@@ -25,11 +25,9 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 
 	var lastMessageID string
 	var lastGroupID string
-	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
-		if msg.Properties != nil {
-			lastMessageID = msg.Properties[types.PropMessageID]
-			lastGroupID = msg.Properties[types.PropGroupID]
-		}
+	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
+		lastMessageID = msg.Broker.Queue.MessageID
+		lastGroupID = msg.Broker.Queue.GroupID
 		return nil
 	})
 

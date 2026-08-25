@@ -7,8 +7,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
@@ -32,17 +32,12 @@ func queueDeliveryBroker(t *testing.T) (*Broker, *mockQueueManager, *session.Ses
 	return b, qm, s
 }
 
-func queueDelivery() *storage.Message {
-	msg := storage.AcquireMessage()
-	msg.Topic = "$queue/m/acme/temp"
-	msg.QoS = 1
-	msg.Properties = map[string]string{
-		qtypes.PropQueueName: "m",
-		qtypes.PropMessageID: "m:42",
-		qtypes.PropGroupID:   "workers",
-		qtypes.PropOffset:    "42",
-	}
-	msg.SetPayloadFromBytes([]byte("reading"))
+func queueDelivery() *message.Envelope {
+	msg := message.NewDelivery("$queue/m/acme/temp", []byte("reading"), 1, false)
+	msg.Broker.Queue.Name = "m"
+	msg.Broker.Queue.MessageID = "m:42"
+	msg.Broker.Queue.GroupID = "workers"
+	msg.Broker.Queue.Offset = 42
 	return msg
 }
 
@@ -72,10 +67,7 @@ func TestPubAckSettlesQueueDelivery(t *testing.T) {
 func TestPubAckIgnoresOrdinaryDelivery(t *testing.T) {
 	b, qm, s := queueDeliveryBroker(t)
 
-	msg := storage.AcquireMessage()
-	msg.Topic = testTelemetryRoom
-	msg.QoS = 1
-	msg.SetPayloadFromBytes([]byte("reading"))
+	msg := message.NewDelivery(testTelemetryRoom, []byte("reading"), 1, false)
 
 	packetID, err := b.DeliverToSession(context.Background(), s, msg)
 	require.NoError(t, err)

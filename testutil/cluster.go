@@ -15,10 +15,10 @@ import (
 
 	"github.com/absmach/fluxmq/cluster"
 	logStorage "github.com/absmach/fluxmq/logstorage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/queue"
 	"github.com/absmach/fluxmq/server/tcp"
-	brokerstorage "github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/badger"
 	"github.com/stretchr/testify/require"
 )
@@ -75,36 +75,18 @@ type TestNode struct {
 // QueueDelivery captures a queue delivery observed by the test node queue manager.
 type QueueDelivery struct {
 	ClientID string
-	Message  *brokerstorage.Message
+	Message  *message.Envelope
 }
 
-func cloneDeliveryMessage(msg *brokerstorage.Message) *brokerstorage.Message {
+func cloneDeliveryMessage(msg *message.Envelope) *message.Envelope {
 	if msg == nil {
 		return nil
 	}
 
-	clone := &brokerstorage.Message{
-		Topic:         msg.Topic,
-		ContentType:   msg.ContentType,
-		ResponseTopic: msg.ResponseTopic,
-		QoS:           msg.QoS,
-		Retain:        msg.Retain,
-	}
-	if len(msg.Properties) > 0 {
-		clone.Properties = make(map[string]string, len(msg.Properties))
-		for k, v := range msg.Properties {
-			clone.Properties[k] = v
-		}
-	}
-	if payload := msg.GetPayload(); len(payload) > 0 {
-		clone.Payload = make([]byte, len(payload))
-		copy(clone.Payload, payload)
-	}
-
-	return clone
+	return msg.Clone()
 }
 
-func (n *TestNode) recordQueueDelivery(clientID string, msg *brokerstorage.Message) {
+func (n *TestNode) recordQueueDelivery(clientID string, msg *message.Envelope) {
 	if msg == nil {
 		return
 	}
@@ -294,7 +276,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 		return fmt.Errorf("failed to create queue log storage: %w", err)
 	}
 	queueCfg := queue.DefaultConfig()
-	deliveryTarget := queue.DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *brokerstorage.Message) error {
+	deliveryTarget := queue.DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		node.recordQueueDelivery(clientID, msg)
 		return b.DeliverToSessionByID(ctx, clientID, msg)
 	})
