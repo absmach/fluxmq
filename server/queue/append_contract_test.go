@@ -155,8 +155,35 @@ func TestAckPartialFailureReportsProgress(t *testing.T) {
 	require.Error(t, err, "acking an undelivered offset must fail")
 
 	detail := queueErrorDetail(t, err)
-	require.NotNil(t, detail.Progress, "a partial settlement must report its committed prefix")
-	assert.Equal(t, uint32(1), detail.Progress.ProcessedCount, "offset 0 settled before the failure")
-	assert.Equal(t, uint64(1), detail.Progress.FailedOffset, "offset 1 is where the command stopped")
-	assert.Equal(t, uint64(1), detail.Progress.Committed, "committed cursor advanced past the settled prefix")
+	progress := detail.GetSettlementProgress()
+	require.NotNil(t, progress, "a partial settlement must report its committed prefix")
+	assert.Equal(t, uint32(1), progress.ProcessedCount, "offset 0 settled before the failure")
+	assert.Equal(t, uint64(1), progress.FailedOffset, "offset 1 is where the command stopped")
+	assert.Equal(t, uint64(1), progress.Committed, "committed cursor advanced past the settled prefix")
+
+	// The two progress shapes are mutually exclusive: a settlement failure must
+	// not present itself as an append failure.
+	assert.Nil(t, detail.GetAppendProgress(), "settlement errors carry settlement progress only")
+}
+
+// A failed append has no offset to report: the record was never written. Its
+// position in the request is the only coordinate that names it, which is why
+// append progress carries an index rather than an offset.
+func TestAppendStreamProgressNamesTheFailedIndex(t *testing.T) {
+	detail := &queuev1.QueueErrorDetail{}
+	setter := appendProgress(3, 10, 12)
+	require.NotNil(t, setter)
+	setter(detail)
+
+	progress := detail.GetAppendProgress()
+	require.NotNil(t, progress)
+	assert.Equal(t, uint32(3), progress.ProcessedCount)
+	assert.Equal(t, uint32(3), progress.FailedIndex, "the failed record follows the committed prefix")
+	assert.Equal(t, uint64(10), progress.FirstOffset)
+	assert.Equal(t, uint64(12), progress.LastOffset)
+	assert.Nil(t, detail.GetSettlementProgress(), "append errors carry append progress only")
+
+	// Nothing committed means no progress at all, rather than a zero-valued
+	// report that a client could mistake for a commit at offset 0.
+	assert.Nil(t, appendProgress(0, 0, 0))
 }

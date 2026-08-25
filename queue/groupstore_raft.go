@@ -153,6 +153,7 @@ func (s *raftGroupStore) CreateConsumerGroup(ctx context.Context, group *types.C
 		Type:       raft.OpCreateGroup,
 		Timestamp:  time.Now(),
 		QueueName:  group.QueueName,
+		GroupID:    group.ID,
 		GroupState: group,
 	}
 

@@ -25,7 +25,14 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-var ErrRaftDisabled = errors.New("queue raft replication is disabled")
+var (
+	ErrRaftDisabled = errors.New("queue raft replication is disabled")
+
+	// ErrInvalidOperation reports an operation that cannot be applied because a
+	// value it requires is absent. Reporting it beats dereferencing a nil field
+	// on the leader, which a forwarded mutation can otherwise reach.
+	ErrInvalidOperation = errors.New("invalid queue raft operation")
+)
 
 // Manager manages a single Raft group for all queue operations.
 // All queues share one Raft consensus group per node.
@@ -619,6 +626,9 @@ func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, minOffset
 func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
 	if !m.IsEnabled() {
 		return ErrRaftDisabled
+	}
+	if group == nil {
+		return fmt.Errorf("%w: create group requires a group", ErrInvalidOperation)
 	}
 
 	op := &Operation{

@@ -105,7 +105,7 @@ type QueueForwarder interface {
 	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error
 
 	// ForwardGroupOp forwards a consumer group mutation to the Raft leader
-	// node for the given queue. opData is a JSON-encoded raft.Operation.
+	// node for the given queue.
 	ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error
 }
 

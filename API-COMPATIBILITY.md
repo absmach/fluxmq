@@ -140,8 +140,26 @@ The existing broker interfaces are unchanged.
 - `Ack`, `Nack`, and `Reject` enforce pending ownership when a consumer ID is
   present. Compatibility adapters that cannot carry a consumer ID resolve the
   owner from the group PEL. A multi-offset command stops at its first failure,
-  and both its in-process outcome and the `QueueProgressDetail` on the returned
-  error identify the successfully settled prefix and the group cursor it left.
+  and both its in-process outcome and the `SettlementProgress` on the returned
+  error identify the successfully settled prefix, the offset it stopped on, and
+  the group cursor it left.
+
+### Partial-progress reporting
+
+An operation that applies part of a multi-entry request before failing reports
+what it committed, so a client resumes instead of re-sending a prefix that
+already landed. `QueueErrorDetail.progress` is a `oneof` because the two cases
+do not share a coordinate:
+
+- `SettlementProgress` names `failed_offset`. The caller supplied that offset,
+  so it identifies the entry exactly.
+- `AppendProgress` names `failed_index`, the zero-based position of the failed
+  record in the request. A failed append was never written and therefore has no
+  offset; the index is the only coordinate that can name it. `first_offset` and
+  `last_offset` describe the committed prefix.
+
+Neither is set when the operation committed nothing: absent progress means a
+total failure, which is distinct from a prefix ending at offset 0.
 - `Nack` releases an entry for redelivery after at least the requested delay;
   normal visibility and claim-idle rules may extend that wait. A zero delay
   makes the entry immediately eligible.

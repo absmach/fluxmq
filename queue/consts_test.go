@@ -22,4 +22,5 @@ const (
 	testCustomValue      = "value"
 	testGroupConsumerA   = "c-1"
 	testGroupConsumerB   = "c-2"
+	testClientTwoID      = "client-2"
 )

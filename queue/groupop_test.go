@@ -65,7 +65,7 @@ func TestGroupOperationRoundTrip(t *testing.T) {
 			op: &raft.Operation{
 				Type: raft.OpRegisterConsumer, QueueName: testQueueJobs, GroupID: testGroupWorkers,
 				ConsumerInfo: &types.ConsumerInfo{
-					ID: testGroupConsumerA, ClientID: "client-1", ProxyNodeID: testNode2,
+					ID: testGroupConsumerA, ClientID: testClientOneID, ProxyNodeID: testNode2,
 					RegisteredAt: claimedAt, LastHeartbeat: claimedAt.Add(time.Minute),
 				},
 			},
@@ -122,8 +122,8 @@ func TestGroupStateRoundTripPreservesPELAndMembership(t *testing.T) {
 		},
 	})
 	group.ReplaceConsumers(map[string]*types.ConsumerInfo{
-		testGroupConsumerA: {ID: testGroupConsumerA, ClientID: "client-1", RegisteredAt: claimedAt},
-		testGroupConsumerB: {ID: testGroupConsumerB, ClientID: "client-2", ProxyNodeID: testNode2, RegisteredAt: claimedAt},
+		testGroupConsumerA: {ID: testGroupConsumerA, ClientID: testClientOneID, RegisteredAt: claimedAt},
+		testGroupConsumerB: {ID: testGroupConsumerB, ClientID: testClientTwoID, ProxyNodeID: testNode2, RegisteredAt: claimedAt},
 	})
 
 	wire, err := encodeGroupOperation(&raft.Operation{
@@ -160,12 +160,182 @@ func TestGroupOperationRejectsNonGroupTypes(t *testing.T) {
 }
 
 func TestGroupOperationRejectsMissingPayload(t *testing.T) {
+	// An absent operation is malformed input, distinct from an operation whose
+	// type this node does not handle.
 	_, err := decodeGroupOperation(nil)
-	assert.ErrorIs(t, err, ErrUnsupportedGroupOp)
+	assert.ErrorIs(t, err, ErrMalformedGroupOp)
 
 	// A wire message whose oneof was never set names no mutation.
 	_, err = decodeGroupOperation(&clusterv1.GroupOperation{QueueName: testQueueJobs, GroupId: testGroupWorkers})
 	assert.ErrorIs(t, err, ErrUnsupportedGroupOp)
+}
+
+// A typed oneof stops a field from being misread; it does not stop a required
+// payload from being absent. The leader applies whatever it decodes, so a
+// schema-valid but semantically empty mutation must be rejected here rather
+// than dereferenced downstream.
+func TestGroupOperationRejectsSemanticallyEmptyPayloads(t *testing.T) {
+	group := func() *clusterv1.ConsumerGroupState {
+		return &clusterv1.ConsumerGroupState{Id: testGroupWorkers, QueueName: testQueueJobs}
+	}
+
+	tests := []struct {
+		name string
+		wire *clusterv1.GroupOperation
+	}{
+		{
+			name: "envelope without queue name",
+			wire: &clusterv1.GroupOperation{
+				GroupId:   testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_DeleteGroup{DeleteGroup: &clusterv1.DeleteGroupOp{}},
+			},
+		},
+		{
+			name: "envelope without group id",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs,
+				Operation: &clusterv1.GroupOperation_DeleteGroup{DeleteGroup: &clusterv1.DeleteGroupOp{}},
+			},
+		},
+		{
+			name: "create group without a group",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_CreateGroup{CreateGroup: &clusterv1.CreateGroupOp{}},
+			},
+		},
+		{
+			name: "update group without a group",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_UpdateGroup{UpdateGroup: &clusterv1.UpdateGroupOp{}},
+			},
+		},
+		{
+			name: "group state naming a different group",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_CreateGroup{CreateGroup: &clusterv1.CreateGroupOp{
+					Group: &clusterv1.ConsumerGroupState{Id: "other-group", QueueName: testQueueJobs},
+				}},
+			},
+		},
+		{
+			name: "group state naming a different queue",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_CreateGroup{CreateGroup: &clusterv1.CreateGroupOp{
+					Group: &clusterv1.ConsumerGroupState{Id: testGroupWorkers, QueueName: "other-queue"},
+				}},
+			},
+		},
+		{
+			name: "add pending without an entry",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_AddPending{AddPending: &clusterv1.AddPendingOp{}},
+			},
+		},
+		{
+			name: "pending entry without a consumer",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_AddPending{AddPending: &clusterv1.AddPendingOp{
+					Entry: &clusterv1.PendingEntryState{Offset: 1},
+				}},
+			},
+		},
+		{
+			name: "remove pending without a consumer",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_RemovePending{RemovePending: &clusterv1.RemovePendingOp{Offset: 1}},
+			},
+		},
+		{
+			name: "transfer pending without consumers",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_TransferPending{TransferPending: &clusterv1.TransferPendingOp{Offset: 1}},
+			},
+		},
+		{
+			name: "register consumer without a consumer",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_RegisterConsumer{RegisterConsumer: &clusterv1.RegisterConsumerOp{}},
+			},
+		},
+		{
+			name: "register consumer without an id",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_RegisterConsumer{RegisterConsumer: &clusterv1.RegisterConsumerOp{
+					Consumer: &clusterv1.ConsumerState{ClientId: testClientOneID},
+				}},
+			},
+		},
+		{
+			name: "unregister consumer without an id",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_UnregisterConsumer{UnregisterConsumer: &clusterv1.UnregisterConsumerOp{}},
+			},
+		},
+		{
+			name: "group state carrying a pending entry without a consumer",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_UpdateGroup{UpdateGroup: &clusterv1.UpdateGroupOp{
+					Group: &clusterv1.ConsumerGroupState{
+						Id: testGroupWorkers, QueueName: testQueueJobs,
+						Pending: []*clusterv1.PendingEntryState{{Offset: 1}},
+					},
+				}},
+			},
+		},
+		{
+			name: "group state carrying a consumer without an id",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_UpdateGroup{UpdateGroup: &clusterv1.UpdateGroupOp{
+					Group: &clusterv1.ConsumerGroupState{
+						Id: testGroupWorkers, QueueName: testQueueJobs,
+						Consumers: []*clusterv1.ConsumerState{{ClientId: testClientOneID}},
+					},
+				}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				op, err := decodeGroupOperation(tt.wire)
+				assert.ErrorIs(t, err, ErrMalformedGroupOp)
+				assert.Nil(t, op)
+			})
+		})
+	}
+
+	// The well-formed shape those cases vary from must still decode.
+	ok, err := decodeGroupOperation(&clusterv1.GroupOperation{
+		QueueName: testQueueJobs, GroupId: testGroupWorkers,
+		Operation: &clusterv1.GroupOperation_CreateGroup{CreateGroup: &clusterv1.CreateGroupOp{Group: group()}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ok.GroupState)
+}
+
+// The nil group that reached raft.Manager.ApplyCreateGroup was dereferenced as
+// group.ID. The decoder rejects it now, and the manager reports it rather than
+// trusting its caller.
+func TestRaftManagerRejectsNilGroup(t *testing.T) {
+	manager := &raft.Manager{}
+	require.NotPanics(t, func() {
+		assert.Error(t, manager.ApplyCreateGroup(t.Context(), testQueueJobs, nil))
+		assert.Error(t, manager.ApplyUpdateGroup(t.Context(), testQueueJobs, nil))
+	})
 }
 
 // Snapshot must copy, not alias: a caller that serializes a group and then holds

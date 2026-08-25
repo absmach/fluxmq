@@ -45,8 +45,8 @@ type QueueHandler interface {
 	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
 
 	// HandleForwardedGroupOp applies a consumer group mutation that was
-	// forwarded from a follower. The opData is a JSON-encoded raft.Operation.
-	// This node is expected to be the Raft leader for the queue's group.
+	// forwarded from a follower. This node is expected to be the Raft leader
+	// for the queue's group.
 	HandleForwardedGroupOp(ctx context.Context, queueName string, op *clusterv1.GroupOperation) error
 }
 

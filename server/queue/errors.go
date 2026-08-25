@@ -91,7 +91,7 @@ func newConnectError(fallback queuepkg.ErrorCode, err error) *connect.Error {
 // part of a multi-entry request before failing. progress travels in the same
 // typed detail, so a client learns the committed prefix from the error itself
 // rather than having to re-read the queue.
-func newConnectErrorWithProgress(fallback queuepkg.ErrorCode, err error, progress *queuev1.QueueProgressDetail) *connect.Error {
+func newConnectErrorWithProgress(fallback queuepkg.ErrorCode, err error, progress progressSetter) *connect.Error {
 	failure := queuepkg.ClassifyError(err)
 	if failure.Code == queuepkg.ErrorCodeInternal {
 		failure.Code = fallback
@@ -119,41 +119,66 @@ func connectCode(code queuepkg.ErrorCode) connect.Code {
 	return connect.CodeInternal
 }
 
-func failureToProto(failure queuepkg.Failure, progress *queuev1.QueueProgressDetail) *queuev1.QueueErrorDetail {
-	return &queuev1.QueueErrorDetail{
+// progressSetter applies operation-specific progress to an error detail.
+//
+// The generated oneof wrapper interface is unexported, so the two progress
+// shapes cannot be named by a shared type from here. A setter keeps the call
+// sites uniform while still making it impossible to attach append progress to a
+// settlement error, or the reverse: only the matching constructor can build one.
+// A nil setter means the operation applied nothing and so reports no progress.
+type progressSetter func(*queuev1.QueueErrorDetail)
+
+func failureToProto(failure queuepkg.Failure, progress progressSetter) *queuev1.QueueErrorDetail {
+	detail := &queuev1.QueueErrorDetail{
 		Code:       protoErrorCodes[failure.Code],
 		Retryable:  failure.Retryable,
 		Ownership:  protoOwnershipStates[failure.Ownership],
 		Leader:     protoLeaderStates[failure.Leader],
 		Durability: protoDurabilityStates[failure.Durability],
-		Progress:   progress,
 	}
+	if progress != nil {
+		progress(detail)
+	}
+	return detail
 }
 
 // settlementProgress converts a partial settlement outcome into the wire detail.
-// failedOffset is the offset the command stopped on. It returns nil when nothing
-// was applied, so a total failure carries no progress at all.
-func settlementProgress(outcome queuepkg.SettlementOutcome, failedOffset uint64) *queuev1.QueueProgressDetail {
+// failedOffset is the offset the command stopped on, which the caller supplied
+// and so can be named exactly. It returns nil when nothing was applied, so a
+// total failure carries no progress at all.
+func settlementProgress(outcome queuepkg.SettlementOutcome, failedOffset uint64) progressSetter {
 	if len(outcome.Offsets) == 0 {
 		return nil
 	}
-	return &queuev1.QueueProgressDetail{
-		ProcessedCount: uint32(len(outcome.Offsets)),
-		FailedOffset:   failedOffset,
-		Committed:      outcome.Committed,
+	return func(detail *queuev1.QueueErrorDetail) {
+		detail.Progress = &queuev1.QueueErrorDetail_SettlementProgress{
+			SettlementProgress: &queuev1.SettlementProgress{
+				ProcessedCount: uint32(len(outcome.Offsets)),
+				FailedOffset:   failedOffset,
+				Committed:      outcome.Committed,
+			},
+		}
 	}
 }
 
-// appendProgress reports the offset range an append committed before failing.
-// It returns nil when nothing was committed.
-func appendProgress(processed uint32, firstOffset, lastOffset uint64) *queuev1.QueueProgressDetail {
+// appendProgress reports the prefix an append committed before failing.
+//
+// The failed record was never appended, so it has no offset to report; its
+// position in the request is the only coordinate that identifies it. That
+// position is the count of records already committed.
+func appendProgress(processed uint32, firstOffset, lastOffset uint64) progressSetter {
 	if processed == 0 {
 		return nil
 	}
-	return &queuev1.QueueProgressDetail{
-		ProcessedCount: processed,
-		FirstOffset:    firstOffset,
-		LastOffset:     lastOffset,
+	return func(detail *queuev1.QueueErrorDetail) {
+		detail.Progress = &queuev1.QueueErrorDetail_AppendProgress{
+			AppendProgress: &queuev1.AppendProgress{
+				ProcessedCount: processed,
+				FailedIndex:    processed,
+				FirstOffset:    firstOffset,
+				LastOffset:     lastOffset,
+			},
+		}
 	}
 }
 
