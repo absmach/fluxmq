@@ -27,12 +27,23 @@ import (
 // therefore release the message as soon as this returns, even though the packet
 // may not be serialized until later on an asynchronous send queue.
 func EncodePublish(msg *message.Envelope, packetID uint16, version byte, dup bool) packets.ControlPacket {
+	return encodePublish(msg, packetID, version, dup, msg.Broker.Delivery.QoS, msg.Broker.Delivery.Retain)
+}
+
+// EncodePublishDelivery builds a packet from immutable publication data and
+// caller-owned delivery flags. It lets QoS 0 fanout share one envelope instead
+// of allocating or pooling a mutable envelope for every subscriber.
+func EncodePublishDelivery(msg *message.Envelope, packetID uint16, version byte, dup bool, qos byte, retain bool) packets.ControlPacket {
+	return encodePublish(msg, packetID, version, dup, qos, retain)
+}
+
+func encodePublish(msg *message.Envelope, packetID uint16, version byte, dup bool, qos byte, retain bool) packets.ControlPacket {
 	if version == packets.V5 {
 		p := v5.AcquirePublish()
 		p.FixedHeader = packets.FixedHeader{
 			PacketType: packets.PublishType,
-			QoS:        msg.Broker.Delivery.QoS,
-			Retain:     msg.Broker.Delivery.Retain,
+			QoS:        qos,
+			Retain:     retain,
 			Dup:        dup,
 		}
 		p.TopicName = msg.Topic
@@ -54,8 +65,8 @@ func EncodePublish(msg *message.Envelope, packetID uint16, version byte, dup boo
 	p := v3.AcquirePublish()
 	p.FixedHeader = packets.FixedHeader{
 		PacketType: packets.PublishType,
-		QoS:        msg.Broker.Delivery.QoS,
-		Retain:     msg.Broker.Delivery.Retain,
+		QoS:        qos,
+		Retain:     retain,
 		Dup:        dup,
 	}
 	p.TopicName = msg.Topic

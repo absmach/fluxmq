@@ -70,6 +70,21 @@ func TestEncodePublish_V3FirstSendNoDup(t *testing.T) {
 	require.Equal(t, byte(2), pub.FixedHeader.QoS)
 }
 
+func TestEncodePublishDeliveryOverridesMutableDeliveryFlags(t *testing.T) {
+	msg := message.NewDelivery("t", []byte("p"), 2, true)
+	defer message.Release(msg)
+
+	pkt := EncodePublishDelivery(msg, 0, packets.V311, false, 0, false)
+	pub, ok := pkt.(*v3.Publish)
+	require.True(t, ok, "v3 version must produce a *v3.Publish")
+	defer pub.Release()
+
+	require.Equal(t, byte(0), pub.FixedHeader.QoS)
+	require.False(t, pub.FixedHeader.Retain)
+	require.Equal(t, byte(2), msg.Broker.Delivery.QoS, "borrowed envelope must not be mutated")
+	require.True(t, msg.Broker.Delivery.Retain, "borrowed envelope must not be mutated")
+}
+
 const (
 	testRuleTrace = `["rule-a"]`
 	testTraceVal  = "abc"

@@ -11,11 +11,16 @@ import (
 	"github.com/absmach/fluxmq/payload"
 )
 
-const testPropertyValue = "value"
+const (
+	testClientID      = "client"
+	testMessageID     = "message"
+	testPropertyValue = "value"
+	testSubject       = "subject"
+)
 
 func TestEnvelopeJSONRequiresVersion1(t *testing.T) {
 	original := New("devices/1", []byte("payload"))
-	original.Broker.Source = SourceMetadata{ClientID: "client", Protocol: ProtocolMQTT}
+	original.Broker.Source = SourceMetadata{ClientID: testClientID, Protocol: ProtocolMQTT}
 	original.User.Properties = map[string]string{"content": "json"}
 	defer Release(original)
 
@@ -90,12 +95,12 @@ func TestPropertyProjectionTrustBoundary(t *testing.T) {
 		PropertyExternalID: "forged",
 		PropertyTraceID:    "forged",
 	}
-	envelope.Broker.Source = SourceMetadata{ClientID: "client", ExternalID: "subject", Protocol: ProtocolMQTT}
-	envelope.Broker.Queue = QueueMetadata{MessageID: "message", Name: "queue", Offset: 3}
+	envelope.Broker.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
+	envelope.Broker.Queue = QueueMetadata{MessageID: testMessageID, Name: "queue", Offset: 3}
 	envelope.Broker.Trace.TraceID = "trusted"
 
 	public := ProjectProperties(envelope, PublicProjection)
-	if public["user"] != "visible" || public[PropertyMessageID] != "message" {
+	if public["user"] != "visible" || public[PropertyMessageID] != testMessageID {
 		t.Fatalf("public projection lost delivery metadata: %#v", public)
 	}
 	if _, ok := public[PropertyExternalID]; ok {
@@ -106,8 +111,31 @@ func TestPropertyProjectionTrustBoundary(t *testing.T) {
 	}
 
 	trusted := ProjectProperties(envelope, TrustedServiceProjection)
-	if trusted[PropertyExternalID] != "subject" || trusted[PropertyTraceID] != "trusted" {
+	if trusted[PropertyExternalID] != testSubject || trusted[PropertyTraceID] != "trusted" {
 		t.Fatalf("trusted projection = %#v", trusted)
+	}
+}
+
+func TestEmptyPropertyProjectionDoesNotAllocate(t *testing.T) {
+	envelope := New("devices/1", nil)
+	defer Release(envelope)
+	if allocations := testing.AllocsPerRun(1000, func() {
+		if properties := ProjectProperties(envelope, PublicProjection); properties != nil {
+			t.Fatalf("empty projection = %#v, want nil", properties)
+		}
+	}); allocations != 0 {
+		t.Fatalf("empty projection allocations = %v, want 0", allocations)
+	}
+}
+
+func TestEnvelopeCloneDoesNotAllocateWithoutMutableMetadata(t *testing.T) {
+	envelope := New("devices/1", make([]byte, 1024))
+	defer Release(envelope)
+	if allocations := testing.AllocsPerRun(1000, func() {
+		clone := envelope.Clone()
+		Release(clone)
+	}); allocations != 0 {
+		t.Fatalf("envelope clone allocations = %v, want 0", allocations)
 	}
 }
 

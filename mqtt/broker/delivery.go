@@ -70,6 +70,40 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	return b.deliverQoS(ctx, s, msg, conn, version, gen, 0)
 }
 
+// deliverSharedQoS0 delivers borrowed immutable publication data without
+// creating a subscriber-specific envelope. The encoded packet retains the
+// payload until the connection has serialized it.
+func (b *Broker) deliverSharedQoS0(ctx context.Context, s *session.Session, msg *message.Envelope, retain bool) error {
+	if msg.User.MessageExpiry != nil && !msg.Broker.Delivery.ExpiresAt.IsZero() && time.Now().After(msg.Broker.Delivery.ExpiresAt) {
+		b.logOp("message_expired",
+			slog.String("client_id", s.ID),
+			slog.String("topic", msg.Topic),
+			slog.Time("expiry", msg.Broker.Delivery.ExpiresAt))
+		return nil
+	}
+	if !s.IsConnected() {
+		return nil
+	}
+	conn, version, _ := s.DeliveryLease()
+	if conn == nil {
+		return nil
+	}
+
+	b.telemetry.stats.IncrementPublishSent()
+	b.telemetry.stats.AddBytesSent(uint64(len(msg.PayloadBytes())))
+	packet := session.EncodePublishDelivery(msg, 0, version, false, 0, retain)
+	err := conn.TryWriteDataPacket(packet, nil)
+	if err == nil && b.telemetry.webhooks != nil {
+		b.telemetry.webhooks.Notify(ctx, events.MessageDelivered{ //nolint:errcheck // fire-and-forget webhook notification
+			ClientID:     s.ID,
+			MessageTopic: msg.Topic,
+			QoS:          0,
+			PayloadSize:  len(msg.PayloadBytes()),
+		})
+	}
+	return err
+}
+
 // maxLeaseRetries bounds how many times a delivery re-leases against a newer
 // connection generation before giving up to the offline queue, so a takeover
 // storm cannot spin forever.

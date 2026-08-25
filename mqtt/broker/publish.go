@@ -286,6 +286,10 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 			if sub.QoS < deliverQoS {
 				deliverQoS = sub.QoS
 			}
+			if deliverQoS == 0 {
+				_ = b.deliverSharedQoS0(ctx, s, msg, false)
+				continue
+			}
 
 			deliverMsg := msg.Clone()
 			deliverMsg.Broker.Delivery.QoS = deliverQoS
@@ -322,10 +326,15 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 			if sub.QoS < deliverQoS {
 				deliverQoS = sub.QoS
 			}
+			retain := msg.Broker.Delivery.Retain && sub.Options.RetainAsPublished
+			if deliverQoS == 0 {
+				_ = b.deliverSharedQoS0(ctx, s, msg, retain)
+				continue
+			}
 
 			deliverMsg := msg.Clone()
 			deliverMsg.Broker.Delivery.QoS = deliverQoS
-			deliverMsg.Broker.Delivery.Retain = msg.Broker.Delivery.Retain && sub.Options.RetainAsPublished
+			deliverMsg.Broker.Delivery.Retain = retain
 
 			// DeliverToSession takes full ownership of the message
 			if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {

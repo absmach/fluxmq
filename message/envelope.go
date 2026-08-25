@@ -154,7 +154,10 @@ type Envelope struct {
 
 // New constructs a Version1 envelope and copies payload into the broker pool.
 func New(topic string, data []byte) *Envelope {
-	return &Envelope{Version: Version1, Topic: topic, Payload: payload.FromBytes(data)}
+	envelope := Acquire()
+	envelope.Topic = topic
+	envelope.Payload = payload.FromBytes(data)
+	return envelope
 }
 
 // NewDelivery constructs a Version1 envelope with protocol delivery metadata.
@@ -168,7 +171,10 @@ func NewDelivery(topic string, data []byte, qos byte, retain bool) *Envelope {
 // NewWithBuffer constructs a Version1 envelope and takes ownership of buf's
 // existing reference.
 func NewWithBuffer(topic string, buf *payload.Buffer) *Envelope {
-	return &Envelope{Version: Version1, Topic: topic, Payload: buf}
+	envelope := Acquire()
+	envelope.Topic = topic
+	envelope.Payload = buf
+	return envelope
 }
 
 // Validate rejects every schema other than the current one.
@@ -244,13 +250,44 @@ func (e *Envelope) Clone() *Envelope {
 	if e == nil {
 		return nil
 	}
-	cp := *e
-	cp.User = cloneUserMetadata(e.User)
-	cp.Broker = cloneBrokerMetadata(e.Broker)
+	cp := Acquire()
+	cp.Version = e.Version
+	cp.Topic = e.Topic
+	cp.Payload = e.Payload
 	if cp.Payload != nil {
 		cp.Payload.Retain()
 	}
-	return &cp
+	if hasUserMetadata(e.User) {
+		cp.User = cloneUserMetadata(e.User)
+	}
+	if e.Broker.Source != (SourceMetadata{}) {
+		cp.Broker.Source = e.Broker.Source
+	}
+	if hasDeliveryMetadata(e.Broker.Delivery) {
+		cp.Broker.Delivery = cloneDeliveryMetadata(e.Broker.Delivery)
+	}
+	if e.Broker.Queue != (QueueMetadata{}) {
+		cp.Broker.Queue = cloneQueueMetadata(e.Broker.Queue)
+	}
+	if e.Broker.Transfer != (TransferMetadata{}) {
+		cp.Broker.Transfer = e.Broker.Transfer
+	}
+	if e.Broker.Trace != (TraceMetadata{}) {
+		cp.Broker.Trace = e.Broker.Trace
+	}
+	return cp
+}
+
+func hasUserMetadata(user UserMetadata) bool {
+	return len(user.Key) > 0 || len(user.Headers) > 0 || len(user.Properties) > 0 ||
+		user.ContentType != "" || user.ContentEncoding != "" || user.ResponseTopic != "" ||
+		len(user.CorrelationData) > 0 || user.PayloadFormat != nil || user.MessageExpiry != nil
+}
+
+func hasDeliveryMetadata(delivery DeliveryMetadata) bool {
+	return !delivery.PublishedAt.IsZero() || !delivery.ExpiresAt.IsZero() || len(delivery.SubscriptionIDs) > 0 ||
+		delivery.PacketID != 0 || delivery.QoS != 0 || delivery.InflightDirection != 0 ||
+		delivery.InflightState != 0 || delivery.Retain || delivery.Duplicate
 }
 
 func cloneUserMetadata(src UserMetadata) UserMetadata {
@@ -275,12 +312,17 @@ func cloneUserMetadata(src UserMetadata) UserMetadata {
 	return dst
 }
 
-func cloneBrokerMetadata(src BrokerMetadata) BrokerMetadata {
+func cloneDeliveryMetadata(src DeliveryMetadata) DeliveryMetadata {
 	dst := src
-	dst.Delivery.SubscriptionIDs = append([]uint32(nil), src.Delivery.SubscriptionIDs...)
-	if src.Queue.Stream != nil {
-		stream := *src.Queue.Stream
-		dst.Queue.Stream = &stream
+	dst.SubscriptionIDs = append([]uint32(nil), src.SubscriptionIDs...)
+	return dst
+}
+
+func cloneQueueMetadata(src QueueMetadata) QueueMetadata {
+	dst := src
+	if src.Stream != nil {
+		stream := *src.Stream
+		dst.Stream = &stream
 	}
 	return dst
 }

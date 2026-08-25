@@ -149,15 +149,14 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 		return nil
 	}
 	properties := FilterUserProperties(envelope.User.Properties)
-	if properties == nil {
-		properties = make(map[string]string)
-	}
 
-	if projection.Queue {
+	if projection.Queue && hasQueueProjection(envelope.Broker.Queue) {
+		properties = ensureProperties(properties)
 		projectQueueProperties(properties, envelope.Broker.Source, envelope.Broker.Queue)
 	}
 	if projection.Transfer {
 		if transfer := envelope.Broker.Transfer; transfer.ID != "" || transfer.FailureReason != "" {
+			properties = ensureProperties(properties)
 			if transfer.ID != "" {
 				properties[PropertyTransferID] = transfer.ID
 			}
@@ -168,6 +167,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 	}
 	if projection.Source {
 		if source := envelope.Broker.Source; source.ClientID != "" || source.ExternalID != "" || source.Protocol != "" {
+			properties = ensureProperties(properties)
 			if source.ClientID != "" {
 				properties[PropertyClientID] = source.ClientID
 			}
@@ -181,6 +181,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 	}
 	if projection.Trace {
 		if trace := envelope.Broker.Trace; trace.TraceParent != "" || trace.TraceState != "" || trace.TraceID != "" {
+			properties = ensureProperties(properties)
 			if trace.TraceParent != "" {
 				properties[PropertyTraceParent] = trace.TraceParent
 			}
@@ -199,10 +200,18 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 	return properties
 }
 
-func projectQueueProperties(properties map[string]string, source SourceMetadata, queue QueueMetadata) {
-	if queue.MessageID == "" && queue.Name == "" && queue.GroupID == "" && queue.Stream == nil {
-		return
+func ensureProperties(properties map[string]string) map[string]string {
+	if properties == nil {
+		return make(map[string]string)
 	}
+	return properties
+}
+
+func hasQueueProjection(queue QueueMetadata) bool {
+	return queue.MessageID != "" || queue.Name != "" || queue.GroupID != "" || queue.Stream != nil
+}
+
+func projectQueueProperties(properties map[string]string, source SourceMetadata, queue QueueMetadata) {
 	if queue.MessageID != "" {
 		properties[PropertyMessageID] = queue.MessageID
 	}
