@@ -680,7 +680,7 @@ func (d *Disposition) Encode() ([]byte, error) {
 	return encodePerformative(DescriptorDisposition, fields.Bytes(), count)
 }
 
-func DecodeDisposition(fields []any) *Disposition {
+func DecodeDisposition(fields []any) (*Disposition, error) {
 	d := &Disposition{}
 	if len(fields) > 0 && fields[0] != nil {
 		d.Role = toBool(fields[0])
@@ -697,13 +697,17 @@ func DecodeDisposition(fields []any) *Disposition {
 	}
 	if len(fields) > 4 && fields[4] != nil {
 		if desc, ok := fields[4].(*types.Described); ok {
-			d.State = DecodeOutcome(desc)
+			state, err := DecodeOutcome(desc)
+			if err != nil {
+				return nil, err
+			}
+			d.State = state
 		}
 	}
 	if len(fields) > 5 && fields[5] != nil {
 		d.Batchable = toBool(fields[5])
 	}
-	return d
+	return d, nil
 }
 
 // Detach performative (0x16).
@@ -744,7 +748,7 @@ func (d *Detach) Encode() ([]byte, error) {
 	return encodePerformative(DescriptorDetach, fields.Bytes(), count)
 }
 
-func DecodeDetach(fields []any) *Detach {
+func DecodeDetach(fields []any) (*Detach, error) {
 	d := &Detach{}
 	if len(fields) > 0 && fields[0] != nil {
 		d.Handle = toUint32(fields[0])
@@ -752,14 +756,14 @@ func DecodeDetach(fields []any) *Detach {
 	if len(fields) > 1 && fields[1] != nil {
 		d.Closed = toBool(fields[1])
 	}
-	if len(fields) > 2 && fields[2] != nil {
-		if desc, ok := fields[2].(*types.Described); ok && desc.Descriptor == DescriptorError {
-			if errFields, ok := desc.Value.([]any); ok {
-				d.Error = DecodeError(errFields)
-			}
+	if len(fields) > 2 {
+		decoded, err := decodeErrorField(fields[2])
+		if err != nil {
+			return nil, err
 		}
+		d.Error = decoded
 	}
-	return d
+	return d, nil
 }
 
 // End performative (0x17).
@@ -784,16 +788,16 @@ func (e *End) Encode() ([]byte, error) {
 	return encodePerformative(DescriptorEnd, fields.Bytes(), count)
 }
 
-func DecodeEnd(fields []any) *End {
+func DecodeEnd(fields []any) (*End, error) {
 	e := &End{}
-	if len(fields) > 0 && fields[0] != nil {
-		if desc, ok := fields[0].(*types.Described); ok && desc.Descriptor == DescriptorError {
-			if errFields, ok := desc.Value.([]any); ok {
-				e.Error = DecodeError(errFields)
-			}
+	if len(fields) > 0 {
+		decoded, err := decodeErrorField(fields[0])
+		if err != nil {
+			return nil, err
 		}
+		e.Error = decoded
 	}
-	return e
+	return e, nil
 }
 
 // Close performative (0x18).
@@ -818,16 +822,16 @@ func (c *Close) Encode() ([]byte, error) {
 	return encodePerformative(DescriptorClose, fields.Bytes(), count)
 }
 
-func DecodeClose(fields []any) *Close {
+func DecodeClose(fields []any) (*Close, error) {
 	c := &Close{}
-	if len(fields) > 0 && fields[0] != nil {
-		if desc, ok := fields[0].(*types.Described); ok && desc.Descriptor == DescriptorError {
-			if errFields, ok := desc.Value.([]any); ok {
-				c.Error = DecodeError(errFields)
-			}
+	if len(fields) > 0 {
+		decoded, err := decodeErrorField(fields[0])
+		if err != nil {
+			return nil, err
 		}
+		c.Error = decoded
 	}
-	return c
+	return c, nil
 }
 
 // DecodePerformative decodes a performative from a frame body.
@@ -850,13 +854,17 @@ func DecodePerformative(body []byte) (uint64, any, error) {
 	case DescriptorTransfer:
 		return descriptor, DecodeTransfer(fields), nil
 	case DescriptorDisposition:
-		return descriptor, DecodeDisposition(fields), nil
+		perf, err := DecodeDisposition(fields)
+		return descriptor, perf, err
 	case DescriptorDetach:
-		return descriptor, DecodeDetach(fields), nil
+		perf, err := DecodeDetach(fields)
+		return descriptor, perf, err
 	case DescriptorEnd:
-		return descriptor, DecodeEnd(fields), nil
+		perf, err := DecodeEnd(fields)
+		return descriptor, perf, err
 	case DescriptorClose:
-		return descriptor, DecodeClose(fields), nil
+		perf, err := DecodeClose(fields)
+		return descriptor, perf, err
 	default:
 		return descriptor, nil, fmt.Errorf("unknown performative descriptor: 0x%02x", descriptor)
 	}

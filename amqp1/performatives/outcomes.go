@@ -4,6 +4,8 @@
 package performatives
 
 import (
+	"fmt"
+
 	"github.com/absmach/fluxmq/amqp1/types"
 	"github.com/absmach/fluxmq/internal/bufpool"
 )
@@ -112,23 +114,30 @@ func (m *Modified) Encode() ([]byte, error) {
 	return result, nil
 }
 
-// DecodeOutcome decodes a disposition state from a described type.
-func DecodeOutcome(desc *types.Described) any {
+// DecodeOutcome decodes a disposition state from a described type. A malformed
+// error inside a rejected outcome is reported rather than partially decoded.
+func DecodeOutcome(desc *types.Described) (any, error) {
 	switch desc.Descriptor {
 	case DescriptorAccepted:
-		return &Accepted{}
+		return &Accepted{}, nil
 	case DescriptorRejected:
 		r := &Rejected{}
-		if fields, ok := desc.Value.([]any); ok && len(fields) > 0 {
-			if errDesc, ok := fields[0].(*types.Described); ok && errDesc.Descriptor == DescriptorError {
-				if errFields, ok := errDesc.Value.([]any); ok {
-					r.Error = DecodeError(errFields)
+		if desc.Value != nil {
+			fields, ok := desc.Value.([]any)
+			if !ok {
+				return nil, fmt.Errorf("%w: rejected body is %T, want a list", ErrMalformedError, desc.Value)
+			}
+			if len(fields) > 0 {
+				decoded, err := decodeErrorField(fields[0])
+				if err != nil {
+					return nil, err
 				}
+				r.Error = decoded
 			}
 		}
-		return r
+		return r, nil
 	case DescriptorReleased:
-		return &Released{}
+		return &Released{}, nil
 	case DescriptorModified:
 		m := &Modified{}
 		if fields, ok := desc.Value.([]any); ok {
@@ -143,8 +152,8 @@ func DecodeOutcome(desc *types.Described) any {
 				}
 			}
 		}
-		return m
+		return m, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
