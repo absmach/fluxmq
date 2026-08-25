@@ -82,11 +82,28 @@ never from error text. Unknown implementation errors map to `internal`.
 | `canceled` | `canceled` | unspecified error | internal-error | internal-error | 500 |
 | `internal` | `internal` | unspecified error | internal-error | internal-error | 500 |
 
-Every Connect QueueService error carries `QueueErrorDetail`. AMQP 1.0 rejected
-deliveries and management errors carry the five fields in `fluxmq:*` info or
-application-properties. MQTT and AMQP 0.9.1 have smaller native error spaces;
-their stable mapping is the table above. Error descriptions are diagnostic and
-are not a compatibility surface.
+Every Connect QueueService error carries `QueueErrorDetail`. MQTT and AMQP 0.9.1
+have smaller native error spaces; their stable mapping is the table above. Error
+descriptions are diagnostic and are not a compatibility surface.
+
+### AMQP 1.0 failure vocabulary
+
+A rejected delivery carries the five fields as `error.info` entries; a
+management error carries the same values as application-properties under
+shorter names. Both key sets and every value below are a wire contract, pinned
+by `TestAMQP1QueueVocabularyIsStable`.
+
+| Field | Rejected-delivery info key | Management property | Values |
+| --- | --- | --- | --- |
+| code | `fluxmq:queue-error-code` | `errorCode` | the `code` column of the table above |
+| retryable | `fluxmq:retryable` | `retryable` | boolean |
+| ownership | `fluxmq:ownership` | `ownership` | `unspecified`, `caller`, `other`, `lost` |
+| leader | `fluxmq:leader` | `leader` | `unspecified`, `required`, `unavailable`, `not_local` |
+| durability | `fluxmq:durability` | `durability` | `unspecified`, `not_attempted`, `unconfirmed`, `unsupported` |
+
+These strings are not derived from Go identifiers at runtime: the domain types
+render them through explicit `String` methods so a rename cannot silently change
+what a client reads.
 
 ## Append semantics
 
