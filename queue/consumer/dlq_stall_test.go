@@ -33,10 +33,9 @@ type stallFixture struct {
 // newStallFixture builds two independent queues, each with one group. The first
 // holds a pending entry that Reject will dead-letter through a handler that
 // blocks, so the lock held across the transfer can be observed.
-func newStallFixture(t *testing.T, queues ...string) stallFixture {
+func newStallFixture(ctx context.Context, t *testing.T, queues ...string) stallFixture {
 	t.Helper()
 
-	ctx := context.Background()
 	store := &groupStore{Store: memlog.New()}
 
 	var poisonAt uint64
@@ -94,11 +93,12 @@ func waitOn(f stallFixture, queueName string) time.Duration {
 // that cross-group stall is what scoping the lock per group removed, and this
 // pins it.
 func TestDLQTransferDoesNotStallUnrelatedGroups(t *testing.T) {
-	f := newStallFixture(t, "poisoned", "unrelated")
+	ctx := context.Background()
+	f := newStallFixture(ctx, t, "poisoned", "unrelated")
 
 	done := make(chan error, 1)
 	go func() {
-		done <- f.manager.Reject(context.Background(), "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
+		done <- f.manager.Reject(ctx, "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
 	}()
 
 	<-f.entered
@@ -110,26 +110,114 @@ func TestDLQTransferDoesNotStallUnrelatedGroups(t *testing.T) {
 		"an unrelated group waited %s on a dead-letter transfer", waited)
 }
 
-// The same group does wait: the transfer runs under its lock. This records the
-// cost rather than asserting it away, so the decision to unlock during the
-// transfer rests on a measurement.
-func TestDLQTransferStallsItsOwnGroup(t *testing.T) {
-	f := newStallFixture(t, "poisoned")
+// The owning group must not wait either. The destination write runs with the
+// group lock released, so a consumer acking or heartbeating on the same group
+// proceeds while the transfer is in flight. Holding the lock across that write
+// stalled the group for its full duration - a Raft round trip for a replicated
+// destination, bounded only by AckTimeout.
+func TestDLQTransferDoesNotStallItsOwnGroup(t *testing.T) {
+	ctx := context.Background()
+	f := newStallFixture(ctx, t, "poisoned")
 
 	done := make(chan error, 1)
 	go func() {
-		done <- f.manager.Reject(context.Background(), "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
+		done <- f.manager.Reject(ctx, "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
 	}()
 
 	<-f.entered
-	go func() {
-		time.Sleep(stallHeldFor)
-		close(f.release)
-	}()
 	waited := waitOn(f, "poisoned")
+	close(f.release)
 	require.NoError(t, <-done)
 
-	t.Logf("same-group operation waited %s while the transfer held the lock", waited)
-	assert.GreaterOrEqual(t, waited, stallHeldFor/2,
-		"the transfer is expected to hold its own group's lock")
+	assert.Less(t, waited, stallHeldFor/3,
+		"the owning group waited %s on its own dead-letter transfer", waited)
+}
+
+// The entry stays reserved while the write is in flight. Settling it would race
+// the write and leave a message both acked and dead-lettered.
+func TestSettlingDuringTransferIsRefused(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		settle  func(*Manager, uint64) error
+		wantErr error
+	}{
+		{
+			name:    "ack",
+			settle:  func(m *Manager, offset uint64) error { return m.Ack(ctx, "poisoned", stallGroup, stallOwner, offset) },
+			wantErr: ErrTransferInProgress,
+		},
+		{
+			name:    "nack",
+			settle:  func(m *Manager, offset uint64) error { return m.Nack(ctx, "poisoned", stallGroup, stallOwner, offset) },
+			wantErr: ErrTransferInProgress,
+		},
+		{
+			name: "second reject",
+			settle: func(m *Manager, offset uint64) error {
+				return m.Reject(ctx, "poisoned", stallGroup, stallOwner, offset, "poison")
+			},
+			wantErr: ErrTransferInProgress,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newStallFixture(ctx, t, "poisoned")
+
+			done := make(chan error, 1)
+			go func() {
+				done <- f.manager.Reject(ctx, "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
+			}()
+
+			<-f.entered
+			err := tc.settle(f.manager, f.poisonAt)
+			close(f.release)
+			require.NoError(t, <-done)
+
+			assert.ErrorIs(t, err, tc.wantErr)
+		})
+	}
+}
+
+// Once the transfer resolves the reservation is gone, so the entry behaves
+// normally again - including after a failure, where it stays pending.
+func TestReservationIsReleasedAfterTransfer(t *testing.T) {
+	ctx := context.Background()
+	f := newStallFixture(ctx, t, "poisoned")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- f.manager.Reject(ctx, "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
+	}()
+
+	<-f.entered
+	require.True(t, f.manager.transferring("poisoned", stallGroup, f.poisonAt))
+	close(f.release)
+	require.NoError(t, <-done)
+
+	assert.False(t, f.manager.transferring("poisoned", stallGroup, f.poisonAt),
+		"a resolved transfer must not leave the entry reserved")
+}
+
+// A failed destination write must leave the entry pending and unreserved, so a
+// later attempt can retry it. The destination deduplicates, so the retry cannot
+// produce a second record.
+func TestFailedTransferReleasesReservationAndKeepsEntryPending(t *testing.T) {
+	ctx := context.Background()
+	f := newStallFixture(ctx, t, "poisoned")
+	f.manager.config.OnDLQ = func(context.Context, string, string, *message.Envelope, uint64, int, string) error {
+		return errDLQGone
+	}
+
+	err := f.manager.Reject(ctx, "poisoned", stallGroup, stallOwner, f.poisonAt, "poison")
+	require.ErrorIs(t, err, errDLQGone)
+
+	assert.False(t, f.manager.transferring("poisoned", stallGroup, f.poisonAt))
+
+	group, err := f.manager.groupStore.GetConsumerGroup(ctx, "poisoned", stallGroup)
+	require.NoError(t, err)
+	entry, _ := group.FindPending(f.poisonAt)
+	assert.NotNil(t, entry, "a failed transfer must leave the source pending")
 }

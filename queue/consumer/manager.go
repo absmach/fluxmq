@@ -30,6 +30,7 @@ var (
 	ErrCommitOffsetOnlyForStreamMode = errors.New("commit offset only supported for stream groups")
 	ErrPELFull                       = errors.New("pending entry list at capacity")
 	ErrDLQHandlerUnavailable         = errors.New("dead-letter queue handler unavailable")
+	ErrTransferInProgress            = errors.New("dead-letter transfer already in progress for this entry")
 	ErrDelayedNackUnsupported        = errors.New("delayed nack is not supported")
 )
 
@@ -45,6 +46,21 @@ type Manager struct {
 	// manager would serialise groups that share no state: one group waiting on
 	// storage stalls every other group on the node.
 	groupLocks keylock.Sharded
+
+	// transfersMu guards transfers, which is keyed per entry and consulted from
+	// operations holding different group locks.
+	transfersMu sync.Mutex
+
+	// transfers reserves entries whose dead-letter transfer is running with the
+	// group lock released. The destination write cannot be covered by that lock
+	// without stalling every consumer in the group for its duration — a Raft
+	// round trip when the destination is replicated — but the entry must not be
+	// settled or stolen while the write is in flight, or one message ends up
+	// both dead-lettered and redelivered.
+	//
+	// The reservation is process-local, which is the scope the group lock had:
+	// a group driven from two nodes was never serialised by it either.
+	transfers map[transferKey]struct{}
 
 	// stateMu guards the two maps below, which are keyed by group but shared
 	// across them. Under groupLocks alone, two goroutines holding different
@@ -146,6 +162,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		config:        config,
 		lastCommit:    make(map[string]time.Time),
 		dlqRetryAfter: make(map[string]time.Time),
+		transfers:     make(map[transferKey]struct{}),
 	}
 }
 
@@ -594,6 +611,13 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 
 	// Try to steal the oldest entry
 	for _, entry := range stealable {
+		if m.transferring(group.QueueName, group.ID, entry.Offset) {
+			// A dead-letter transfer is writing this entry to its destination
+			// with the group lock released. Redelivering it now would put the
+			// same message in two places.
+			continue
+		}
+
 		// Poison message: exceeded max delivery attempts.
 		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
 			if m.transferPoisonEntry(ctx, group, entry) {
@@ -776,6 +800,10 @@ func (m *Manager) Ack(ctx context.Context, queueName, groupID, consumerID string
 	groupLock.Lock()
 	defer groupLock.Unlock()
 
+	if m.transferring(queueName, groupID, offset) {
+		return ErrTransferInProgress
+	}
+
 	// Remove from PEL
 	if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
 		return err
@@ -798,6 +826,11 @@ func (m *Manager) AckBatch(ctx context.Context, queueName, groupID, consumerID s
 	defer groupLock.Unlock()
 
 	for _, offset := range offsets {
+		if m.transferring(queueName, groupID, offset) {
+			// A dead-letter transfer owns this entry; settling it here would
+			// race the destination write.
+			continue
+		}
 		if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
 			// Continue even if some fail
 			continue
@@ -842,6 +875,10 @@ func (m *Manager) NackWithDelay(ctx context.Context, queueName, groupID, consume
 		return ErrConsumerNotFound
 	}
 
+	if m.transferring(queueName, groupID, offset) {
+		return ErrTransferInProgress
+	}
+
 	requeuer, ok := m.groupStore.(storage.PendingEntryRequeuer)
 	if !ok {
 		return ErrDelayedNackUnsupported
@@ -853,47 +890,121 @@ func (m *Manager) NackWithDelay(ctx context.Context, queueName, groupID, consume
 	return requeuer.RequeuePendingEntry(ctx, queueName, groupID, consumerID, offset, attemptedAt)
 }
 
-// Reject rejects a message, moving it to the DLQ.
-func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID string, offset uint64, reason string) error {
-	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+// transferKey names one pending entry undergoing a dead-letter transfer.
+type transferKey struct {
+	queueName string
+	groupID   string
+	offset    uint64
+}
+
+// beginTransfer reserves an entry, reporting false when one is already running.
+func (m *Manager) beginTransfer(key transferKey) bool {
+	m.transfersMu.Lock()
+	defer m.transfersMu.Unlock()
+
+	if _, running := m.transfers[key]; running {
+		return false
+	}
+	m.transfers[key] = struct{}{}
+	return true
+}
+
+func (m *Manager) endTransfer(key transferKey) {
+	m.transfersMu.Lock()
+	defer m.transfersMu.Unlock()
+
+	delete(m.transfers, key)
+}
+
+// transferring reports whether an entry is reserved. Settling or stealing a
+// reserved entry would race the destination write that is already in flight.
+func (m *Manager) transferring(queueName, groupID string, offset uint64) bool {
+	m.transfersMu.Lock()
+	defer m.transfersMu.Unlock()
+
+	_, running := m.transfers[transferKey{queueName: queueName, groupID: groupID, offset: offset}]
+	return running
+}
+
+// prepareTransfer validates the entry, reserves it and reads its record, all
+// under the group lock, so the caller can perform the destination write without
+// holding it. The returned envelope belongs to the caller.
+func (m *Manager) prepareTransfer(ctx context.Context, key transferKey, consumerID string) (*message.Envelope, int, error) {
+	groupLock := m.groupLocks.KeyPair(key.queueName, key.groupID)
 	groupLock.Lock()
 	defer groupLock.Unlock()
 
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	group, err := m.groupStore.GetConsumerGroup(ctx, key.queueName, key.groupID)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	entry, ownerID := group.FindPending(offset)
+	entry, ownerID := group.FindPending(key.offset)
 	if entry == nil {
-		return ErrMessageNotPending
+		return nil, 0, ErrMessageNotPending
 	}
 	if ownerID != consumerID {
-		return ErrConsumerNotFound
+		return nil, 0, ErrConsumerNotFound
 	}
 	if m.config.OnDLQ == nil {
-		return ErrDLQHandlerUnavailable
+		return nil, 0, ErrDLQHandlerUnavailable
 	}
-	msg, err := m.queueStore.Read(ctx, queueName, offset)
+	if !m.beginTransfer(key) {
+		return nil, 0, ErrTransferInProgress
+	}
+
+	msg, err := m.queueStore.Read(ctx, key.queueName, key.offset)
+	if err != nil {
+		m.endTransfer(key)
+		return nil, 0, err
+	}
+	return msg, entry.DeliveryCount, nil
+}
+
+// finishTransfer releases the reservation and settles the source, but only once
+// the destination write has succeeded. A failed write leaves the entry pending,
+// which is what keeps the transition loss-safe.
+func (m *Manager) finishTransfer(ctx context.Context, key transferKey, consumerID string, transferErr error) error {
+	groupLock := m.groupLocks.KeyPair(key.queueName, key.groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
+	m.endTransfer(key)
+	if transferErr != nil {
+		return transferErr
+	}
+
+	if err := m.groupStore.RemovePendingEntry(ctx, key.queueName, key.groupID, consumerID, key.offset); err != nil {
+		return err
+	}
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, key.queueName, key.groupID)
 	if err != nil {
 		return err
 	}
-	defer message.Release(msg)
-	if err := m.config.OnDLQ(ctx, queueName, groupID, msg, offset, entry.DeliveryCount, reason); err != nil {
+
+	return m.advanceCommitted(ctx, group)
+}
+
+// Reject rejects a message, moving it to the DLQ.
+func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID string, offset uint64, reason string) error {
+	key := transferKey{queueName: queueName, groupID: groupID, offset: offset}
+
+	msg, deliveryCount, err := m.prepareTransfer(ctx, key, consumerID)
+	if err != nil {
 		return err
 	}
+
+	// The destination write runs without the group lock. It reaches storage and,
+	// for a replicated dead-letter queue, a full Raft round trip bounded only by
+	// AckTimeout; holding the group lock across it stalls every consumer in the
+	// group for that long. The reservation taken above is what keeps the entry
+	// from being settled or stolen in the meantime, and the destination's
+	// deduplication is what makes a retry after a failure here safe.
+	transferErr := m.config.OnDLQ(ctx, queueName, groupID, msg, offset, deliveryCount, reason)
+	message.Release(msg)
 
 	// The source delivery is removed only after the DLQ write succeeds.
-	if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
-		return err
-	}
-
-	group, err = m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
-	if err != nil {
-		return err
-	}
-
-	// Advance committed offset if possible
-	return m.advanceCommitted(ctx, group)
+	return m.finishTransfer(ctx, key, consumerID, transferErr)
 }
 
 func releaseMessages(envelopes []*message.Envelope) {
