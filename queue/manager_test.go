@@ -1170,7 +1170,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("unmatched PublishToMatchingQueues failed: %v", err)
 	}
-	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); err != storage.ErrQueueNotFound {
+	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); !errors.Is(err, storage.ErrQueueNotFound) {
 		t.Fatalf("unmatched publish created a queue: %v", err)
 	}
 }
@@ -2231,7 +2231,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	ctx := context.Background()
 	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
-	if err := manager.CreateQueue(ctx, queueCfg); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
@@ -2388,7 +2388,7 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	ctx := context.Background()
 	replicated := types.DefaultQueueConfig(testQueueTest, "$queue/test/#")
 	replicated.Replication.Enabled = true
-	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := manager.CreateQueue(ctx, replicated); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
@@ -2442,7 +2442,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 	replicated := types.DefaultQueueConfig(testQueueHotEvents, "$queue/hot-events/#")
 	replicated.Replication.Enabled = true
 	replicated.Replication.Group = "hot"
-	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := manager.CreateQueue(ctx, replicated); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
@@ -2851,7 +2851,7 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 		t.Fatalf("expected queue demo-events to exist: %v", err)
 	}
 
-	if _, err := logStore.GetQueue(ctx, topic); err != storage.ErrQueueNotFound {
+	if _, err := logStore.GetQueue(ctx, topic); !errors.Is(err, storage.ErrQueueNotFound) {
 		t.Fatalf("expected queue %q to not exist, got err=%v", topic, err)
 	}
 
@@ -3070,7 +3070,7 @@ func TestCleanupEphemeralQueues(t *testing.T) {
 	manager.cleanupEphemeralQueues(ctx)
 
 	// Expired ephemeral queue should be deleted
-	if _, err := logStore.GetQueue(ctx, "expired-queue"); err != storage.ErrQueueNotFound {
+	if _, err := logStore.GetQueue(ctx, "expired-queue"); !errors.Is(err, storage.ErrQueueNotFound) {
 		t.Error("Expected expired ephemeral queue to be deleted")
 	}
 
@@ -3385,7 +3385,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 
 	// Next claim should fail — PEL is full, so ClaimBatch returns ErrNoMessages
 	_, err = mgr.consumerManager.ClaimBatch(ctx, "pelcap", "g1", "c1", nil, 1)
-	if err != consumer.ErrNoMessages {
+	if !errors.Is(err, consumer.ErrNoMessages) {
 		t.Fatalf("expected ErrNoMessages (PEL full), got: %v", err)
 	}
 

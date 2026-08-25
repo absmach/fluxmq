@@ -83,7 +83,7 @@ func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.
 func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.GetQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	config, err := h.queueStore.GetQueue(ctx, req.Msg.Name)
 	if err != nil {
-		if err == storage.ErrQueueNotFound {
+		if errors.Is(err, storage.ErrQueueNotFound) {
 			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -151,7 +151,7 @@ func (h *Handler) DeleteQueue(ctx context.Context, req *connect.Request[queuev1.
 		if errors.Is(err, queue.ErrProtectedQueueMutation) {
 			return nil, newConnectError(queue.ErrorCodeFailedPrecondition, err)
 		}
-		if err == storage.ErrQueueNotFound {
+		if errors.Is(err, storage.ErrQueueNotFound) {
 			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -163,7 +163,7 @@ func (h *Handler) DeleteQueue(ctx context.Context, req *connect.Request[queuev1.
 func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.UpdateQueueRequest]) (*connect.Response[queuev1.Queue], error) {
 	config, err := h.queueStore.GetQueue(ctx, req.Msg.Name)
 	if err != nil {
-		if err == storage.ErrQueueNotFound {
+		if errors.Is(err, storage.ErrQueueNotFound) {
 			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -180,7 +180,7 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 		}
 		current, err := h.queueStore.GetQueue(ctx, updated.Name)
 		if err != nil {
-			if err == storage.ErrQueueNotFound {
+			if errors.Is(err, storage.ErrQueueNotFound) {
 				return nil, newConnectError(queue.ErrorCodeNotFound, err)
 			}
 			return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -189,7 +189,7 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 	}
 
 	if err := h.queueStore.UpdateQueue(ctx, updated); err != nil {
-		if err == storage.ErrQueueNotFound {
+		if errors.Is(err, storage.ErrQueueNotFound) {
 			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -335,7 +335,7 @@ func (h *Handler) Read(ctx context.Context, req *connect.Request[queuev1.ReadReq
 
 	message, err := h.queueStore.Read(ctx, msg.QueueName, msg.Offset)
 	if err != nil {
-		if err == storage.ErrOffsetOutOfRange {
+		if errors.Is(err, storage.ErrOffsetOutOfRange) {
 			return nil, newConnectError(queue.ErrorCodeOutOfRange, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -379,7 +379,7 @@ func (h *Handler) Tail(ctx context.Context, req *connect.Request[queuev1.TailReq
 
 		messages, err := h.queueStore.ReadBatch(ctx, msg.QueueName, offset, 10)
 		if err != nil {
-			if err == storage.ErrOffsetOutOfRange {
+			if errors.Is(err, storage.ErrOffsetOutOfRange) {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -475,7 +475,7 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 	for offset < tail {
 		batch, err := h.queueStore.ReadBatch(ctx, msg.QueueName, offset, 128)
 		if err != nil {
-			if err == storage.ErrOffsetOutOfRange {
+			if errors.Is(err, storage.ErrOffsetOutOfRange) {
 				break
 			}
 			return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -513,7 +513,7 @@ func (h *Handler) CreateConsumerGroup(ctx context.Context, req *connect.Request[
 
 	_, err := h.queueStore.GetQueue(ctx, msg.QueueName)
 	if err != nil {
-		if err == storage.ErrQueueNotFound {
+		if errors.Is(err, storage.ErrQueueNotFound) {
 			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -526,7 +526,7 @@ func (h *Handler) CreateConsumerGroup(ctx context.Context, req *connect.Request[
 	group.Cursor.Committed = head
 
 	if err := h.groupStore.CreateConsumerGroup(ctx, group); err != nil {
-		if err == storage.ErrConsumerGroupExists {
+		if errors.Is(err, storage.ErrConsumerGroupExists) {
 			return nil, newConnectError(queue.ErrorCodeAlreadyExists, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -540,7 +540,7 @@ func (h *Handler) GetConsumerGroup(ctx context.Context, req *connect.Request[que
 
 	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
 	if err != nil {
-		if err == storage.ErrConsumerNotFound {
+		if errors.Is(err, storage.ErrConsumerNotFound) {
 			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -610,7 +610,7 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 	msg := req.Msg
 	if h.manager != nil {
 		if err := h.manager.UpdateConsumerHeartbeat(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId); err != nil {
-			if err == storage.ErrConsumerNotFound || err == consumer.ErrConsumerNotFound {
+			if errors.Is(err, storage.ErrConsumerNotFound) || errors.Is(err, consumer.ErrConsumerNotFound) {
 				return nil, newConnectError(queue.ErrorCodeNotFound, err)
 			}
 			return nil, newConnectError(queue.ErrorCodeInternal, err)

@@ -20,6 +20,7 @@ linters:
     - errcheck
     - errchkjson
     - errname
+    - errorlint
     - ginkgolinter
     - gocheckcompilerdirectives
     - goconst
@@ -40,6 +41,13 @@ linters:
     - unused
     - whitespace
   settings:
+    errorlint:
+      # Comparison and type-assertion checks only. Whether a given fmt.Errorf
+      # should wrap with %w rather than format with %v is a decision about what
+      # callers may match on, taken per site, not something to enforce broadly.
+      errorf: false
+      asserts: true
+      comparison: true
     gocritic:
       enabled-checks:
         - importShadow

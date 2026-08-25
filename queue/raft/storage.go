@@ -6,6 +6,7 @@ package raft
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/dgraph-io/badger/v4"
@@ -87,7 +88,7 @@ func (b *BadgerLogStore) GetLog(index uint64, log *raft.Log) error {
 
 	return b.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return raft.ErrLogNotFound
 		}
 		if err != nil {
@@ -128,7 +129,7 @@ func (b *BadgerLogStore) DeleteRange(min, max uint64) error {
 	return b.db.Update(func(txn *badger.Txn) error {
 		for idx := min; idx <= max; idx++ {
 			key := b.encodeKey(idx)
-			if err := txn.Delete(key); err != nil && err != badger.ErrKeyNotFound {
+			if err := txn.Delete(key); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 				return err
 			}
 		}
@@ -180,7 +181,7 @@ func (b *BadgerStableStore) Get(key []byte) ([]byte, error) {
 
 	err := b.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(fullKey)
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return nil // Key not found is not an error for Raft
 		}
 		if err != nil {

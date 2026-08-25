@@ -5,6 +5,7 @@ package badger
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,7 +39,7 @@ func (s *SessionStore) Get(clientID string) (*storage.Session, error) {
 	err := s.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		if err != nil {
-			if err == badger.ErrKeyNotFound {
+			if errors.Is(err, badger.ErrKeyNotFound) {
 				return storage.ErrNotFound
 			}
 			return err

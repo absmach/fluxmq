@@ -6,6 +6,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -482,7 +483,7 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 	}
 
 	stored, err := b.stores.sessions.Get(clientID)
-	if err != nil && err != storage.ErrNotFound {
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 	if stored != nil {

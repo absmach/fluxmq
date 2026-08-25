@@ -618,10 +618,11 @@ func (c *TestMQTTClient) readLoop() {
 		header := make([]byte, 1)
 		_, err := conn.Read(header)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
-			if err != io.EOF && c.State() == StateConnected {
+			if !errors.Is(err, io.EOF) && c.State() == StateConnected {
 				c.notifyError(fmt.Errorf("read error: %w", err))
 			}
 			return

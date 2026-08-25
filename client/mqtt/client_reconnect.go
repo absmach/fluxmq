@@ -5,6 +5,7 @@ package mqtt
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
 	"time"
 )
@@ -189,7 +190,7 @@ func (c *Client) restoreOutboundMessages() {
 		replay.Dup = true
 
 		packetID, staged, _, err := c.stageQoSPublish(replay)
-		if err == ErrMaxInflight {
+		if errors.Is(err, ErrMaxInflight) {
 			// Inflight slots exhausted — preserve all remaining messages.
 			for _, remaining := range msgs[i:] {
 				if remaining != nil && remaining.QoS > 0 {
@@ -216,7 +217,7 @@ func (c *Client) restoreOutboundMessages() {
 
 func (c *Client) handleDisconnectedPublish(msg *Message) error {
 	if err := c.bufferDisconnectedPublish(msg); err != nil {
-		if err == ErrReconnectBufferFull {
+		if errors.Is(err, ErrReconnectBufferFull) {
 			c.reportAsyncError(err)
 			meta := &DroppedMessage{
 				Direction: DroppedMessageOutbound,

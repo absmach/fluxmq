@@ -4,6 +4,7 @@
 package v5
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -53,7 +54,7 @@ type BasicProperties struct {
 func (p *BasicProperties) Unpack(r io.Reader) error {
 	for {
 		prop, err := codec.DecodeByte(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

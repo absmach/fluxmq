@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -121,7 +122,7 @@ func (b *Broker) PublishWill(ctx context.Context, clientID string) error {
 
 	will, err := b.stores.wills.Get(ctx, clientID)
 	if err != nil {
-		if err == storage.ErrNotFound {
+		if errors.Is(err, storage.ErrNotFound) {
 			return nil
 		}
 		return err

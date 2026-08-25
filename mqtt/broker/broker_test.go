@@ -109,7 +109,7 @@ func TestBroker_HandleV5Connect(t *testing.T) {
 	t.Logf("HandleConnect returned: %v", err)
 
 	// Expect nil or io.EOF (because runSession exits on EOF)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("HandleConnect failed: %v", err)
 	}
 

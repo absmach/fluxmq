@@ -185,7 +185,7 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 
 	if err := m.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		// Handle race condition - another process might have created it
-		if err == storage.ErrConsumerGroupExists {
+		if errors.Is(err, storage.ErrConsumerGroupExists) {
 			return m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 		}
 		return nil, err
@@ -231,7 +231,7 @@ func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID stri
 		return msg, nil
 	}
 
-	if err != ErrNoMessages {
+	if !errors.Is(err, ErrNoMessages) {
 		return nil, err
 	}
 
@@ -428,7 +428,7 @@ func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.Consum
 
 		msg, err := m.queueStore.Read(ctx, group.QueueName, offset)
 		if err != nil {
-			if err == storage.ErrOffsetOutOfRange {
+			if errors.Is(err, storage.ErrOffsetOutOfRange) {
 				continue
 			}
 			releaseMessages(messages)
@@ -537,7 +537,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 		// Read message
 		msg, err := m.queueStore.Read(ctx, group.QueueName, offset)
 		if err != nil {
-			if err == storage.ErrOffsetOutOfRange {
+			if errors.Is(err, storage.ErrOffsetOutOfRange) {
 				continue // Message was truncated, skip
 			}
 			return nil, err

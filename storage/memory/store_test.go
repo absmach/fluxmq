@@ -5,6 +5,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func TestMessageStore(t *testing.T) {
 		t.Fatalf("Delete failed: %v", err)
 	}
 	_, err = s.Get("client1/123")
-	if err != storage.ErrNotFound {
+	if !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("Expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -286,7 +287,7 @@ func TestRetainedStore(t *testing.T) {
 		t.Fatalf("Set with empty payload failed: %v", err)
 	}
 	_, err = s.Get(ctx, "sensors/temp")
-	if err != storage.ErrNotFound {
+	if !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("Expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -384,7 +385,7 @@ func TestWillStore(t *testing.T) {
 		t.Fatalf("Delete failed: %v", err)
 	}
 	_, err = s.Get(ctx, testClient1)
-	if err != storage.ErrNotFound {
+	if !errors.Is(err, storage.ErrNotFound) {
 		t.Errorf("Expected ErrNotFound after delete")
 	}
 }

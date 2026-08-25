@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -284,7 +285,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			Filter:     group.Pattern,
 			Limit:      e.batchSize,
 		})
-		if err == consumer.ErrNoMessages {
+		if errors.Is(err, consumer.ErrNoMessages) {
 			releaseDeliverySources(outcome.Messages)
 			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
 			continue
@@ -521,9 +522,9 @@ func (e *DeliveryEngine) unregisterConsumer(ctx context.Context, queueName, grou
 	e.logger.LogAttrs(ctx, slog.LevelWarn, "removing stale queue consumer", attrs...)
 
 	if err := e.consumerManager.UnregisterConsumer(ctx, queueName, groupID, consumerID); err != nil {
-		if err != consumer.ErrConsumerNotFound &&
-			err != storage.ErrConsumerNotFound &&
-			err != storage.ErrQueueNotFound {
+		if !errors.Is(err, consumer.ErrConsumerNotFound) &&
+			!errors.Is(err, storage.ErrConsumerNotFound) &&
+			!errors.Is(err, storage.ErrQueueNotFound) {
 			e.logger.Warn("failed to unregister stale queue consumer",
 				slog.String("queue", queueName),
 				slog.String("group", groupID),

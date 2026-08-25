@@ -187,7 +187,7 @@ func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	err := f.queueStore.CreateQueue(ctx, *op.QueueConfig)
-	if err != nil && err != storage.ErrQueueAlreadyExists {
+	if err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		f.logger.Error("failed to apply create queue",
 			slog.String("queue", op.QueueConfig.Name),
 			slog.String("error", err.Error()))
@@ -217,7 +217,7 @@ func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: fmt.Errorf("empty queue name in delete queue operation")}
 	}
 
-	if err := f.queueStore.DeleteQueue(ctx, op.QueueName); err != nil && err != storage.ErrQueueNotFound {
+	if err := f.queueStore.DeleteQueue(ctx, op.QueueName); err != nil && !errors.Is(err, storage.ErrQueueNotFound) {
 		f.logger.Error("failed to apply delete queue",
 			slog.String("queue", op.QueueName),
 			slog.String("error", err.Error()))
@@ -237,7 +237,7 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	messageID := op.Message.Broker.Queue.MessageID
 
 	offset, err := f.queueStore.Append(ctx, op.QueueName, op.Message)
-	if err == storage.ErrQueueNotFound {
+	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
 			message.Release(op.Message)
 			op.Message = nil
@@ -335,7 +335,7 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
-	if err == storage.ErrQueueNotFound {
+	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
 			releaseMessages(op.Messages)
 			op.Messages = nil
@@ -375,7 +375,7 @@ func releaseMessages(messages []*message.Envelope) {
 
 func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {
 	cfg := types.DefaultEphemeralQueueConfig(queueName, "$queue/"+queueName+"/#")
-	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		return err
 	}
 	return nil
@@ -404,7 +404,7 @@ func (f *LogFSM) applyCreateGroup(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	err := f.groupStore.CreateConsumerGroup(ctx, op.GroupState)
-	if err != nil && err != storage.ErrConsumerGroupExists {
+	if err != nil && !errors.Is(err, storage.ErrConsumerGroupExists) {
 		f.logger.Error("failed to apply create group",
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
@@ -505,7 +505,7 @@ func (f *LogFSM) applyAddPending(ctx context.Context, op *Operation) *ApplyResul
 
 func (f *LogFSM) applyRemovePending(ctx context.Context, op *Operation) *ApplyResult {
 	err := f.groupStore.RemovePendingEntry(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
-	if err != nil && err != storage.ErrPendingEntryNotFound {
+	if err != nil && !errors.Is(err, storage.ErrPendingEntryNotFound) {
 		f.logger.Error("failed to apply remove pending",
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
@@ -636,7 +636,7 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 	for _, q := range snapshot.Queues {
 		if q.QueueConfig != nil {
 			if err := f.queueStore.CreateQueue(ctx, *q.QueueConfig); err != nil {
-				if err == storage.ErrQueueAlreadyExists {
+				if errors.Is(err, storage.ErrQueueAlreadyExists) {
 					if updateErr := f.queueStore.UpdateQueue(ctx, *q.QueueConfig); updateErr != nil {
 						f.logger.Error("failed to restore queue config",
 							slog.String("queue", q.QueueName),
@@ -663,7 +663,7 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 		for _, group := range q.Groups {
 			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
-				if err != storage.ErrConsumerGroupExists {
+				if !errors.Is(err, storage.ErrConsumerGroupExists) {
 					f.logger.Error("failed to restore consumer group",
 						slog.String("queue", q.QueueName),
 						slog.String("group", group.ID),

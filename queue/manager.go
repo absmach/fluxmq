@@ -526,7 +526,7 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 			return err
 		}
 		if err := m.queueStore.CreateQueue(ctx, cfg); err != nil {
-			if err != storage.ErrQueueAlreadyExists {
+			if !errors.Is(err, storage.ErrQueueAlreadyExists) {
 				return err
 			}
 		}
@@ -890,7 +890,7 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 			return err
 		}
 		// Ensure local immediate visibility even with async apply/mocks.
-		if err := m.queueStore.CreateQueue(ctx, config); err != nil && err != storage.ErrQueueAlreadyExists {
+		if err := m.queueStore.CreateQueue(ctx, config); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 			return err
 		}
 	} else {
@@ -948,7 +948,7 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 			return err
 		}
 		// Keep local view in sync immediately.
-		if err := m.queueStore.UpdateQueue(ctx, config); err != nil && err != storage.ErrQueueNotFound {
+		if err := m.queueStore.UpdateQueue(ctx, config); err != nil && !errors.Is(err, storage.ErrQueueNotFound) {
 			return err
 		}
 	} else {
@@ -978,14 +978,14 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 		return config, nil
 	}
 
-	if err != storage.ErrQueueNotFound {
+	if !errors.Is(err, storage.ErrQueueNotFound) {
 		return nil, err
 	}
 
 	// Create with ephemeral config (auto-created queues are ephemeral)
 	defaultConfig := types.DefaultEphemeralQueueConfig(queueName, topics...)
 	if err := m.CreateQueue(ctx, defaultConfig); err != nil {
-		if err != storage.ErrQueueAlreadyExists {
+		if !errors.Is(err, storage.ErrQueueAlreadyExists) {
 			return nil, err
 		}
 	}
@@ -1017,7 +1017,7 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 			return err
 		}
 		// Ensure local deletion even with async apply/mocks.
-		if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil && err != storage.ErrQueueNotFound {
+		if err := m.queueStore.DeleteQueue(ctx, queueName); err != nil && !errors.Is(err, storage.ErrQueueNotFound) {
 			return err
 		}
 	} else {
@@ -1911,7 +1911,7 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 			queueExistsCache[queueName] = true
 			return true
 		}
-		if err != storage.ErrQueueNotFound {
+		if !errors.Is(err, storage.ErrQueueNotFound) {
 			m.logger.Warn("failed to check queue existence for forwarding",
 				slog.String("queue", queueName),
 				slog.String("error", err.Error()))
@@ -2324,7 +2324,7 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, clientID string) error {
 			m.touchSubscription(clientID, target.key, now)
 			continue
 		}
-		if err == storage.ErrConsumerNotFound || err == consumer.ErrConsumerNotFound {
+		if errors.Is(err, storage.ErrConsumerNotFound) || errors.Is(err, consumer.ErrConsumerNotFound) {
 			staleKeys = append(staleKeys, target.key)
 		}
 	}

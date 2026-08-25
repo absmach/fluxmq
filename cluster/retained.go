@@ -245,7 +245,7 @@ func (h *RetainedStore) Get(ctx context.Context, topic string) (*message.Envelop
 // Delete removes a retained message.
 func (h *RetainedStore) Delete(ctx context.Context, topic string) error {
 	// Delete from local store
-	if err := h.localStore.Delete(ctx, topic); err != nil && err != storage.ErrNotFound {
+	if err := h.localStore.Delete(ctx, topic); err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return fmt.Errorf("failed to delete from local store: %w", err)
 	}
 

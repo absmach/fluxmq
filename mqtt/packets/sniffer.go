@@ -27,7 +27,7 @@ func DetectProtocolVersion(r io.Reader) (int, io.Reader, error) {
 	peekBuf := make([]byte, 12)
 	n, err := io.ReadFull(r, peekBuf)
 	// If we hit EOF but read some bytes, we might have a short packet, but we can still check what we got.
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+	if err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return 0, nil, err
 	}
 	if n < 8 {

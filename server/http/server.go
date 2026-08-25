@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -127,12 +128,12 @@ func (s *Server) Listen(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		if s.config.TLSConfig != nil {
-			if err := s.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			if err := s.server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- err
 			}
 			return
 		}
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

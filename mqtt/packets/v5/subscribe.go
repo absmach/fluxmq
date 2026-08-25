@@ -5,6 +5,7 @@ package v5
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
@@ -96,7 +97,7 @@ type SubscribeProperties struct {
 func (p *SubscribeProperties) Unpack(r io.Reader) error {
 	for {
 		prop, err := codec.DecodeByte(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -205,7 +206,7 @@ func (pkt *Subscribe) Unpack(r io.Reader) error {
 	for {
 		opt := SubOption{}
 		err := opt.Unpack(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

@@ -228,7 +228,7 @@ func (a *Adapter) FindMatchingQueues(ctx context.Context, topic string) ([]strin
 
 func (a *Adapter) queueConfigExists(queueName string) error {
 	if _, err := a.queueStore.Get(queueName); err != nil {
-		if err == ErrQueueNotFound {
+		if errors.Is(err, ErrQueueNotFound) {
 			return storage.ErrQueueNotFound
 		}
 		return err
@@ -329,10 +329,10 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*mes
 func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*message.Envelope, error) {
 	msg, err := a.store.Read(queueName, offset)
 	if err != nil {
-		if err == ErrOffsetOutOfRange {
+		if errors.Is(err, ErrOffsetOutOfRange) {
 			return nil, storage.ErrOffsetOutOfRange
 		}
-		if err == ErrQueueNotFound {
+		if errors.Is(err, ErrQueueNotFound) {
 			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
@@ -349,7 +349,7 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 
 	tail, err := a.store.Tail(queueName)
 	if err != nil {
-		if err == ErrQueueNotFound {
+		if errors.Is(err, ErrQueueNotFound) {
 			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
@@ -365,10 +365,10 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 	for current < tail && len(result) < limit {
 		batch, err := a.store.ReadBatch(queueName, current)
 		if err != nil {
-			if err == ErrOffsetOutOfRange {
+			if errors.Is(err, ErrOffsetOutOfRange) {
 				break
 			}
-			if err == ErrQueueNotFound {
+			if errors.Is(err, ErrQueueNotFound) {
 				releaseEnvelopes(result)
 				return nil, storage.ErrQueueNotFound
 			}
@@ -511,7 +511,7 @@ func (a *Adapter) AddPendingEntry(ctx context.Context, queueName, groupID string
 // RemovePendingEntry removes an entry from a consumer's PEL.
 func (a *Adapter) RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
 	if err := a.store.AckPending(queueName, groupID, offset); err != nil {
-		if err == ErrPELEntryNotFound {
+		if errors.Is(err, ErrPELEntryNotFound) {
 			return storage.ErrPendingEntryNotFound
 		}
 		return err
@@ -565,7 +565,7 @@ func (a *Adapter) GetAllPendingEntries(ctx context.Context, queueName, groupID s
 // TransferPendingEntry moves a pending entry from one consumer to another.
 func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
 	if err := a.store.ClaimPending(queueName, groupID, offset, toConsumer); err != nil {
-		if err == ErrPELEntryNotFound {
+		if errors.Is(err, ErrPELEntryNotFound) {
 			return storage.ErrPendingEntryNotFound
 		}
 		return err

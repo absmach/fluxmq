@@ -3,7 +3,10 @@
 
 package amqp
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestOptionsSetURL(t *testing.T) {
 	opts := NewOptions().SetURL("amqp://user:pass@localhost:5672/vhost")
@@ -24,7 +27,7 @@ func TestPublishWithOptionsMandatoryRequiresReturnHandler(t *testing.T) {
 		Payload:   []byte("hello"),
 		Mandatory: true,
 	})
-	if err != ErrNoReturnHandler {
+	if !errors.Is(err, ErrNoReturnHandler) {
 		t.Fatalf("expected ErrNoReturnHandler, got %v", err)
 	}
 }
@@ -35,7 +38,7 @@ func TestPublishWithConfirmNilOptions(t *testing.T) {
 		t.Fatalf("New failed: %v", err)
 	}
 
-	if err := c.PublishWithConfirm(nil, 0); err != ErrNilOptions {
+	if err := c.PublishWithConfirm(nil, 0); !errors.Is(err, ErrNilOptions) {
 		t.Fatalf("expected ErrNilOptions, got %v", err)
 	}
 }
@@ -48,7 +51,7 @@ func TestGetValidation(t *testing.T) {
 
 	// Not connected
 	_, _, err = c.Get("test-queue", true)
-	if err != ErrNotConnected {
+	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected, got %v", err)
 	}
 
@@ -56,12 +59,12 @@ func TestGetValidation(t *testing.T) {
 
 	// Empty queue name
 	_, _, err = c.Get("", true)
-	if err != ErrInvalidQueueName {
+	if !errors.Is(err, ErrInvalidQueueName) {
 		t.Fatalf("expected ErrInvalidQueueName, got %v", err)
 	}
 
 	_, _, err = c.GetFromQueue("", true)
-	if err != ErrInvalidQueueName {
+	if !errors.Is(err, ErrInvalidQueueName) {
 		t.Fatalf("expected ErrInvalidQueueName, got %v", err)
 	}
 }
@@ -74,7 +77,7 @@ func TestGetFromQueueNormalizesName(t *testing.T) {
 
 	// Not connected — should still propagate ErrNotConnected
 	_, _, err = c.GetFromQueue("my-queue", true)
-	if err != ErrNotConnected {
+	if !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("expected ErrNotConnected, got %v", err)
 	}
 }

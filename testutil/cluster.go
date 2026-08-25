@@ -5,6 +5,7 @@ package testutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -307,7 +308,7 @@ func (tc *TestCluster) startNode(node *TestNode, bootstrap bool, peerTransports 
 
 	// Start TCP server in background
 	go func() {
-		if err := tcpServer.Listen(node.ctx); err != nil && err != context.Canceled {
+		if err := tcpServer.Listen(node.ctx); err != nil && !errors.Is(err, context.Canceled) {
 			tc.t.Logf("TCP server error on %s: %v", node.ID, err)
 		}
 		close(node.tcpStopped)

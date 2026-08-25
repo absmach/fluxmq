@@ -460,7 +460,7 @@ func (s *Segment) ReadRange(startOffset, endOffset uint64, maxMessages int) ([]M
 	for currentOffset < endOffset && len(messages) < maxMessages {
 		batch, err := s.readBatchContaining(currentOffset)
 		if err != nil {
-			if err == ErrOffsetOutOfRange {
+			if errors.Is(err, ErrOffsetOutOfRange) {
 				break
 			}
 			return nil, err

@@ -5,6 +5,7 @@ package mqtt
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +56,7 @@ func TestNewClientValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := New(tt.opts)
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("expected error %v, got %v", tt.wantErr, err)
 			}
 		})
@@ -64,7 +65,7 @@ func TestNewClientValidation(t *testing.T) {
 
 func TestNewClientNilOptions(t *testing.T) {
 	_, err := New(nil)
-	if err != ErrNilOptions {
+	if !errors.Is(err, ErrNilOptions) {
 		t.Fatalf("expected ErrNilOptions, got %v", err)
 	}
 }
@@ -97,17 +98,17 @@ func TestClientNotConnectedOperations(t *testing.T) {
 	client, _ := New(opts)
 
 	err := client.Publish(nil, testTopic, []byte("payload"), 0, false)
-	if err != ErrNotConnected {
+	if !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Publish should fail with ErrNotConnected, got: %v", err)
 	}
 
 	err = client.Subscribe(nil, map[string]byte{testTopic: 0})
-	if err != ErrNotConnected {
+	if !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Subscribe should fail with ErrNotConnected, got: %v", err)
 	}
 
 	err = client.Unsubscribe(nil, testTopic)
-	if err != ErrNotConnected {
+	if !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Unsubscribe should fail with ErrNotConnected, got: %v", err)
 	}
 }
@@ -120,12 +121,12 @@ func TestClientPublishValidation(t *testing.T) {
 	client.state.set(StateConnected)
 
 	err := client.Publish(nil, "", []byte("payload"), 0, false)
-	if err != ErrInvalidTopic {
+	if !errors.Is(err, ErrInvalidTopic) {
 		t.Errorf("Publish with empty topic should fail with ErrInvalidTopic, got: %v", err)
 	}
 
 	err = client.Publish(nil, testTopic, []byte("payload"), 3, false)
-	if err != ErrInvalidQoS {
+	if !errors.Is(err, ErrInvalidQoS) {
 		t.Errorf("Publish with invalid QoS should fail with ErrInvalidQoS, got: %v", err)
 	}
 }
@@ -138,7 +139,7 @@ func TestClientSubscribeValidation(t *testing.T) {
 	client.state.set(StateConnected)
 
 	err := client.Subscribe(nil, map[string]byte{})
-	if err != ErrInvalidTopic {
+	if !errors.Is(err, ErrInvalidTopic) {
 		t.Errorf("Subscribe with empty topics should fail with ErrInvalidTopic, got: %v", err)
 	}
 }
@@ -149,12 +150,12 @@ func TestClientSubscribeWithOptionsValidation(t *testing.T) {
 	client.state.set(StateConnected)
 
 	err := client.SubscribeWithOptions(nil, nil)
-	if err != ErrInvalidSubscribeOpt {
+	if !errors.Is(err, ErrInvalidSubscribeOpt) {
 		t.Fatalf("expected ErrInvalidSubscribeOpt, got %v", err)
 	}
 
 	err = client.SubscribeWithOptions(nil, &SubscribeOption{Topic: testTopicTest, QoS: 1, RetainHandling: 3})
-	if err != ErrInvalidSubscribeOpt {
+	if !errors.Is(err, ErrInvalidSubscribeOpt) {
 		t.Fatalf("expected ErrInvalidSubscribeOpt for retain handling, got %v", err)
 	}
 }
@@ -167,7 +168,7 @@ func TestClientUnsubscribeValidation(t *testing.T) {
 	client.state.set(StateConnected)
 
 	err := client.Unsubscribe(nil)
-	if err != ErrInvalidTopic {
+	if !errors.Is(err, ErrInvalidTopic) {
 		t.Errorf("Unsubscribe with no topics should fail with ErrInvalidTopic, got: %v", err)
 	}
 }
@@ -180,7 +181,7 @@ func TestSubscribeContextCanceled(t *testing.T) {
 	cancel()
 
 	err := client.Subscribe(ctx, map[string]byte{testTopic: 1})
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -193,7 +194,7 @@ func TestSubscribeWithOptionsContextCanceled(t *testing.T) {
 	cancel()
 
 	err := client.SubscribeWithOptions(ctx, &SubscribeOption{Topic: testTopic, QoS: 1})
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -206,7 +207,7 @@ func TestUnsubscribeContextCanceled(t *testing.T) {
 	cancel()
 
 	err := client.Unsubscribe(ctx, testTopic)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
@@ -226,7 +227,7 @@ func TestClientClose(t *testing.T) {
 
 	// Operations should fail after close
 	err = client.Connect(context.Background())
-	if err != ErrClientClosed {
+	if !errors.Is(err, ErrClientClosed) {
 		t.Errorf("Connect after Close should fail with ErrClientClosed, got: %v", err)
 	}
 }
@@ -338,7 +339,7 @@ func TestSubscribeSingle(t *testing.T) {
 	// This will fail because there's no actual connection,
 	// but we're testing that SubscribeSingle calls Subscribe correctly
 	err := client.SubscribeSingle(nil, testTopic, 1)
-	if err != ErrNotConnected {
+	if !errors.Is(err, ErrNotConnected) {
 		// The state check passes but the actual send fails
 		// because there's no real connection
 		t.Logf("SubscribeSingle error (expected): %v", err)
@@ -394,7 +395,7 @@ func TestHandleSubAckV5FailureCodes(t *testing.T) {
 		ReasonCodes: &reasonCodes,
 	})
 
-	if err := op.wait(100 * time.Millisecond); err != ErrSubscribeFailed {
+	if err := op.wait(100 * time.Millisecond); !errors.Is(err, ErrSubscribeFailed) {
 		t.Fatalf("expected ErrSubscribeFailed, got %v", err)
 	}
 }

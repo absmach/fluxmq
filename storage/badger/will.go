@@ -6,6 +6,7 @@ package badger
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -66,7 +67,7 @@ func (w *WillStore) Get(ctx context.Context, clientID string) (*storage.WillMess
 	err := w.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		if err != nil {
-			if err == badger.ErrKeyNotFound {
+			if errors.Is(err, badger.ErrKeyNotFound) {
 				return storage.ErrNotFound
 			}
 			return err
