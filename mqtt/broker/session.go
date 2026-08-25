@@ -25,8 +25,9 @@ import (
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
 func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
-	b.sessionLocks.Lock(clientID)
-	defer b.sessionLocks.Unlock(clientID)
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	ctx := context.Background()
 	releaseOwnershipOnFailure := false
@@ -211,8 +212,9 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 // DestroySession removes a session completely.
 func (b *Broker) DestroySession(clientID string) error {
-	b.sessionLocks.Lock(clientID)
-	defer b.sessionLocks.Unlock(clientID)
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {
@@ -363,9 +365,10 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	}
 
 	if s.CleanStart && s.ExpiryInterval == 0 {
-		b.sessionLocks.Lock(s.ID)
+		sessionLock := b.sessionLocks.Key(s.ID)
+		sessionLock.Lock()
 		b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
-		b.sessionLocks.Unlock(s.ID)
+		sessionLock.Unlock()
 
 		// Release ownership for clean sessions
 		if b.cluster != nil {
@@ -604,8 +607,9 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 // GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.
 // This is used during session takeover.
 func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
-	b.sessionLocks.Lock(clientID)
-	defer b.sessionLocks.Unlock(clientID)
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/internal/keylock"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/server/otel"
 	"github.com/absmach/fluxmq/storage"
@@ -129,7 +130,7 @@ type Broker struct {
 	telemetry brokerTelemetry
 	cfg       brokerConfig
 
-	sessionLocks  keyLock
+	sessionLocks  keylock.Sharded
 	globalMu      sync.Mutex // protects lifecycle (Close, transferActiveSessions, expireSessions)
 	wg            sync.WaitGroup
 	sessionsMap   session.Cache

@@ -1,0 +1,132 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+package consumer
+
+import (
+	"context"
+	"strconv"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/absmach/fluxmq/message"
+	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
+	"github.com/absmach/fluxmq/queue/types"
+)
+
+// benchGroupStore adapts the in-memory log store to storage.ConsumerGroupStore.
+// It is declared here rather than shared so this benchmark compiles unchanged
+// against revisions that predate the keyed-locking work, which is what makes a
+// before/after comparison possible.
+type benchGroupStore struct {
+	*memlog.Store
+}
+
+func (s *benchGroupStore) RegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
+	return nil
+}
+
+func (s *benchGroupStore) UnregisterConsumer(context.Context, string, string, string) error {
+	return nil
+}
+
+func (s *benchGroupStore) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.ConsumerInfo, error) {
+	consumers, err := s.Store.ListConsumers(ctx, queueName, groupID)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]*types.ConsumerInfo, 0, len(consumers))
+	for _, c := range consumers {
+		infos = append(infos, &types.ConsumerInfo{ID: c.ID, ClientID: c.ClientID})
+	}
+	return infos, nil
+}
+
+const benchGroups = 64
+
+// benchFixture builds benchGroups independent consumer groups, each on its own
+// queue, so parallel operations never touch the same group state.
+func benchFixture(b *testing.B) (*Manager, []string) {
+	b.Helper()
+
+	ctx := context.Background()
+	store := &benchGroupStore{Store: memlog.New()}
+
+	names := make([]string, benchGroups)
+	for i := range names {
+		name := "bench-queue-" + strconv.Itoa(i)
+		names[i] = name
+
+		if err := store.CreateQueue(ctx, types.DefaultQueueConfig(name, name+"/#")); err != nil {
+			b.Fatalf("create queue: %v", err)
+		}
+		envelope := message.New(name, []byte("payload"))
+		if _, err := store.Append(ctx, name, envelope); err != nil {
+			b.Fatalf("append: %v", err)
+		}
+		group := types.NewConsumerGroupState(name, "workers", "")
+		// CommitOffset is a stream-mode operation; it is used here because it is
+		// the shortest path that takes the manager lock and then touches the
+		// group store.
+		group.Mode = types.GroupModeStream
+		if err := store.CreateConsumerGroup(ctx, group); err != nil {
+			b.Fatalf("create group: %v", err)
+		}
+	}
+
+	manager := NewManager(store, store, Config{
+		VisibilityTimeout:  time.Minute,
+		MaxDeliveryCount:   5,
+		ClaimBatchSize:     10,
+		StealBatchSize:     5,
+		AutoCommitInterval: 0,
+		MaxPELSize:         1000,
+	})
+
+	return manager, names
+}
+
+// BenchmarkConsumerGroupContention measures whether operations on unrelated
+// consumer groups proceed independently.
+//
+// Every iteration targets a different group, so a correctly scoped lock lets
+// them run concurrently. A single manager-wide mutex serialises them all, and
+// the cost of that shows up here rather than in the single-group benchmarks.
+func BenchmarkConsumerGroupContention(b *testing.B) {
+	manager, names := benchFixture(b)
+	ctx := context.Background()
+
+	var next atomic.Uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			name := names[next.Add(1)%benchGroups]
+			if err := manager.CommitOffset(ctx, name, "workers", 0); err != nil {
+				b.Errorf("commit offset: %v", err)
+				return
+			}
+		}
+	})
+}
+
+// BenchmarkConsumerSingleGroupContention is the control: every iteration hits
+// the same group, so it stays serialised however the lock is scoped. It exists
+// so a change that only moves contention around is distinguishable from one
+// that removes it.
+func BenchmarkConsumerSingleGroupContention(b *testing.B) {
+	manager, names := benchFixture(b)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if err := manager.CommitOffset(ctx, names[0], "workers", 0); err != nil {
+				b.Errorf("commit offset: %v", err)
+				return
+			}
+		}
+	})
+}

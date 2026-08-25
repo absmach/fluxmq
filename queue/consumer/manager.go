@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/internal/keylock"
 	"github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
@@ -38,14 +39,28 @@ type Manager struct {
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	config     Config
+
+	// groupLocks serialises operations per consumer group. Every exported
+	// operation names exactly one (queue, group) pair, so a lock over the whole
+	// manager would serialise groups that share no state: one group waiting on
+	// storage stalls every other group on the node.
+	groupLocks keylock.Sharded
+
+	// stateMu guards the two maps below, which are keyed by group but shared
+	// across them. Under groupLocks alone, two goroutines holding different
+	// group locks would race on these.
+	stateMu    sync.Mutex
 	lastCommit map[string]time.Time
 
 	// dlqRetryAfter rate-limits dead-letter transfer retries per pending entry.
 	// It is deliberately in-memory: this is a retry throttle, not durable state,
 	// and losing it on restart costs one immediate retry per stuck entry.
 	dlqRetryAfter map[string]time.Time
+}
 
-	mu sync.RWMutex
+// groupKey names the lock and map entries for one consumer group.
+func groupKey(queueName, groupID string) string {
+	return queueName + "\x00" + groupID
 }
 
 // DLQHandler is called when a message exceeds MaxDeliveryCount.
@@ -200,8 +215,9 @@ func (m *Manager) UnregisterConsumer(ctx context.Context, queueName, groupID, co
 // Claim retrieves the next available message for a consumer.
 // It first tries to get a new message from the log, then falls back to work stealing.
 func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID string, filter *Filter) (*message.Envelope, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	// Get consumer group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
@@ -225,8 +241,9 @@ func (m *Manager) Claim(ctx context.Context, queueName, groupID, consumerID stri
 
 // ClaimBatch retrieves multiple messages for a consumer.
 func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*message.Envelope, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	if limit <= 0 {
 		limit = m.config.ClaimBatchSize
@@ -275,8 +292,9 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 // consumer. Unlike ClaimBatch it never consumes new log records. Entries are
 // considered oldest-first so all storage backends expose the same order.
 func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, consumerID string, minIdle time.Duration, limit int) ([]*message.Envelope, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	if limit <= 0 {
 		limit = m.config.ClaimBatchSize
@@ -331,8 +349,9 @@ func (m *Manager) ClaimPendingBatch(ctx context.Context, queueName, groupID, con
 // ClaimBatchStream retrieves multiple messages for a stream consumer without PEL tracking.
 // It advances the cursor once per batch for efficiency.
 func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, consumerID string, filter *Filter, limit int) ([]*message.Envelope, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	if limit <= 0 {
 		limit = m.config.ClaimBatchSize
@@ -359,8 +378,9 @@ func (m *Manager) ClaimBatchStream(ctx context.Context, queueName, groupID, cons
 // PeekBatchStream retrieves stream messages without advancing the consumer
 // group cursor. Call CommitStreamCursor after successful delivery.
 func (m *Manager) PeekBatchStream(ctx context.Context, queueName, groupID, _ string, filter *Filter, limit int) ([]*message.Envelope, uint64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	if limit <= 0 {
 		limit = m.config.ClaimBatchSize
@@ -377,8 +397,9 @@ func (m *Manager) PeekBatchStream(ctx context.Context, queueName, groupID, _ str
 // CommitStreamCursor advances a stream consumer group's cursor after delivery
 // has succeeded.
 func (m *Manager) CommitStreamCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
@@ -455,17 +476,39 @@ func (m *Manager) updateStreamCursorLocked(ctx context.Context, group *types.Con
 		return m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor)
 	}
 
-	key := group.QueueName + "/" + group.ID
-	now := time.Now()
-	last, ok := m.lastCommit[key]
-	if ok && now.Sub(last) < m.config.AutoCommitInterval {
+	// lastCommit is shared across groups, so it needs its own lock even though
+	// the caller already holds this group's.
+	if !m.autoCommitDue(groupKey(group.QueueName, group.ID)) {
 		return nil
 	}
 	if err := m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, newCursor); err != nil {
+		// The commit did not happen, so the interval must not be treated as
+		// spent; otherwise a failing store would suppress commits for a whole
+		// interval each time it failed.
+		m.clearAutoCommit(groupKey(group.QueueName, group.ID))
 		return err
 	}
-	m.lastCommit[key] = now
 	return nil
+}
+
+// autoCommitDue reports whether this group's auto-commit interval has elapsed,
+// recording the attempt when it has.
+func (m *Manager) autoCommitDue(key string) bool {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	now := time.Now()
+	if last, ok := m.lastCommit[key]; ok && now.Sub(last) < m.config.AutoCommitInterval {
+		return false
+	}
+	m.lastCommit[key] = now
+	return true
+}
+
+func (m *Manager) clearAutoCommit(key string) {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	delete(m.lastCommit, key)
 }
 
 // claimFromCursor tries to claim a message from the cursor position.
@@ -670,6 +713,11 @@ func (m *Manager) dlqUnavailable(err error) bool {
 // dlqTransferDue reports whether this entry's transfer may be attempted now,
 // and records the attempt when it may.
 func (m *Manager) dlqTransferDue(group *types.ConsumerGroup, entry *types.PendingEntry) bool {
+	// dlqRetryAfter is shared across groups, so it needs its own lock even
+	// though the caller already holds this group's.
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
 	key := dlqRetryKey(group, entry)
 	if retryAt, throttled := m.dlqRetryAfter[key]; throttled && time.Now().Before(retryAt) {
 		return false
@@ -679,6 +727,8 @@ func (m *Manager) dlqTransferDue(group *types.ConsumerGroup, entry *types.Pendin
 }
 
 func (m *Manager) clearDLQRetry(group *types.ConsumerGroup, entry *types.PendingEntry) {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
 	delete(m.dlqRetryAfter, dlqRetryKey(group, entry))
 }
 
@@ -722,8 +772,9 @@ func (m *Manager) reportPoisonWithoutDLQ(group *types.ConsumerGroup, entry *type
 
 // Ack acknowledges successful processing of a message.
 func (m *Manager) Ack(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	// Remove from PEL
 	if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
@@ -742,8 +793,9 @@ func (m *Manager) Ack(ctx context.Context, queueName, groupID, consumerID string
 
 // AckBatch acknowledges multiple messages.
 func (m *Manager) AckBatch(ctx context.Context, queueName, groupID, consumerID string, offsets []uint64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	for _, offset := range offsets {
 		if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
@@ -769,8 +821,9 @@ func (m *Manager) Nack(ctx context.Context, queueName, groupID, consumerID strin
 // NackWithDelay negatively acknowledges a message and controls when it becomes
 // eligible for work stealing.
 func (m *Manager) NackWithDelay(ctx context.Context, queueName, groupID, consumerID string, offset uint64, delay time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	// Get group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
@@ -802,8 +855,9 @@ func (m *Manager) NackWithDelay(ctx context.Context, queueName, groupID, consume
 
 // Reject rejects a message, moving it to the DLQ.
 func (m *Manager) Reject(ctx context.Context, queueName, groupID, consumerID string, offset uint64, reason string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
@@ -912,8 +966,9 @@ func (m *Manager) GetCommittedOffset(ctx context.Context, queueName, groupID str
 // CommitOffset explicitly commits an offset for a stream consumer group.
 // This is used when AutoCommit is disabled for manual commit control.
 func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
@@ -990,8 +1045,9 @@ func (m *Manager) GetMinCommittedOffsetByMode(ctx context.Context, queueName str
 
 // UpdateHeartbeat updates the heartbeat timestamp for a consumer.
 func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consumerID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
@@ -1009,8 +1065,9 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consu
 
 // CleanupStaleConsumers removes consumers that haven't sent a heartbeat within the timeout.
 func (m *Manager) CleanupStaleConsumers(ctx context.Context, queueName, groupID string, timeout time.Duration) ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
 
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err != nil {
