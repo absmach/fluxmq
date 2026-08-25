@@ -6,22 +6,41 @@ package logstorage
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/absmach/fluxmq/internal/keylock"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
+// groupRef names one consumer group.
+//
+// It is a struct rather than a joined string because queue names contain
+// slashes: "$dlq/tasks" with group "workers" and "$dlq" with group
+// "tasks/workers" would otherwise collide on the same key.
+type groupRef struct {
+	queueName string
+	groupID   string
+}
+
 // ConsumerGroupStateStore manages consumer group state persistence.
+//
+// Two locks, deliberately: mu guards the maps below and is never held across
+// disk I/O, while writeLocks serialises writers of one group's file, which
+// share a temp path. Scoping them this way keeps one group's file write off
+// every other group's path.
 type ConsumerGroupStateStore struct {
 	mu sync.RWMutex
 
 	dir    string
 	groups map[string]map[string]*types.ConsumerGroup // queueName -> groupID -> state
-	dirty  map[string]bool                            // groupKey -> dirty flag
+	dirty  map[groupRef]bool
+
+	writeLocks keylock.Sharded
 }
 
 const consumerGroupVersion uint8 = 2
@@ -42,7 +61,7 @@ func NewConsumerGroupStateStore(baseDir string) (*ConsumerGroupStateStore, error
 	store := &ConsumerGroupStateStore{
 		dir:    dir,
 		groups: make(map[string]map[string]*types.ConsumerGroup),
-		dirty:  make(map[string]bool),
+		dirty:  make(map[groupRef]bool),
 	}
 
 	if err := store.loadAll(); err != nil {
@@ -149,31 +168,52 @@ func (s *ConsumerGroupStateStore) groupPath(queueName, groupID string) string {
 	return filepath.Join(s.dir, queueName, groupID+".json")
 }
 
-// groupKey returns a unique key for a group.
-func groupKey(queueName, groupID string) string {
-	return queueName + "/" + groupID
-}
-
 // Save persists a consumer group state.
 func (s *ConsumerGroupStateStore) Save(state *types.ConsumerGroup) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ref := groupRef{queueName: state.QueueName, groupID: state.ID}
 
-	groups, ok := s.groups[state.QueueName]
+	s.mu.Lock()
+	groups, ok := s.groups[ref.queueName]
 	if !ok {
 		groups = make(map[string]*types.ConsumerGroup)
-		s.groups[state.QueueName] = groups
+		s.groups[ref.queueName] = groups
 	}
+	groups[ref.groupID] = state
+	s.dirty[ref] = true
+	s.mu.Unlock()
 
-	groups[state.ID] = state
-	s.dirty[groupKey(state.QueueName, state.ID)] = true
-
-	return s.saveGroup(state)
+	return s.flush(ref, state)
 }
 
-// saveGroup saves a single group to disk (must hold lock).
-func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroup) error {
-	path := s.groupPath(state.QueueName, state.ID)
+// flush writes one group to disk outside the map lock.
+//
+// The dirty flag is cleared before the write rather than after: a mutation
+// arriving mid-write must leave the group dirty for the next Sync, and clearing
+// afterwards would discard it. A failed write marks it dirty again so the state
+// is not silently dropped.
+func (s *ConsumerGroupStateStore) flush(ref groupRef, state *types.ConsumerGroup) error {
+	writeLock := s.writeLocks.KeyPair(ref.queueName, ref.groupID)
+	writeLock.Lock()
+	defer writeLock.Unlock()
+
+	s.mu.Lock()
+	delete(s.dirty, ref)
+	s.mu.Unlock()
+
+	if err := s.writeGroup(ref, state); err != nil {
+		s.mu.Lock()
+		s.dirty[ref] = true
+		s.mu.Unlock()
+		return err
+	}
+
+	return nil
+}
+
+// writeGroup encodes and replaces one group's file. Callers hold the group's
+// write lock; the map lock must not be held.
+func (s *ConsumerGroupStateStore) writeGroup(ref groupRef, state *types.ConsumerGroup) error {
+	path := s.groupPath(ref.queueName, ref.groupID)
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -190,7 +230,10 @@ func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroup) error {
 		SavedAt: time.Now().UnixMilli(),
 	}
 
-	data, err := json.MarshalIndent(wrapper, "", "  ")
+	// Compact rather than indented: this file is rewritten on every flush and
+	// carries the whole pending entry list, so the indentation is write
+	// amplification on a hot path, not readability anyone relies on.
+	data, err := json.Marshal(wrapper)
 	if err != nil {
 		return fmt.Errorf("failed to marshal consumer group state: %w", err)
 	}
@@ -205,8 +248,6 @@ func (s *ConsumerGroupStateStore) saveGroup(state *types.ConsumerGroup) error {
 		os.Remove(tempPath)
 		return fmt.Errorf("failed to rename consumer group file: %w", err)
 	}
-
-	delete(s.dirty, groupKey(state.QueueName, state.ID))
 
 	return nil
 }
@@ -232,8 +273,6 @@ func (s *ConsumerGroupStateStore) Get(queueName, groupID string) (*types.Consume
 // Delete removes a consumer group state.
 func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	groups, ok := s.groups[queueName]
 	if ok {
 		delete(groups, groupID)
@@ -242,7 +281,12 @@ func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 		}
 	}
 
-	delete(s.dirty, groupKey(queueName, groupID))
+	delete(s.dirty, groupRef{queueName: queueName, groupID: groupID})
+	s.mu.Unlock()
+
+	writeLock := s.writeLocks.KeyPair(queueName, groupID)
+	writeLock.Lock()
+	defer writeLock.Unlock()
 
 	path := s.groupPath(queueName, groupID)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -293,24 +337,32 @@ func (s *ConsumerGroupStateStore) ListAll() ([]*types.ConsumerGroup, error) {
 }
 
 // Sync saves all dirty states to disk.
+//
+// The dirty set names the queue and group directly, so resolving it is a map
+// lookup rather than a scan over every group in the process. The writes happen
+// after the map lock is released.
 func (s *ConsumerGroupStateStore) Sync() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	pending := make(map[groupRef]*types.ConsumerGroup, len(s.dirty))
+	for ref := range s.dirty {
+		groups, ok := s.groups[ref.queueName]
+		if !ok {
+			continue
+		}
+		if state, ok := groups[ref.groupID]; ok {
+			pending[ref] = state
+		}
+	}
+	s.mu.RUnlock()
 
-	var lastErr error
-	for key := range s.dirty {
-		for queueName, group := range s.groups {
-			for groupID, state := range group {
-				if groupKey(queueName, groupID) == key {
-					if err := s.saveGroup(state); err != nil {
-						lastErr = err
-					}
-				}
-			}
+	var errs []error
+	for ref, state := range pending {
+		if err := s.flush(ref, state); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return lastErr
+	return errors.Join(errs...)
 }
 
 // Close closes the store.
@@ -334,23 +386,23 @@ func (s *ConsumerGroupStateStore) Exists(queueName, groupID string) bool {
 
 // CreateIfNotExists creates a consumer group if it doesn't exist.
 func (s *ConsumerGroupStateStore) CreateIfNotExists(state *types.ConsumerGroup) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ref := groupRef{queueName: state.QueueName, groupID: state.ID}
 
-	groups, ok := s.groups[state.QueueName]
+	s.mu.Lock()
+	groups, ok := s.groups[ref.queueName]
 	if !ok {
 		groups = make(map[string]*types.ConsumerGroup)
-		s.groups[state.QueueName] = groups
+		s.groups[ref.queueName] = groups
 	}
-
-	if _, exists := groups[state.ID]; exists {
+	if _, exists := groups[ref.groupID]; exists {
+		s.mu.Unlock()
 		return nil
 	}
+	groups[ref.groupID] = state
+	s.dirty[ref] = true
+	s.mu.Unlock()
 
-	groups[state.ID] = state
-	s.dirty[groupKey(state.QueueName, state.ID)] = true
-
-	return s.saveGroup(state)
+	return s.flush(ref, state)
 }
 
 // UpdateCursor updates just the cursor for a queue.
@@ -368,12 +420,11 @@ func (s *ConsumerGroupStateStore) UpdateCursor(queueName, groupID string, cursor
 		return ErrGroupNotFound
 	}
 
-	c := state.GetCursor()
-	c.Cursor = cursor
-	c.Committed = committed
-	state.UpdatedAt = time.Now()
+	// Through the group's own lock: GetCursor hands out the live pointer, and
+	// writing it here would race everything reading the group.
+	state.SetCursor(cursor, committed)
 
-	s.dirty[groupKey(queueName, groupID)] = true
+	s.dirty[groupRef{queueName: queueName, groupID: groupID}] = true
 
 	return nil
 }

@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,67 @@ func (g *ConsumerGroup) GetCursor() *QueueCursor {
 		}
 	}
 	return g.Cursor
+}
+
+// SetCursor atomically updates both cursor positions.
+//
+// GetCursor hands out the live cursor pointer, so mutating it through that
+// pointer writes group state without the group's lock. Callers advancing a
+// cursor must come through here instead.
+func (g *ConsumerGroup) SetCursor(cursor, committed uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	g.Cursor.Cursor = cursor
+	g.Cursor.Committed = committed
+	g.UpdatedAt = time.Now()
+}
+
+// SetCursorPosition moves the cursor, leaving the committed safe point alone.
+func (g *ConsumerGroup) SetCursorPosition(cursor uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	g.Cursor.Cursor = cursor
+	g.UpdatedAt = time.Now()
+}
+
+// AdvanceCommitted records committed as the safe point, pulling the cursor up
+// to meet it when a caller has committed past where the group had read.
+func (g *ConsumerGroup) AdvanceCommitted(committed uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	if committed > g.Cursor.Cursor {
+		g.Cursor.Cursor = committed
+	}
+	g.Cursor.Committed = committed
+	g.UpdatedAt = time.Now()
+}
+
+// MarshalJSON encodes the group under its own read lock.
+//
+// Encoding reads PEL, Consumers and Cursor directly, which is exactly what
+// Snapshot exists to prevent callers from doing: without the lock a group being
+// persisted races every consumer mutating it. The field set and names are the
+// default ones, so the encoding is unchanged.
+func (g *ConsumerGroup) MarshalJSON() ([]byte, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	// plain sheds the methods, so this does not recurse. The conversion is on
+	// the pointer, so the mutex is never copied.
+	type plain ConsumerGroup
+	return json.Marshal((*plain)(g))
 }
 
 // ReplacePEL atomically replaces the entire PEL map.

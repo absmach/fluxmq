@@ -616,9 +616,7 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 	// Update the group state's cursor as well
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		c := group.GetCursor()
-		c.Cursor = cursor
-		group.UpdatedAt = time.Now()
+		group.SetCursorPosition(cursor)
 		if err := a.groupStore.Save(group); err != nil {
 			return err
 		}
@@ -636,12 +634,7 @@ func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string
 	// the underlying PEL.
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		c := group.GetCursor()
-		if committed > c.Cursor {
-			c.Cursor = committed
-		}
-		c.Committed = committed
-		group.UpdatedAt = time.Now()
+		group.AdvanceCommitted(committed)
 		if err := a.groupStore.Save(group); err != nil {
 			return err
 		}
@@ -712,8 +705,7 @@ func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.C
 		return
 	}
 
-	c := group.GetCursor()
-	c.Cursor = cursorState.Cursor
+	group.SetCursorPosition(cursorState.Cursor)
 }
 
 // syncPELFromStore syncs PEL state from the log store to the group state.
