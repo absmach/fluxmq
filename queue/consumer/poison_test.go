@@ -242,3 +242,63 @@ func TestPoisonCountersReachTheSnapshot(t *testing.T) {
 	assert.Zero(t, cleared.DLQTransferFailures, "reset must clear what snapshot reports")
 	assert.Zero(t, cleared.PoisonWithoutDLQ)
 }
+
+// The gauge answers "how many messages are stuck right now", which is the
+// question worth alerting on. A counter cannot: one permanently stuck message
+// increments it forever, so its rate tracks how often consumers looked rather
+// than how bad things are.
+func TestPoisonGaugeReflectsCurrentlyStuckEntries(t *testing.T) {
+	ctx := context.Background()
+	metrics := NewMetrics()
+	fixture := newPoisonFixture(t, nil, nil, metrics)
+
+	// The queue has no dead-letter destination, so the entry falls through to
+	// redelivery and stays stuck.
+	stolen, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.NoError(t, err)
+	message.Release(stolen)
+
+	snapshot := metrics.Snapshot()
+	assert.Equal(t, uint64(1), snapshot.PoisonPending, "the stuck entry must show in the gauge")
+	assert.Equal(t, uint64(1), snapshot.PoisonPendingNoDestination,
+		"an entry with nowhere to go must be distinguishable from a failing transfer")
+	assert.Equal(t, uint64(1), snapshot.PoisonWithoutDLQ)
+
+	// Make the entry stale again so a second consumer can examine it. Examining
+	// it must not inflate either number: it is the same entry, and the counter
+	// records entering the state rather than noticing it.
+	require.True(t, fixture.group.RequeuePending(0, testPoisonThief, time.Now().Add(-time.Hour)))
+
+	stolen, err = fixture.manager.stealWork(ctx, fixture.group, "consumer-other", nil)
+	require.NoError(t, err)
+	message.Release(stolen)
+
+	repeated := metrics.Snapshot()
+	assert.Equal(t, uint64(1), repeated.PoisonPending, "one entry must count once however often it is examined")
+	assert.Equal(t, uint64(1), repeated.PoisonWithoutDLQ,
+		"the counter must record the transition, not every observation")
+}
+
+// A gauge that only counts up is worse than none. An entry settled by an
+// ordinary ack leaves no dead-letter signal, so the sweep has to notice it is
+// gone.
+func TestPoisonGaugeFallsWhenTheEntryIsSettled(t *testing.T) {
+	ctx := context.Background()
+	metrics := NewMetrics()
+	fixture := newPoisonFixture(t, nil, nil, metrics)
+
+	stolen, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.NoError(t, err)
+	message.Release(stolen)
+	require.Equal(t, uint64(1), metrics.Snapshot().PoisonPending)
+
+	// The steal transferred ownership, so the thief is the one that settles it.
+	require.NoError(t, fixture.manager.Ack(ctx, testPoisonQueue, testPoisonGroup, testPoisonThief, 0))
+
+	// The next sweep is where a settled entry leaves the population.
+	_, err = fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.ErrorIs(t, err, ErrNoMessages)
+
+	assert.Zero(t, metrics.Snapshot().PoisonPending, "a settled entry must leave the gauge")
+	assert.Zero(t, metrics.Snapshot().PoisonPendingNoDestination)
+}

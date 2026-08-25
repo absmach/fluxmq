@@ -8,7 +8,6 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -68,10 +67,33 @@ type Manager struct {
 	stateMu    sync.Mutex
 	lastCommit map[string]time.Time
 
-	// dlqRetryAfter rate-limits dead-letter transfer retries per pending entry.
-	// It is deliberately in-memory: this is a retry throttle, not durable state,
-	// and losing it on restart costs one immediate retry per stuck entry.
-	dlqRetryAfter map[string]time.Time
+	// poison tracks pending entries that have exhausted their delivery budget
+	// and have not reached a dead-letter queue, keyed by group and then offset.
+	//
+	// It serves two purposes: it rate-limits transfer retries per entry, and its
+	// population is what the poison gauges report. Keying by group rather than
+	// flattening to one map is what makes both cheap — a sweep can prune one
+	// group's stale entries without walking every other group's.
+	//
+	// Deliberately in-memory. This is a throttle and a gauge, not durable state;
+	// losing it on restart costs one immediate retry per stuck entry.
+	poison map[string]map[uint64]poisonState
+
+	// poisonTotal and poisonNoDestination mirror the map's population so the
+	// gauges can be published without walking it.
+	poisonTotal         int
+	poisonNoDestination int
+}
+
+// poisonState records why one pending entry has not been dead-lettered.
+type poisonState struct {
+	retryAfter time.Time
+
+	// noDestination separates the two situations an operator handles
+	// differently: a transfer that keeps failing resolves itself when the
+	// destination recovers, while a queue with no dead-letter destination at
+	// all never resolves without a configuration change.
+	noDestination bool
 }
 
 // groupKey names the lock and map entries for one consumer group.
@@ -157,12 +179,12 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		config.Logger = slog.Default()
 	}
 	return &Manager{
-		queueStore:    queueStore,
-		groupStore:    groupStore,
-		config:        config,
-		lastCommit:    make(map[string]time.Time),
-		dlqRetryAfter: make(map[string]time.Time),
-		transfers:     make(map[transferKey]struct{}),
+		queueStore: queueStore,
+		groupStore: groupStore,
+		config:     config,
+		lastCommit: make(map[string]time.Time),
+		poison:     make(map[string]map[uint64]poisonState),
+		transfers:  make(map[transferKey]struct{}),
 	}
 }
 
@@ -620,6 +642,12 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*message.Envelope, error) {
 	// Get stealable entries
 	stealable := group.StealableEntries(m.config.VisibilityTimeout, consumerID)
+
+	// Drop tracked poison entries this group no longer holds. An entry settled
+	// by an ordinary ack leaves no other signal, so without this the gauge only
+	// ever counts up.
+	m.prunePoison(group)
+
 	if len(stealable) == 0 {
 		return nil, ErrNoMessages
 	}
@@ -750,29 +778,144 @@ func (m *Manager) dlqUnavailable(err error) bool {
 }
 
 // dlqTransferDue reports whether this entry's transfer may be attempted now,
-// and records the attempt when it may.
+// and records the attempt so the next one waits out the backoff.
 func (m *Manager) dlqTransferDue(group *types.ConsumerGroup, entry *types.PendingEntry) bool {
-	// dlqRetryAfter is shared across groups, so it needs its own lock even
-	// though the caller already holds this group's.
+	// poison is shared across groups, so it needs its own lock even though the
+	// caller already holds this group's.
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 
-	key := dlqRetryKey(group, entry)
-	if retryAt, throttled := m.dlqRetryAfter[key]; throttled && time.Now().Before(retryAt) {
+	key := groupKey(group.QueueName, group.ID)
+	entries, ok := m.poison[key]
+	if !ok {
+		entries = make(map[uint64]poisonState)
+		m.poison[key] = entries
+	}
+
+	state, tracked := entries[entry.Offset]
+	if tracked && time.Now().Before(state.retryAfter) {
 		return false
 	}
-	m.dlqRetryAfter[key] = time.Now().Add(m.config.DLQRetryBackoff)
+	if !tracked {
+		m.poisonTotal++
+	}
+	state.retryAfter = time.Now().Add(m.config.DLQRetryBackoff)
+	entries[entry.Offset] = state
+	m.publishPoisonGaugesLocked()
+
 	return true
 }
 
-func (m *Manager) clearDLQRetry(group *types.ConsumerGroup, entry *types.PendingEntry) {
+// markPoisonWithoutDestination records that this entry has nowhere to go, and
+// reports whether that is newly true. Callers count the transition rather than
+// the observation: without a destination the entry is examined on every steal
+// cycle, and counting those measures how often consumers looked rather than how
+// many messages are stuck.
+func (m *Manager) markPoisonWithoutDestination(group *types.ConsumerGroup, entry *types.PendingEntry) bool {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
-	delete(m.dlqRetryAfter, dlqRetryKey(group, entry))
+
+	key := groupKey(group.QueueName, group.ID)
+	entries, ok := m.poison[key]
+	if !ok {
+		entries = make(map[uint64]poisonState)
+		m.poison[key] = entries
+	}
+
+	// The entry may not be tracked yet: a queue with no destination at all is
+	// reported before any transfer is attempted, so this is where it enters the
+	// population rather than dlqTransferDue.
+	state, tracked := entries[entry.Offset]
+	if !tracked {
+		m.poisonTotal++
+	}
+	if state.noDestination {
+		return false
+	}
+
+	state.noDestination = true
+	entries[entry.Offset] = state
+	m.poisonNoDestination++
+	m.publishPoisonGaugesLocked()
+
+	return true
 }
 
-func dlqRetryKey(group *types.ConsumerGroup, entry *types.PendingEntry) string {
-	return group.QueueName + "\x00" + group.ID + "\x00" + strconv.FormatUint(entry.Offset, 10)
+// clearDLQRetry forgets an entry that is no longer poison, because it reached a
+// dead-letter queue or was settled some other way.
+func (m *Manager) clearDLQRetry(group *types.ConsumerGroup, entry *types.PendingEntry) {
+	m.forgetPoison(group.QueueName, group.ID, entry.Offset)
+}
+
+func (m *Manager) forgetPoison(queueName, groupID string, offset uint64) {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	m.forgetPoisonLocked(queueName, groupID, offset)
+	m.publishPoisonGaugesLocked()
+}
+
+func (m *Manager) forgetPoisonLocked(queueName, groupID string, offset uint64) {
+	key := groupKey(queueName, groupID)
+	entries, ok := m.poison[key]
+	if !ok {
+		return
+	}
+	state, tracked := entries[offset]
+	if !tracked {
+		return
+	}
+
+	delete(entries, offset)
+	m.poisonTotal--
+	if state.noDestination {
+		m.poisonNoDestination--
+	}
+	if len(entries) == 0 {
+		delete(m.poison, key)
+	}
+}
+
+// prunePoison drops tracked entries that are no longer pending in this group.
+//
+// Without it the map grows for the lifetime of the process: an entry settled by
+// an ordinary ack leaves no other signal, and a gauge that only ever counts up
+// is worse than none.
+//
+// The pending set is read only when this group actually has tracked entries.
+// Building it means walking the whole pending list, and the overwhelmingly
+// common case is a group with no poison at all — this runs on every steal
+// sweep, so paying for that walk unconditionally would tax the delivery path
+// to maintain a gauge that is almost always zero.
+func (m *Manager) prunePoison(group *types.ConsumerGroup) {
+	key := groupKey(group.QueueName, group.ID)
+
+	m.stateMu.Lock()
+	tracked := len(m.poison[key])
+	m.stateMu.Unlock()
+	if tracked == 0 {
+		return
+	}
+
+	pending := group.PendingOffsets()
+
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	for offset := range m.poison[key] {
+		if _, stillPending := pending[offset]; !stillPending {
+			m.forgetPoisonLocked(group.QueueName, group.ID, offset)
+		}
+	}
+	m.publishPoisonGaugesLocked()
+}
+
+// publishPoisonGaugesLocked reports the current population. Callers hold stateMu.
+func (m *Manager) publishPoisonGaugesLocked() {
+	if m.config.Metrics == nil {
+		return
+	}
+	m.config.Metrics.SetPoisonPending(uint64(m.poisonTotal), uint64(m.poisonNoDestination))
 }
 
 func (m *Manager) reportDLQTransferFailure(group *types.ConsumerGroup, entry *types.PendingEntry, stage string, err error) {
@@ -791,9 +934,14 @@ func (m *Manager) reportDLQTransferFailure(group *types.ConsumerGroup, entry *ty
 }
 
 func (m *Manager) reportPoisonWithoutDLQ(group *types.ConsumerGroup, entry *types.PendingEntry, err error) {
-	if m.config.Metrics != nil {
+	// Counted on the transition into the state, not on every observation. This
+	// entry is examined on every steal cycle for as long as it is stuck, so
+	// counting observations would measure how often consumers looked rather
+	// than how many messages have nowhere to go.
+	if m.markPoisonWithoutDestination(group, entry) && m.config.Metrics != nil {
 		m.config.Metrics.RecordPoisonWithoutDLQ()
 	}
+
 	// Throttled on the same schedule as a transfer retry: without a destination
 	// this entry is redelivered indefinitely, and one line per delivery would
 	// drown the log.

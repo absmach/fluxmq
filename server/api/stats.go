@@ -136,6 +136,12 @@ type queueAckStats struct {
 	// and these are what distinguish it from one.
 	DLQTransferFailures uint64 `json:"dlq_transfer_failures"`
 	PoisonWithoutDLQ    uint64 `json:"poison_without_dlq"`
+
+	// PoisonPending and PoisonPendingNoDestination are gauges: how many entries
+	// are stuck now, and how many of those have nowhere to go. These are the
+	// values worth alerting on; the counters above only say it has happened.
+	PoisonPending              uint64 `json:"poison_pending"`
+	PoisonPendingNoDestination uint64 `json:"poison_pending_no_destination"`
 }
 
 // queuePendingStats describes the pending entry list, which only classic queues
@@ -282,6 +288,9 @@ func (s *Server) buildStatsResponse() statsResponse {
 				DLQ:                 qm.DLQCount,
 				DLQTransferFailures: qm.DLQTransferFailures,
 				PoisonWithoutDLQ:    qm.PoisonWithoutDLQ,
+
+				PoisonPending:              qm.PoisonPending,
+				PoisonPendingNoDestination: qm.PoisonPendingNoDestination,
 			},
 			Pending: queuePendingStats{
 				Current:   qm.PELSize,

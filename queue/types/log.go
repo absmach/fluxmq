@@ -400,6 +400,25 @@ func (g *ConsumerGroup) PendingCount() int {
 	return count
 }
 
+// PendingOffsets returns the set of offsets currently in the pending list.
+//
+// A set rather than a slice because callers use it for membership tests, and a
+// copy because the caller reads it after the lock is released.
+func (g *ConsumerGroup) PendingOffsets() map[uint64]struct{} {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	offsets := make(map[uint64]struct{})
+	for _, entries := range g.PEL {
+		for _, entry := range entries {
+			if entry != nil {
+				offsets[entry.Offset] = struct{}{}
+			}
+		}
+	}
+	return offsets
+}
+
 // StealableEntries returns entries that are older than the visibility timeout.
 func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
 	g.mu.RLock()

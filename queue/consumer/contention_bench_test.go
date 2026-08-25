@@ -213,3 +213,65 @@ func BenchmarkConsumerSingleGroupContentionDurable(b *testing.B) {
 		}
 	})
 }
+
+// benchStealFixture builds one group holding a full pending list whose entries
+// are all stealable, which is what the steal sweep walks.
+func benchStealFixture(b *testing.B, pending int) (*Manager, *types.ConsumerGroup) {
+	b.Helper()
+
+	ctx := context.Background()
+	store := &benchGroupStore{Store: memlog.New()}
+	name := "steal-queue"
+
+	if err := store.CreateQueue(ctx, types.DefaultQueueConfig(name, name+"/#")); err != nil {
+		b.Fatalf("create queue: %v", err)
+	}
+
+	entries := make([]*types.PendingEntry, 0, pending)
+	for i := range pending {
+		if _, err := store.Append(ctx, name, message.New(name, []byte("payload"))); err != nil {
+			b.Fatalf("append: %v", err)
+		}
+		entries = append(entries, &types.PendingEntry{
+			Offset:     uint64(i),
+			ConsumerID: "owner",
+			ClaimedAt:  time.Now().Add(-time.Hour),
+		})
+	}
+
+	group := types.NewConsumerGroupState(name, "workers", "")
+	group.ReplacePEL(map[string][]*types.PendingEntry{"owner": entries})
+	if err := store.CreateConsumerGroup(ctx, group); err != nil {
+		b.Fatalf("create group: %v", err)
+	}
+
+	manager := NewManager(store, store, Config{
+		VisibilityTimeout: time.Millisecond,
+		MaxDeliveryCount:  1000,
+		ClaimBatchSize:    10,
+		StealBatchSize:    5,
+		MaxPELSize:        100000,
+	})
+
+	return manager, group
+}
+
+// BenchmarkStealSweepWithoutPoison measures the steal path for a group with no
+// poison entries, which is the overwhelmingly common case and the one the
+// poison gauge bookkeeping must not tax. A group with nothing tracked must not
+// pay to walk its pending list.
+func BenchmarkStealSweepWithoutPoison(b *testing.B) {
+	manager, group := benchStealFixture(b, 512)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		msg, err := manager.stealWork(ctx, group, "thief", nil)
+		if err != nil {
+			b.Fatalf("steal: %v", err)
+		}
+		message.Release(msg)
+		// Hand it back so the next iteration has the same work to do.
+		group.TransferPending(msg.Broker.Queue.Offset, "thief", "owner")
+	}
+}
