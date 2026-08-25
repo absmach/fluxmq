@@ -24,6 +24,7 @@ import (
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1929,6 +1930,11 @@ type mockQueueCoordinator struct {
 	createCalls []string
 	cursorCalls []string
 	commitCalls []string
+
+	// appendOnceKeys stands in for a replica's store, so a repeated key is
+	// answered the way a real FSM would answer it.
+	appendOnceCalls []string
+	appendOnceKeys  map[string]uint64
 }
 
 func (m *mockQueueCoordinator) Stop() error { return nil }
@@ -1978,6 +1984,20 @@ func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) err
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
+}
+
+func (m *mockQueueCoordinator) ApplyAppendOnceWithOptions(_ context.Context, queueName, dedupeKey string, msg *message.Envelope, _ queueraft.ApplyOptions) (uint64, bool, error) {
+	m.appendOnceCalls = append(m.appendOnceCalls, queueName+"/"+dedupeKey)
+	message.Release(msg)
+	if m.appendOnceKeys == nil {
+		m.appendOnceKeys = make(map[string]uint64)
+	}
+	if offset, seen := m.appendOnceKeys[dedupeKey]; seen {
+		return offset, true, nil
+	}
+	offset := uint64(len(m.appendOnceKeys))
+	m.appendOnceKeys[dedupeKey] = offset
+	return offset, false, nil
 }
 
 func (m *mockQueueCoordinator) ApplyTruncate(_ context.Context, _ string, _ uint64) error {
@@ -3947,4 +3967,134 @@ func TestCreateQueueRejectsFiltersThatCannotMatch(t *testing.T) {
 	if err := mgr.UpdateQueue(ctx, types.DefaultQueueConfig("working", "m/#/events")); err == nil {
 		t.Fatal("UpdateQueue accepted a filter that can never match")
 	}
+}
+
+// A dead-letter transfer appends to the destination before settling the source.
+// If it crashes or fails between those two steps, the retry must complete the
+// transition rather than repeat it: one destination record, not two.
+func TestMoveToDLQRetryProducesExactlyOneRecord(t *testing.T) {
+	ctx := context.Background()
+	store, err := logstorage.NewAdapter(t.TempDir(), logstorage.DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	mgr := NewManager(store, store, DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
+		DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	sourceCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	sourceCfg.DLQConfig.Enabled = true
+	require.NoError(t, mgr.CreateQueue(ctx, sourceCfg))
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+
+	// Two attempts at the same transfer: same source queue, group and offset,
+	// so both derive the same transfer identity.
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
+	retry := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"))
+
+	count, err := store.Count(ctx, "$dlq/tasks")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), count, "a retried transfer must not duplicate the destination record")
+
+	// A different source offset is a different transfer and must still land.
+	other := newQueueEnvelope("bad-msg-2", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
+	count, err = store.Count(ctx, "$dlq/tasks")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), count, "distinct transfers must not be collapsed")
+}
+
+// plainQueueCoordinator satisfies the manager's coordinator contract without
+// the deduplication capability. Embedding the interface rather than the mock
+// keeps the promoted method set narrow, which is what makes the assertion in
+// replicateTransferOnce fail the way a coordinator without it would.
+type plainQueueCoordinator struct {
+	queueraft.QueueCoordinator
+}
+
+func newReplicatedDLQManager(t *testing.T, coordinator queueraft.QueueCoordinator) (*Manager, *memlog.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	store := memlog.New()
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyReject
+	mgr := NewManager(store, newMockGroupStore(),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
+		config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mgr.SetRaftCoordinator(coordinator)
+
+	sourceCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	sourceCfg.DLQConfig.Enabled = true
+	require.NoError(t, mgr.CreateQueue(ctx, sourceCfg))
+
+	// The destination is created up front so it carries replication; left to
+	// moveToDLQ it would be auto-created as an ordinary local queue.
+	dlqCfg := types.DefaultQueueConfig("$dlq/tasks", "$dlq/tasks/#")
+	dlqCfg.DLQConfig.Enabled = false
+	dlqCfg.Replication.Enabled = true
+	require.NoError(t, mgr.CreateQueue(ctx, dlqCfg))
+
+	return mgr, store
+}
+
+func replicatedDLQCoordinator() *mockQueueCoordinator {
+	return &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{"$dlq/tasks": true},
+		leaderByQueue:     map[string]bool{"$dlq/tasks": true},
+	}
+}
+
+// A replicated destination must take the check through Raft, carrying the
+// transfer key, so every replica decides for itself whether the record exists.
+func TestMoveToDLQReplicatedDeduplicatesThroughRaft(t *testing.T) {
+	ctx := context.Background()
+	coordinator := replicatedDLQCoordinator()
+	mgr, _ := newReplicatedDLQManager(t, coordinator)
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
+
+	retry := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"),
+		"a transfer already replicated must settle rather than fail")
+
+	transferID := dlqTransferID("tasks", testGroupWorkers, 42)
+	assert.Equal(t, []string{"$dlq/tasks/" + transferID, "$dlq/tasks/" + transferID}, coordinator.appendOnceCalls,
+		"both attempts must replicate the same key")
+	assert.Empty(t, coordinator.appendCalls,
+		"a replicated transfer must not fall back to a plain append")
+	assert.Len(t, coordinator.appendOnceKeys, 1, "the retry must not create a second record")
+
+	// A different source offset is a different transfer and must still land.
+	other := newQueueEnvelope("bad-msg-2", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
+	assert.Len(t, coordinator.appendOnceKeys, 2, "distinct transfers must not be collapsed")
+}
+
+// A coordinator that cannot replicate the check must be reported, not silently
+// downgraded to a plain append: the downgrade is what duplicates the record.
+func TestMoveToDLQReplicatedRefusesCoordinatorWithoutCapability(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := newReplicatedDLQManager(t, plainQueueCoordinator{QueueCoordinator: replicatedDLQCoordinator()})
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
+	assert.ErrorIs(t, err, storage.ErrDeduplicationUnsupported)
+}
+
+// The transfer must not be reported as complete when this node cannot write to
+// the replicated destination: the source entry stays pending for a retry.
+func TestMoveToDLQReplicatedRequiresLeadership(t *testing.T) {
+	ctx := context.Background()
+	coordinator := replicatedDLQCoordinator()
+	mgr, _ := newReplicatedDLQManager(t, coordinator)
+	coordinator.leaderByQueue["$dlq/tasks"] = false
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
+	require.Error(t, err)
+	assert.Empty(t, coordinator.appendOnceCalls, "nothing may be replicated without leadership")
 }

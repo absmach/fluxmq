@@ -32,6 +32,7 @@ type Adapter struct {
 	queueStore *QueueConfigStore
 	groupStore *ConsumerGroupStateStore
 	topicIndex *storage.TopicIndex
+	dedupe     *dedupeIndexes
 }
 
 // AdapterConfig holds adapter configuration.
@@ -71,6 +72,7 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 		queueStore: queueStore,
 		groupStore: groupStore,
 		topicIndex: storage.NewTopicIndex(),
+		dedupe:     newDedupeIndexes(),
 	}
 
 	// Rebuild topic index from existing queues.
@@ -204,6 +206,9 @@ func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueC
 func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
 	// Remove from topic index
 	a.topicIndex.RemoveQueue(queueName)
+	// The records are going; a key without its record must not report a
+	// duplicate, and a recreated queue must start with an empty index.
+	a.dedupe.forget(queueName)
 
 	if err := a.queueStore.Delete(queueName); err != nil {
 		return err

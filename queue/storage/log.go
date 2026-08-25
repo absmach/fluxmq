@@ -28,6 +28,20 @@ var (
 	ErrQueueAlreadyExists = errors.New("queue already exists")
 )
 
+// Deduplication errors, reported by every DeduplicatingQueueStore so callers
+// can distinguish "this store will not deduplicate" from an ordinary append
+// failure without knowing which implementation they hold.
+var (
+	// ErrDeduplicationKeyRequired reports an AppendOnce with no key. Appending
+	// without one cannot be deduplicated, and silently degrading to a plain
+	// append would leave the caller believing otherwise.
+	ErrDeduplicationKeyRequired = errors.New("deduplication key is required")
+
+	// ErrDeduplicationUnsupported reports that a deduplicated append reached a
+	// store or a replication path that cannot perform the check.
+	ErrDeduplicationUnsupported = errors.New("deduplicated append is not supported")
+)
+
 // QueueStore provides append-only log storage with offset-based access.
 // Each queue has a single log where messages matching any of its topic patterns are stored.
 type QueueStore interface {
@@ -71,6 +85,33 @@ type QueueStore interface {
 
 	// Count returns the number of messages in the queue (tail - head).
 	Count(ctx context.Context, queueName string) (uint64, error)
+}
+
+// DeduplicatingQueueStore appends at most one record per deduplication key.
+//
+// It exists so a transfer that must not duplicate — a dead-letter move, which
+// appends to the destination before settling the source — can be retried after
+// a crash or a failed settlement without producing a second record.
+//
+// The key must be derivable from the source coordinates rather than generated
+// per attempt, so a retry computes the same key. It must also be persisted in
+// the record: an index that lives only in memory is rebuilt from the log, and
+// a key that was never written cannot be recovered.
+type DeduplicatingQueueStore interface {
+	// AppendOnce appends msg unless a record with the same dedupeKey is already
+	// present within the store's deduplication window, in which case it returns
+	// that record's offset and reports deduplicated.
+	//
+	// Ownership follows QueueStore.Append, with one addition: a nil error takes
+	// ownership of msg in the deduplicated case too, where the envelope is
+	// released rather than stored. An error leaves ownership with the caller.
+	AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (offset uint64, deduplicated bool, err error)
+
+	// DeduplicationWindow reports how far back AppendOnce can recognise a
+	// repeated key, in records. Beyond it a retry appends again, so callers that
+	// need a guarantee rather than a mitigation must retry within it. Zero means
+	// every record retained by the queue is covered.
+	DeduplicationWindow() int
 }
 
 // DurableQueueStore atomically appends and establishes a durability barrier for

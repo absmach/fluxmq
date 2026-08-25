@@ -1754,22 +1754,113 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 		DeliveryCount: deliveryCount,
 	}
 
-	if _, err := m.appendConfiguredMessage(ctx, dlqQueueName, dlqCfg, dlqMsg); err != nil {
+	deduplicated, err := m.appendTransferOnce(ctx, dlqQueueName, dlqCfg, transferID, dlqMsg)
+	if err != nil {
 		m.logger.Warn("failed to append message to DLQ",
 			slog.String("queue", queueName),
 			slog.String("dlq_queue", dlqQueueName),
-			slog.String("message_id", msg.Broker.Queue.MessageID),
+			slog.String("transfer_id", transferID),
 			slog.String("error", err.Error()))
 		return fmt.Errorf("append DLQ transfer %q: %w", transferID, err)
+	}
+	if deduplicated {
+		// A previous attempt already appended this transfer and failed before
+		// settling the source. Reporting success lets the caller settle now,
+		// which is what completes the transition rather than repeating it.
+		m.logger.Info("dead-letter transfer already present; settling source",
+			slog.String("queue", queueName),
+			slog.String("group", groupID),
+			slog.String("dlq_queue", dlqQueueName),
+			slog.String("transfer_id", transferID))
+		return nil
 	}
 
 	m.logger.Warn("message moved to DLQ",
 		slog.String("queue", queueName),
 		slog.String("group", groupID),
 		slog.String("dlq_queue", dlqQueueName),
-		slog.String("message_id", msg.Broker.Queue.MessageID),
+		slog.String("transfer_id", transferID),
 		slog.Int("delivery_count", deliveryCount))
 	return nil
+}
+
+// appendTransferOnce appends a transfer that must not duplicate.
+//
+// Deduplicating makes the retry safe: an attempt that appended and then failed
+// to settle its source can be repeated without producing a second record. A
+// replicated destination takes the check through Raft so every replica performs
+// it; a local one takes it through the store directly.
+func (m *Manager) appendTransferOnce(ctx context.Context, queueName string, config *types.QueueConfig, transferID string, msg *message.Envelope) (bool, error) {
+	if config.Replication.Enabled {
+		return m.replicateTransferOnce(ctx, queueName, config, transferID, msg)
+	}
+
+	deduplicating, ok := m.queueStore.(storage.DeduplicatingQueueStore)
+	if !ok {
+		// A store outside the two this repository ships may not offer the
+		// capability. Refusing the transfer would strand the entry, so it moves
+		// under the weaker at-least-once guarantee instead; the caller learns
+		// this by getting deduplicated=false on every attempt.
+		_, err := m.appendConfiguredMessage(ctx, queueName, config, msg)
+		return false, err
+	}
+
+	// AppendOnce consumes the envelope unless it fails, storing it or releasing
+	// it, so anything needed afterwards is read first.
+	topic := msg.Topic
+
+	offset, deduplicated, err := deduplicating.AppendOnce(ctx, queueName, transferID, msg)
+	if err != nil {
+		message.Release(msg)
+		return false, err
+	}
+	if err := m.completeAppend(queueName, topic, offset, nil); err != nil {
+		return false, err
+	}
+	m.delivery.Schedule(queueName)
+	return deduplicated, nil
+}
+
+// replicateTransferOnce runs a deduplicated transfer through Raft.
+//
+// The leader cannot decide alone whether the record already exists, because the
+// followers have no way to check its answer. Instead the key is replicated with
+// the entry and each replica asks its own store, reaching the same conclusion
+// from the same log.
+func (m *Manager) replicateTransferOnce(ctx context.Context, queueName string, config *types.QueueConfig, transferID string, msg *message.Envelope) (bool, error) {
+	// Raft serializes the caller's envelope and applies a decoded copy, so the
+	// original is finished once the apply returns, on every path.
+	defer message.Release(msg)
+	topic := msg.Topic
+
+	if m.raftCoordinator == nil {
+		return false, fmt.Errorf("%w: queue %q is replicated but no coordinator is configured", ErrReplicationUnavailable, queueName)
+	}
+	deduplicating, ok := m.raftCoordinator.(raft.DeduplicatingLogReplicator)
+	if !ok {
+		return false, fmt.Errorf("%w: coordinator for queue %q", storage.ErrDeduplicationUnsupported, queueName)
+	}
+	if err := m.replicationWriteReadiness(queueName); err != nil {
+		return false, err
+	}
+	if !m.raftCoordinator.IsLeaderForQueue(queueName) {
+		return false, fmt.Errorf("%w: queue %q is not led by this node", ErrReplicationUnavailable, queueName)
+	}
+
+	// Replication.Mode is deliberately not consulted: an async apply returns
+	// before the deduplication answer exists, and the caller settles its source
+	// on that answer.
+	offset, deduplicated, err := deduplicating.ApplyAppendOnceWithOptions(ctx, queueName, transferID, msg, raft.ApplyOptions{
+		AckTimeout: config.Replication.AckTimeout,
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := m.completeAppend(queueName, topic, offset, nil); err != nil {
+		return false, err
+	}
+	m.delivery.Schedule(queueName)
+	return deduplicated, nil
 }
 
 func dlqTransferID(queueName, groupID string, sourceOffset uint64) string {

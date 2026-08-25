@@ -528,6 +528,49 @@ func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, 
 	return 0, nil
 }
 
+// ApplyAppendOnceWithOptions submits an append that must not duplicate.
+//
+// The key travels in the log entry so every replica performs the check itself;
+// see applyAppendOnce for why the decision cannot be taken on the leader alone.
+// The caller learns whether this attempt created the record or found one an
+// earlier attempt had already written, which is what lets it settle a transfer
+// instead of repeating it.
+func (m *Manager) ApplyAppendOnceWithOptions(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope, opts ApplyOptions) (uint64, bool, error) {
+	if !m.IsEnabled() {
+		return 0, false, ErrRaftDisabled
+	}
+	if dedupeKey == "" {
+		return 0, false, storage.ErrDeduplicationKeyRequired
+	}
+
+	op := &Operation{
+		Type:      OpAppend,
+		QueueName: queueName,
+		Message:   msg,
+		DedupeKey: dedupeKey,
+	}
+
+	// A keyed append answers a question — is this record already here — and an
+	// async apply returns before the answer exists. The caller settles its
+	// source on that answer, so it has to be the committed one; async mode is
+	// overridden rather than honoured.
+	syncMode := true
+	opts.SyncMode = &syncMode
+
+	result, err := m.ApplyWithOptions(ctx, op, opts)
+	if err != nil {
+		return 0, false, err
+	}
+	if result == nil {
+		return 0, false, fmt.Errorf("%w: no apply result for deduplicated append", storage.ErrDeduplicationUnsupported)
+	}
+	if result.Error != nil {
+		return 0, false, result.Error
+	}
+
+	return result.Offset, result.Deduplicated, nil
+}
+
 // ApplyCreateQueue submits a create queue config operation to Raft.
 func (m *Manager) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
 	if !m.IsEnabled() {

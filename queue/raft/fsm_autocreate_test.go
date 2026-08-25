@@ -79,10 +79,13 @@ func (noopGroupStore) ListConsumers(context.Context, string, string) ([]*types.C
 	return nil, nil
 }
 
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func newTestLogFSM() (*LogFSM, *memlog.Store) {
 	queueStore := memlog.New()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewLogFSM(queueStore, noopGroupStore{}, logger), queueStore
+	return NewLogFSM(queueStore, noopGroupStore{}, discardLogger()), queueStore
 }
 
 func newQueuedEnvelope(id, topic string, data []byte) *message.Envelope {
