@@ -20,20 +20,41 @@ import (
 // syncRecordingStore reports durable-sync support and records which append path
 // each publish took. The in-memory log store does not claim durable sync, so a
 // double is the only way to exercise the fsync policy in a unit test.
+//
+// The embedded field is the concrete memory store rather than the QueueStore
+// interface, so the deduplicating methods are promoted. Embedding the interface
+// hid them: the manager's capability assertion failed, and the dead-letter test
+// below passed while exercising the non-deduplicating fallback instead of the
+// path a deployment actually takes.
 type syncRecordingStore struct {
-	storage.QueueStore
+	*memlog.Store
 	appends atomic.Int64
 	synced  atomic.Int64
+
+	// The deduplicating paths are recorded separately, so a transfer that
+	// deduplicated cannot be mistaken for one that also synced.
+	dedupeAppends atomic.Int64
+	dedupeSyncs   atomic.Int64
 }
 
 func (s *syncRecordingStore) Append(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.appends.Add(1)
-	return s.QueueStore.Append(ctx, queueName, msg)
+	return s.Store.Append(ctx, queueName, msg)
 }
 
 func (s *syncRecordingStore) AppendAndSync(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
 	s.synced.Add(1)
-	return s.QueueStore.Append(ctx, queueName, msg)
+	return s.Store.Append(ctx, queueName, msg)
+}
+
+func (s *syncRecordingStore) AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	s.dedupeAppends.Add(1)
+	return s.Store.AppendOnce(ctx, queueName, dedupeKey, msg)
+}
+
+func (s *syncRecordingStore) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	s.dedupeSyncs.Add(1)
+	return s.Store.AppendOnce(ctx, queueName, dedupeKey, msg)
 }
 
 func (s *syncRecordingStore) SupportsDurableSync() bool { return true }
@@ -58,7 +79,7 @@ func publishTo(t *testing.T, mgr *Manager, queueName string) {
 // the append is on disk. Before this, only the protected internal stream took
 // that path and every ordinary publish acknowledged from the page cache.
 func TestAckDurabilityFsyncSyncsDurableQueuePublish(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
 
 	require.NoError(t, mgr.CreateQueue(context.Background(), types.DefaultQueueConfig("durable", "$queue/durable")))
@@ -68,8 +89,12 @@ func TestAckDurabilityFsyncSyncsDurableQueuePublish(t *testing.T) {
 	require.Equal(t, int64(0), store.appends.Load(), "durable publish took the buffered path")
 }
 
+// A dead-letter transfer must be idempotent and as durable as its queue asks.
+// The transfer settles its source on success, so on an fsync queue the
+// destination record has to be on disk before that success is reported;
+// deduplicating must not quietly downgrade the queue's durability.
 func TestDLQTransferUsesConfiguredDurabilityPath(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
 	ctx := context.Background()
 
@@ -78,15 +103,34 @@ func TestDLQTransferUsesConfiguredDurabilityPath(t *testing.T) {
 		newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")),
 		7, 5, "decode failed", "$dlq/"))
 
-	require.Equal(t, int64(1), store.synced.Load(), "DLQ append did not use the durable path")
-	require.Equal(t, int64(0), store.appends.Load(), "DLQ append bypassed fsync policy")
+	require.Equal(t, int64(1), store.dedupeSyncs.Load(),
+		"DLQ transfer did not take the durable deduplicating path")
+	require.Zero(t, store.dedupeAppends.Load(), "DLQ transfer deduplicated without syncing")
+	require.Zero(t, store.appends.Load(), "DLQ transfer bypassed deduplication")
+}
+
+// The buffered policy takes the deduplicating path too. What the policy changes
+// is the barrier, not the idempotency.
+func TestDLQTransferDeduplicatesOnBufferedQueues(t *testing.T) {
+	store := &syncRecordingStore{Store: memlog.New()}
+	mgr := newDurabilityManager(t, store, AckDurabilityBuffered)
+	ctx := context.Background()
+
+	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
+		newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")),
+		7, 5, "decode failed", "$dlq/"))
+
+	require.Equal(t, int64(1), store.dedupeAppends.Load(),
+		"a buffered DLQ transfer must still deduplicate")
+	require.Zero(t, store.dedupeSyncs.Load())
 }
 
 // TestAckDurabilityBufferedSkipsTheSync covers the opt-out: a deployment that
 // chooses throughput gets the unsynced path, and the loss window is the store's
 // sync interval.
 func TestAckDurabilityBufferedSkipsTheSync(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityBuffered)
 
 	require.NoError(t, mgr.CreateQueue(context.Background(), types.DefaultQueueConfig("durable", "$queue/durable")))
@@ -100,7 +144,7 @@ func TestAckDurabilityBufferedSkipsTheSync(t *testing.T) {
 // ephemeral queue does not survive a restart in the first place, so paying for
 // a barrier on it buys nothing.
 func TestAckDurabilityFsyncSkipsEphemeralQueues(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
 
 	require.NoError(t, mgr.CreateQueue(context.Background(), types.DefaultEphemeralQueueConfig("ephemeral", "$queue/ephemeral")))
@@ -126,7 +170,7 @@ func TestAckDurabilityFallsBackWhenStoreCannotSync(t *testing.T) {
 // queue as well as the broker: one audit queue can demand the barrier without
 // imposing ~5ms per publish on the telemetry queues beside it.
 func TestQueueAckDurabilityOverridesBrokerDefault(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityBuffered)
 	ctx := context.Background()
 
@@ -147,7 +191,7 @@ func TestQueueAckDurabilityOverridesBrokerDefault(t *testing.T) {
 // TestQueueBufferedOverridesFsyncDefault covers the other direction: a broker
 // that syncs by default still lets one high-volume queue opt out.
 func TestQueueBufferedOverridesFsyncDefault(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
 	ctx := context.Background()
 
@@ -161,7 +205,7 @@ func TestQueueBufferedOverridesFsyncDefault(t *testing.T) {
 }
 
 func TestQueueBlankAckDurabilityUsesBrokerDefault(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityFsync)
 
 	audit := types.DefaultQueueConfig("audit", "$queue/audit")
@@ -183,7 +227,7 @@ func TestReplicatedQueueRejectsFsyncAckDurability(t *testing.T) {
 		{name: "queue override", brokerPolicy: AckDurabilityBuffered, queueOverride: string(AckDurabilityFsync)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := &syncRecordingStore{QueueStore: memlog.New()}
+			store := &syncRecordingStore{Store: memlog.New()}
 			mgr := newDurabilityManager(t, store, tc.brokerPolicy)
 
 			cfg := types.DefaultQueueConfig("replicated", "$queue/replicated")
@@ -197,7 +241,7 @@ func TestReplicatedQueueRejectsFsyncAckDurability(t *testing.T) {
 }
 
 func TestReplicatedEphemeralQueueIgnoresFsyncAckDurability(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	managerConfig := DefaultConfig()
 	managerConfig.AckDurability = AckDurabilityFsync
 	managerConfig.WritePolicy = WritePolicyReject
@@ -214,7 +258,7 @@ func TestReplicatedEphemeralQueueIgnoresFsyncAckDurability(t *testing.T) {
 }
 
 func TestCreateQueueRejectsUnknownAckDurability(t *testing.T) {
-	store := &syncRecordingStore{QueueStore: memlog.New()}
+	store := &syncRecordingStore{Store: memlog.New()}
 	mgr := newDurabilityManager(t, store, AckDurabilityBuffered)
 
 	cfg := types.DefaultQueueConfig("audit", "$queue/audit")

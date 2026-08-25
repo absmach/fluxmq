@@ -316,15 +316,15 @@ func (s *mockGroupStore) RequeuePendingEntry(ctx context.Context, queueName, gro
 	if s.groups[queueName] == nil || s.groups[queueName][groupID] == nil {
 		return storage.ErrConsumerNotFound
 	}
-	entry, owner := s.groups[queueName][groupID].FindPending(offset)
-	if entry == nil {
+	group := s.groups[queueName][groupID]
+	_, owner := group.FindPending(offset)
+	if owner == "" {
 		return storage.ErrPendingEntryNotFound
 	}
 	if owner != consumerID {
 		return storage.ErrConsumerNotFound
 	}
-	entry.ClaimedAt = attemptedAt
-	entry.DeliveryCount++
+	group.RequeuePending(offset, consumerID, attemptedAt)
 	return nil
 }
 
@@ -3338,8 +3338,8 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	updated := updatedGroup.GetConsumer(testConsumerOne)
-	if updated == nil {
+	updated, registered := updatedGroup.GetConsumer(testConsumerOne)
+	if !registered {
 		t.Fatalf("expected consumer to exist")
 	}
 	if !updated.LastHeartbeat.After(before) {

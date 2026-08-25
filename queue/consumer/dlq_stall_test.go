@@ -218,6 +218,6 @@ func TestFailedTransferReleasesReservationAndKeepsEntryPending(t *testing.T) {
 
 	group, err := f.manager.groupStore.GetConsumerGroup(ctx, "poisoned", stallGroup)
 	require.NoError(t, err)
-	entry, _ := group.FindPending(f.poisonAt)
-	assert.NotNil(t, entry, "a failed transfer must leave the source pending")
+	_, owner := group.FindPending(f.poisonAt)
+	assert.NotEmpty(t, owner, "a failed transfer must leave the source pending")
 }

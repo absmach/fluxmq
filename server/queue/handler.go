@@ -625,13 +625,14 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
-	c := group.GetConsumer(msg.ConsumerId)
-	if c == nil {
+	// Through the group's lock rather than a pointer it handed out, which is
+	// what let this write race the encoder that persists the group.
+	c, registered := group.TouchConsumer(msg.ConsumerId, time.Now())
+	if !registered {
 		return nil, newConnectError(queue.ErrorCodeNotFound, fmt.Errorf("consumer not found"))
 	}
 
-	c.LastHeartbeat = time.Now()
-	if err := h.groupStore.RegisterConsumer(ctx, msg.QueueName, msg.GroupId, c); err != nil {
+	if err := h.groupStore.RegisterConsumer(ctx, msg.QueueName, msg.GroupId, &c); err != nil {
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 

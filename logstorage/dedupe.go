@@ -21,6 +21,12 @@ import (
 // written. The transfers this protects — a dead-letter move retried after a
 // failed settlement — repeat within seconds, so a window of recent records
 // covers the case that matters at a cost that does not grow with the log.
+//
+// One rule governs a key's lifetime, and append, recovery and truncation all
+// enforce it: a key is recognised while its record is retained and within this
+// many records of the tail. The live index is bounded to the window on append
+// so it cannot remember more than a restart would, and truncation drops keys
+// whose records are gone so it cannot remember a record that is not there.
 const DefaultDeduplicationWindow = 4096
 
 // dedupeIndex maps deduplication keys to the offsets already carrying them, for
@@ -72,11 +78,66 @@ func (d *dedupeIndexes) forget(queueName string) {
 	delete(d.byQueue, queueName)
 }
 
+// pruneBelow drops keys whose record is no longer at or after minOffset.
+//
+// A key that outlives its record is worse than a missing key: AppendOnce would
+// report the transfer already present, at an offset holding nothing, and the
+// caller would settle its source against a record that does not exist. That
+// loses the message, which is the failure this whole mechanism exists to
+// prevent.
+func (d *dedupeIndexes) pruneBelow(queueName string, minOffset uint64) {
+	d.mu.RLock()
+	index, ok := d.byQueue[queueName]
+	d.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	for key, offset := range index.offsets {
+		if offset < minOffset {
+			delete(index.offsets, key)
+		}
+	}
+}
+
+// pruneToWindowLocked bounds the live index to the same distance a rebuild can
+// recover, so a key is recognised for as long before a restart as after one.
+// Callers hold index.mu.
+func (index *dedupeIndex) pruneToWindowLocked(tail uint64) {
+	if uint64(len(index.offsets)) <= uint64(DefaultDeduplicationWindow) {
+		return
+	}
+	if tail <= uint64(DefaultDeduplicationWindow) {
+		return
+	}
+
+	cutoff := tail - uint64(DefaultDeduplicationWindow)
+	for key, offset := range index.offsets {
+		if offset < cutoff {
+			delete(index.offsets, key)
+		}
+	}
+}
+
 // AppendOnce implements storage.DeduplicatingQueueStore.
 //
 // The check and the append are serialised per queue, so two concurrent retries
 // of the same transfer cannot both observe an empty index and both append.
 func (a *Adapter) AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.Append)
+}
+
+// appendOnce performs the check and the append as one operation, writing
+// through the supplied append so the caller's durability policy survives the
+// deduplication rather than being replaced by it.
+func (a *Adapter) appendOnce(
+	ctx context.Context,
+	queueName, dedupeKey string,
+	msg *message.Envelope,
+	append func(context.Context, string, *message.Envelope) (uint64, error),
+) (uint64, bool, error) {
 	if dedupeKey == "" {
 		return 0, false, storage.ErrDeduplicationKeyRequired
 	}
@@ -106,16 +167,22 @@ func (a *Adapter) AppendOnce(ctx context.Context, queueName, dedupeKey string, m
 	// The key must reach the record, or a rebuild after a crash cannot see it.
 	msg.Broker.Transfer.ID = dedupeKey
 
-	appended, err := a.Append(ctx, queueName, msg)
+	appended, err := append(ctx, queueName, msg)
 	if err != nil {
 		return 0, false, err
 	}
 
 	index.mu.Lock()
 	index.offsets[dedupeKey] = appended
+	index.pruneToWindowLocked(appended + 1)
 	index.mu.Unlock()
 
 	return appended, false, nil
+}
+
+// AppendOnceAndSync implements storage.DeduplicatingQueueStore.
+func (a *Adapter) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.AppendAndSync)
 }
 
 // DeduplicationWindow implements storage.DeduplicatingQueueStore.

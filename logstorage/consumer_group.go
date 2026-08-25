@@ -199,6 +199,25 @@ func encodePathComponent(name string) string {
 	return encoded.String()
 }
 
+// contained returns path only when it stays inside the store directory.
+//
+// Group IDs come from clients and queue names from configuration, and neither
+// carries a containment contract: a group named ".." joined into a path
+// resolves outside the store, and Delete would then remove a file belonging to
+// something else entirely. Canonical paths are encoded and cannot escape, but
+// they are checked here too rather than trusted, so containment holds no matter
+// which path construction a caller used.
+func (s *ConsumerGroupStateStore) contained(path string) (string, bool) {
+	relative, err := filepath.Rel(s.dir, path)
+	if err != nil {
+		return "", false
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return path, true
+}
+
 // groupPath returns the path to a group's state file.
 func (s *ConsumerGroupStateStore) groupPath(queueName, groupID string) string {
 	return filepath.Join(s.dir, encodePathComponent(queueName), encodePathComponent(groupID)+".json")
@@ -259,7 +278,10 @@ func (s *ConsumerGroupStateStore) flush(ref groupRef, state *types.ConsumerGroup
 // writeGroup encodes and replaces one group's file. Callers hold the group's
 // write lock; the map lock must not be held.
 func (s *ConsumerGroupStateStore) writeGroup(ref groupRef, state *types.ConsumerGroup) error {
-	path := s.groupPath(ref.queueName, ref.groupID)
+	path, ok := s.contained(s.groupPath(ref.queueName, ref.groupID))
+	if !ok {
+		return fmt.Errorf("consumer group %q/%q resolves outside the group directory", ref.queueName, ref.groupID)
+	}
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -334,18 +356,23 @@ func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 	writeLock.Lock()
 	defer writeLock.Unlock()
 
-	for _, path := range []string{s.groupPath(queueName, groupID), s.legacyGroupPath(queueName, groupID)} {
+	for _, candidate := range []string{s.groupPath(queueName, groupID), s.legacyGroupPath(queueName, groupID)} {
+		path, ok := s.contained(candidate)
+		if !ok {
+			continue
+		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 
 	// Clean up empty queue directories, canonical and legacy alike.
-	for _, dir := range []string{
+	for _, candidate := range []string{
 		filepath.Join(s.dir, encodePathComponent(queueName)),
 		filepath.Join(s.dir, queueName),
 	} {
-		if dir == s.dir {
+		dir, ok := s.contained(candidate)
+		if !ok || dir == s.dir {
 			continue
 		}
 		entries, err := os.ReadDir(dir)

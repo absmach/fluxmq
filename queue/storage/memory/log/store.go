@@ -841,6 +841,16 @@ func (s *Store) AppendOnce(ctx context.Context, queueName, dedupeKey string, msg
 	return offset, false, nil
 }
 
+// AppendOnceAndSync implements storage.DeduplicatingQueueStore.
+//
+// The whole log is in memory, so there is no barrier to establish and no
+// weaker guarantee being offered: a record is exactly as durable as everything
+// else this store holds. A queue that asks for fsync is refused before it
+// reaches here, because the store reports no durable sync support.
+func (s *Store) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	return s.AppendOnce(ctx, queueName, dedupeKey, msg)
+}
+
 // DeduplicationWindow implements storage.DeduplicatingQueueStore. Every retained
 // record is covered: the index is pruned only by truncation.
 func (s *Store) DeduplicationWindow() int { return 0 }

@@ -776,7 +776,7 @@ func TestDeliverStreamDoesNotAdvanceCursorForMissingLocalTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get group failed: %v", err)
 	}
-	if updated.GetConsumer("c1") != nil {
+	if _, registered := updated.GetConsumer("c1"); registered {
 		t.Fatal("expected disconnected consumer to be removed")
 	}
 	if cursor := updated.CursorView().Cursor; cursor != 0 {
@@ -812,7 +812,7 @@ func TestDeliverStreamKeepsConsumerForQueueableOfflineTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get group failed: %v", err)
 	}
-	if updated.GetConsumer("c1") == nil {
+	if _, registered := updated.GetConsumer("c1"); !registered {
 		t.Fatal("expected queueable offline consumer to remain registered")
 	}
 	if cursor := updated.CursorView().Cursor; cursor != 1 {
@@ -884,7 +884,7 @@ func TestDeliverStreamRemovesConsumerOnClientNotConnectedError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get group failed: %v", err)
 	}
-	if updated.GetConsumer("c1") != nil {
+	if _, registered := updated.GetConsumer("c1"); registered {
 		t.Fatal("expected stale consumer to be removed")
 	}
 	if cursor := updated.CursorView().Cursor; cursor != 0 {
@@ -926,7 +926,7 @@ func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *tes
 	if err != nil {
 		t.Fatalf("get group failed: %v", err)
 	}
-	if updated.GetConsumer(testRemoteConsumerID) != nil {
+	if _, registered := updated.GetConsumer(testRemoteConsumerID); registered {
 		t.Fatal("expected stale remote consumer to be removed")
 	}
 	if cursor := updated.CursorView().Cursor; cursor != 0 {
@@ -970,7 +970,7 @@ func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccess
 	if err != nil {
 		t.Fatalf("get group failed: %v", err)
 	}
-	if updated.GetConsumer(testRemoteConsumerID) == nil {
+	if _, registered := updated.GetConsumer(testRemoteConsumerID); !registered {
 		t.Fatal("expected remote consumer to remain registered")
 	}
 	if cursor := updated.CursorView().Cursor; cursor != 1 {

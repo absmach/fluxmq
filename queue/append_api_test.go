@@ -85,7 +85,7 @@ func TestAppendBatchToQueueRejectsUnsupportedAtomicContracts(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("fsync", func(t *testing.T) {
-		store := &syncRecordingStore{QueueStore: memlog.New()}
+		store := &syncRecordingStore{Store: memlog.New()}
 		mgr := newDurabilityManager(t, store, AckDurabilityFsync)
 		require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("fsync", "fsync/#")))
 

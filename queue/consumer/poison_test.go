@@ -220,3 +220,25 @@ func TestSuccessfulDLQTransferSettlesEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, fresh.PendingCount(), "a transferred entry must leave the pending list")
 }
+
+// The poison counters have to survive the trip through Snapshot, because that
+// is the only way an operator sees them. Incrementing a field that Snapshot
+// omits produces a counter that is always zero from outside the process, which
+// is indistinguishable from nothing going wrong.
+func TestPoisonCountersReachTheSnapshot(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordDLQTransferFailure()
+	metrics.RecordDLQTransferFailure()
+	metrics.RecordPoisonWithoutDLQ()
+
+	snapshot := metrics.Snapshot()
+	assert.Equal(t, uint64(2), snapshot.DLQTransferFailures,
+		"dead-letter transfer failures must be observable outside the process")
+	assert.Equal(t, uint64(1), snapshot.PoisonWithoutDLQ,
+		"poison messages without a destination must be observable outside the process")
+
+	metrics.Reset()
+	cleared := metrics.Snapshot()
+	assert.Zero(t, cleared.DLQTransferFailures, "reset must clear what snapshot reports")
+	assert.Zero(t, cleared.PoisonWithoutDLQ)
+}

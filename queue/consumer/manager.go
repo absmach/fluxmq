@@ -168,6 +168,13 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 // GetOrCreateGroup retrieves or creates a consumer group.
 func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool) (*types.ConsumerGroup, error) {
+	// Same serialization as every other transition on this group. Without it,
+	// two subscribers arriving together can both find no group and both create
+	// one, and a mode negotiated by one can be overwritten by the other.
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
 	// Try to get existing group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err == nil {
@@ -213,6 +220,10 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 
 // RegisterConsumer adds a consumer to a group.
 func (m *Manager) RegisterConsumer(ctx context.Context, queueName, groupID, consumerID, clientID, proxyNodeID string) error {
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
 	consumer := &types.ConsumerInfo{
 		ID:            consumerID,
 		ClientID:      clientID,
@@ -226,6 +237,10 @@ func (m *Manager) RegisterConsumer(ctx context.Context, queueName, groupID, cons
 
 // UnregisterConsumer removes a consumer from a group.
 func (m *Manager) UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
 	return m.groupStore.UnregisterConsumer(ctx, queueName, groupID, consumerID)
 }
 
@@ -838,8 +853,8 @@ func (m *Manager) NackWithDelay(ctx context.Context, queueName, groupID, consume
 	}
 
 	// Find the pending entry
-	entry, ownerID := group.FindPending(offset)
-	if entry == nil {
+	_, ownerID := group.FindPending(offset)
+	if ownerID == "" {
 		return ErrMessageNotPending
 	}
 
@@ -912,7 +927,7 @@ func (m *Manager) prepareTransfer(ctx context.Context, key transferKey, consumer
 		return nil, 0, err
 	}
 	entry, ownerID := group.FindPending(key.offset)
-	if entry == nil {
+	if ownerID == "" {
 		return nil, 0, ErrMessageNotPending
 	}
 	if ownerID != consumerID {
@@ -1142,13 +1157,15 @@ func (m *Manager) UpdateHeartbeat(ctx context.Context, queueName, groupID, consu
 		return err
 	}
 
-	consumer := group.GetConsumer(consumerID)
-	if consumer == nil {
+	// Through the group's lock: the heartbeat used to be written through a
+	// pointer GetConsumer handed out, with nothing serialising it against the
+	// encoder that persists the group.
+	consumer, ok := group.TouchConsumer(consumerID, time.Now())
+	if !ok {
 		return ErrConsumerNotFound
 	}
 
-	consumer.LastHeartbeat = time.Now()
-	return m.groupStore.RegisterConsumer(ctx, queueName, groupID, consumer)
+	return m.groupStore.RegisterConsumer(ctx, queueName, groupID, &consumer)
 }
 
 // CleanupStaleConsumers removes consumers that haven't sent a heartbeat within the timeout.

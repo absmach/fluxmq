@@ -504,7 +504,18 @@ func (c *recordCore) appendTransferOnce(ctx context.Context, queueName string, c
 	// it, so anything needed afterwards is read first.
 	topic := msg.Topic
 
-	offset, deduplicated, err := deduplicating.AppendOnce(ctx, queueName, transferID, msg)
+	// The transfer settles its source on this call's success, so on a queue
+	// configured for fsync the record has to be durable before that success is
+	// reported. Deduplicating must not quietly downgrade the queue's durability.
+	appendOnce := deduplicating.AppendOnce
+	if c.ackDurabilityFor(config) == AckDurabilityFsync && config.Durable {
+		if _, err := c.durableStore(); err != nil {
+			return false, err
+		}
+		appendOnce = deduplicating.AppendOnceAndSync
+	}
+
+	offset, deduplicated, err := appendOnce(ctx, queueName, transferID, msg)
 	if err != nil {
 		message.Release(msg)
 		return false, err

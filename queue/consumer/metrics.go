@@ -197,23 +197,25 @@ func (m *Metrics) GetAverageStealLatency() time.Duration {
 // Snapshot returns a copy of current metrics.
 func (m *Metrics) Snapshot() Metrics {
 	return Metrics{
-		ClaimAttempts:     atomic.LoadUint64(&m.ClaimAttempts),
-		ClaimSuccesses:    atomic.LoadUint64(&m.ClaimSuccesses),
-		ClaimFailures:     atomic.LoadUint64(&m.ClaimFailures),
-		StealAttempts:     atomic.LoadUint64(&m.StealAttempts),
-		StealSuccesses:    atomic.LoadUint64(&m.StealSuccesses),
-		StealFailures:     atomic.LoadUint64(&m.StealFailures),
-		AckCount:          atomic.LoadUint64(&m.AckCount),
-		NackCount:         atomic.LoadUint64(&m.NackCount),
-		RejectCount:       atomic.LoadUint64(&m.RejectCount),
-		DLQCount:          atomic.LoadUint64(&m.DLQCount),
-		CaptureFailures:   atomic.LoadUint64(&m.CaptureFailures),
-		CaptureDropped:    atomic.LoadUint64(&m.CaptureDropped),
-		TotalClaimLatency: atomic.LoadUint64(&m.TotalClaimLatency),
-		TotalStealLatency: atomic.LoadUint64(&m.TotalStealLatency),
-		TotalAckLatency:   atomic.LoadUint64(&m.TotalAckLatency),
-		PELSize:           atomic.LoadUint64(&m.PELSize),
-		PELHighWater:      atomic.LoadUint64(&m.PELHighWater),
+		ClaimAttempts:       atomic.LoadUint64(&m.ClaimAttempts),
+		ClaimSuccesses:      atomic.LoadUint64(&m.ClaimSuccesses),
+		ClaimFailures:       atomic.LoadUint64(&m.ClaimFailures),
+		StealAttempts:       atomic.LoadUint64(&m.StealAttempts),
+		StealSuccesses:      atomic.LoadUint64(&m.StealSuccesses),
+		StealFailures:       atomic.LoadUint64(&m.StealFailures),
+		AckCount:            atomic.LoadUint64(&m.AckCount),
+		NackCount:           atomic.LoadUint64(&m.NackCount),
+		RejectCount:         atomic.LoadUint64(&m.RejectCount),
+		DLQCount:            atomic.LoadUint64(&m.DLQCount),
+		DLQTransferFailures: atomic.LoadUint64(&m.DLQTransferFailures),
+		PoisonWithoutDLQ:    atomic.LoadUint64(&m.PoisonWithoutDLQ),
+		CaptureFailures:     atomic.LoadUint64(&m.CaptureFailures),
+		CaptureDropped:      atomic.LoadUint64(&m.CaptureDropped),
+		TotalClaimLatency:   atomic.LoadUint64(&m.TotalClaimLatency),
+		TotalStealLatency:   atomic.LoadUint64(&m.TotalStealLatency),
+		TotalAckLatency:     atomic.LoadUint64(&m.TotalAckLatency),
+		PELSize:             atomic.LoadUint64(&m.PELSize),
+		PELHighWater:        atomic.LoadUint64(&m.PELHighWater),
 	}
 }
 
@@ -229,6 +231,8 @@ func (m *Metrics) Reset() {
 	atomic.StoreUint64(&m.NackCount, 0)
 	atomic.StoreUint64(&m.RejectCount, 0)
 	atomic.StoreUint64(&m.DLQCount, 0)
+	atomic.StoreUint64(&m.DLQTransferFailures, 0)
+	atomic.StoreUint64(&m.PoisonWithoutDLQ, 0)
 	atomic.StoreUint64(&m.CaptureFailures, 0)
 	atomic.StoreUint64(&m.CaptureDropped, 0)
 	atomic.StoreUint64(&m.TotalClaimLatency, 0)

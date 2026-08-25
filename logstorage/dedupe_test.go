@@ -175,3 +175,58 @@ func TestAppendOnceRequiresKey(t *testing.T) {
 	_, _, err := adapter.AppendOnce(ctx, testDedupeQueue, "", dedupeEnvelope("one"))
 	assert.ErrorIs(t, err, storage.ErrDeduplicationKeyRequired)
 }
+
+// A truncated record takes its deduplication key with it. Keeping the key would
+// tell a retried transfer that its record is already present, at an offset that
+// now holds nothing, and the caller would settle its source against a record
+// that does not exist — losing the message this mechanism exists to protect.
+func TestTruncateDropsKeysForRemovedRecords(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	first, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("one"))
+	require.NoError(t, err)
+	_, _, err = adapter.AppendOnce(ctx, testDedupeQueue, "dlq-second", dedupeEnvelope("two"))
+	require.NoError(t, err)
+
+	require.NoError(t, adapter.Truncate(ctx, testDedupeQueue, first+1))
+
+	// The first key's record is gone, so the transfer must be appended again
+	// rather than reported as already present.
+	retried, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.False(t, duplicated, "a key whose record was truncated must not report a duplicate")
+	assert.NotEqual(t, first, retried)
+
+	stored, err := adapter.Read(ctx, testDedupeQueue, retried)
+	require.NoError(t, err)
+	t.Cleanup(func() { message.Release(stored) })
+	assert.Equal(t, "retry", string(stored.PayloadBytes()), "the retried transfer must be readable")
+
+	// A key whose record survived truncation is still recognised.
+	_, duplicated, err = adapter.AppendOnce(ctx, testDedupeQueue, "dlq-second", dedupeEnvelope("again"))
+	require.NoError(t, err)
+	assert.True(t, duplicated, "a retained record's key must still deduplicate")
+}
+
+// The live index must not recognise a key further back than a rebuild can, or
+// the same retry is deduplicated before a restart and duplicated after one.
+func TestLiveIndexIsBoundedToTheRecoveryWindow(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	_, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("first"))
+	require.NoError(t, err)
+
+	for i := range DefaultDeduplicationWindow + 1 {
+		_, _, err := adapter.AppendOnce(ctx, testDedupeQueue, "filler-"+strconv.Itoa(i), dedupeEnvelope("filler"))
+		require.NoError(t, err)
+	}
+
+	_, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.False(t, duplicated,
+		"a key beyond the window must be forgotten while the process runs, as it would be after a restart")
+}

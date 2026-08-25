@@ -258,12 +258,12 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			continue
 		}
 
-		consumerInfo := freshGroup.GetConsumer(consumerID)
-		if consumerInfo == nil {
+		consumerInfo, registered := freshGroup.GetConsumer(consumerID)
+		if !registered {
 			continue
 		}
 
-		remoteTarget := e.isRemoteConsumer(consumerInfo)
+		remoteTarget := e.isRemoteConsumer(&consumerInfo)
 		if !remoteTarget {
 			if e.local == nil {
 				continue

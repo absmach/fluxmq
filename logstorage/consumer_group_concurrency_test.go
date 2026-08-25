@@ -190,3 +190,50 @@ func TestSyncSkipsDeletedGroups(t *testing.T) {
 	_, err := store.Get("orders", testWorkersGroup)
 	assert.ErrorIs(t, err, ErrGroupNotFound)
 }
+
+// Deleting a group must never remove a file outside the store directory.
+//
+// Group IDs come from clients, so ".." is something a client can simply choose.
+// The canonical path encodes it, but the legacy path joins raw names, and
+// Delete removes both.
+func TestDeleteCannotRemoveFilesOutsideTheStore(t *testing.T) {
+	base := t.TempDir()
+	store, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
+
+	// A file that has nothing to do with this store, one level above it.
+	bystander := filepath.Join(base, "bystander.json")
+	require.NoError(t, os.WriteFile(bystander, []byte(`{"keep":true}`), 0o600))
+
+	for _, tc := range []struct{ queueName, groupID string }{
+		{"..", "bystander"},
+		{"../..", "bystander"},
+		{"orders", "../bystander"},
+	} {
+		require.NoError(t, store.Delete(tc.queueName, tc.groupID),
+			"delete of %q/%q must not error", tc.queueName, tc.groupID)
+
+		_, err := os.Stat(bystander)
+		require.NoError(t, err,
+			"delete of %q/%q removed a file outside the store", tc.queueName, tc.groupID)
+	}
+}
+
+// Writing an escaping name lands inside the store, not outside it. The
+// canonical path encodes the name, so containment here is a backstop rather
+// than the mechanism; this pins the property either way.
+func TestSaveStaysInsideTheStoreForEscapingNames(t *testing.T) {
+	base := t.TempDir()
+	store, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
+
+	require.NoError(t, store.writeGroup(groupRef{queueName: "..", groupID: "escaped"},
+		types.NewConsumerGroupState("..", "escaped", "#")))
+
+	_, statErr := os.Stat(filepath.Join(base, "escaped.json"))
+	assert.True(t, os.IsNotExist(statErr), "a file was created outside the group directory")
+
+	written, err := os.ReadFile(filepath.Join(store.dir, "%2E%2E", "escaped.json"))
+	require.NoError(t, err, "the group must be written inside the store under an encoded name")
+	assert.Contains(t, string(written), "escaped")
+}

@@ -107,6 +107,20 @@ type DeduplicatingQueueStore interface {
 	// released rather than stored. An error leaves ownership with the caller.
 	AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (offset uint64, deduplicated bool, err error)
 
+	// AppendOnceAndSync is AppendOnce with the durability barrier of
+	// DurableQueueStore.AppendAndSync: it returns only once the record it
+	// appended is durable.
+	//
+	// A dead-letter transfer settles its source once the destination reports
+	// success, so on a queue configured for fsync the destination has to be
+	// durable before that success is reported — otherwise the settlement
+	// outlives the record it was settling against. A store that can deduplicate
+	// but cannot do so durably must not be used for such a queue, which is why
+	// this lives on the same interface rather than in a separate optional one:
+	// offering half the contract is what leaves a caller with no path that
+	// provides both.
+	AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (offset uint64, deduplicated bool, err error)
+
 	// DeduplicationWindow reports how far back AppendOnce can recognise a
 	// repeated key, in records. Beyond it a retry appends again, so callers that
 	// need a guarantee rather than a mitigation must retry within it. Zero means

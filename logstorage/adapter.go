@@ -422,7 +422,16 @@ func (a *Adapter) Tail(ctx context.Context, queueName string) (uint64, error) {
 
 // Truncate removes all messages with offset < minOffset.
 func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint64) error {
-	return a.store.Truncate(queueName, minOffset)
+	if err := a.store.Truncate(queueName, minOffset); err != nil {
+		return err
+	}
+
+	// The records below minOffset are gone; their deduplication keys must go
+	// with them, or a retried transfer is told its record is already present at
+	// an offset that no longer holds one.
+	a.dedupe.pruneBelow(queueName, minOffset)
+
+	return nil
 }
 
 // Count returns the number of messages in a queue.
@@ -589,8 +598,8 @@ func (a *Adapter) RequeuePendingEntry(ctx context.Context, queueName, groupID, c
 	if err != nil {
 		return err
 	}
-	entry, owner := group.FindPending(offset)
-	if entry == nil {
+	_, owner := group.FindPending(offset)
+	if owner == "" {
 		return storage.ErrPendingEntryNotFound
 	}
 	if owner != consumerID {
@@ -602,8 +611,11 @@ func (a *Adapter) RequeuePendingEntry(ctx context.Context, queueName, groupID, c
 		}
 		return err
 	}
-	entry.ClaimedAt = attemptedAt
-	entry.DeliveryCount++
+	// Through the group's lock: the entry used to be mutated here through a
+	// pointer FindPending handed out, racing every reader and the encoder.
+	if !group.RequeuePending(offset, consumerID, attemptedAt) {
+		return storage.ErrPendingEntryNotFound
+	}
 	return a.groupStore.Save(group)
 }
 
