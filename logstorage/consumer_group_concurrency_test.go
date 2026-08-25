@@ -4,6 +4,8 @@
 package logstorage
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testWorkersGroup = "workers"
 
 func newGroupStateStore(t *testing.T) *ConsumerGroupStateStore {
 	t.Helper()
@@ -27,7 +31,7 @@ func newGroupStateStore(t *testing.T) *ConsumerGroupStateStore {
 // than merely wrong.
 func TestSaveDoesNotRaceGroupMutations(t *testing.T) {
 	store := newGroupStateStore(t)
-	group := types.NewConsumerGroupState("orders", "workers", "orders/#")
+	group := types.NewConsumerGroupState("orders", testWorkersGroup, "orders/#")
 	require.NoError(t, store.Save(group))
 
 	var wg sync.WaitGroup
@@ -64,23 +68,20 @@ func TestSaveDoesNotRaceGroupMutations(t *testing.T) {
 	wg.Wait()
 }
 
-// The dirty set names the queue and group as separate fields, so a queue name
-// containing a slash cannot be confused with a group name. Joining the two with
-// "/" made ("$dlq/tasks", "workers") and ("$dlq", "tasks/workers") one entry,
-// so a flush of either cleared the other's dirty flag and lost its state.
-//
-// Note this covers the dirty set only: groupPath still joins the two into a
-// filesystem path, where the same pair still collides. That is a separate
-// defect in the on-disk layout, not something this key change fixes.
-func TestDirtyKeysDistinguishSlashesInQueueNames(t *testing.T) {
-	store := newGroupStateStore(t)
+// A queue name containing a slash must not collide with a group name. Both the
+// dirty set and the file path used to join the two, so ("$dlq/tasks",
+// testWorkersGroup) and ("$dlq", "tasks/workers") were one entry and one file, and
+// whichever wrote last destroyed the other. "$dlq/" prefixed queues are what
+// the dead-letter path creates, so this is reachable, not theoretical.
+func TestGroupsWithSlashesInQueueNamesStayDistinct(t *testing.T) {
+	base := t.TempDir()
+	store, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
 
-	first := types.NewConsumerGroupState("$dlq/tasks", "workers", "#")
-	second := types.NewConsumerGroupState("$dlq", "tasks/workers", "#")
-	require.NoError(t, store.Save(first))
-	require.NoError(t, store.Save(second))
+	require.NoError(t, store.Save(types.NewConsumerGroupState("$dlq/tasks", testWorkersGroup, "#")))
+	require.NoError(t, store.Save(types.NewConsumerGroupState("$dlq", "tasks/workers", "#")))
 
-	require.NoError(t, store.UpdateCursor("$dlq/tasks", "workers", 4, 4))
+	require.NoError(t, store.UpdateCursor("$dlq/tasks", testWorkersGroup, 4, 4))
 	require.NoError(t, store.UpdateCursor("$dlq", "tasks/workers", 9, 9))
 
 	store.mu.RLock()
@@ -88,8 +89,62 @@ func TestDirtyKeysDistinguishSlashesInQueueNames(t *testing.T) {
 	store.mu.RUnlock()
 	assert.Equal(t, 2, dirty, "two distinct groups must occupy two dirty entries")
 
+	require.NoError(t, store.Sync())
+
+	reopened, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
+
+	first, err := reopened.Get("$dlq/tasks", testWorkersGroup)
+	require.NoError(t, err)
 	assert.Equal(t, uint64(4), first.CursorView().Committed)
-	assert.Equal(t, uint64(9), second.CursorView().Committed)
+
+	second, err := reopened.Get("$dlq", "tasks/workers")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(9), second.CursorView().Committed,
+		"the second group must survive the first rather than share its file")
+}
+
+// A name that resolves to a parent directory must stay inside the store.
+func TestGroupPathCannotEscapeTheStoreDirectory(t *testing.T) {
+	store := newGroupStateStore(t)
+
+	for _, tc := range []struct{ queueName, groupID string }{
+		{"..", testWorkersGroup},
+		{".", testWorkersGroup},
+		{"../../etc", testWorkersGroup},
+		{"orders", ".."},
+	} {
+		path := store.groupPath(tc.queueName, tc.groupID)
+		assert.Equal(t, store.dir, filepath.Dir(filepath.Dir(path)),
+			"%q/%q escaped to %q", tc.queueName, tc.groupID, path)
+	}
+}
+
+// Deleting a group must remove the file it was loaded from, not only the one
+// the current naming would write. A file left behind is loaded on the next
+// start and brings the group back.
+func TestDeleteRemovesLegacyFile(t *testing.T) {
+	base := t.TempDir()
+	store, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
+
+	legacy := store.legacyGroupPath("$dlq/tasks", testWorkersGroup)
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacy), 0o755))
+	group := types.NewConsumerGroupState("$dlq/tasks", testWorkersGroup, "#")
+	require.NoError(t, store.writeGroup(groupRef{queueName: "$dlq/tasks", groupID: testWorkersGroup}, group))
+	require.NoError(t, os.Rename(store.groupPath("$dlq/tasks", testWorkersGroup), legacy))
+
+	loaded, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
+	_, err = loaded.Get("$dlq/tasks", testWorkersGroup)
+	require.NoError(t, err, "a file written under the old naming must still load")
+
+	require.NoError(t, loaded.Delete("$dlq/tasks", testWorkersGroup))
+
+	reopened, err := NewConsumerGroupStateStore(base)
+	require.NoError(t, err)
+	_, err = reopened.Get("$dlq/tasks", testWorkersGroup)
+	assert.ErrorIs(t, err, ErrGroupNotFound, "a deleted group must not come back on restart")
 }
 
 // Sync must write the groups the dirty set names and clear them, rather than
@@ -98,10 +153,10 @@ func TestSyncWritesDirtyGroupsAndClearsThem(t *testing.T) {
 	store := newGroupStateStore(t)
 
 	for _, name := range []string{"alpha", "beta", "gamma"} {
-		require.NoError(t, store.Save(types.NewConsumerGroupState(name, "workers", "#")))
+		require.NoError(t, store.Save(types.NewConsumerGroupState(name, testWorkersGroup, "#")))
 	}
 
-	require.NoError(t, store.UpdateCursor("beta", "workers", 12, 12))
+	require.NoError(t, store.UpdateCursor("beta", testWorkersGroup, 12, 12))
 
 	store.mu.RLock()
 	dirty := len(store.dirty)
@@ -117,7 +172,7 @@ func TestSyncWritesDirtyGroupsAndClearsThem(t *testing.T) {
 
 	reopened, err := NewConsumerGroupStateStore(store.dir[:len(store.dir)-len("/groups")])
 	require.NoError(t, err)
-	recovered, err := reopened.Get("beta", "workers")
+	recovered, err := reopened.Get("beta", testWorkersGroup)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(12), recovered.CursorView().Cursor)
 }
@@ -126,12 +181,12 @@ func TestSyncWritesDirtyGroupsAndClearsThem(t *testing.T) {
 // must not leave an entry behind for a group that no longer exists.
 func TestSyncSkipsDeletedGroups(t *testing.T) {
 	store := newGroupStateStore(t)
-	require.NoError(t, store.Save(types.NewConsumerGroupState("orders", "workers", "#")))
-	require.NoError(t, store.UpdateCursor("orders", "workers", 3, 3))
-	require.NoError(t, store.Delete("orders", "workers"))
+	require.NoError(t, store.Save(types.NewConsumerGroupState("orders", testWorkersGroup, "#")))
+	require.NoError(t, store.UpdateCursor("orders", testWorkersGroup, 3, 3))
+	require.NoError(t, store.Delete("orders", testWorkersGroup))
 
 	require.NoError(t, store.Sync())
 
-	_, err := store.Get("orders", "workers")
+	_, err := store.Get("orders", testWorkersGroup)
 	assert.ErrorIs(t, err, ErrGroupNotFound)
 }

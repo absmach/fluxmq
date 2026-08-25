@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,8 +165,52 @@ func (s *ConsumerGroupStateStore) loadAll() error {
 	return nil
 }
 
+// encodePathComponent makes one name safe as a single path element.
+//
+// Queue names contain slashes: "$dlq/tasks" is what the dead-letter path
+// creates. Joining them straight into a path made ("$dlq/tasks", "workers") and
+// ("$dlq", "tasks/workers") the same file, so one group's state overwrote the
+// other's. Percent-encoding the separator keeps each name in one element and
+// leaves names without one — the overwhelming majority — byte for byte as they
+// were. The dot cases are handled so a name can never resolve to a parent
+// directory.
+func encodePathComponent(name string) string {
+	switch name {
+	case ".":
+		return "%2E"
+	case "..":
+		return "%2E%2E"
+	}
+	if !strings.ContainsAny(name, `%/\`) {
+		return name
+	}
+
+	var encoded strings.Builder
+	encoded.Grow(len(name) + 8)
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; c {
+		case '%', '/', '\\':
+			encoded.WriteString("%")
+			encoded.WriteString(strings.ToUpper(strconv.FormatUint(uint64(c), 16)))
+		default:
+			encoded.WriteByte(c)
+		}
+	}
+	return encoded.String()
+}
+
 // groupPath returns the path to a group's state file.
 func (s *ConsumerGroupStateStore) groupPath(queueName, groupID string) string {
+	return filepath.Join(s.dir, encodePathComponent(queueName), encodePathComponent(groupID)+".json")
+}
+
+// legacyGroupPath is where a group's file lived before names were encoded.
+//
+// Loading walks the directory and takes identity from file contents, so old
+// files are still read wherever they sit. Delete has to know about them anyway:
+// a stale file left behind would be loaded again on the next start and
+// resurrect a group that was removed.
+func (s *ConsumerGroupStateStore) legacyGroupPath(queueName, groupID string) string {
 	return filepath.Join(s.dir, queueName, groupID+".json")
 }
 
@@ -288,16 +334,24 @@ func (s *ConsumerGroupStateStore) Delete(queueName, groupID string) error {
 	writeLock.Lock()
 	defer writeLock.Unlock()
 
-	path := s.groupPath(queueName, groupID)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
+	for _, path := range []string{s.groupPath(queueName, groupID), s.legacyGroupPath(queueName, groupID)} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 
-	// Clean up empty queue directory
-	dir := filepath.Join(s.dir, queueName)
-	entries, _ := os.ReadDir(dir)
-	if len(entries) == 0 {
-		os.Remove(dir)
+	// Clean up empty queue directories, canonical and legacy alike.
+	for _, dir := range []string{
+		filepath.Join(s.dir, encodePathComponent(queueName)),
+		filepath.Join(s.dir, queueName),
+	} {
+		if dir == s.dir {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err == nil && len(entries) == 0 {
+			os.Remove(dir)
+		}
 	}
 
 	return nil
