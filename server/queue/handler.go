@@ -74,7 +74,7 @@ func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.
 	}
 
 	if err := h.manager.CreateQueue(ctx, config); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(h.queueToProto(&config)), nil
@@ -84,9 +84,9 @@ func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.Get
 	config, err := h.queueStore.GetQueue(ctx, req.Msg.Name)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
-			return nil, newConnectError(connect.CodeNotFound, err)
+			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(h.queueToProto(config)), nil
@@ -95,7 +95,7 @@ func (h *Handler) GetQueue(ctx context.Context, req *connect.Request[queuev1.Get
 func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.ListQueuesRequest]) (*connect.Response[queuev1.ListQueuesResponse], error) {
 	configs, err := h.queueStore.ListQueues(ctx)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	filtered := make([]types.QueueConfig, 0, len(configs))
@@ -149,12 +149,12 @@ func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.L
 func (h *Handler) DeleteQueue(ctx context.Context, req *connect.Request[queuev1.DeleteQueueRequest]) (*connect.Response[emptypb.Empty], error) {
 	if err := h.manager.DeleteQueue(ctx, req.Msg.Name); err != nil {
 		if errors.Is(err, queue.ErrProtectedQueueMutation) {
-			return nil, newConnectError(connect.CodeFailedPrecondition, err)
+			return nil, newConnectError(queue.ErrorCodeFailedPrecondition, err)
 		}
 		if err == storage.ErrQueueNotFound {
-			return nil, newConnectError(connect.CodeNotFound, err)
+			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&emptypb.Empty{}), nil
@@ -164,9 +164,9 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 	config, err := h.queueStore.GetQueue(ctx, req.Msg.Name)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
-			return nil, newConnectError(connect.CodeNotFound, err)
+			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	updated := *config
@@ -176,23 +176,23 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 
 	if h.manager != nil {
 		if err := h.manager.UpdateQueue(ctx, updated); err != nil {
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		current, err := h.queueStore.GetQueue(ctx, updated.Name)
 		if err != nil {
 			if err == storage.ErrQueueNotFound {
-				return nil, newConnectError(connect.CodeNotFound, err)
+				return nil, newConnectError(queue.ErrorCodeNotFound, err)
 			}
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		return connect.NewResponse(h.queueToProto(current)), nil
 	}
 
 	if err := h.queueStore.UpdateQueue(ctx, updated); err != nil {
 		if err == storage.ErrQueueNotFound {
-			return nil, newConnectError(connect.CodeNotFound, err)
+			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(h.queueToProto(&updated)), nil
@@ -213,17 +213,23 @@ func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.Appen
 		}},
 	})
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&queuev1.AppendResponse{
 		Offset:    outcome.FirstOffset,
-		Timestamp: timestamppb.Now(),
+		Timestamp: timestamppb.New(outcome.Timestamp),
 	}), nil
 }
 
 func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.AppendBatchRequest]) (*connect.Response[queuev1.AppendBatchResponse], error) {
 	msg := req.Msg
+
+	// Offset 0 is a valid offset, so an empty batch cannot be answered with a
+	// zero-valued success: the client could not tell it from a real append.
+	if len(msg.Messages) == 0 {
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errEmptyBatch)
+	}
 
 	publishes := make([]types.PublishRequest, len(msg.Messages))
 	for i, entry := range msg.Messages {
@@ -241,24 +247,45 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 		AtomicBatch: true,
 	})
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&queuev1.AppendBatchResponse{
 		FirstOffset: outcome.FirstOffset,
 		LastOffset:  outcome.LastOffset,
 		Count:       outcome.Count,
-		Timestamp:   timestamppb.Now(),
+		Timestamp:   timestamppb.New(outcome.Timestamp),
 	}), nil
 }
 
+// AppendStream appends a stream of messages to one queue. The stream is pinned
+// to the first message's queue: a mid-stream change would make the single
+// returned offset range meaningless.
+//
+// The stream commits a prefix and stops at the first failed append. The error
+// carries that prefix as QueueProgressDetail so the client can resume rather
+// than re-send and duplicate it.
 func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream[queuev1.AppendRequest]) (*connect.Response[queuev1.AppendBatchResponse], error) {
-	var firstOffset, lastOffset uint64
-	var count uint32
+	var (
+		queueName     string
+		firstOffset   uint64
+		lastOffset    uint64
+		lastTimestamp time.Time
+		count         uint32
+	)
 
-	first := true
 	for stream.Receive() {
 		msg := stream.Msg()
+
+		if count == 0 {
+			queueName = msg.QueueName
+		} else if msg.QueueName != queueName {
+			return nil, newConnectErrorWithProgress(
+				queue.ErrorCodeInvalidArgument,
+				fmt.Errorf("%w: stream is pinned to queue %q, got %q", errStreamQueueChanged, queueName, msg.QueueName),
+				appendProgress(count, firstOffset, lastOffset),
+			)
+		}
 
 		outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 			QueueName: msg.QueueName,
@@ -270,27 +297,34 @@ func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream
 			}},
 		})
 		if err != nil {
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectErrorWithProgress(
+				queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
 		}
-		offset := outcome.FirstOffset
 
-		if first {
-			firstOffset = offset
-			first = false
+		if count == 0 {
+			firstOffset = outcome.FirstOffset
 		}
-		lastOffset = offset
+		lastOffset = outcome.FirstOffset
+		lastTimestamp = outcome.Timestamp
 		count++
 	}
 
 	if err := stream.Err(); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectErrorWithProgress(
+			queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
+	}
+
+	// Same reasoning as AppendBatch: a zero-valued success is indistinguishable
+	// from a real append at offset 0.
+	if count == 0 {
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errEmptyStream)
 	}
 
 	return connect.NewResponse(&queuev1.AppendBatchResponse{
 		FirstOffset: firstOffset,
 		LastOffset:  lastOffset,
 		Count:       count,
-		Timestamp:   timestamppb.Now(),
+		Timestamp:   timestamppb.New(lastTimestamp),
 	}), nil
 }
 
@@ -302,9 +336,9 @@ func (h *Handler) Read(ctx context.Context, req *connect.Request[queuev1.ReadReq
 	message, err := h.queueStore.Read(ctx, msg.QueueName, msg.Offset)
 	if err != nil {
 		if err == storage.ErrOffsetOutOfRange {
-			return nil, newConnectError(connect.CodeOutOfRange, err)
+			return nil, newConnectError(queue.ErrorCodeOutOfRange, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	protoMessage := h.messageToProto(message)
@@ -322,7 +356,7 @@ func (h *Handler) ReadBatch(ctx context.Context, req *connect.Request[queuev1.Re
 
 	messages, err := h.queueStore.ReadBatch(ctx, msg.QueueName, msg.StartOffset, limit)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	protoMsgs := h.messagesToProto(messages)
@@ -349,7 +383,7 @@ func (h *Handler) Tail(ctx context.Context, req *connect.Request[queuev1.TailReq
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			return newConnectError(connect.CodeInternal, err)
+			return newConnectError(queue.ErrorCodeInternal, err)
 		}
 
 		protoMessages := h.messagesToProto(messages)
@@ -377,19 +411,19 @@ func (h *Handler) SeekToOffset(ctx context.Context, req *connect.Request[queuev1
 			Offset:    msg.Offset,
 		})
 		if err != nil {
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		return connect.NewResponse(&queuev1.SeekResponse{Offset: outcome.Offset}), nil
 	}
 
 	head, err := h.queueStore.Head(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	tail, err := h.queueStore.Tail(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	offset := msg.Offset
@@ -408,7 +442,7 @@ func (h *Handler) SeekToOffset(ctx context.Context, req *connect.Request[queuev1
 func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queuev1.SeekToTimestampRequest]) (*connect.Response[queuev1.SeekResponse], error) {
 	msg := req.Msg
 	if msg.Timestamp == nil {
-		return nil, newConnectError(connect.CodeInvalidArgument, fmt.Errorf("timestamp is required"))
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, fmt.Errorf("timestamp is required"))
 	}
 	if h.manager != nil {
 		outcome, err := h.manager.StateMachine().Seek(ctx, queue.SeekCommand{
@@ -417,7 +451,7 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 			Timestamp: msg.Timestamp.AsTime(),
 		})
 		if err != nil {
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		return connect.NewResponse(&queuev1.SeekResponse{
 			Offset:     outcome.Offset,
@@ -428,12 +462,12 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 
 	head, err := h.queueStore.Head(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	tail, err := h.queueStore.Tail(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	target := msg.Timestamp.AsTime()
@@ -444,7 +478,7 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 			if err == storage.ErrOffsetOutOfRange {
 				break
 			}
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		if len(batch) == 0 {
 			break
@@ -480,9 +514,9 @@ func (h *Handler) CreateConsumerGroup(ctx context.Context, req *connect.Request[
 	_, err := h.queueStore.GetQueue(ctx, msg.QueueName)
 	if err != nil {
 		if err == storage.ErrQueueNotFound {
-			return nil, newConnectError(connect.CodeNotFound, err)
+			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	head, _ := h.queueStore.Head(ctx, msg.QueueName)
@@ -493,9 +527,9 @@ func (h *Handler) CreateConsumerGroup(ctx context.Context, req *connect.Request[
 
 	if err := h.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		if err == storage.ErrConsumerGroupExists {
-			return nil, newConnectError(connect.CodeAlreadyExists, err)
+			return nil, newConnectError(queue.ErrorCodeAlreadyExists, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(h.groupToProto(group)), nil
@@ -507,9 +541,9 @@ func (h *Handler) GetConsumerGroup(ctx context.Context, req *connect.Request[que
 	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
 	if err != nil {
 		if err == storage.ErrConsumerNotFound {
-			return nil, newConnectError(connect.CodeNotFound, err)
+			return nil, newConnectError(queue.ErrorCodeNotFound, err)
 		}
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(h.groupToProto(group)), nil
@@ -520,7 +554,7 @@ func (h *Handler) ListConsumerGroups(ctx context.Context, req *connect.Request[q
 
 	groups, err := h.groupStore.ListConsumerGroups(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	protoGroups := make([]*queuev1.ConsumerGroup, len(groups))
@@ -537,7 +571,7 @@ func (h *Handler) DeleteConsumerGroup(ctx context.Context, req *connect.Request[
 	msg := req.Msg
 
 	if err := h.groupStore.DeleteConsumerGroup(ctx, msg.QueueName, msg.GroupId); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&emptypb.Empty{}), nil
@@ -554,7 +588,7 @@ func (h *Handler) JoinGroup(ctx context.Context, req *connect.Request[queuev1.Jo
 	}
 
 	if err := h.groupStore.RegisterConsumer(ctx, msg.QueueName, msg.GroupId, consumer); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&queuev1.JoinGroupResponse{
@@ -566,7 +600,7 @@ func (h *Handler) LeaveGroup(ctx context.Context, req *connect.Request[queuev1.L
 	msg := req.Msg
 
 	if err := h.groupStore.UnregisterConsumer(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&emptypb.Empty{}), nil
@@ -577,9 +611,9 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 	if h.manager != nil {
 		if err := h.manager.UpdateConsumerHeartbeat(ctx, msg.QueueName, msg.GroupId, msg.ConsumerId); err != nil {
 			if err == storage.ErrConsumerNotFound || err == consumer.ErrConsumerNotFound {
-				return nil, newConnectError(connect.CodeNotFound, err)
+				return nil, newConnectError(queue.ErrorCodeNotFound, err)
 			}
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		return connect.NewResponse(&queuev1.HeartbeatResponse{
 			ShouldRejoin: false,
@@ -588,17 +622,17 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 
 	group, err := h.groupStore.GetConsumerGroup(ctx, msg.QueueName, msg.GroupId)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	c := group.GetConsumer(msg.ConsumerId)
 	if c == nil {
-		return nil, newConnectError(connect.CodeNotFound, fmt.Errorf("consumer not found"))
+		return nil, newConnectError(queue.ErrorCodeNotFound, fmt.Errorf("consumer not found"))
 	}
 
 	c.LastHeartbeat = time.Now()
 	if err := h.groupStore.RegisterConsumer(ctx, msg.QueueName, msg.GroupId, c); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&queuev1.HeartbeatResponse{
@@ -611,7 +645,7 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.ConsumeRequest]) (*connect.Response[queuev1.ConsumeResponse], error) {
 	msg := req.Msg
 	if h.manager == nil {
-		return nil, newConnectError(connect.CodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
+		return nil, newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
 	}
 	limit := int(msg.MaxMessages)
 	if limit == 0 {
@@ -628,7 +662,7 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 	}
 	if err != nil {
 		releaseMessages(outcome.Messages)
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 	protoMsgs := h.messagesToProto(outcome.Messages)
 	if outcome.CommitRequired {
@@ -637,7 +671,7 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 			GroupID:   msg.GroupId,
 			Offset:    outcome.NextOffset,
 		}); err != nil {
-			return nil, newConnectError(connect.CodeInternal, err)
+			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 	}
 	return connect.NewResponse(&queuev1.ConsumeResponse{
@@ -648,7 +682,7 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev1.ConsumeQueueRequest], stream *connect.ServerStream[queuev1.Message]) error {
 	msg := req.Msg
 	if h.manager == nil {
-		return newConnectError(connect.CodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
+		return newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
 	}
 	limit := int(msg.MaxInFlight)
 	if limit == 0 {
@@ -674,7 +708,7 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 		}
 		if err != nil {
 			releaseMessages(outcome.Messages)
-			return newConnectError(connect.CodeInternal, err)
+			return newConnectError(queue.ErrorCodeInternal, err)
 		}
 		protoMessages := h.messagesToProto(outcome.Messages)
 		for _, message := range protoMessages {
@@ -688,7 +722,7 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 				GroupID:   msg.GroupId,
 				Offset:    outcome.NextOffset,
 			}); err != nil {
-				return newConnectError(connect.CodeInternal, err)
+				return newConnectError(queue.ErrorCodeInternal, err)
 			}
 		}
 	}
@@ -697,7 +731,7 @@ func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev
 func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckRequest]) (*connect.Response[queuev1.AckResponse], error) {
 	msg := req.Msg
 	if h.manager == nil {
-		return nil, newConnectError(connect.CodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
+		return nil, newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
 	}
 	outcome, err := h.manager.StateMachine().Ack(ctx, queue.AckCommand{
 		QueueName:  msg.QueueName,
@@ -706,7 +740,10 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 		Offsets:    msg.Offsets,
 	})
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		// A multi-offset settlement stops at its first failure. Report the prefix
+		// it did settle so the client re-acknowledges only what remains.
+		return nil, newConnectErrorWithProgress(queue.ErrorCodeInternal, err,
+			settlementProgress(outcome, failedOffset(msg.Offsets, len(outcome.Offsets))))
 	}
 	return connect.NewResponse(&queuev1.AckResponse{
 		AckedCount: uint32(len(outcome.Offsets)),
@@ -720,20 +757,22 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackRequest]) (*connect.Response[emptypb.Empty], error) {
 	msg := req.Msg
 	if h.manager == nil {
-		return nil, newConnectError(connect.CodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
+		return nil, newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
 	}
 	delay := time.Duration(0)
 	if msg.Delay != nil {
 		delay = msg.Delay.AsDuration()
 	}
-	if _, err := h.manager.StateMachine().Nack(ctx, queue.NackCommand{
+	outcome, err := h.manager.StateMachine().Nack(ctx, queue.NackCommand{
 		QueueName:  msg.QueueName,
 		GroupID:    msg.GroupId,
 		ConsumerID: msg.ConsumerId,
 		Offsets:    msg.Offsets,
 		Delay:      delay,
-	}); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+	})
+	if err != nil {
+		return nil, newConnectErrorWithProgress(queue.ErrorCodeInternal, err,
+			settlementProgress(outcome, failedOffset(msg.Offsets, len(outcome.Offsets))))
 	}
 	return connect.NewResponse(&emptypb.Empty{}), nil
 }
@@ -741,7 +780,7 @@ func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackReq
 func (h *Handler) Claim(ctx context.Context, req *connect.Request[queuev1.ClaimRequest]) (*connect.Response[queuev1.ClaimResponse], error) {
 	msg := req.Msg
 	if h.manager == nil {
-		return nil, newConnectError(connect.CodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
+		return nil, newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
 	}
 	limit := int(msg.Limit)
 	if limit == 0 {
@@ -763,7 +802,7 @@ func (h *Handler) Claim(ctx context.Context, req *connect.Request[queuev1.ClaimR
 	}
 	if err != nil {
 		releaseMessages(outcome.Messages)
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 	claimed := h.messagesToProto(outcome.Messages)
 	return connect.NewResponse(&queuev1.ClaimResponse{
@@ -784,7 +823,7 @@ func (h *Handler) GetPending(ctx context.Context, req *connect.Request[queuev1.G
 	}
 
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	protoEntries := make([]*queuev1.PendingEntry, len(entries))
@@ -809,12 +848,12 @@ func (h *Handler) GetQueueInfo(ctx context.Context, req *connect.Request[queuev1
 
 	head, err := h.queueStore.Head(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	tail, err := h.queueStore.Tail(ctx, msg.QueueName)
 	if err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	count, _ := h.queueStore.Count(ctx, msg.QueueName)
@@ -852,7 +891,7 @@ func (h *Handler) Purge(ctx context.Context, req *connect.Request[queuev1.PurgeR
 	count, _ := h.queueStore.Count(ctx, msg.QueueName)
 	tail, _ := h.queueStore.Tail(ctx, msg.QueueName)
 	if err := h.queueStore.Truncate(ctx, msg.QueueName, tail); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&queuev1.PurgeResponse{
@@ -864,7 +903,7 @@ func (h *Handler) Truncate(ctx context.Context, req *connect.Request[queuev1.Tru
 	msg := req.Msg
 
 	if err := h.queueStore.Truncate(ctx, msg.QueueName, msg.MinOffset); err != nil {
-		return nil, newConnectError(connect.CodeInternal, err)
+		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
 	return connect.NewResponse(&emptypb.Empty{}), nil

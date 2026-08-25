@@ -21,7 +21,9 @@ func TestClassifyErrorContract(t *testing.T) {
 		err  error
 		want Failure
 	}{
-		{name: "success", want: Failure{Code: ErrorCodeOK}},
+		// A nil error is invalid input to a failure classifier. It fails closed
+		// as Internal rather than reporting a success the taxonomy cannot express.
+		{name: "nil fails closed", want: Failure{Code: ErrorCodeInternal}},
 		{name: "canceled", err: context.Canceled, want: Failure{Code: ErrorCodeCanceled}},
 		{name: "deadline", err: context.DeadlineExceeded, want: Failure{Code: ErrorCodeDeadlineExceeded, Retryable: true, Durability: DurabilityUnconfirmed}},
 		{name: "invalid config", err: fmt.Errorf("wrapped: %w", types.ErrInvalidConfig), want: Failure{Code: ErrorCodeInvalidArgument}},

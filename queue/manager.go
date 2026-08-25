@@ -1062,7 +1062,7 @@ func (m *Manager) AppendToQueue(ctx context.Context, queueName string, publish t
 	return outcome.FirstOffset, err
 }
 
-func (m *Manager) appendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, error) {
+func (m *Manager) appendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {
 	publish = normalizePublishRequest(publish)
 	if publish.Topic == "" {
 		publish.Topic = queueName
@@ -1070,17 +1070,17 @@ func (m *Manager) appendToQueue(ctx context.Context, queueName string, publish t
 
 	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
-		return 0, err
+		return 0, time.Time{}, err
 	}
 	if queueConfig == nil {
-		return 0, storage.ErrQueueNotFound
+		return 0, time.Time{}, storage.ErrQueueNotFound
 	}
 	if queueConfig.Replication.Enabled {
 		if err := m.replicationWriteReadiness(queueName); err != nil {
-			return 0, err
+			return 0, time.Time{}, err
 		}
 		if !m.raftCoordinator.IsLeaderForQueue(queueName) {
-			return 0, WithFailure(
+			return 0, time.Time{}, WithFailure(
 				fmt.Errorf("%w: queue %q is not led by this node", ErrReplicationUnavailable, queueName),
 				Failure{
 					Code:       ErrorCodeUnavailable,
@@ -1093,12 +1093,15 @@ func (m *Manager) appendToQueue(ctx context.Context, queueName string, publish t
 	}
 
 	msg := newQueuedMessage(publish, queueConfig)
+	// Read the assigned timestamp before the append: a successful append
+	// transfers ownership of msg to the store, which may release it.
+	createdAt := msg.Broker.Queue.CreatedAt
 	offset, err := m.appendConfiguredMessage(ctx, queueName, queueConfig, msg)
 	if err := m.completeAppend(queueName, publish.Topic, offset, err); err != nil {
-		return 0, err
+		return 0, time.Time{}, err
 	}
 	m.delivery.Schedule(queueName)
-	return offset, nil
+	return offset, createdAt, nil
 }
 
 // AppendBatchToQueue atomically appends a batch to one single-node buffered
@@ -1114,23 +1117,23 @@ func (m *Manager) AppendBatchToQueue(ctx context.Context, queueName string, publ
 	return outcome.FirstOffset, outcome.Count, err
 }
 
-func (m *Manager) appendBatchToQueue(ctx context.Context, queueName string, publishes []types.PublishRequest) (uint64, uint32, error) {
+func (m *Manager) appendBatchToQueue(ctx context.Context, queueName string, publishes []types.PublishRequest) (uint64, uint32, time.Time, error) {
 	if len(publishes) == 0 {
-		return 0, 0, nil
+		return 0, 0, time.Time{}, nil
 	}
 
 	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, time.Time{}, err
 	}
 	if queueConfig == nil {
-		return 0, 0, storage.ErrQueueNotFound
+		return 0, 0, time.Time{}, storage.ErrQueueNotFound
 	}
 	if queueConfig.Replication.Enabled {
-		return 0, 0, ErrAtomicBatchReplicationUnsupported
+		return 0, 0, time.Time{}, ErrAtomicBatchReplicationUnsupported
 	}
 	if queueConfig.Durable && m.ackDurabilityFor(queueConfig) == AckDurabilityFsync {
-		return 0, 0, ErrAtomicBatchDurabilityUnsupported
+		return 0, 0, time.Time{}, ErrAtomicBatchDurabilityUnsupported
 	}
 
 	messages := make([]*message.Envelope, len(publishes))
@@ -1142,17 +1145,21 @@ func (m *Manager) appendBatchToQueue(ctx context.Context, queueName string, publ
 		messages[i] = newQueuedMessage(publish, queueConfig)
 	}
 
+	// Read the last record's timestamp before the append: a successful append
+	// transfers ownership of every envelope to the store.
+	lastCreatedAt := messages[len(messages)-1].Broker.Queue.CreatedAt
+
 	firstOffset, err := m.queueStore.AppendBatch(ctx, queueName, messages)
 	if err != nil {
 		releaseEnvelopes(messages)
-		return 0, 0, fmt.Errorf("append batch to queue %q: %w", queueName, err)
+		return 0, 0, time.Time{}, fmt.Errorf("append batch to queue %q: %w", queueName, err)
 	}
 	m.logger.Debug("message batch published",
 		slog.String("queue", queueName),
 		slog.Uint64("first_offset", firstOffset),
 		slog.Int("count", len(messages)))
 	m.delivery.Schedule(queueName)
-	return firstOffset, uint32(len(messages)), nil
+	return firstOffset, uint32(len(messages)), lastCreatedAt, nil
 }
 
 // PublishToMatchingQueues captures an ordinary pub/sub publish in existing
@@ -1349,41 +1356,41 @@ func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, 
 	return err
 }
 
-func (m *Manager) publishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, error) {
+func (m *Manager) publishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {
 	expected, protected := m.protectedQueueContract(queueName)
 	if !protected {
-		return 0, fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
+		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
 	}
 
 	publish = normalizePublishRequest(publish)
 	queueConfig, err := m.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
-		return 0, fmt.Errorf("get exact stream %q: %w", queueName, err)
+		return 0, time.Time{}, fmt.Errorf("get exact stream %q: %w", queueName, err)
 	}
 	if queueConfig == nil {
-		return 0, fmt.Errorf("get exact stream %q: %w", queueName, storage.ErrQueueNotFound)
+		return 0, time.Time{}, fmt.Errorf("get exact stream %q: %w", queueName, storage.ErrQueueNotFound)
 	}
 	if err := protectedQueueContractMismatch(expected, *queueConfig); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
+		return 0, time.Time{}, fmt.Errorf("%w: %v", ErrProtectedQueueContractDrift, err)
 	}
 	if !queueConfig.Reserved {
-		return 0, fmt.Errorf("%w: %s", ErrQueueNotReserved, queueName)
+		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrQueueNotReserved, queueName)
 	}
 	if queueConfig.Type != types.QueueTypeStream {
-		return 0, fmt.Errorf("%w: %s", ErrQueueNotStream, queueName)
+		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrQueueNotStream, queueName)
 	}
 	if !queueConfig.Durable {
-		return 0, fmt.Errorf("%w: %s", ErrQueueNotDurable, queueName)
+		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrQueueNotDurable, queueName)
 	}
 	if queueConfig.Replication.Enabled {
-		return 0, fmt.Errorf("%w: %s", ErrDurableReplicatedStreamUnsupported, queueName)
+		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrDurableReplicatedStreamUnsupported, queueName)
 	}
 	durableStore, err := m.durableQueueStore()
 	if err != nil {
-		return 0, fmt.Errorf("%w: %s", err, queueName)
+		return 0, time.Time{}, fmt.Errorf("%w: %s", err, queueName)
 	}
 	if queueConfig.MaxMessageSize <= 0 || int64(len(publish.Payload)) > queueConfig.MaxMessageSize {
-		return 0, fmt.Errorf(
+		return 0, time.Time{}, fmt.Errorf(
 			"%w: queue %s accepts at most %d bytes, got %d",
 			ErrQueueMessageTooLarge,
 			queueName,
@@ -1393,15 +1400,18 @@ func (m *Manager) publishToDurableStream(ctx context.Context, queueName string, 
 	}
 
 	msg := newQueuedMessage(publish, queueConfig)
+	// Read the assigned timestamp before the append: a successful append
+	// transfers ownership of msg to the store.
+	createdAt := msg.Broker.Queue.CreatedAt
 	offset, err := durableStore.AppendAndSync(ctx, queueName, msg)
 	if err != nil {
 		message.Release(msg)
 	}
 	if err := m.completeAppend(queueName, publish.Topic, offset, err); err != nil {
-		return 0, err
+		return 0, time.Time{}, err
 	}
 	m.delivery.Schedule(queueName)
-	return offset, nil
+	return offset, createdAt, nil
 }
 
 // HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.

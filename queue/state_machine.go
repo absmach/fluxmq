@@ -28,10 +28,15 @@ type AppendCommand struct {
 }
 
 // AppendOutcome describes the offset range assigned by an append.
+//
+// Timestamp is the record timestamp assigned by the append, not the time the
+// call returned. For a batch it is the last appended record's timestamp, which
+// is the one that pairs with LastOffset.
 type AppendOutcome struct {
 	FirstOffset uint64
 	LastOffset  uint64
 	Count       uint32
+	Timestamp   time.Time
 }
 
 // ConsumeCommand claims the next records for a consumer group.
@@ -177,28 +182,31 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 	if command.QueueName == "" {
 		return AppendOutcome{}, fmt.Errorf("%w: queue name is required", ErrInvalidCommand)
 	}
+	// An empty append is rejected rather than reported as a success at offset 0.
+	// Offset 0 is a valid offset, so "nothing to do" and "wrote at offset 0"
+	// would otherwise be indistinguishable to the caller.
 	if len(command.Messages) == 0 {
-		return AppendOutcome{}, nil
+		return AppendOutcome{}, fmt.Errorf("%w: at least one message is required", ErrInvalidCommand)
 	}
 	if command.RequireProtectedDurable {
 		if len(command.Messages) != 1 || command.AtomicBatch {
 			return AppendOutcome{}, fmt.Errorf("%w: protected durable append requires exactly one message", ErrInvalidCommand)
 		}
-		offset, err := s.manager.publishToDurableStream(ctx, command.QueueName, command.Messages[0])
+		offset, createdAt, err := s.manager.publishToDurableStream(ctx, command.QueueName, command.Messages[0])
 		if err != nil {
 			return AppendOutcome{}, err
 		}
-		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1}, nil
+		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 	}
 	if len(command.Messages) == 1 && !command.AtomicBatch {
-		offset, err := s.manager.appendToQueue(ctx, command.QueueName, command.Messages[0])
+		offset, createdAt, err := s.manager.appendToQueue(ctx, command.QueueName, command.Messages[0])
 		if err != nil {
 			return AppendOutcome{}, err
 		}
-		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1}, nil
+		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 	}
 
-	first, count, err := s.manager.appendBatchToQueue(ctx, command.QueueName, command.Messages)
+	first, count, lastCreatedAt, err := s.manager.appendBatchToQueue(ctx, command.QueueName, command.Messages)
 	if err != nil {
 		return AppendOutcome{}, err
 	}
@@ -206,7 +214,7 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 	if count > 0 {
 		last += uint64(count - 1)
 	}
-	return AppendOutcome{FirstOffset: first, LastOffset: last, Count: count}, nil
+	return AppendOutcome{FirstOffset: first, LastOffset: last, Count: count, Timestamp: lastCreatedAt}, nil
 }
 
 func (s *stateMachine) appendResolved(ctx context.Context, queueName string, publish types.PublishRequest, config *types.QueueConfig) (AppendOutcome, error) {
@@ -214,11 +222,12 @@ func (s *stateMachine) appendResolved(ctx context.Context, queueName string, pub
 		return AppendOutcome{}, fmt.Errorf("append to queue %q: missing queue configuration", queueName)
 	}
 	message := newQueuedMessage(publish, config)
+	createdAt := message.Broker.Queue.CreatedAt
 	offset, err := s.manager.appendConfiguredMessage(ctx, queueName, config, message)
 	if err := s.manager.completeAppend(queueName, publish.Topic, offset, err); err != nil {
 		return AppendOutcome{}, err
 	}
-	return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1}, nil
+	return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 }
 
 // Consume selects and claims the next records for a consumer.
@@ -277,10 +286,10 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 	for _, offset := range command.Offsets {
 		group, owner, err := s.resolveSettlement(ctx, command.QueueName, command.GroupID, offset)
 		if err != nil {
-			return outcome, fmt.Errorf("ack offset %d: %w", offset, err)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, err))
 		}
 		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
-			return outcome, fmt.Errorf("ack offset %d: %w", offset, consumer.ErrConsumerNotFound)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
 		if group.Mode == types.GroupModeStream {
 			err = s.ackStream(ctx, group, offset)
@@ -288,7 +297,7 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 			err = s.consumers.Ack(ctx, command.QueueName, group.ID, owner, offset)
 		}
 		if err != nil {
-			return outcome, fmt.Errorf("ack offset %d: %w", offset, err)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, err))
 		}
 		if s.manager != nil {
 			s.manager.metrics.RecordAck(0)
@@ -313,14 +322,14 @@ func (s *stateMachine) Nack(ctx context.Context, command NackCommand) (Settlemen
 	for _, offset := range command.Offsets {
 		group, owner, err := s.resolveSettlement(ctx, command.QueueName, command.GroupID, offset)
 		if err != nil {
-			return outcome, fmt.Errorf("nack offset %d: %w", offset, err)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
 		}
 		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
-			return outcome, fmt.Errorf("nack offset %d: %w", offset, consumer.ErrConsumerNotFound)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
 		if group.Mode != types.GroupModeStream {
 			if err := s.consumers.NackWithDelay(ctx, command.QueueName, group.ID, owner, offset, command.Delay); err != nil {
-				return outcome, fmt.Errorf("nack offset %d: %w", offset, err)
+				return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
 			}
 		}
 		if s.manager != nil {
@@ -343,10 +352,10 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 	for _, offset := range command.Offsets {
 		group, owner, err := s.resolveSettlement(ctx, command.QueueName, command.GroupID, offset)
 		if err != nil {
-			return outcome, fmt.Errorf("reject offset %d: %w", offset, err)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
 		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
-			return outcome, fmt.Errorf("reject offset %d: %w", offset, consumer.ErrConsumerNotFound)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
 		if group.Mode == types.GroupModeStream {
 			err = s.manager.rejectStream(ctx, command.QueueName, group, offset, command.Reason)
@@ -354,7 +363,7 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 			err = s.consumers.Reject(ctx, command.QueueName, group.ID, owner, offset, command.Reason)
 		}
 		if err != nil {
-			return outcome, fmt.Errorf("reject offset %d: %w", offset, err)
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
 		if s.manager != nil && group.Mode != types.GroupModeStream {
 			s.manager.metrics.RecordReject()
@@ -503,6 +512,21 @@ func (s *stateMachine) ackStream(ctx context.Context, group *types.ConsumerGroup
 		return nil
 	}
 	return s.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, next)
+}
+
+// partialSettlement enriches an outcome that is being returned with an error so
+// the settled prefix still reports the group cursor it left behind. Without it a
+// caller learns which offsets settled but not where the group now stands.
+func (s *stateMachine) partialSettlement(ctx context.Context, queueName, groupID string, outcome SettlementOutcome, cause error) (SettlementOutcome, error) {
+	if len(outcome.Offsets) == 0 || groupID == "" {
+		return outcome, cause
+	}
+	if group, err := s.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
+		cursor := group.GetCursor()
+		outcome.Cursor = cursor.Cursor
+		outcome.Committed = cursor.Committed
+	}
+	return outcome, cause
 }
 
 func (s *stateMachine) finishSettlement(ctx context.Context, queueName, groupID string, outcome SettlementOutcome) (SettlementOutcome, error) {

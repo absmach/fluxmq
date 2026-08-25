@@ -317,6 +317,32 @@ message QueueErrorDetail {
   QueueOwnershipState ownership = 3;
   QueueLeaderState leader = 4;
   QueueDurabilityState durability = 5;
+
+  // progress is set when an operation applied part of a multi-entry request
+  // before failing. Without it a client cannot tell a total failure from a
+  // partial one and must retry the whole request, duplicating the committed
+  // prefix.
+  QueueProgressDetail progress = 6;
+}
+
+// QueueProgressDetail reports what a partially applied operation committed
+// before it failed. It is set on settlement errors (Ack, Nack, Reject) and on
+// append errors that committed a prefix (AppendQueue).
+message QueueProgressDetail {
+  // Number of entries successfully applied before the failure.
+  uint32 processed_count = 1;
+
+  // The offset the operation failed on. Entries before it were applied.
+  uint64 failed_offset = 2;
+
+  // Settlement only: the consumer group's committed cursor after the partial
+  // apply.
+  uint64 committed = 3;
+
+  // Append only: first and last offsets committed before the failure. Both are
+  // unset when nothing was committed.
+  uint64 first_offset = 4;
+  uint64 last_offset = 5;
 }
 
 enum QueueErrorCode {

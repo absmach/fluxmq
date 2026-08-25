@@ -829,7 +829,7 @@ func TestQueueMutationErrorCodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newConnectError(connect.CodeInternal, tt.err).Code(); got != tt.want {
+			if got := newConnectError(queuepkg.ErrorCodeInternal, tt.err).Code(); got != tt.want {
 				t.Fatalf("newConnectError code = %v, want %v", got, tt.want)
 			}
 		})
