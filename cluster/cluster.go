@@ -106,7 +106,7 @@ type QueueForwarder interface {
 
 	// ForwardGroupOp forwards a consumer group mutation to the Raft leader
 	// node for the given queue. opData is a JSON-encoded raft.Operation.
-	ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error
+	ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error
 }
 
 // QueueConsumerRegistry keeps the existing composite for compatibility.

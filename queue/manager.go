@@ -21,6 +21,7 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
@@ -2604,13 +2605,13 @@ func (m *Manager) DeliverQueueMessage(ctx context.Context, clientID string, msg 
 
 // HandleForwardedGroupOp implements cluster.QueueHandler.HandleForwardedGroupOp.
 // It decodes a raft.Operation and applies it through the local coordinator.
-func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, opData []byte) error {
+func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, wire *clusterv1.GroupOperation) error {
 	if m.groupReplicator == nil {
 		return fmt.Errorf("raft coordinator not available")
 	}
 
-	var op raft.Operation
-	if err := raft.DecodeOperation(opData, &op); err != nil {
+	op, err := decodeGroupOperation(wire)
+	if err != nil {
 		return fmt.Errorf("failed to decode forwarded group op: %w", err)
 	}
 
@@ -2618,7 +2619,7 @@ func (m *Manager) HandleForwardedGroupOp(ctx context.Context, queueName string, 
 		return fmt.Errorf("queue name mismatch: request=%q op=%q", queueName, op.QueueName)
 	}
 
-	return m.applyGroupOp(ctx, &op)
+	return m.applyGroupOp(ctx, op)
 }
 
 func (m *Manager) applyGroupOp(ctx context.Context, op *raft.Operation) error {

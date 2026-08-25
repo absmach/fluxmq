@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
@@ -18,7 +19,7 @@ import (
 
 // GroupOpForwarder forwards consumer group operations to a remote node.
 type GroupOpForwarder interface {
-	ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error
+	ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error
 }
 
 type groupCoordinator interface {
@@ -103,12 +104,12 @@ func (s *raftGroupStore) forwardToLeader(ctx context.Context, queueName string, 
 		return fmt.Errorf("leader unknown for queue %q", queueName)
 	}
 
-	data, err := raft.EncodeOperation(op)
+	wire, err := encodeGroupOperation(op)
 	if err != nil {
 		return fmt.Errorf("failed to encode operation: %w", err)
 	}
 
-	return forwarder.ForwardGroupOp(ctx, leaderID, queueName, data)
+	return forwarder.ForwardGroupOp(ctx, leaderID, queueName, wire)
 }
 
 // applyOrForward applies the mutation on the leader, forwards to the leader

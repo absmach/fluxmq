@@ -888,7 +888,7 @@ func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *tes
 	group.SetConsumer(testRemoteConsumerID, &types.ConsumerInfo{
 		ID:          testRemoteConsumerID,
 		ClientID:    testRemoteClientID,
-		ProxyNodeID: "node-2",
+		ProxyNodeID: testNode2,
 	})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
@@ -932,7 +932,7 @@ func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccess
 	group.SetConsumer(testRemoteConsumerID, &types.ConsumerInfo{
 		ID:          testRemoteConsumerID,
 		ClientID:    testRemoteClientID,
-		ProxyNodeID: "node-2",
+		ProxyNodeID: testNode2,
 	})
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 

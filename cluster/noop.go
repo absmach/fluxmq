@@ -184,7 +184,7 @@ func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	return ErrClusterNotEnabled
 }
 
-func (n *NoopCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+func (n *NoopCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error {
 	// Single-node: no remote nodes to forward to
 	return ErrClusterNotEnabled
 }

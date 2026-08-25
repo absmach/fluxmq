@@ -2277,12 +2277,12 @@ func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 }
 
 // ForwardGroupOp forwards a consumer group operation to a remote node.
-func (c *EtcdCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+func (c *EtcdCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
 	}
 
-	return c.transport.SendForwardGroupOp(ctx, nodeID, queueName, opData)
+	return c.transport.SendForwardGroupOp(ctx, nodeID, queueName, op)
 }
 
 // HandleTakeover implements TransportHandler.HandleTakeover.

@@ -1914,7 +1914,7 @@ func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	return nil
 }
 
-func (c *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+func (c *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error {
 	return nil
 }
 

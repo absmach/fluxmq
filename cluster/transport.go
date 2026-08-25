@@ -47,7 +47,7 @@ type QueueHandler interface {
 	// HandleForwardedGroupOp applies a consumer group mutation that was
 	// forwarded from a follower. The opData is a JSON-encoded raft.Operation.
 	// This node is expected to be the Raft leader for the queue's group.
-	HandleForwardedGroupOp(ctx context.Context, queueName string, opData []byte) error
+	HandleForwardedGroupOp(ctx context.Context, queueName string, op *clusterv1.GroupOperation) error
 }
 
 // Transport handles inter-broker communication using Connect protocol.
@@ -578,7 +578,7 @@ func (t *Transport) ForwardGroupOp(ctx context.Context, req *ForwardGroupOpReq) 
 		}), nil
 	}
 
-	if err := handler.HandleForwardedGroupOp(ctx, req.Msg.QueueName, req.Msg.OpData); err != nil {
+	if err := handler.HandleForwardedGroupOp(ctx, req.Msg.QueueName, req.Msg.Operation); err != nil {
 		return connect.NewResponse(&clusterv1.ForwardGroupOpResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -1089,7 +1089,7 @@ func summarizeQueueBatchFailures(failures []queueBatchFailure) string {
 }
 
 // SendForwardGroupOp forwards a consumer group operation to a peer node with retry and circuit breaker.
-func (t *Transport) SendForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+func (t *Transport) SendForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error {
 	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
@@ -1098,7 +1098,7 @@ func (t *Transport) SendForwardGroupOp(ctx context.Context, nodeID, queueName st
 
 		req := connect.NewRequest(&clusterv1.ForwardGroupOpRequest{
 			QueueName: queueName,
-			OpData:    opData,
+			Operation: op,
 		})
 
 		resp, err := client.ForwardGroupOp(ctx, req)

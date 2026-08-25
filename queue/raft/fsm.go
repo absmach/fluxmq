@@ -87,16 +87,6 @@ type Operation struct {
 	QueueConfig *types.QueueConfig `json:"queue_config,omitempty"`
 }
 
-// EncodeOperation serializes an Operation to JSON for transmission over the wire.
-func EncodeOperation(op *Operation) ([]byte, error) {
-	return json.Marshal(op)
-}
-
-// DecodeOperation deserializes JSON bytes into an Operation.
-func DecodeOperation(data []byte, op *Operation) error {
-	return json.Unmarshal(data, op)
-}
-
 // ApplyResult holds the result of an FSM apply operation.
 type ApplyResult struct {
 	Offset uint64 // For append operations
