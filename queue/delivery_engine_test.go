@@ -60,7 +60,11 @@ func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*Deliver
 		nodeID = "node-1" //nolint:goconst // test value
 	}
 
+	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger)
+	machine := newStateMachine(records, logStore, groupStore, consumerMgr)
+
 	engine := NewDeliveryEngine(
+		machine,
 		logStore, groupStore, consumerMgr,
 		local, remote, nodeID,
 		DistributionForward, 100, logger,
@@ -478,7 +482,11 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
 
+	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger)
+	machine := newStateMachine(records, logStore, groupStore, consumerMgr)
+
 	engine := NewDeliveryEngine(
+		machine,
 		logStore, groupStore, consumerMgr,
 		local, nil, "",
 		DistributionForward, 100, logger,
@@ -561,7 +569,11 @@ func TestDLQCallbackNilHandlerRedeliversInsteadOfBlocking(t *testing.T) {
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
 
+	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger)
+	machine := newStateMachine(records, logStore, groupStore, consumerMgr)
+
 	engine := NewDeliveryEngine(
+		machine,
 		logStore, groupStore, consumerMgr,
 		local, nil, "",
 		DistributionForward, 100, logger,

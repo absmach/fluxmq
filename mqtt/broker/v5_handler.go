@@ -453,7 +453,6 @@ func (h *v5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	h.broker.telemetry.logger.Debug("v5_pubrel", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 
 	packetID := p.ID
-
 	rc := byte(0x00)
 	comp := &v5.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
@@ -461,55 +460,11 @@ func (h *v5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 		ReasonCode:  &rc,
 		Properties:  &v5.BasicProperties{},
 	}
-	msg, found, err := s.GetInbound(packetID)
-	if err != nil {
+
+	if err := h.broker.completeInboundQoS2(s, packetID, "v5_pubrel"); err != nil {
 		return err
-	}
-	if !found {
-		h.broker.telemetry.logger.Warn("v5_pubrel_unknown_packet",
-			slog.String("client_id", s.ID),
-			slog.Int("packet_id", int(packetID)))
-		return s.WritePacket(comp)
 	}
 
-	// Async fanout remains an opt-in pub/sub policy. Exact queue addresses run
-	// synchronously so PUBCOMP cannot overtake a failed durable append.
-	if h.broker.cfg.asyncFanOut && h.broker.routeResolver.Resolve(msg.Topic).Kind == corebroker.RoutePubSub {
-		owned, err := s.AckInbound(packetID)
-		if err != nil {
-			return err
-		}
-		submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
-			topic := owned.Topic
-			if err := h.broker.Publish(context.Background(), owned); err != nil {
-				h.broker.logError("v5_pubrel_publish", err,
-					slog.String("client_id", s.ID),
-					slog.String("topic", topic))
-			}
-		})
-		if !submitted {
-			topic := owned.Topic
-			if err := h.broker.Publish(context.Background(), owned); err != nil {
-				h.broker.logError("v5_pubrel_publish", err,
-					slog.String("client_id", s.ID),
-					slog.String("topic", topic))
-			}
-		}
-		return s.WritePacket(comp)
-	}
-
-	publish := msg.Clone()
-	if err := h.broker.Publish(context.Background(), publish); err != nil {
-		h.broker.logError("v5_pubrel_publish", err,
-			slog.String("client_id", s.ID),
-			slog.String("topic", msg.Topic))
-		return err
-	}
-	owned, err := s.AckInbound(packetID)
-	if err != nil {
-		return err
-	}
-	message.Release(owned)
 	return s.WritePacket(comp)
 }
 

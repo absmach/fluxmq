@@ -1323,7 +1323,7 @@ func TestSubscribeExistingWithCursorDoesNotChangeQueueType(t *testing.T) {
 	}
 }
 
-func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
+func TestStreamAckOnManualCommitGroupIsRefused(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -1344,8 +1344,12 @@ func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
 
-	if err := mgr.Ack(context.Background(), testQueueEvents, "streamer", 0); err != nil {
-		t.Fatalf("Ack failed: %v", err)
+	// A manual-commit stream group is not advanced by Ack. Reporting success
+	// would tell the caller the offset is durable while the group still holds
+	// the old committed position; CommitOffset is the call that advances it.
+	err := mgr.Ack(context.Background(), testQueueEvents, "streamer", 0)
+	if !errors.Is(err, ErrAckOnlyForAutoCommitStream) {
+		t.Fatalf("expected ErrAckOnlyForAutoCommitStream, got %v", err)
 	}
 
 	stored, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamer")
@@ -3427,7 +3431,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	poisonMsg := newQueueEnvelope("bad-msg-1", "$queue/tasks/process", []byte("poison-payload"))
 	poisonMsg.User.Properties = map[string]string{"custom-key": "custom-val"}
 
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
 
 	// Verify the DLQ queue was auto-created
 	dlqCfg, err := logStore.GetQueue(ctx, "$dlq/tasks")
@@ -3504,7 +3508,7 @@ func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
 		newQueueEnvelope("msg-1", "$queue/tasks/test", []byte("data")), 0, 5, "", "$dlq/")
 	require.ErrorIs(t, err, ErrDLQDisabled)
 
@@ -3535,7 +3539,7 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
 		newQueueEnvelope("msg-1", "$queue/tasks/test", []byte("data")), 0, 5, "", "$dlq/"))
 
 	// Should use custom topic as queue name
@@ -3985,9 +3989,9 @@ func TestMoveToDLQRetryProducesExactlyOneRecord(t *testing.T) {
 
 	// Two attempts at the same transfer: same source queue, group and offset,
 	// so both derive the same transfer identity.
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
 	retry := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"))
 
 	count, err := store.Count(ctx, "$dlq/tasks")
 	require.NoError(t, err)
@@ -3995,7 +3999,7 @@ func TestMoveToDLQRetryProducesExactlyOneRecord(t *testing.T) {
 
 	// A different source offset is a different transfer and must still land.
 	other := newQueueEnvelope("bad-msg-2", "$queue/tasks/process", []byte("poison"))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
 	count, err = store.Count(ctx, "$dlq/tasks")
 	require.NoError(t, err)
 	assert.Equal(t, uint64(2), count, "distinct transfers must not be collapsed")
@@ -4051,10 +4055,10 @@ func TestMoveToDLQReplicatedDeduplicatesThroughRaft(t *testing.T) {
 	mgr, _ := newReplicatedDLQManager(t, coordinator)
 
 	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
 
 	retry := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"),
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"),
 		"a transfer already replicated must settle rather than fail")
 
 	transferID := dlqTransferID("tasks", testGroupWorkers, 42)
@@ -4066,7 +4070,7 @@ func TestMoveToDLQReplicatedDeduplicatesThroughRaft(t *testing.T) {
 
 	// A different source offset is a different transfer and must still land.
 	other := newQueueEnvelope("bad-msg-2", "$queue/tasks/process", []byte("poison"))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
 	assert.Len(t, coordinator.appendOnceKeys, 2, "distinct transfers must not be collapsed")
 }
 
@@ -4077,7 +4081,7 @@ func TestMoveToDLQReplicatedRefusesCoordinatorWithoutCapability(t *testing.T) {
 	mgr, _ := newReplicatedDLQManager(t, plainQueueCoordinator{QueueCoordinator: replicatedDLQCoordinator()})
 
 	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
-	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
 	assert.ErrorIs(t, err, storage.ErrDeduplicationUnsupported)
 }
 
@@ -4090,7 +4094,7 @@ func TestMoveToDLQReplicatedRequiresLeadership(t *testing.T) {
 	coordinator.leaderByQueue["$dlq/tasks"] = false
 
 	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
-	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
 	require.Error(t, err)
 	assert.Empty(t, coordinator.appendOnceCalls, "nothing may be replicated without leadership")
 }

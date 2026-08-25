@@ -642,6 +642,57 @@ func (h *Handler) Heartbeat(ctx context.Context, req *connect.Request[queuev1.He
 
 // --- Consume Operations ---
 
+// streamIdlePoll is how long ConsumeQueue waits before re-checking an empty
+// queue. The streaming RPC carries no client-supplied wait: back-pressure there
+// belongs in max_in_flight.
+const streamIdlePoll = 100 * time.Millisecond
+
+// consumePollInterval is how often a waiting unary Consume re-checks the queue.
+const consumePollInterval = 50 * time.Millisecond
+
+// sleepCtx waits for d, reporting false if the context ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// consumeWaiting polls until the queue yields messages or the wait elapses.
+//
+// A client that sets wait_time is asking not to be answered with an immediate
+// empty response; returning one anyway turns a long poll into a busy loop. The
+// wait is bounded by the request deadline as well, so a caller cannot hold a
+// handler past the context it supplied.
+func (h *Handler) consumeWaiting(ctx context.Context, command queue.ConsumeCommand, wait time.Duration) (queue.ConsumeOutcome, error) {
+	outcome, err := h.manager.StateMachine().Consume(ctx, command)
+	if !errors.Is(err, consumer.ErrNoMessages) || wait <= 0 {
+		return outcome, err
+	}
+
+	deadline := time.Now().Add(wait)
+	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
+		deadline = requestDeadline
+	}
+
+	for time.Now().Before(deadline) {
+		if !sleepCtx(ctx, min(consumePollInterval, time.Until(deadline))) {
+			return queue.ConsumeOutcome{}, consumer.ErrNoMessages
+		}
+		outcome, err = h.manager.StateMachine().Consume(ctx, command)
+		if !errors.Is(err, consumer.ErrNoMessages) {
+			return outcome, err
+		}
+	}
+
+	return queue.ConsumeOutcome{}, consumer.ErrNoMessages
+}
+
 func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.ConsumeRequest]) (*connect.Response[queuev1.ConsumeResponse], error) {
 	msg := req.Msg
 	if h.manager == nil {
@@ -651,12 +702,14 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 	if limit == 0 {
 		limit = 10
 	}
-	outcome, err := h.manager.StateMachine().Consume(ctx, queue.ConsumeCommand{
+	command := queue.ConsumeCommand{
 		QueueName:  msg.QueueName,
 		GroupID:    msg.GroupId,
 		ConsumerID: msg.ConsumerId,
 		Limit:      limit,
-	})
+	}
+
+	outcome, err := h.consumeWaiting(ctx, command, msg.WaitTime.AsDuration())
 	if errors.Is(err, consumer.ErrNoMessages) {
 		return connect.NewResponse(&queuev1.ConsumeResponse{}), nil
 	}
@@ -690,6 +743,13 @@ func (h *Handler) ConsumeQueue(ctx context.Context, req *connect.Request[queuev1
 	}
 
 	for {
+		// Checked before each round rather than only when idle: a stream with a
+		// steady supply of messages never reaches the idle branch, so a client
+		// that went away was noticed only when a Send eventually failed.
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+
 		outcome, err := h.manager.StateMachine().Consume(ctx, queue.ConsumeCommand{
 			QueueName:  msg.QueueName,
 			GroupID:    msg.GroupId,
@@ -697,12 +757,8 @@ func (h *Handler) ConsumeQueue(ctx context.Context, req *connect.Request[queuev1
 			Limit:      limit,
 		})
 		if errors.Is(err, consumer.ErrNoMessages) {
-			timer := time.NewTimer(100 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
+			if !sleepCtx(ctx, streamIdlePoll) {
 				return nil
-			case <-timer.C:
 			}
 			continue
 		}

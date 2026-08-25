@@ -25,16 +25,21 @@ import (
 // CreateSession creates a new session or returns an existing one.
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
-func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
+func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (sess *session.Session, created bool, err error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
 	defer sessionLock.Unlock()
 
 	ctx := context.Background()
-	releaseOwnershipOnFailure := false
-	sessionReady := false
+
+	// ownershipAcquired records that this call took cluster ownership of the
+	// session. Failing after that point has to hand it back, or the session is
+	// stranded on a node that never finished creating it. Reading the outcome
+	// from the returned error rather than from a second flag means every early
+	// return is covered without having to remember to mark one.
+	ownershipAcquired := false
 	defer func() {
-		if !releaseOwnershipOnFailure || sessionReady || b.cluster == nil {
+		if err == nil || !ownershipAcquired || b.cluster == nil {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -71,7 +76,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 			}
 
 			b.telemetry.logger.Info("session takeover completed", slog.String("client_id", clientID))
-			releaseOwnershipOnFailure = true
+			ownershipAcquired = true
 
 			// Webhook: session takeover
 			if b.telemetry.webhooks != nil {
@@ -98,7 +103,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 				return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
 			}
 		}
-		sessionReady = true
+		ownershipAcquired = true
 		return existing, false, nil
 	}
 
@@ -196,7 +201,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
 			return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
 		}
-		releaseOwnershipOnFailure = true
+		ownershipAcquired = true
 	}
 
 	if b.stores.sessions != nil {
@@ -206,7 +211,6 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	}
 
 	b.sessionsMap.Set(clientID, s)
-	sessionReady = true
 
 	return s, true, nil
 }

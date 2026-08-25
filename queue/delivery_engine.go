@@ -59,6 +59,7 @@ type DeliveryEngine struct {
 // NewDeliveryEngine creates a delivery engine. remote may be nil for
 // single-node deployments.
 func NewDeliveryEngine(
+	machine *stateMachine,
 	queueStore storage.QueueStore,
 	groupStore storage.ConsumerGroupStore,
 	consumerMgr *consumer.Manager,
@@ -73,7 +74,7 @@ func NewDeliveryEngine(
 		queueStore:       queueStore,
 		groupStore:       groupStore,
 		consumerManager:  consumerMgr,
-		stateMachine:     newConsumerStateMachine(queueStore, groupStore, consumerMgr),
+		stateMachine:     machine,
 		local:            local,
 		remote:           remote,
 		localNodeID:      localNodeID,
@@ -84,10 +85,6 @@ func NewDeliveryEngine(
 		queue:            make(chan string, 4096),
 		stopCh:           make(chan struct{}),
 	}
-}
-
-func (e *DeliveryEngine) setStateMachine(stateMachine *stateMachine) {
-	e.stateMachine = stateMachine
 }
 
 func (e *DeliveryEngine) setConsumerRemovedCallback(callback func(context.Context, string, string, []string)) {

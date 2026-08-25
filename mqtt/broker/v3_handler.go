@@ -380,58 +380,15 @@ func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 	h.broker.telemetry.logger.Debug("v3_pubrel", slog.String("client_id", s.ID), slog.Int("packet_id", int(p.ID)))
 
 	packetID := p.ID
-
 	comp := &v3.PubComp{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PubCompType},
 		ID:          packetID,
 	}
-	msg, found, err := s.GetInbound(packetID)
-	if err != nil {
+
+	if err := h.broker.completeInboundQoS2(s, packetID, "v3_pubrel"); err != nil {
 		return err
-	}
-	if !found {
-		h.broker.telemetry.logger.Warn("v3_pubrel_unknown_packet",
-			slog.String("client_id", s.ID),
-			slog.Int("packet_id", int(packetID)))
-		return s.WritePacket(comp)
 	}
 
-	if h.broker.cfg.asyncFanOut && h.broker.routeResolver.Resolve(msg.Topic).Kind == corebroker.RoutePubSub {
-		owned, err := s.AckInbound(packetID)
-		if err != nil {
-			return err
-		}
-		submitted := h.broker.fanOutPool != nil && h.broker.fanOutPool.Submit(func() {
-			topic := owned.Topic
-			if err := h.broker.Publish(context.Background(), owned); err != nil {
-				h.broker.logError("v3_pubrel_publish", err,
-					slog.String("client_id", s.ID),
-					slog.String("topic", topic))
-			}
-		})
-		if !submitted {
-			topic := owned.Topic
-			if err := h.broker.Publish(context.Background(), owned); err != nil {
-				h.broker.logError("v3_pubrel_publish", err,
-					slog.String("client_id", s.ID),
-					slog.String("topic", topic))
-			}
-		}
-		return s.WritePacket(comp)
-	}
-
-	publish := msg.Clone()
-	if err := h.broker.Publish(context.Background(), publish); err != nil {
-		h.broker.logError("v3_pubrel_publish", err,
-			slog.String("client_id", s.ID),
-			slog.String("topic", msg.Topic))
-		return err
-	}
-	owned, err := s.AckInbound(packetID)
-	if err != nil {
-		return err
-	}
-	message.Release(owned)
 	return s.WritePacket(comp)
 }
 

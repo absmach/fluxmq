@@ -74,7 +74,7 @@ func TestDLQTransferUsesConfiguredDurabilityPath(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
 		newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")),
 		7, 5, "decode failed", "$dlq/"))
 

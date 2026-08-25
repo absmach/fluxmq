@@ -819,33 +819,6 @@ func (m *Manager) Ack(ctx context.Context, queueName, groupID, consumerID string
 	return m.advanceCommitted(ctx, group)
 }
 
-// AckBatch acknowledges multiple messages.
-func (m *Manager) AckBatch(ctx context.Context, queueName, groupID, consumerID string, offsets []uint64) error {
-	groupLock := m.groupLocks.KeyPair(queueName, groupID)
-	groupLock.Lock()
-	defer groupLock.Unlock()
-
-	for _, offset := range offsets {
-		if m.transferring(queueName, groupID, offset) {
-			// A dead-letter transfer owns this entry; settling it here would
-			// race the destination write.
-			continue
-		}
-		if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, consumerID, offset); err != nil {
-			// Continue even if some fail
-			continue
-		}
-	}
-
-	// Get group to update committed offset
-	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
-	if err != nil {
-		return err
-	}
-
-	return m.advanceCommitted(ctx, group)
-}
-
 // Nack negatively acknowledges a message, making it available for redelivery.
 func (m *Manager) Nack(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
 	return m.NackWithDelay(ctx, queueName, groupID, consumerID, offset, 0)
