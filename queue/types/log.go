@@ -420,6 +420,19 @@ func (g *ConsumerGroup) PendingOffsets() map[uint64]struct{} {
 }
 
 // StealableEntries returns entries that are older than the visibility timeout.
+// StealableEntries returns the entries whose visibility timeout has elapsed,
+// excluding one consumer's own.
+//
+// Unlike FindPending and GetConsumer this returns the live entries rather than
+// copies, and deliberately: a sweep walks the whole pending list, and copying
+// every entry to read two fields from a handful measured six times the cost on
+// the delivery path.
+//
+// The contract that makes it safe is the caller's, not this method's. The
+// entries are a read-only view valid only while the caller holds that group's
+// lock, which every mutator — RequeuePending, TransferPending, and the settle
+// paths — also holds. Writing through these pointers is what the copies
+// elsewhere exist to prevent; do it through those methods instead.
 func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -432,7 +445,7 @@ func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, exclud
 			continue
 		}
 		for _, e := range entries {
-			if e.ClaimedAt.Before(cutoff) {
+			if e != nil && e.ClaimedAt.Before(cutoff) {
 				stealable = append(stealable, e)
 			}
 		}

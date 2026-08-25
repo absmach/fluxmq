@@ -5,6 +5,7 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -273,5 +274,29 @@ func BenchmarkStealSweepWithoutPoison(b *testing.B) {
 		message.Release(msg)
 		// Hand it back so the next iteration has the same work to do.
 		group.TransferPending(msg.Broker.Queue.Offset, "thief", "owner")
+	}
+}
+
+// BenchmarkStealSweepAllPoison measures the claim path for a group whose whole
+// pending list is poison and waiting to be swept.
+//
+// It is not an A/B against the old inline transfer: that version drained the
+// pending list as it went, so it measured a shrinking population while this one
+// measures a fixed one. What it is good for is the cost of re-examining entries
+// that are waiting, which the claim path pays on every claim until a sweep
+// clears them.
+func BenchmarkStealSweepAllPoison(b *testing.B) {
+	manager, group := benchStealFixture(b, 128)
+	manager.config.MaxDeliveryCount = 0
+	manager.config.OnDLQ = func(context.Context, string, string, *message.Envelope, uint64, int, string) error {
+		return nil
+	}
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := manager.stealWork(ctx, group, "thief", nil); err != nil && !errors.Is(err, ErrNoMessages) {
+			b.Fatalf("steal: %v", err)
+		}
 	}
 }

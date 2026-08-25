@@ -467,11 +467,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Stop is what ends them.
 	m.capture.Start(context.WithoutCancel(ctx))
 
-	// Start work stealing if enabled
-	if m.config.StealEnabled {
-		m.wg.Add(1)
-		go m.runStealLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
-	}
+	// Dead-lettering must not be optional. This loop is started unconditionally
+	// even though StealEnabled once gated it: work stealing itself happens
+	// inside ClaimBatch and never consulted that flag, so all the flag ever
+	// gated was a loop that did nothing. Gating the poison sweep on it would
+	// mean a deployment with stealing disabled never dead-letters, and its
+	// poison entries accumulate until MaxPELSize stalls the group.
+	m.wg.Add(1)
+	go m.runPoisonSweepLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
 
 	// Start consumer cleanup
 	m.wg.Add(1)
@@ -1992,18 +1995,27 @@ func projectPublishMetadata(properties map[string]string, source message.SourceM
 	return properties
 }
 
-func (m *Manager) runStealLoop() {
+// runPoisonSweepLoop performs the dead-letter transfers the claim path defers.
+//
+// The transfer reaches storage and, for a replicated dead-letter queue, a full
+// Raft round trip. Doing that inside a claim meant holding one consumer group's
+// lock for the destination's latency, once per poison entry in the batch, so it
+// runs here instead.
+func (m *Manager) runPoisonSweepLoop() {
 	defer m.wg.Done()
 
 	ticker := time.NewTicker(m.config.StealInterval)
 	defer ticker.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	for {
 		select {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			// Work stealing is handled internally by ClaimBatch
+			m.consumerManager.SweepPoison(ctx)
 		}
 	}
 }

@@ -221,3 +221,48 @@ func TestFailedTransferReleasesReservationAndKeepsEntryPending(t *testing.T) {
 	_, owner := group.FindPending(f.poisonAt)
 	assert.NotEmpty(t, owner, "a failed transfer must leave the source pending")
 }
+
+// A slow dead-letter destination must not stall the claim path.
+//
+// The transfer used to run inside stealWork, under the owning group's lock and
+// inside a claim that walks up to a whole batch of entries in one acquisition:
+// a batch of poison messages could hold a consumer group for the destination's
+// latency multiplied by the batch size. The claim now hands the entries to the
+// sweeper and returns.
+func TestPoisonTransferDoesNotStallTheClaimPath(t *testing.T) {
+	ctx := context.Background()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	blocking := func(context.Context, string, string, *message.Envelope, uint64, int, string) error {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return nil
+	}
+	fixture := newPoisonFixture(t, blocking, nil, NewMetrics())
+
+	// Hand the entry to the sweeper, then hold the sweeper inside the handler.
+	_, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.ErrorIs(t, err, ErrNoMessages)
+
+	swept := make(chan struct{})
+	go func() {
+		fixture.manager.SweepPoison(ctx)
+		close(swept)
+	}()
+	<-entered
+
+	// The group must stay usable while the destination write is in flight.
+	start := time.Now()
+	_ = fixture.manager.UpdateHeartbeat(ctx, testPoisonQueue, testPoisonGroup, testPoisonOwner)
+	waited := time.Since(start)
+
+	close(release)
+	<-swept
+
+	assert.Less(t, waited, 100*time.Millisecond,
+		"a claim-path operation waited %s on an in-flight dead-letter transfer", waited)
+}

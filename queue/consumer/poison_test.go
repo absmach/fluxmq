@@ -152,8 +152,17 @@ func TestPoisonWithoutDLQIsRedeliveredNotBlocked(t *testing.T) {
 			metrics := NewMetrics()
 			fixture := newPoisonFixture(t, tt.onDLQ, tt.unavailable, metrics)
 
-			stolen, err := fixture.manager.stealWork(
-				context.Background(), fixture.group, testPoisonThief, nil)
+			ctx := context.Background()
+
+			// With no handler at all the claim path knows immediately. With one
+			// configured, the first sweep is what discovers it has nowhere to
+			// send the message, and the claim after that redelivers.
+			stolen, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+			if err != nil {
+				require.ErrorIs(t, err, ErrNoMessages, "the entry waits for the sweeper, not for a consumer")
+				fixture.manager.SweepPoison(ctx)
+				stolen, err = fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+			}
 
 			require.NoError(t, err, "an undead-letterable poison message must still be delivered")
 			require.NotNil(t, stolen)
@@ -176,11 +185,15 @@ func TestTransientDLQFailureKeepsEntryPending(t *testing.T) {
 		return errors.New("storage temporarily unavailable")
 	}, nil, metrics)
 
-	stolen, err := fixture.manager.stealWork(
-		context.Background(), fixture.group, testPoisonThief, nil)
+	ctx := context.Background()
 
+	stolen, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
 	require.ErrorIs(t, err, ErrNoMessages, "a retryable poison entry must not be redelivered")
 	require.Nil(t, stolen)
+
+	// The transfer runs off the claim path now.
+	fixture.manager.SweepPoison(ctx)
+
 	assert.Equal(t, uint64(1), metrics.DLQTransferFailures)
 	assert.Zero(t, metrics.PoisonWithoutDLQ)
 	assert.Equal(t, 1, *fixture.calls)
@@ -193,13 +206,16 @@ func TestFailingDLQTransferIsRateLimited(t *testing.T) {
 		return errors.New("storage temporarily unavailable")
 	}, nil, metrics)
 
+	ctx := context.Background()
+	_, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.ErrorIs(t, err, ErrNoMessages)
+
 	for range 5 {
-		_, err := fixture.manager.stealWork(context.Background(), fixture.group, testPoisonThief, nil)
-		require.ErrorIs(t, err, ErrNoMessages)
+		fixture.manager.SweepPoison(ctx)
 	}
 
 	assert.Equal(t, 1, *fixture.calls,
-		"the backoff must throttle retries; the handler ran on every cycle")
+		"the backoff must throttle retries; the handler ran on every sweep")
 	assert.Equal(t, uint64(1), metrics.DLQTransferFailures)
 }
 
@@ -210,8 +226,11 @@ func TestSuccessfulDLQTransferSettlesEntry(t *testing.T) {
 		return nil
 	}, nil, metrics)
 
-	_, err := fixture.manager.stealWork(context.Background(), fixture.group, testPoisonThief, nil)
-	require.ErrorIs(t, err, ErrNoMessages, "the entry was dead-lettered, not redelivered")
+	ctx := context.Background()
+	_, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.ErrorIs(t, err, ErrNoMessages, "the entry was not redelivered while awaiting transfer")
+
+	fixture.manager.SweepPoison(ctx)
 
 	assert.Equal(t, uint64(1), metrics.DLQCount)
 	assert.Zero(t, metrics.DLQTransferFailures)

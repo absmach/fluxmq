@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -663,7 +664,7 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 
 		// Poison message: exceeded max delivery attempts.
 		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
-			if m.transferPoisonEntry(ctx, group, entry) {
+			if m.deferPoisonTransfer(group, entry) {
 				continue
 			}
 			// No dead-letter destination exists, so the entry falls through to
@@ -714,57 +715,161 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 	return nil, ErrNoMessages
 }
 
-// transferPoisonEntry moves one exhausted entry to the dead-letter queue.
+// deferPoisonTransfer hands an exhausted entry to the background sweeper and
+// reports whether the sweeper owns it now.
 //
-// It reports whether the entry is settled or should stay pending — in both cases
-// the caller skips it. It returns false only when the queue has no dead-letter
-// destination at all, which is the one case where continuing to redeliver beats
-// holding the entry forever: blocking would occupy a pending slot for a transfer
-// that can never succeed, and eventually stall the group on MaxPELSize.
+// The transfer itself does not happen here. It reaches storage and, for a
+// replicated dead-letter queue, a full Raft round trip bounded only by
+// AckTimeout — and this runs under the group's lock, inside a claim that may
+// walk up to a batch of entries in one acquisition. Performing transfers on the
+// claim path meant one poison message could hold an entire consumer group for
+// seconds, and a batch of them for considerably longer.
 //
-// A transient failure keeps the entry pending and retries later under backoff,
-// because a destination does exist and redelivering now would duplicate a
-// message the transfer may still deliver.
-func (m *Manager) transferPoisonEntry(ctx context.Context, group *types.ConsumerGroup, entry *types.PendingEntry) (handled bool) {
+// It returns false only when the queue has no dead-letter destination at all,
+// which is the one case where continuing to redeliver beats holding the entry
+// forever: blocking would occupy a pending slot for a transfer that can never
+// succeed, and eventually stall the group on MaxPELSize.
+func (m *Manager) deferPoisonTransfer(group *types.ConsumerGroup, entry *types.PendingEntry) (handled bool) {
 	if m.config.OnDLQ == nil {
 		m.reportPoisonWithoutDLQ(group, entry, ErrDLQHandlerUnavailable)
 		return false
 	}
-	if !m.dlqTransferDue(group, entry) {
-		// Throttled: the entry stays pending and is retried on a later cycle.
-		return true
+	// One lock acquisition, not two. A group holding many poison entries has
+	// every one of them re-examined on each claim until a sweep drains them, so
+	// this runs per entry per claim and the difference is measurable.
+	return m.trackPoisonForSweep(group, entry)
+}
+
+// SweepPoison performs the dead-letter transfers the claim path deferred.
+//
+// It runs off the delivery path, so a slow destination costs dead-letter
+// latency rather than consumer throughput. Each transfer takes the owning
+// group's lock only to validate and to settle; the destination write happens
+// with the lock released, guarded by the same reservation that keeps a
+// concurrent ack or steal from touching the entry.
+func (m *Manager) SweepPoison(ctx context.Context) {
+	if m.config.OnDLQ == nil {
+		return
 	}
 
-	msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
-	if err != nil {
-		m.reportDLQTransferFailure(group, entry, "read source record", err)
-		return true
-	}
-
-	err = m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.Offset, entry.DeliveryCount, "max delivery count exceeded")
-	message.Release(msg)
-	if err != nil {
-		if m.dlqUnavailable(err) {
-			m.reportPoisonWithoutDLQ(group, entry, err)
-			return false
+	for _, ref := range m.poisonWorkList() {
+		if err := ctx.Err(); err != nil {
+			return
 		}
-		m.reportDLQTransferFailure(group, entry, "append to dead-letter queue", err)
-		return true
+		m.sweepPoisonEntry(ctx, ref)
+	}
+}
+
+// poisonRef names one entry awaiting a dead-letter transfer.
+type poisonRef struct {
+	queueName string
+	groupID   string
+	offset    uint64
+}
+
+// poisonWorkList copies the tracked entries so the sweep does not hold stateMu
+// while transferring.
+func (m *Manager) poisonWorkList() []poisonRef {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	refs := make([]poisonRef, 0, m.poisonTotal)
+	for key, entries := range m.poison {
+		queueName, groupID, ok := splitGroupKey(key)
+		if !ok {
+			continue
+		}
+		for offset, state := range entries {
+			if state.noDestination || time.Now().Before(state.retryAfter) {
+				continue
+			}
+			refs = append(refs, poisonRef{queueName: queueName, groupID: groupID, offset: offset})
+		}
+	}
+	return refs
+}
+
+func (m *Manager) sweepPoisonEntry(ctx context.Context, ref poisonRef) {
+	group, entry, msg, ok := m.preparePoisonTransfer(ctx, ref)
+	if !ok {
+		return
 	}
 
-	if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset); err != nil {
-		// The transfer succeeded, so the record is not lost. The entry is
-		// retried, and the destination's deduplication keeps that from
-		// producing a second dead-letter record.
+	err := m.config.OnDLQ(ctx, ref.queueName, ref.groupID, msg, ref.offset, entry.DeliveryCount, "max delivery count exceeded")
+	message.Release(msg)
+
+	m.finishPoisonTransfer(ctx, ref, group, &entry, err)
+}
+
+// preparePoisonTransfer validates the entry, reserves it and reads its record
+// under the group's lock, so the destination write can run without it.
+func (m *Manager) preparePoisonTransfer(ctx context.Context, ref poisonRef) (*types.ConsumerGroup, types.PendingEntry, *message.Envelope, bool) {
+	groupLock := m.groupLocks.KeyPair(ref.queueName, ref.groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, ref.queueName, ref.groupID)
+	if err != nil {
+		m.forgetPoison(ref.queueName, ref.groupID, ref.offset)
+		return nil, types.PendingEntry{}, nil, false
+	}
+
+	entry, owner := group.FindPending(ref.offset)
+	if owner == "" {
+		// Settled while it waited; nothing left to transfer.
+		m.forgetPoison(ref.queueName, ref.groupID, ref.offset)
+		return nil, types.PendingEntry{}, nil, false
+	}
+	if !m.beginTransfer(transferKey{queueName: ref.queueName, groupID: ref.groupID, offset: ref.offset}) {
+		return nil, types.PendingEntry{}, nil, false
+	}
+
+	msg, err := m.queueStore.Read(ctx, ref.queueName, ref.offset)
+	if err != nil {
+		m.endTransfer(transferKey{queueName: ref.queueName, groupID: ref.groupID, offset: ref.offset})
+		m.scheduleNextPoisonAttempt(ref)
+		m.reportDLQTransferFailure(group, &entry, "read source record", err)
+		return nil, types.PendingEntry{}, nil, false
+	}
+
+	return group, entry, msg, true
+}
+
+// finishPoisonTransfer releases the reservation and settles the source, but
+// only once the destination write succeeded. A failure leaves the entry pending
+// and scheduled for a later sweep, which is what keeps the move loss-safe.
+func (m *Manager) finishPoisonTransfer(ctx context.Context, ref poisonRef, group *types.ConsumerGroup, entry *types.PendingEntry, transferErr error) {
+	groupLock := m.groupLocks.KeyPair(ref.queueName, ref.groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
+	m.endTransfer(transferKey{queueName: ref.queueName, groupID: ref.groupID, offset: ref.offset})
+
+	if transferErr != nil {
+		if m.dlqUnavailable(transferErr) {
+			// No destination at all: stop sweeping it and let the claim path
+			// redeliver rather than hold a pending slot forever.
+			m.reportPoisonWithoutDLQ(group, entry, transferErr)
+			return
+		}
+		m.scheduleNextPoisonAttempt(ref)
+		m.reportDLQTransferFailure(group, entry, "append to dead-letter queue", transferErr)
+		return
+	}
+
+	if err := m.groupStore.RemovePendingEntry(ctx, ref.queueName, ref.groupID, entry.ConsumerID, ref.offset); err != nil {
+		// The transfer succeeded, so the record is not lost. The entry is swept
+		// again, and the destination's deduplication keeps that from producing
+		// a second dead-letter record.
+		m.scheduleNextPoisonAttempt(ref)
 		m.reportDLQTransferFailure(group, entry, "remove settled pending entry", err)
-		return true
+		return
 	}
 
 	m.clearDLQRetry(group, entry)
 	if m.config.Metrics != nil {
 		m.config.Metrics.RecordDLQ()
 	}
-	return true
 }
 
 func (m *Manager) dlqUnavailable(err error) bool {
@@ -804,6 +909,61 @@ func (m *Manager) dlqTransferDue(group *types.ConsumerGroup, entry *types.Pendin
 	m.publishPoisonGaugesLocked()
 
 	return true
+}
+
+// trackPoisonForSweep puts an entry on the sweeper's work list and reports
+// whether the sweeper owns it.
+//
+// It answers both questions under one lock because the claim path asks them
+// together, once per poison entry per claim, for as long as those entries sit
+// waiting to be swept.
+func (m *Manager) trackPoisonForSweep(group *types.ConsumerGroup, entry *types.PendingEntry) bool {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	key := groupKey(group.QueueName, group.ID)
+	entries, ok := m.poison[key]
+	if !ok {
+		entries = make(map[uint64]poisonState)
+		m.poison[key] = entries
+	}
+
+	if state, tracked := entries[entry.Offset]; tracked {
+		// A sweep that found no destination hands the entry back to redelivery.
+		return !state.noDestination
+	}
+
+	// A newly tracked entry is due immediately; the backoff applies to retries.
+	entries[entry.Offset] = poisonState{}
+	m.poisonTotal++
+	m.publishPoisonGaugesLocked()
+
+	return true
+}
+
+// scheduleNextPoisonAttempt makes a failed transfer wait out the backoff before
+// the sweeper tries it again. Without it a destination that is down is retried
+// on every sweep, which is the cost the backoff exists to avoid.
+func (m *Manager) scheduleNextPoisonAttempt(ref poisonRef) {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	entries, ok := m.poison[groupKey(ref.queueName, ref.groupID)]
+	if !ok {
+		return
+	}
+	state, tracked := entries[ref.offset]
+	if !tracked {
+		return
+	}
+	state.retryAfter = time.Now().Add(m.config.DLQRetryBackoff)
+	entries[ref.offset] = state
+}
+
+// splitGroupKey reverses groupKey.
+func splitGroupKey(key string) (queueName, groupID string, ok bool) {
+	queueName, groupID, ok = strings.Cut(key, "\x00")
+	return queueName, groupID, ok
 }
 
 // markPoisonWithoutDestination records that this entry has nowhere to go, and

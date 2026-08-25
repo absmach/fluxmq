@@ -514,8 +514,11 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	group.PEL["c1"][0].DeliveryCount = 5
 	group.PEL["c1"][0].ClaimedAt = time.Now().Add(-time.Hour) // make stealable
 
-	// c2 tries to claim — triggers stealWork which should fire DLQ callback
+	// c2 tries to claim. The poison entry is handed to the sweeper rather than
+	// dead-lettered inline, so the claim finds nothing to deliver and the
+	// transfer happens off the claim path.
 	_, err = consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c2", nil)
+	consumerMgr.SweepPoison(ctx)
 	if err == nil {
 		t.Fatal("expected no messages (poison should go to DLQ, not be delivered)")
 	}
