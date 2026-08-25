@@ -28,6 +28,16 @@ type Metrics struct {
 	// DLQ metrics
 	DLQCount uint64 // Messages moved to DLQ
 
+	// DLQTransferFailures counts poison messages whose dead-letter transfer was
+	// attempted and failed. The entry stays pending and the transfer is retried
+	// under backoff, so a rising count means records are stuck, not lost.
+	DLQTransferFailures uint64
+
+	// PoisonWithoutDLQ counts poison messages returned to ordinary redelivery
+	// because the queue has no dead-letter destination at all. They are not
+	// stuck: they keep being delivered, which is the only remaining option.
+	PoisonWithoutDLQ uint64
+
 	// Capture metrics
 	CaptureFailures uint64 // Matching queues a captured publish failed to reach
 	CaptureDropped  uint64 // Capture jobs discarded without being attempted
@@ -88,6 +98,19 @@ func (m *Metrics) RecordReject() {
 // RecordDLQ records a message moved to DLQ.
 func (m *Metrics) RecordDLQ() {
 	atomic.AddUint64(&m.DLQCount, 1)
+}
+
+// RecordDLQTransferFailure records one failed dead-letter transfer of a poison
+// message. The source entry remains pending, so this counts records that are
+// stuck rather than records that were lost.
+func (m *Metrics) RecordDLQTransferFailure() {
+	atomic.AddUint64(&m.DLQTransferFailures, 1)
+}
+
+// RecordPoisonWithoutDLQ records one poison message returned to ordinary
+// redelivery because its queue has no dead-letter destination.
+func (m *Metrics) RecordPoisonWithoutDLQ() {
+	atomic.AddUint64(&m.PoisonWithoutDLQ, 1)
 }
 
 // RecordCaptureFailure records one matching queue a captured publish failed to

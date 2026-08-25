@@ -178,6 +178,11 @@ type Config struct {
 	// DLQ configuration
 	DLQTopicPrefix string
 
+	// DLQRetryBackoff is the minimum interval between dead-letter transfer
+	// attempts for one pending entry, so a persistently failing transfer cannot
+	// consume a steal slot on every cycle. Zero selects the consumer default.
+	DLQRetryBackoff time.Duration
+
 	// Work stealing configuration
 	StealInterval time.Duration
 	StealEnabled  bool
@@ -233,6 +238,7 @@ func DefaultConfig() Config {
 		ConsumerTimeout:        2 * time.Minute,
 		MaxPELSize:             100_000,
 		DLQTopicPrefix:         defaultDLQTopicPrefix,
+		DLQRetryBackoff:        30 * time.Second,
 		StealInterval:          5 * time.Second,
 		StealEnabled:           true,
 		RetentionCheckInterval: 5 * time.Minute,
@@ -288,6 +294,14 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 			}
 			return mgr.moveToDLQ(ctx, queueName, groupID, msg, offset, deliveryCount, reason, dlqPrefix)
 		},
+		// A queue with dead-lettering switched off has no destination, so its
+		// poison messages keep being redelivered rather than holding a pending
+		// slot for a transfer that can never happen. Every other failure is
+		// transient and worth retrying.
+		DLQUnavailable:  func(err error) bool { return errors.Is(err, ErrDLQDisabled) },
+		DLQRetryBackoff: config.DLQRetryBackoff,
+		Metrics:         metrics,
+		Logger:          logger,
 	}
 
 	raftGroupStore := newRaftGroupStore(groupStore)

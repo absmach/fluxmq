@@ -537,7 +537,11 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	}
 }
 
-func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
+// With no dead-letter handler at all there is no destination, so an exhausted
+// entry returns to ordinary redelivery rather than holding a pending slot for a
+// transfer that can never happen. Contrast TestDLQCallbackFailureLeavesMessagePending:
+// a transient failure does keep the entry pending, because a destination exists.
+func TestDLQCallbackNilHandlerRedeliversInsteadOfBlocking(t *testing.T) {
 	local := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
 		return nil
 	})
@@ -553,7 +557,7 @@ func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
 		MaxPELSize:         100_000,
 		AutoCommitInterval: DefaultConfig().AutoCommitInterval,
 		VisibilityTimeout:  1 * time.Millisecond,
-		// OnDLQ is nil — the source delivery must remain pending.
+		// OnDLQ is nil — there is no destination, so the entry is redelivered.
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
 
@@ -579,16 +583,24 @@ func TestDLQCallbackNilHandlerLeavesMessagePending(t *testing.T) {
 	group.PEL["c1"][0].DeliveryCount = 5
 	group.PEL["c1"][0].ClaimedAt = time.Now().Add(-time.Hour)
 
-	// Should not panic with nil OnDLQ
-	_, err := consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c2", nil)
-	if err == nil {
-		t.Fatal("expected no messages")
+	// A nil handler must not panic, and must not strand the entry: c2 steals it.
+	stolen, err := consumerMgr.Claim(ctx, "tasks", testGroupWorkers, "c2", nil)
+	if err != nil {
+		t.Fatalf("poison entry with no DLQ destination must still be delivered: %v", err)
 	}
+	if stolen == nil {
+		t.Fatal("expected the poison entry to be redelivered")
+	}
+	message.Release(stolen)
 
-	// Without a confirmed DLQ append, the PEL entry must remain retryable.
-	entries, _ := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, "c1")
-	if len(entries) != 1 {
-		t.Fatalf("expected PEL entry retained, got %d", len(entries))
+	// The entry moved to the new owner rather than remaining stuck with c1.
+	previous, _ := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, "c1")
+	if len(previous) != 0 {
+		t.Fatalf("expected the entry to leave the original consumer, got %d", len(previous))
+	}
+	current, _ := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, "c2")
+	if len(current) != 1 {
+		t.Fatalf("expected the entry to transfer to the stealing consumer, got %d", len(current))
 	}
 }
 

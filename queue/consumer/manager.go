@@ -6,7 +6,9 @@ package consumer
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -37,7 +39,13 @@ type Manager struct {
 	groupStore storage.ConsumerGroupStore
 	config     Config
 	lastCommit map[string]time.Time
-	mu         sync.RWMutex
+
+	// dlqRetryAfter rate-limits dead-letter transfer retries per pending entry.
+	// It is deliberately in-memory: this is a retry throttle, not durable state,
+	// and losing it on restart costs one immediate retry per stuck entry.
+	dlqRetryAfter map[string]time.Time
+
+	mu sync.RWMutex
 }
 
 // DLQHandler is called when a message exceeds MaxDeliveryCount.
@@ -69,10 +77,33 @@ type Config struct {
 	// Zero means unlimited (not recommended for production).
 	MaxPELSize int
 
-	// OnDLQ is called when a message exceeds MaxDeliveryCount during work stealing.
-	// If nil or if it returns an error, poison messages remain in the PEL.
+	// OnDLQ is called when a message exceeds MaxDeliveryCount during work
+	// stealing. A nil handler, or one reporting that the queue has no
+	// dead-letter destination, returns the message to ordinary redelivery. Any
+	// other error keeps the entry pending and retries the transfer later.
 	OnDLQ DLQHandler
+
+	// DLQUnavailable reports whether an OnDLQ error means "this queue has no
+	// dead-letter destination" rather than "the transfer failed this time". The
+	// two are handled differently: the first cannot be retried into success, the
+	// second can. A nil func treats every error as transient.
+	DLQUnavailable func(error) bool
+
+	// DLQRetryBackoff is the minimum interval between dead-letter transfer
+	// attempts for one pending entry. It stops a permanently failing transfer
+	// from consuming a steal slot on every cycle. Zero selects
+	// defaultDLQRetryBackoff.
+	DLQRetryBackoff time.Duration
+
+	// Metrics records dead-letter transfer outcomes. May be nil.
+	Metrics *Metrics
+
+	// Logger reports dead-letter transfer failures. Nil selects slog.Default.
+	Logger *slog.Logger
 }
+
+// defaultDLQRetryBackoff throttles retries of a failing dead-letter transfer.
+const defaultDLQRetryBackoff = 30 * time.Second
 
 // DefaultConfig returns default manager configuration.
 func DefaultConfig() Config {
@@ -88,11 +119,18 @@ func DefaultConfig() Config {
 
 // NewManager creates a new consumer group manager.
 func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, config Config) *Manager {
+	if config.DLQRetryBackoff <= 0 {
+		config.DLQRetryBackoff = defaultDLQRetryBackoff
+	}
+	if config.Logger == nil {
+		config.Logger = slog.Default()
+	}
 	return &Manager{
-		queueStore: queueStore,
-		groupStore: groupStore,
-		config:     config,
-		lastCommit: make(map[string]time.Time),
+		queueStore:    queueStore,
+		groupStore:    groupStore,
+		config:        config,
+		lastCommit:    make(map[string]time.Time),
+		dlqRetryAfter: make(map[string]time.Time),
 	}
 }
 
@@ -515,22 +553,12 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 	for _, entry := range stealable {
 		// Poison message: exceeded max delivery attempts.
 		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
-			if m.config.OnDLQ == nil {
+			if m.transferPoisonEntry(ctx, group, entry) {
 				continue
 			}
-			msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
-			if err != nil {
-				continue
-			}
-			if err := m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.Offset, entry.DeliveryCount, "max delivery count exceeded"); err != nil {
-				message.Release(msg)
-				continue
-			}
-			message.Release(msg)
-			if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset); err != nil {
-				continue
-			}
-			continue
+			// No dead-letter destination exists, so the entry falls through to
+			// ordinary redelivery below rather than holding a pending slot for
+			// a transfer that can never happen.
 		}
 
 		// Read message
@@ -574,6 +602,122 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 	}
 
 	return nil, ErrNoMessages
+}
+
+// transferPoisonEntry moves one exhausted entry to the dead-letter queue.
+//
+// It reports whether the entry is settled or should stay pending — in both cases
+// the caller skips it. It returns false only when the queue has no dead-letter
+// destination at all, which is the one case where continuing to redeliver beats
+// holding the entry forever: blocking would occupy a pending slot for a transfer
+// that can never succeed, and eventually stall the group on MaxPELSize.
+//
+// A transient failure keeps the entry pending and retries later under backoff,
+// because a destination does exist and redelivering now would duplicate a
+// message the transfer may still deliver.
+func (m *Manager) transferPoisonEntry(ctx context.Context, group *types.ConsumerGroup, entry *types.PendingEntry) (handled bool) {
+	if m.config.OnDLQ == nil {
+		m.reportPoisonWithoutDLQ(group, entry, ErrDLQHandlerUnavailable)
+		return false
+	}
+	if !m.dlqTransferDue(group, entry) {
+		// Throttled: the entry stays pending and is retried on a later cycle.
+		return true
+	}
+
+	msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
+	if err != nil {
+		m.reportDLQTransferFailure(group, entry, "read source record", err)
+		return true
+	}
+
+	err = m.config.OnDLQ(ctx, group.QueueName, group.ID, msg, entry.Offset, entry.DeliveryCount, "max delivery count exceeded")
+	message.Release(msg)
+	if err != nil {
+		if m.dlqUnavailable(err) {
+			m.reportPoisonWithoutDLQ(group, entry, err)
+			return false
+		}
+		m.reportDLQTransferFailure(group, entry, "append to dead-letter queue", err)
+		return true
+	}
+
+	if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, entry.ConsumerID, entry.Offset); err != nil {
+		// The transfer succeeded, so the record is not lost. The entry is
+		// retried, and the destination's deduplication keeps that from
+		// producing a second dead-letter record.
+		m.reportDLQTransferFailure(group, entry, "remove settled pending entry", err)
+		return true
+	}
+
+	m.clearDLQRetry(group, entry)
+	if m.config.Metrics != nil {
+		m.config.Metrics.RecordDLQ()
+	}
+	return true
+}
+
+func (m *Manager) dlqUnavailable(err error) bool {
+	if errors.Is(err, ErrDLQHandlerUnavailable) {
+		return true
+	}
+	if m.config.DLQUnavailable == nil {
+		return false
+	}
+	return m.config.DLQUnavailable(err)
+}
+
+// dlqTransferDue reports whether this entry's transfer may be attempted now,
+// and records the attempt when it may.
+func (m *Manager) dlqTransferDue(group *types.ConsumerGroup, entry *types.PendingEntry) bool {
+	key := dlqRetryKey(group, entry)
+	if retryAt, throttled := m.dlqRetryAfter[key]; throttled && time.Now().Before(retryAt) {
+		return false
+	}
+	m.dlqRetryAfter[key] = time.Now().Add(m.config.DLQRetryBackoff)
+	return true
+}
+
+func (m *Manager) clearDLQRetry(group *types.ConsumerGroup, entry *types.PendingEntry) {
+	delete(m.dlqRetryAfter, dlqRetryKey(group, entry))
+}
+
+func dlqRetryKey(group *types.ConsumerGroup, entry *types.PendingEntry) string {
+	return group.QueueName + "\x00" + group.ID + "\x00" + strconv.FormatUint(entry.Offset, 10)
+}
+
+func (m *Manager) reportDLQTransferFailure(group *types.ConsumerGroup, entry *types.PendingEntry, stage string, err error) {
+	if m.config.Metrics != nil {
+		m.config.Metrics.RecordDLQTransferFailure()
+	}
+	m.config.Logger.Warn("dead-letter transfer failed; entry stays pending",
+		slog.String("stage", stage),
+		slog.String("queue", group.QueueName),
+		slog.String("group", group.ID),
+		slog.String("consumer", entry.ConsumerID),
+		slog.Uint64("offset", entry.Offset),
+		slog.Int("delivery_count", entry.DeliveryCount),
+		slog.Duration("retry_after", m.config.DLQRetryBackoff),
+		slog.String("error", err.Error()))
+}
+
+func (m *Manager) reportPoisonWithoutDLQ(group *types.ConsumerGroup, entry *types.PendingEntry, err error) {
+	if m.config.Metrics != nil {
+		m.config.Metrics.RecordPoisonWithoutDLQ()
+	}
+	// Throttled on the same schedule as a transfer retry: without a destination
+	// this entry is redelivered indefinitely, and one line per delivery would
+	// drown the log.
+	if !m.dlqTransferDue(group, entry) {
+		return
+	}
+	m.config.Logger.Warn("poison message has no dead-letter destination; continuing redelivery",
+		slog.String("queue", group.QueueName),
+		slog.String("group", group.ID),
+		slog.String("consumer", entry.ConsumerID),
+		slog.Uint64("offset", entry.Offset),
+		slog.Int("delivery_count", entry.DeliveryCount),
+		slog.String("error", err.Error()))
 }
 
 // Ack acknowledges successful processing of a message.
