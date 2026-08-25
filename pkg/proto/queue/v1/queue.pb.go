@@ -1278,18 +1278,21 @@ func (*QueueErrorDetail_SettlementProgress) isQueueErrorDetail_Progress() {}
 // AppendProgress reports what a partially applied append committed before it
 // failed. It is set on AppendQueue, which commits a prefix and stops at the
 // first failed append.
+// Every field carries explicit presence. Zero is a legitimate value for an
+// offset, an index and a count, so an unset field must be distinguishable from
+// a field that is genuinely zero.
 type AppendProgress struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Number of records successfully appended before the failure.
-	ProcessedCount uint32 `protobuf:"varint,1,opt,name=processed_count,json=processedCount,proto3" json:"processed_count,omitempty"`
+	ProcessedCount *uint32 `protobuf:"varint,1,opt,name=processed_count,json=processedCount,proto3,oneof" json:"processed_count,omitempty"`
 	// Zero-based position of the failed record within the request. The record was
 	// not appended and so has no offset; this is the only coordinate that can
-	// name it. It always equals processed_count, and is stated explicitly so a
-	// client does not have to infer it.
-	FailedIndex uint32 `protobuf:"varint,2,opt,name=failed_index,json=failedIndex,proto3" json:"failed_index,omitempty"`
-	// Offsets of the committed prefix. Meaningful only when processed_count > 0.
-	FirstOffset   uint64 `protobuf:"varint,3,opt,name=first_offset,json=firstOffset,proto3" json:"first_offset,omitempty"`
-	LastOffset    uint64 `protobuf:"varint,4,opt,name=last_offset,json=lastOffset,proto3" json:"last_offset,omitempty"`
+	// name it.
+	FailedIndex *uint32 `protobuf:"varint,2,opt,name=failed_index,json=failedIndex,proto3,oneof" json:"failed_index,omitempty"`
+	// Offsets of the committed prefix. Unset when nothing was committed, which is
+	// distinct from a prefix that committed at offset 0.
+	FirstOffset   *uint64 `protobuf:"varint,3,opt,name=first_offset,json=firstOffset,proto3,oneof" json:"first_offset,omitempty"`
+	LastOffset    *uint64 `protobuf:"varint,4,opt,name=last_offset,json=lastOffset,proto3,oneof" json:"last_offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1325,29 +1328,29 @@ func (*AppendProgress) Descriptor() ([]byte, []int) {
 }
 
 func (x *AppendProgress) GetProcessedCount() uint32 {
-	if x != nil {
-		return x.ProcessedCount
+	if x != nil && x.ProcessedCount != nil {
+		return *x.ProcessedCount
 	}
 	return 0
 }
 
 func (x *AppendProgress) GetFailedIndex() uint32 {
-	if x != nil {
-		return x.FailedIndex
+	if x != nil && x.FailedIndex != nil {
+		return *x.FailedIndex
 	}
 	return 0
 }
 
 func (x *AppendProgress) GetFirstOffset() uint64 {
-	if x != nil {
-		return x.FirstOffset
+	if x != nil && x.FirstOffset != nil {
+		return *x.FirstOffset
 	}
 	return 0
 }
 
 func (x *AppendProgress) GetLastOffset() uint64 {
-	if x != nil {
-		return x.LastOffset
+	if x != nil && x.LastOffset != nil {
+		return *x.LastOffset
 	}
 	return 0
 }
@@ -1355,16 +1358,21 @@ func (x *AppendProgress) GetLastOffset() uint64 {
 // SettlementProgress reports what a partially applied settlement committed
 // before it failed. It is set on Ack, Nack and Reject, which apply the
 // requested offsets in order and stop at the first failure.
+// Every field carries explicit presence, for the same reason as AppendProgress:
+// offset zero, cursor zero and committed zero are all valid values.
 type SettlementProgress struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Number of offsets successfully settled before the failure.
-	ProcessedCount uint32 `protobuf:"varint,1,opt,name=processed_count,json=processedCount,proto3" json:"processed_count,omitempty"`
+	ProcessedCount *uint32 `protobuf:"varint,1,opt,name=processed_count,json=processedCount,proto3,oneof" json:"processed_count,omitempty"`
 	// The offset the settlement failed on. Every offset requested before it was
-	// settled. Meaningful because the offset was supplied by the caller, unlike
-	// an append's failed record.
-	FailedOffset uint64 `protobuf:"varint,2,opt,name=failed_offset,json=failedOffset,proto3" json:"failed_offset,omitempty"`
-	// The consumer group's committed cursor after the partial apply.
-	Committed     uint64 `protobuf:"varint,3,opt,name=committed,proto3" json:"committed,omitempty"`
+	// settled. Nameable because the caller supplied it, unlike an append's failed
+	// record.
+	FailedOffset *uint64 `protobuf:"varint,2,opt,name=failed_offset,json=failedOffset,proto3,oneof" json:"failed_offset,omitempty"`
+	// The consumer group's cursor and committed offset after the partial apply.
+	// Both are reported: the cursor is where delivery resumes, the committed
+	// offset is what is safe to truncate behind.
+	Committed     *uint64 `protobuf:"varint,3,opt,name=committed,proto3,oneof" json:"committed,omitempty"`
+	Cursor        *uint64 `protobuf:"varint,4,opt,name=cursor,proto3,oneof" json:"cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1400,22 +1408,29 @@ func (*SettlementProgress) Descriptor() ([]byte, []int) {
 }
 
 func (x *SettlementProgress) GetProcessedCount() uint32 {
-	if x != nil {
-		return x.ProcessedCount
+	if x != nil && x.ProcessedCount != nil {
+		return *x.ProcessedCount
 	}
 	return 0
 }
 
 func (x *SettlementProgress) GetFailedOffset() uint64 {
-	if x != nil {
-		return x.FailedOffset
+	if x != nil && x.FailedOffset != nil {
+		return *x.FailedOffset
 	}
 	return 0
 }
 
 func (x *SettlementProgress) GetCommitted() uint64 {
-	if x != nil {
-		return x.Committed
+	if x != nil && x.Committed != nil {
+		return *x.Committed
+	}
+	return 0
+}
+
+func (x *SettlementProgress) GetCursor() uint64 {
+	if x != nil && x.Cursor != nil {
+		return *x.Cursor
 	}
 	return 0
 }
@@ -4695,17 +4710,27 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x0fappend_progress\x18\a \x01(\v2\x1f.fluxmq.queue.v1.AppendProgressH\x00R\x0eappendProgress\x12V\n" +
 	"\x13settlement_progress\x18\b \x01(\v2#.fluxmq.queue.v1.SettlementProgressH\x00R\x12settlementProgressB\n" +
 	"\n" +
-	"\bprogressJ\x04\b\x06\x10\aR\bprogress\"\xa0\x01\n" +
-	"\x0eAppendProgress\x12'\n" +
-	"\x0fprocessed_count\x18\x01 \x01(\rR\x0eprocessedCount\x12!\n" +
-	"\ffailed_index\x18\x02 \x01(\rR\vfailedIndex\x12!\n" +
-	"\ffirst_offset\x18\x03 \x01(\x04R\vfirstOffset\x12\x1f\n" +
-	"\vlast_offset\x18\x04 \x01(\x04R\n" +
-	"lastOffset\"\x80\x01\n" +
-	"\x12SettlementProgress\x12'\n" +
-	"\x0fprocessed_count\x18\x01 \x01(\rR\x0eprocessedCount\x12#\n" +
-	"\rfailed_offset\x18\x02 \x01(\x04R\ffailedOffset\x12\x1c\n" +
-	"\tcommitted\x18\x03 \x01(\x04R\tcommitted\"\xe3\x02\n" +
+	"\bprogressJ\x04\b\x06\x10\aR\bprogress\"\xfa\x01\n" +
+	"\x0eAppendProgress\x12,\n" +
+	"\x0fprocessed_count\x18\x01 \x01(\rH\x00R\x0eprocessedCount\x88\x01\x01\x12&\n" +
+	"\ffailed_index\x18\x02 \x01(\rH\x01R\vfailedIndex\x88\x01\x01\x12&\n" +
+	"\ffirst_offset\x18\x03 \x01(\x04H\x02R\vfirstOffset\x88\x01\x01\x12$\n" +
+	"\vlast_offset\x18\x04 \x01(\x04H\x03R\n" +
+	"lastOffset\x88\x01\x01B\x12\n" +
+	"\x10_processed_countB\x0f\n" +
+	"\r_failed_indexB\x0f\n" +
+	"\r_first_offsetB\x0e\n" +
+	"\f_last_offset\"\xeb\x01\n" +
+	"\x12SettlementProgress\x12,\n" +
+	"\x0fprocessed_count\x18\x01 \x01(\rH\x00R\x0eprocessedCount\x88\x01\x01\x12(\n" +
+	"\rfailed_offset\x18\x02 \x01(\x04H\x01R\ffailedOffset\x88\x01\x01\x12!\n" +
+	"\tcommitted\x18\x03 \x01(\x04H\x02R\tcommitted\x88\x01\x01\x12\x1b\n" +
+	"\x06cursor\x18\x04 \x01(\x04H\x03R\x06cursor\x88\x01\x01B\x12\n" +
+	"\x10_processed_countB\x10\n" +
+	"\x0e_failed_offsetB\f\n" +
+	"\n" +
+	"_committedB\t\n" +
+	"\a_cursor\"\xe3\x02\n" +
 	"\tQueueInfo\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x1f\n" +
@@ -5313,6 +5338,8 @@ func file_queue_v1_queue_proto_init() {
 		(*QueueErrorDetail_AppendProgress)(nil),
 		(*QueueErrorDetail_SettlementProgress)(nil),
 	}
+	file_queue_v1_queue_proto_msgTypes[9].OneofWrappers = []any{}
+	file_queue_v1_queue_proto_msgTypes[10].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

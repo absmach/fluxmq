@@ -152,14 +152,23 @@ already landed. `QueueErrorDetail.progress` is a `oneof` because the two cases
 do not share a coordinate:
 
 - `SettlementProgress` names `failed_offset`. The caller supplied that offset,
-  so it identifies the entry exactly.
+  so it identifies the entry exactly. It also reports both `cursor` and
+  `committed`: the cursor is where delivery resumes, the committed offset is
+  what is safe to truncate behind.
 - `AppendProgress` names `failed_index`, the zero-based position of the failed
   record in the request. A failed append was never written and therefore has no
   offset; the index is the only coordinate that can name it. `first_offset` and
   `last_offset` describe the committed prefix.
 
-Neither is set when the operation committed nothing: absent progress means a
-total failure, which is distinct from a prefix ending at offset 0.
+Every field in both messages carries explicit presence. Zero is a legitimate
+offset, cursor, index and count, so an unset field is distinguishable from one
+that is genuinely zero. Absent progress means the operation committed nothing,
+which is distinct from a prefix ending at offset 0.
+
+Settlement over the public QueueService requires `group_id`. A cursor belongs to
+one group, so a settlement that does not name its group has no unambiguous
+cursor to report. The in-process adapters may still omit it and resolve the
+owner from the pending-entry list.
 - `Nack` releases an entry for redelivery after at least the requested delay;
   normal visibility and claim-idle rules may extend that wait. A zero delay
   makes the entry immediately eligible.

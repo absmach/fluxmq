@@ -157,9 +157,16 @@ func TestAckPartialFailureReportsProgress(t *testing.T) {
 	detail := queueErrorDetail(t, err)
 	progress := detail.GetSettlementProgress()
 	require.NotNil(t, progress, "a partial settlement must report its committed prefix")
-	assert.Equal(t, uint32(1), progress.ProcessedCount, "offset 0 settled before the failure")
-	assert.Equal(t, uint64(1), progress.FailedOffset, "offset 1 is where the command stopped")
-	assert.Equal(t, uint64(1), progress.Committed, "committed cursor advanced past the settled prefix")
+	assert.Equal(t, uint32(1), progress.GetProcessedCount(), "offset 0 settled before the failure")
+	assert.Equal(t, uint64(1), progress.GetFailedOffset(), "offset 1 is where the command stopped")
+	assert.Equal(t, uint64(1), progress.GetCommitted(), "committed cursor advanced past the settled prefix")
+
+	// Explicit presence: a zero offset or cursor is a real value, so the fields
+	// must be set rather than left to default.
+	require.NotNil(t, progress.ProcessedCount)
+	require.NotNil(t, progress.FailedOffset)
+	require.NotNil(t, progress.Committed)
+	require.NotNil(t, progress.Cursor)
 
 	// The two progress shapes are mutually exclusive: a settlement failure must
 	// not present itself as an append failure.
@@ -177,13 +184,46 @@ func TestAppendStreamProgressNamesTheFailedIndex(t *testing.T) {
 
 	progress := detail.GetAppendProgress()
 	require.NotNil(t, progress)
-	assert.Equal(t, uint32(3), progress.ProcessedCount)
-	assert.Equal(t, uint32(3), progress.FailedIndex, "the failed record follows the committed prefix")
-	assert.Equal(t, uint64(10), progress.FirstOffset)
-	assert.Equal(t, uint64(12), progress.LastOffset)
+	assert.Equal(t, uint32(3), progress.GetProcessedCount())
+	assert.Equal(t, uint32(3), progress.GetFailedIndex(), "the failed record follows the committed prefix")
+	assert.Equal(t, uint64(10), progress.GetFirstOffset())
+	assert.Equal(t, uint64(12), progress.GetLastOffset())
+
+	// A prefix committed at offset 0 must be distinguishable from no prefix.
+	zeroPrefix := &queuev1.QueueErrorDetail{}
+	require.NotNil(t, appendProgress(1, 0, 0))
+	appendProgress(1, 0, 0)(zeroPrefix)
+	require.NotNil(t, zeroPrefix.GetAppendProgress().FirstOffset)
+	assert.Equal(t, uint64(0), zeroPrefix.GetAppendProgress().GetFirstOffset())
 	assert.Nil(t, detail.GetSettlementProgress(), "append errors carry append progress only")
 
 	// Nothing committed means no progress at all, rather than a zero-valued
 	// report that a client could mistake for a commit at offset 0.
 	assert.Nil(t, appendProgress(0, 0, 0))
+}
+
+// Settlement over the public API must name its consumer group. Without one the
+// broker resolves the owner by scanning every group on the queue, so the cursor
+// reported back would describe whichever group happened to hold the offset.
+func TestPublicSettlementRequiresGroupID(t *testing.T) {
+	h, _, ctx := newAppendHandler(t)
+
+	t.Run("ack", func(t *testing.T) {
+		_, err := h.Ack(ctx, connect.NewRequest(&queuev1.AckRequest{
+			QueueName: testQueueAppends,
+			Offsets:   []uint64{0},
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+		assert.Equal(t, queuev1.QueueErrorCode_QUEUE_ERROR_CODE_INVALID_ARGUMENT, queueErrorDetail(t, err).Code)
+	})
+
+	t.Run("nack", func(t *testing.T) {
+		_, err := h.Nack(ctx, connect.NewRequest(&queuev1.NackRequest{
+			QueueName: testQueueAppends,
+			Offsets:   []uint64{0},
+		}))
+		require.Error(t, err)
+		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	})
 }

@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	"google.golang.org/protobuf/proto"
 )
 
 // Request-shape rejections. An append that writes nothing cannot be reported as
@@ -19,6 +20,13 @@ var (
 	errEmptyBatch         = errors.New("append batch requires at least one message")
 	errEmptyStream        = errors.New("append stream requires at least one message")
 	errStreamQueueChanged = errors.New("append stream cannot change queue mid-stream")
+
+	// Settlement over the public API names its consumer group. Without one the
+	// broker resolves the owner by scanning every group on the queue, so the
+	// cursor reported back describes whichever group happened to hold the
+	// offset. The in-process adapters may still omit it; the public contract
+	// may not.
+	errSettlementGroupRequired = errors.New("settlement requires a group id")
 )
 
 // The queue failure taxonomy is protocol-independent; these tables are its
@@ -153,9 +161,10 @@ func settlementProgress(outcome queuepkg.SettlementOutcome, failedOffset uint64)
 	return func(detail *queuev1.QueueErrorDetail) {
 		detail.Progress = &queuev1.QueueErrorDetail_SettlementProgress{
 			SettlementProgress: &queuev1.SettlementProgress{
-				ProcessedCount: uint32(len(outcome.Offsets)),
-				FailedOffset:   failedOffset,
-				Committed:      outcome.Committed,
+				ProcessedCount: proto.Uint32(uint32(len(outcome.Offsets))),
+				FailedOffset:   proto.Uint64(failedOffset),
+				Committed:      proto.Uint64(outcome.Committed),
+				Cursor:         proto.Uint64(outcome.Cursor),
 			},
 		}
 	}
@@ -173,10 +182,10 @@ func appendProgress(processed uint32, firstOffset, lastOffset uint64) progressSe
 	return func(detail *queuev1.QueueErrorDetail) {
 		detail.Progress = &queuev1.QueueErrorDetail_AppendProgress{
 			AppendProgress: &queuev1.AppendProgress{
-				ProcessedCount: processed,
-				FailedIndex:    processed,
-				FirstOffset:    firstOffset,
-				LastOffset:     lastOffset,
+				ProcessedCount: proto.Uint32(processed),
+				FailedIndex:    proto.Uint32(processed),
+				FirstOffset:    proto.Uint64(firstOffset),
+				LastOffset:     proto.Uint64(lastOffset),
 			},
 		}
 	}

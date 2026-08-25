@@ -733,6 +733,9 @@ func (h *Handler) Ack(ctx context.Context, req *connect.Request[queuev1.AckReque
 	if h.manager == nil {
 		return nil, newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
 	}
+	if msg.GroupId == "" {
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errSettlementGroupRequired)
+	}
 	outcome, err := h.manager.StateMachine().Ack(ctx, queue.AckCommand{
 		QueueName:  msg.QueueName,
 		GroupID:    msg.GroupId,
@@ -758,6 +761,9 @@ func (h *Handler) Nack(ctx context.Context, req *connect.Request[queuev1.NackReq
 	msg := req.Msg
 	if h.manager == nil {
 		return nil, newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))
+	}
+	if msg.GroupId == "" {
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errSettlementGroupRequired)
 	}
 	delay := time.Duration(0)
 	if msg.Delay != nil {

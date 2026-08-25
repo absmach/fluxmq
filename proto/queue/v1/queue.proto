@@ -339,35 +339,43 @@ message QueueErrorDetail {
 // AppendProgress reports what a partially applied append committed before it
 // failed. It is set on AppendQueue, which commits a prefix and stops at the
 // first failed append.
+// Every field carries explicit presence. Zero is a legitimate value for an
+// offset, an index and a count, so an unset field must be distinguishable from
+// a field that is genuinely zero.
 message AppendProgress {
   // Number of records successfully appended before the failure.
-  uint32 processed_count = 1;
+  optional uint32 processed_count = 1;
 
   // Zero-based position of the failed record within the request. The record was
   // not appended and so has no offset; this is the only coordinate that can
-  // name it. It always equals processed_count, and is stated explicitly so a
-  // client does not have to infer it.
-  uint32 failed_index = 2;
+  // name it.
+  optional uint32 failed_index = 2;
 
-  // Offsets of the committed prefix. Meaningful only when processed_count > 0.
-  uint64 first_offset = 3;
-  uint64 last_offset = 4;
+  // Offsets of the committed prefix. Unset when nothing was committed, which is
+  // distinct from a prefix that committed at offset 0.
+  optional uint64 first_offset = 3;
+  optional uint64 last_offset = 4;
 }
 
 // SettlementProgress reports what a partially applied settlement committed
 // before it failed. It is set on Ack, Nack and Reject, which apply the
 // requested offsets in order and stop at the first failure.
+// Every field carries explicit presence, for the same reason as AppendProgress:
+// offset zero, cursor zero and committed zero are all valid values.
 message SettlementProgress {
   // Number of offsets successfully settled before the failure.
-  uint32 processed_count = 1;
+  optional uint32 processed_count = 1;
 
   // The offset the settlement failed on. Every offset requested before it was
-  // settled. Meaningful because the offset was supplied by the caller, unlike
-  // an append's failed record.
-  uint64 failed_offset = 2;
+  // settled. Nameable because the caller supplied it, unlike an append's failed
+  // record.
+  optional uint64 failed_offset = 2;
 
-  // The consumer group's committed cursor after the partial apply.
-  uint64 committed = 3;
+  // The consumer group's cursor and committed offset after the partial apply.
+  // Both are reported: the cursor is where delivery resumes, the committed
+  // offset is what is safe to truncate behind.
+  optional uint64 committed = 3;
+  optional uint64 cursor = 4;
 }
 
 enum QueueErrorCode {
