@@ -20,4 +20,6 @@ const (
 	testTopicSensorsTemp = "sensors/temp"
 	testQueueTest        = "test"
 	testCustomValue      = "value"
+	testGroupConsumerA   = "c-1"
+	testGroupConsumerB   = "c-2"
 )

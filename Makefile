@@ -16,7 +16,15 @@ DASHBOARD_IMAGE_LATEST := ghcr.io/absmach/fluxmq-dashboard:latest
 PERF_SCRIPT_DIR := tests/perf/scripts
 PERF_SCENARIO_CONFIG ?= $(CONFIG)
 DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
-PROTO_V1_BASELINE := api/compat/proto-v1.binpb
+# The public contract and the internal cluster wire are versioned separately.
+# Public schemas are what external clients compile against; the cluster wire is
+# an implementation detail shared between broker nodes of compatible versions.
+# Both gates are hard, but a cluster change is reviewed on its own terms instead
+# of being weighed against a client-facing promise.
+PROTO_PUBLIC_PATHS   := --path proto/queue --path proto/auth
+PROTO_INTERNAL_PATHS := --path proto/cluster
+PROTO_PUBLIC_BASELINE   := api/compat/proto-public-v1.binpb
+PROTO_INTERNAL_BASELINE := api/compat/proto-cluster-v1.binpb
 
 
 # Default target
@@ -287,7 +295,11 @@ lint:
 .PHONY: fmt
 fmt:
 	$(GO) fmt ./...
-	goimports -w .
+	# Generated protobuf code is excluded: goimports regroups its imports, which
+	# `make proto` then reverts, so formatting it makes the CI
+	# `make proto && git diff --exit-code` gate fail on unrelated changes.
+	@find . -name '*.go' -not -path './pkg/proto/*' -not -path './build/*' -print0 \
+		| xargs -0 goimports -w
 
 .PHONY: deps
 deps:
@@ -303,12 +315,29 @@ proto-lint:
 	buf lint
 
 .PHONY: proto-breaking
-proto-breaking:
-	buf breaking --against $(PROTO_V1_BASELINE)
+proto-breaking: proto-breaking-public proto-breaking-internal
+
+# Each baseline image defines its own scope: buf reports a change only for files
+# present in both the image and the workspace, so the public gate ignores the
+# cluster schemas and the internal gate ignores the client-facing ones.
+.PHONY: proto-breaking-public
+proto-breaking-public:
+	buf breaking --against $(PROTO_PUBLIC_BASELINE)
+
+.PHONY: proto-breaking-internal
+proto-breaking-internal:
+	buf breaking --against $(PROTO_INTERNAL_BASELINE)
 
 .PHONY: proto-baseline
-proto-baseline:
-	buf build --exclude-source-info -o $(PROTO_V1_BASELINE)
+proto-baseline: proto-baseline-public proto-baseline-internal
+
+.PHONY: proto-baseline-public
+proto-baseline-public:
+	buf build --exclude-source-info $(PROTO_PUBLIC_PATHS) -o $(PROTO_PUBLIC_BASELINE)
+
+.PHONY: proto-baseline-internal
+proto-baseline-internal:
+	buf build --exclude-source-info $(PROTO_INTERNAL_PATHS) -o $(PROTO_INTERNAL_BASELINE)
 
 # Show help
 .PHONY: help
@@ -380,6 +409,6 @@ help:
 	@echo "  deps               Download and tidy dependencies"
 	@echo "  proto              Generate protobuf code"
 	@echo "  proto-lint         Lint protobuf definitions"
-	@echo "  proto-breaking     Check protobufs against the v1 descriptor baseline"
-	@echo "  proto-baseline     Refresh the reviewed v1 descriptor baseline"
+	@echo "  proto-breaking     Check both protobuf descriptor baselines"
+	@echo "  proto-baseline     Refresh both reviewed descriptor baselines"
 	@echo "  help               Show this help message"

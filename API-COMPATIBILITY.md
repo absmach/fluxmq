@@ -7,9 +7,16 @@ supported adapter.
 
 ## Stable surfaces
 
-- Protobuf: `proto/queue/v1`, `proto/auth/v1`, and `proto/cluster/v1`.
-  `api/compat/proto-v1.binpb` is the reviewed descriptor baseline and CI runs
-  `make proto-breaking` against it.
+- Protobuf, public: `proto/queue/v1` and `proto/auth/v1`. These are what
+  external clients compile against. `api/compat/proto-public-v1.binpb` is the
+  reviewed descriptor baseline.
+- Protobuf, internal: `proto/cluster/v1`. This is the inter-node wire, an
+  implementation detail shared between broker nodes rather than a client-facing
+  contract. `api/compat/proto-cluster-v1.binpb` is its separate baseline, so a
+  cluster-wire change is reviewed on its own terms instead of being weighed
+  against a published promise.
+
+  CI runs `make proto-breaking`, which checks both. Both are hard failures.
 - Go: `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
   `broker.StreamQueueManager`, plus `queue.CommandProcessor` and its typed
   command/outcome values. Compile-time guards pin the interface method sets and
@@ -75,11 +82,28 @@ never from error text. Unknown implementation errors map to `internal`.
 | `canceled` | `canceled` | unspecified error | internal-error | internal-error | 500 |
 | `internal` | `internal` | unspecified error | internal-error | internal-error | 500 |
 
-Every Connect QueueService error carries `QueueErrorDetail`. AMQP 1.0 rejected
-deliveries and management errors carry the five fields in `fluxmq:*` info or
-application-properties. MQTT and AMQP 0.9.1 have smaller native error spaces;
-their stable mapping is the table above. Error descriptions are diagnostic and
-are not a compatibility surface.
+Every Connect QueueService error carries `QueueErrorDetail`. MQTT and AMQP 0.9.1
+have smaller native error spaces; their stable mapping is the table above. Error
+descriptions are diagnostic and are not a compatibility surface.
+
+### AMQP 1.0 failure vocabulary
+
+A rejected delivery carries the five fields as `error.info` entries; a
+management error carries the same values as application-properties under
+shorter names. Both key sets and every value below are a wire contract, pinned
+by `TestAMQP1QueueVocabularyIsStable`.
+
+| Field | Rejected-delivery info key | Management property | Values |
+| --- | --- | --- | --- |
+| code | `fluxmq:queue-error-code` | `errorCode` | the `code` column of the table above |
+| retryable | `fluxmq:retryable` | `retryable` | boolean |
+| ownership | `fluxmq:ownership` | `ownership` | `unspecified`, `caller`, `other`, `lost` |
+| leader | `fluxmq:leader` | `leader` | `unspecified`, `required`, `unavailable`, `not_local` |
+| durability | `fluxmq:durability` | `durability` | `unspecified`, `not_attempted`, `unconfirmed`, `unsupported` |
+
+These strings are not derived from Go identifiers at runtime: the domain types
+render them through explicit `String` methods so a rename cannot silently change
+what a client reads.
 
 ## Append semantics
 
@@ -108,10 +132,16 @@ The existing broker interfaces are unchanged.
 - Stream-mode `Consume` only peeks. An adapter calls `CommitConsume` after it
   has delivered the selected prefix, so a send failure does not advance the
   stream cursor past an undelivered record.
+- `Ack`, `Nack`, and `Reject` identify a record by its queue offset. A protocol
+  that exposes a textual message identifier to its clients derives it at its own
+  boundary; it is never parsed back into an offset. Adapters that receive a
+  delivery as a property map rather than an envelope resolve the offset once, at
+  delivery, from the projected `offset` property.
 - `Ack`, `Nack`, and `Reject` enforce pending ownership when a consumer ID is
   present. Compatibility adapters that cannot carry a consumer ID resolve the
-  owner from the group PEL. A multi-offset command stops at its first failure
-  and its in-process outcome identifies the successfully settled prefix.
+  owner from the group PEL. A multi-offset command stops at its first failure,
+  and both its in-process outcome and the `QueueProgressDetail` on the returned
+  error identify the successfully settled prefix and the group cursor it left.
 - `Nack` releases an entry for redelivery after at least the requested delay;
   normal visibility and claim-idle rules may extend that wait. A zero delay
   makes the entry immediately eligible.

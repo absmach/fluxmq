@@ -205,11 +205,13 @@ func (h *managementHandler) statusResponse(req *message.Message, code int32, des
 func (h *managementHandler) queueErrorResponse(req *message.Message, err error) *message.Message {
 	failure := queuepkg.ClassifyError(err)
 	resp := h.statusResponse(req, amqp1ManagementStatus(failure.Code), "queue operation failed")
-	resp.ApplicationProperties["errorCode"] = string(failure.Code)
-	resp.ApplicationProperties["retryable"] = failure.Retryable
-	resp.ApplicationProperties["ownership"] = string(failure.Ownership)
-	resp.ApplicationProperties["leader"] = string(failure.Leader)
-	resp.ApplicationProperties["durability"] = string(failure.Durability)
+	// Same external vocabulary as the rejected-delivery outcome, carried as
+	// management application-properties. Pinned by TestAMQP1QueueVocabularyIsStable.
+	resp.ApplicationProperties[amqp1ManagementErrorCodeKey] = failure.Code.String()
+	resp.ApplicationProperties[amqp1ManagementRetryableKey] = failure.Retryable
+	resp.ApplicationProperties[amqp1ManagementOwnershipKey] = failure.Ownership.String()
+	resp.ApplicationProperties[amqp1ManagementLeaderKey] = failure.Leader.String()
+	resp.ApplicationProperties[amqp1ManagementDurabilityKey] = failure.Durability.String()
 	return resp
 }
 

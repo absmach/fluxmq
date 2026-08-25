@@ -58,7 +58,7 @@ func TestPubAckSettlesQueueDelivery(t *testing.T) {
 	require.NoError(t, b.AckMessage(s, packetID))
 
 	require.Len(t, qm.ackCalls, 1)
-	assert.Equal(t, ackCall{queueName: "m", messageID: "m:42", groupID: "workers"}, qm.ackCalls[0])
+	assert.Equal(t, ackCall{queueName: "m", offset: 42, groupID: "workers"}, qm.ackCalls[0])
 }
 
 // TestPubAckIgnoresOrdinaryDelivery keeps the settlement scoped to queue

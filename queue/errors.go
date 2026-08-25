@@ -17,10 +17,18 @@ import (
 // ErrorCode is the stable, protocol-independent class of a queue operation
 // failure. Protocol adapters map these values to their native wire errors;
 // callers must not infer behavior from an error string.
+//
+// These values are deliberately independent of any transport numbering. The
+// protobuf enum, the Connect code, and the AMQP 1.0 symbol are all projections
+// of this type, declared in their own adapters.
 type ErrorCode string
 
+// String returns the stable wire spelling of the code. Adapters that put the
+// code on a wire must use this rather than converting the type directly, so the
+// external vocabulary stays decoupled from the Go identifier.
+func (c ErrorCode) String() string { return string(c) }
+
 const (
-	ErrorCodeOK                 ErrorCode = "ok"
 	ErrorCodeCanceled           ErrorCode = "canceled"
 	ErrorCodeInvalidArgument    ErrorCode = "invalid_argument"
 	ErrorCodeNotFound           ErrorCode = "not_found"
@@ -37,6 +45,9 @@ const (
 // OwnershipState describes whether ownership contributed to a failure.
 type OwnershipState string
 
+// String returns the stable wire spelling of the state.
+func (s OwnershipState) String() string { return string(s) }
+
 const (
 	OwnershipUnspecified OwnershipState = "unspecified"
 	OwnershipCaller      OwnershipState = "caller"
@@ -48,6 +59,9 @@ const (
 // operation.
 type LeaderState string
 
+// String returns the stable wire spelling of the state.
+func (s LeaderState) String() string { return string(s) }
+
 const (
 	LeaderUnspecified LeaderState = "unspecified"
 	LeaderRequired    LeaderState = "required"
@@ -57,6 +71,9 @@ const (
 
 // DurabilityState describes what can be asserted about an unsuccessful write.
 type DurabilityState string
+
+// String returns the stable wire spelling of the state.
+func (s DurabilityState) String() string { return string(s) }
 
 const (
 	DurabilityUnspecified  DurabilityState = "unspecified"
@@ -111,9 +128,13 @@ type failureCarrier interface {
 // ClassifyError converts implementation errors into the stable queue failure
 // contract. New implementation errors default to Internal until explicitly
 // classified; their strings never become protocol behavior.
+//
+// Passing a nil error is invalid input: the taxonomy describes failures and has
+// no success value. It fails closed as Internal rather than inventing one, so a
+// caller that reaches this with nil reports "cannot classify", not "success".
 func ClassifyError(err error) Failure {
 	if err == nil {
-		return normalizeFailure(Failure{Code: ErrorCodeOK})
+		return normalizeFailure(Failure{Code: ErrorCodeInternal})
 	}
 
 	var carrier failureCarrier

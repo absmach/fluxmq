@@ -116,15 +116,18 @@ func (c *testCluster) ListAllQueueConsumers(_ context.Context) ([]*cluster.Queue
 func (c *testCluster) ForwardQueuePublish(_ context.Context, _, _ string, _ []byte, _ map[string]string, _ bool) error {
 	return nil
 }
-func (c *testCluster) ForwardGroupOp(_ context.Context, _, _ string, _ []byte) error { return nil }
-func (c *testCluster) IsLeader(_ context.Context) bool                               { return true }
-func (c *testCluster) WaitForLeader(_ context.Context) error                         { return nil }
-func (c *testCluster) Start() error                                                  { return nil }
-func (c *testCluster) Stop() error                                                   { return nil }
-func (c *testCluster) NodeID() string                                                { return "test" }
-func (c *testCluster) Nodes() []cluster.NodeInfo                                     { return nil }
-func (c *testCluster) Retained() storage.RetainedStore                               { return nil }
-func (c *testCluster) Wills() storage.WillStore                                      { return nil }
+
+func (c *testCluster) ForwardGroupOp(_ context.Context, _, _ string, _ *clusterv1.GroupOperation) error {
+	return nil
+}
+func (c *testCluster) IsLeader(_ context.Context) bool       { return true }
+func (c *testCluster) WaitForLeader(_ context.Context) error { return nil }
+func (c *testCluster) Start() error                          { return nil }
+func (c *testCluster) Stop() error                           { return nil }
+func (c *testCluster) NodeID() string                        { return "test" }
+func (c *testCluster) Nodes() []cluster.NodeInfo             { return nil }
+func (c *testCluster) Retained() storage.RetainedStore       { return nil }
+func (c *testCluster) Wills() storage.WillStore              { return nil }
 func (c *testCluster) RoutePublish(_ context.Context, _ string, _ []byte, _ byte, _ bool, _ map[string]string) error {
 	return nil
 }

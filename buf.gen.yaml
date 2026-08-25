@@ -9,21 +9,28 @@ managed:
     - file_option: go_package_prefix
       value: github.com/absmach/fluxmq/pkg/proto
 
+# Remote plugin versions are pinned deliberately. An unpinned plugin regenerates
+# different code on every upstream release, which fails the `make proto` +
+# `git diff --exit-code` gate on unrelated pull requests. Bump these together
+# with their runtime dependency in go.mod:
+#   protocolbuffers/go <-> google.golang.org/protobuf
+#   grpc/go            <-> google.golang.org/grpc
+#   connectrpc/go      <-> connectrpc.com/connect
 plugins:
   # Standard protobuf Go code
-  - remote: buf.build/protocolbuffers/go
+  - remote: buf.build/protocolbuffers/go:v1.36.12
     out: pkg/proto
     opt:
       - paths=source_relative
 
   # Standard gRPC server/client stubs
-  - remote: buf.build/grpc/go
+  - remote: buf.build/grpc/go:v1.6.2
     out: pkg/proto
     opt:
       - paths=source_relative
 
   # Connect-Go for gRPC + HTTP support
-  - remote: buf.build/connectrpc/go
+  - remote: buf.build/connectrpc/go:v1.20.0
     out: pkg/proto
     opt:
       - paths=source_relative

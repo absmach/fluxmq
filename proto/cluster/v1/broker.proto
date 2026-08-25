@@ -5,6 +5,8 @@ syntax = "proto3";
 
 package fluxmq.cluster.v1;
 
+import "google/protobuf/timestamp.proto";
+
 // BrokerService defines RPC methods for inter-broker communication in the cluster.
 // This is an internal API not exposed to clients.
 service BrokerService {
@@ -195,7 +197,6 @@ message EnqueueRemoteRequest {
 message EnqueueRemoteResponse {
   bool success = 1;
   string error = 2;
-  string message_id = 3;
 }
 
 message RouteQueueMessageRequest {
@@ -242,11 +243,119 @@ message RouteQueueBatchResponse {
 // Consumer Group Operation Forwarding
 // =============================================================================
 
-// ForwardGroupOpRequest carries a consumer group mutation from a follower
-// to the Raft leader. op_data is a JSON-encoded raft.Operation struct.
+// ForwardGroupOpRequest carries a consumer group mutation from a follower to
+// the Raft leader.
 message ForwardGroupOpRequest {
   string queue_name = 1;
-  bytes op_data = 2;
+
+  // Field 2 held op_data, a JSON-encoded Go struct. It is retired: an opaque
+  // blob inside a versioned schema is invisible to compatibility checking, and
+  // renaming an unexported Go field silently changed the wire format.
+  reserved 2;
+  reserved "op_data";
+
+  GroupOperation operation = 3;
+}
+
+// GroupOperation is a consumer group mutation applied through Raft consensus.
+// queue_name and group_id identify the target; the oneof selects the mutation.
+message GroupOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+
+  oneof operation {
+    CreateGroupOp create_group = 4;
+    UpdateGroupOp update_group = 5;
+    DeleteGroupOp delete_group = 6;
+    UpdateCursorOp update_cursor = 7;
+    UpdateCommittedOp update_committed = 8;
+    AddPendingOp add_pending = 9;
+    RemovePendingOp remove_pending = 10;
+    TransferPendingOp transfer_pending = 11;
+    RegisterConsumerOp register_consumer = 12;
+    UnregisterConsumerOp unregister_consumer = 13;
+  }
+}
+
+message CreateGroupOp {
+  ConsumerGroupState group = 1;
+}
+
+message UpdateGroupOp {
+  ConsumerGroupState group = 1;
+}
+
+// DeleteGroupOp names its target through GroupOperation.group_id.
+message DeleteGroupOp {}
+
+message UpdateCursorOp {
+  uint64 cursor = 1;
+}
+
+message UpdateCommittedOp {
+  uint64 committed = 1;
+}
+
+message AddPendingOp {
+  PendingEntryState entry = 1;
+}
+
+message RemovePendingOp {
+  string consumer_id = 1;
+  uint64 offset = 2;
+}
+
+message TransferPendingOp {
+  uint64 offset = 1;
+  string from_consumer = 2;
+  string to_consumer = 3;
+}
+
+message RegisterConsumerOp {
+  ConsumerState consumer = 1;
+}
+
+message UnregisterConsumerOp {
+  string consumer_id = 1;
+}
+
+// ConsumerGroupState is the replicated state of one consumer group.
+message ConsumerGroupState {
+  string id = 1;
+  string queue_name = 2;
+  string pattern = 3;
+  string mode = 4;
+  bool auto_commit = 5;
+  QueueCursorState cursor = 6;
+
+  // The pending entry list, flattened. Each entry names its own consumer, so
+  // the per-consumer grouping is rebuilt on receipt.
+  repeated PendingEntryState pending = 7;
+
+  repeated ConsumerState consumers = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message QueueCursorState {
+  uint64 cursor = 1;
+  uint64 committed = 2;
+}
+
+message PendingEntryState {
+  uint64 offset = 1;
+  string consumer_id = 2;
+  google.protobuf.Timestamp claimed_at = 3;
+  uint32 delivery_count = 4;
+}
+
+message ConsumerState {
+  string id = 1;
+  string client_id = 2;
+  string proxy_node_id = 3;
+  google.protobuf.Timestamp registered_at = 4;
+  google.protobuf.Timestamp last_heartbeat = 5;
 }
 
 message ForwardGroupOpResponse {

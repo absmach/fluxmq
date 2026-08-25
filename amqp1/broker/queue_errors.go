@@ -9,6 +9,12 @@ import (
 	queuepkg "github.com/absmach/fluxmq/queue"
 )
 
+// These five keys and the value vocabulary they carry are the AMQP 1.0
+// projection of the queue failure taxonomy, and they are an external contract:
+// clients branch on them instead of parsing the error description. The values
+// come from the domain type's String method rather than a direct conversion, so
+// the wire spelling stays decoupled from the Go identifier.
+// TestAMQP1QueueVocabularyIsStable pins every key and value.
 const (
 	amqp1QueueErrorCodeKey  amqptypes.Symbol = "fluxmq:queue-error-code"
 	amqp1RetryableKey       amqptypes.Symbol = "fluxmq:retryable"
@@ -17,14 +23,25 @@ const (
 	amqp1DurabilityStateKey amqptypes.Symbol = "fluxmq:durability"
 )
 
+// The management endpoint carries the same vocabulary as plain
+// application-property names, because management responses are ordinary AMQP
+// messages rather than error performatives.
+const (
+	amqp1ManagementErrorCodeKey  = "errorCode"
+	amqp1ManagementRetryableKey  = "retryable"
+	amqp1ManagementOwnershipKey  = "ownership"
+	amqp1ManagementLeaderKey     = "leader"
+	amqp1ManagementDurabilityKey = "durability"
+)
+
 func amqp1QueueOutcome(err error) any {
 	failure := queuepkg.ClassifyError(err)
 	info := map[amqptypes.Symbol]any{
-		amqp1QueueErrorCodeKey:  string(failure.Code),
+		amqp1QueueErrorCodeKey:  failure.Code.String(),
 		amqp1RetryableKey:       failure.Retryable,
-		amqp1OwnershipStateKey:  string(failure.Ownership),
-		amqp1LeaderStateKey:     string(failure.Leader),
-		amqp1DurabilityStateKey: string(failure.Durability),
+		amqp1OwnershipStateKey:  failure.Ownership.String(),
+		amqp1LeaderStateKey:     failure.Leader.String(),
+		amqp1DurabilityStateKey: failure.Durability.String(),
 	}
 	return &performatives.Rejected{Error: &performatives.Error{
 		Condition:   amqp1QueueCondition(failure.Code),

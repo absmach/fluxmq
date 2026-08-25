@@ -105,7 +105,7 @@ func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	return nil
 }
 
-func (m *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+func (m *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error {
 	return nil
 }
 func (m *mockCluster) Retained() storage.RetainedStore { return nil }

@@ -115,6 +115,77 @@ func (g *ConsumerGroup) ReplacePEL(pel map[string][]*PendingEntry) {
 	g.UpdatedAt = time.Now()
 }
 
+// ReplaceConsumers atomically replaces the entire consumer membership map.
+func (g *ConsumerGroup) ReplaceConsumers(consumers map[string]*ConsumerInfo) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.Consumers = consumers
+	g.UpdatedAt = time.Now()
+}
+
+// ConsumerGroupSnapshot is a point-in-time copy of a group's replicated state.
+type ConsumerGroupSnapshot struct {
+	ID         string
+	QueueName  string
+	Pattern    string
+	Mode       ConsumerGroupMode
+	AutoCommit bool
+	Cursor     QueueCursor
+	PEL        map[string][]*PendingEntry
+	Consumers  map[string]*ConsumerInfo
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// Snapshot copies the group's state under its own lock.
+//
+// The PEL and consumer maps are mutated by consumers as they claim and settle
+// records, so anything that serializes a group — replication, diagnostics —
+// must read them through here. Reading the fields directly races those
+// mutations even when the reader only intends to look.
+//
+// Entries are copied, not aliased, so the returned snapshot cannot be used to
+// mutate group state after the lock is released.
+func (g *ConsumerGroup) Snapshot() ConsumerGroupSnapshot {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	snapshot := ConsumerGroupSnapshot{
+		ID:         g.ID,
+		QueueName:  g.QueueName,
+		Pattern:    g.Pattern,
+		Mode:       g.Mode,
+		AutoCommit: g.AutoCommit,
+		PEL:        make(map[string][]*PendingEntry, len(g.PEL)),
+		Consumers:  make(map[string]*ConsumerInfo, len(g.Consumers)),
+		CreatedAt:  g.CreatedAt,
+		UpdatedAt:  g.UpdatedAt,
+	}
+	if g.Cursor != nil {
+		snapshot.Cursor = *g.Cursor
+	}
+	for consumerID, entries := range g.PEL {
+		copied := make([]*PendingEntry, 0, len(entries))
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			value := *entry
+			copied = append(copied, &value)
+		}
+		snapshot.PEL[consumerID] = copied
+	}
+	for consumerID, info := range g.Consumers {
+		if info == nil {
+			continue
+		}
+		value := *info
+		snapshot.Consumers[consumerID] = &value
+	}
+	return snapshot
+}
+
 // AddPending adds a pending entry for a consumer.
 func (g *ConsumerGroup) AddPending(consumerID string, entry *PendingEntry) {
 	g.mu.Lock()

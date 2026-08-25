@@ -24,13 +24,13 @@ type mockQueueManager struct {
 
 type ackCall struct {
 	queueName string
-	messageID string
+	offset    uint64
 	groupID   string
 }
 
 type rejectCall struct {
 	queueName string
-	messageID string
+	offset    uint64
 	groupID   string
 	reason    string
 }
@@ -53,18 +53,18 @@ func (m *mockQueueManager) Unsubscribe(ctx context.Context, queueName, pattern, 
 	return nil
 }
 
-func (m *mockQueueManager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
-	m.ackCalls = append(m.ackCalls, ackCall{queueName: queueName, messageID: messageID, groupID: groupID})
+func (m *mockQueueManager) Ack(ctx context.Context, queueName, groupID string, offset uint64) error {
+	m.ackCalls = append(m.ackCalls, ackCall{queueName: queueName, offset: offset, groupID: groupID})
 	return nil
 }
 
-func (m *mockQueueManager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
-	m.nackCalls = append(m.nackCalls, ackCall{queueName: queueName, messageID: messageID, groupID: groupID})
+func (m *mockQueueManager) Nack(ctx context.Context, queueName, groupID string, offset uint64) error {
+	m.nackCalls = append(m.nackCalls, ackCall{queueName: queueName, offset: offset, groupID: groupID})
 	return nil
 }
 
-func (m *mockQueueManager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
-	m.rejectCalls = append(m.rejectCalls, rejectCall{queueName: queueName, messageID: messageID, groupID: groupID, reason: reason})
+func (m *mockQueueManager) Reject(ctx context.Context, queueName, groupID string, offset uint64, reason string) error {
+	m.rejectCalls = append(m.rejectCalls, rejectCall{queueName: queueName, offset: offset, groupID: groupID, reason: reason})
 	return nil
 }
 
@@ -92,14 +92,14 @@ func TestHandleQueueAck_UsesParsedQueueName(t *testing.T) {
 	}
 
 	msg := message.New("$queue/orders/$ack", nil)
-	msg.Broker.Queue.MessageID = "orders:42"
+	msg.Broker.Queue.Offset = 42
 	msg.Broker.Queue.GroupID = testGroupWorkers
 
 	route := resolver.Resolve(msg.Topic)
 	require.NoError(t, b.handleQueueAck(context.Background(), msg, route))
 	require.Len(t, qm.ackCalls, 1)
 	require.Equal(t, "orders", qm.ackCalls[0].queueName)
-	require.Equal(t, "orders:42", qm.ackCalls[0].messageID)
+	require.Equal(t, uint64(42), qm.ackCalls[0].offset)
 	require.Equal(t, testGroupWorkers, qm.ackCalls[0].groupID)
 }
 
@@ -113,7 +113,7 @@ func TestHandleQueueAck_IgnoresRoutingKeyInAckTopic(t *testing.T) {
 	}
 
 	msg := message.New("$queue/orders/images/$nack", nil)
-	msg.Broker.Queue.MessageID = "orders:1"
+	msg.Broker.Queue.Offset = 1
 	msg.Broker.Queue.GroupID = "workers@images/#"
 
 	route := resolver.Resolve(msg.Topic)
@@ -132,7 +132,7 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 	}
 
 	msg := message.New("$queue/$ack", nil)
-	msg.Broker.Queue.MessageID = "orders:1"
+	msg.Broker.Queue.Offset = 1
 	msg.Broker.Queue.GroupID = testGroupWorkers
 
 	route := resolver.Resolve(msg.Topic)

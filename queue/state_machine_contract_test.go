@@ -96,7 +96,7 @@ func TestMQTTAndAMQPManagerAdapterContract(t *testing.T) {
 			}
 
 			// MQTT and both AMQP adapters call these frozen Manager methods.
-			if err := manager.Nack(ctx, testQueueJobs, "jobs:0", testGroupWorkers); err != nil {
+			if err := manager.Nack(ctx, testQueueJobs, testGroupWorkers, 0); err != nil {
 				t.Fatalf("legacy nack: %v", err)
 			}
 			claimed, err := manager.StateMachine().Claim(ctx, ClaimCommand{
@@ -105,13 +105,13 @@ func TestMQTTAndAMQPManagerAdapterContract(t *testing.T) {
 			if err != nil || len(claimed.Offsets) != 1 || claimed.Offsets[0] != 0 {
 				t.Fatalf("claim after legacy nack = %+v, error = %v", claimed, err)
 			}
-			if err := manager.Ack(ctx, testQueueJobs, "jobs:0", testGroupWorkers); err != nil {
+			if err := manager.Ack(ctx, testQueueJobs, testGroupWorkers, 0); err != nil {
 				t.Fatalf("legacy ack: %v", err)
 			}
-			if err := manager.Reject(ctx, testQueueJobs, "jobs:1", testGroupWorkers, "invalid"); err != nil {
+			if err := manager.Reject(ctx, testQueueJobs, testGroupWorkers, 1, "invalid"); err != nil {
 				t.Fatalf("legacy reject: %v", err)
 			}
-			if err := manager.Ack(ctx, testQueueJobs, "jobs:2", testGroupWorkers); err != nil {
+			if err := manager.Ack(ctx, testQueueJobs, testGroupWorkers, 2); err != nil {
 				t.Fatalf("legacy final ack: %v", err)
 			}
 			final, err := backend.group.GetConsumerGroup(ctx, testQueueJobs, testGroupWorkers)

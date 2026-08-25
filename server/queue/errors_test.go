@@ -23,7 +23,7 @@ func TestConnectQueueErrorContract(t *testing.T) {
 	}
 	err := queuepkg.WithFailure(errors.New("implementation detail"), failure)
 
-	connectErr := newConnectError(connect.CodeInternal, err)
+	connectErr := newConnectError(queuepkg.ErrorCodeInternal, err)
 	require.Equal(t, connect.CodeUnavailable, connectErr.Code())
 	require.Len(t, connectErr.Details(), 1)
 
@@ -39,7 +39,7 @@ func TestConnectQueueErrorContract(t *testing.T) {
 }
 
 func TestConnectQueueErrorFallbackIsAlsoTyped(t *testing.T) {
-	connectErr := newConnectError(connect.CodeInvalidArgument, errors.New("request detail"))
+	connectErr := newConnectError(queuepkg.ErrorCodeInvalidArgument, errors.New("request detail"))
 	require.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
 	require.Len(t, connectErr.Details(), 1)
 

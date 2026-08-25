@@ -117,8 +117,13 @@ type unackedDelivery struct {
 	deliveryTag uint64
 	routingKey  string
 	queueName   string
-	messageID   string
 	groupID     string
+	// offset identifies the queue record to settle. It is resolved once here,
+	// at delivery, rather than parsed back out of a client-supplied identifier
+	// when the disposition arrives. queued reports whether this delivery came
+	// from a queue at all.
+	offset uint64
+	queued bool
 }
 
 type pendingDelivery struct {
@@ -940,12 +945,14 @@ func (ch *Channel) sendDelivery(cons *consumer, topic string, payload []byte, pr
 
 	if !cons.noAck {
 		ch.unackedMu.Lock()
+		offset, queued := message.QueueOffsetFromProperties(props)
 		ch.unacked[deliveryTag] = &unackedDelivery{
 			deliveryTag: deliveryTag,
 			routingKey:  topic,
 			queueName:   cons.queueName,
-			messageID:   props[message.PropertyMessageID],
 			groupID:     props[message.PropertyGroupID],
+			offset:      offset,
+			queued:      queued,
 		}
 		ch.unackedMu.Unlock()
 	}
@@ -1737,37 +1744,37 @@ func (ch *Channel) handleBasicRecoverAsync(_ *codec.BasicRecoverAsync) error {
 }
 
 func (ch *Channel) ackDelivery(ud *unackedDelivery) {
-	if ud.messageID == "" {
+	if !ud.queued {
 		return
 	}
 	qm := ch.conn.broker.queueManager
 	if qm != nil {
-		if err := qm.Ack(context.Background(), ud.queueName, ud.messageID, ud.groupID); err != nil {
-			ch.conn.logger.Warn("queue ack failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
+		if err := qm.Ack(context.Background(), ud.queueName, ud.groupID, ud.offset); err != nil {
+			ch.conn.logger.Warn("queue ack failed", "queue", ud.queueName, "offset", ud.offset, "group_id", ud.groupID, "error", err)
 		}
 	}
 }
 
 func (ch *Channel) nackDelivery(ud *unackedDelivery) {
-	if ud.messageID == "" {
+	if !ud.queued {
 		return
 	}
 	qm := ch.conn.broker.queueManager
 	if qm != nil {
-		if err := qm.Nack(context.Background(), ud.queueName, ud.messageID, ud.groupID); err != nil {
-			ch.conn.logger.Warn("queue nack failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
+		if err := qm.Nack(context.Background(), ud.queueName, ud.groupID, ud.offset); err != nil {
+			ch.conn.logger.Warn("queue nack failed", "queue", ud.queueName, "offset", ud.offset, "group_id", ud.groupID, "error", err)
 		}
 	}
 }
 
 func (ch *Channel) rejectDelivery(ud *unackedDelivery) {
-	if ud.messageID == "" {
+	if !ud.queued {
 		return
 	}
 	qm := ch.conn.broker.queueManager
 	if qm != nil {
-		if err := qm.Reject(context.Background(), ud.queueName, ud.messageID, ud.groupID, "rejected by client"); err != nil {
-			ch.conn.logger.Warn("queue reject failed", "queue", ud.queueName, "message_id", ud.messageID, "group_id", ud.groupID, "error", err)
+		if err := qm.Reject(context.Background(), ud.queueName, ud.groupID, ud.offset, "rejected by client"); err != nil {
+			ch.conn.logger.Warn("queue reject failed", "queue", ud.queueName, "offset", ud.offset, "group_id", ud.groupID, "error", err)
 		}
 	}
 }

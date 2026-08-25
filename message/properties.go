@@ -240,3 +240,24 @@ func projectQueueProperties(properties map[string]string, source SourceMetadata,
 		}
 	}
 }
+
+// QueueOffsetFromProperties recovers the queue offset a delivery carries.
+//
+// Protocol adapters that receive a delivery as a property map rather than an
+// envelope use this at the delivery boundary, once, to resolve the offset they
+// will later settle on. Settlement itself takes a uint64: a textual identifier
+// is never parsed back into an offset.
+//
+// ok reports whether the delivery came from a queue at all. A malformed value
+// is reported as absent rather than silently settling offset 0.
+func QueueOffsetFromProperties(properties map[string]string) (offset uint64, ok bool) {
+	raw, present := properties[PropertyOffset]
+	if !present {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}

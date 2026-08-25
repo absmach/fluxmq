@@ -1871,9 +1871,9 @@ func (c *EtcdCluster) releaseTakeoverLock(ctx context.Context, lockKey, token st
 }
 
 // EnqueueRemote sends an enqueue request to a remote node.
-func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) (string, error) {
+func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) error {
 	if c.transport == nil {
-		return "", ErrTransportNotConfigured
+		return ErrTransportNotConfigured
 	}
 	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, payload, properties, false, false)
 }
@@ -2272,17 +2272,17 @@ func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic str
 	}
 
 	// Use SendEnqueueRemote with topic in queueName field
-	_, err := c.transport.SendEnqueueRemote(ctx, nodeID, topic, payload, properties, true, forwardToLeader)
+	err := c.transport.SendEnqueueRemote(ctx, nodeID, topic, payload, properties, true, forwardToLeader)
 	return err
 }
 
 // ForwardGroupOp forwards a consumer group operation to a remote node.
-func (c *EtcdCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, opData []byte) error {
+func (c *EtcdCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName string, op *clusterv1.GroupOperation) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
 	}
 
-	return c.transport.SendForwardGroupOp(ctx, nodeID, queueName, opData)
+	return c.transport.SendForwardGroupOp(ctx, nodeID, queueName, op)
 }
 
 // HandleTakeover implements TransportHandler.HandleTakeover.

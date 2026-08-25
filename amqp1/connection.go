@@ -300,14 +300,32 @@ func (c *Connection) ReadPerformative() (uint16, uint64, any, []byte, error) {
 		perf = performatives.DecodeFlow(fields)
 	case performatives.DescriptorTransfer:
 		perf = performatives.DecodeTransfer(fields)
+	// These four carry a peer-supplied error performative. A malformed one is a
+	// protocol violation, so the frame is failed rather than partially decoded.
 	case performatives.DescriptorDisposition:
-		perf = performatives.DecodeDisposition(fields)
+		disposition, err := performatives.DecodeDisposition(fields)
+		if err != nil {
+			return f.Channel, descriptor, nil, nil, err
+		}
+		perf = disposition
 	case performatives.DescriptorDetach:
-		perf = performatives.DecodeDetach(fields)
+		detach, err := performatives.DecodeDetach(fields)
+		if err != nil {
+			return f.Channel, descriptor, nil, nil, err
+		}
+		perf = detach
 	case performatives.DescriptorEnd:
-		perf = performatives.DecodeEnd(fields)
+		end, err := performatives.DecodeEnd(fields)
+		if err != nil {
+			return f.Channel, descriptor, nil, nil, err
+		}
+		perf = end
 	case performatives.DescriptorClose:
-		perf = performatives.DecodeClose(fields)
+		closePerf, err := performatives.DecodeClose(fields)
+		if err != nil {
+			return f.Channel, descriptor, nil, nil, err
+		}
+		perf = closePerf
 	default:
 		return f.Channel, descriptor, nil, nil, fmt.Errorf("unknown performative: 0x%02x", descriptor)
 	}

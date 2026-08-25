@@ -67,14 +67,19 @@ type ExistingQueueSubscriber interface {
 }
 
 // QueueAcknowledger handles queue delivery acknowledgments.
+//
+// A record is identified by its queue offset, which is what the queue state
+// machine settles on. Protocol adapters that expose a textual message
+// identifier to their clients derive it at their own boundary; it is never
+// parsed back into an offset here.
 type QueueAcknowledger interface {
-	// Ack acknowledges successful processing of a message by a consumer group.
+	// Ack acknowledges successful processing of a record by a consumer group.
 	// groupID is required for fan-out support - each group acknowledges independently.
-	Ack(ctx context.Context, queueName, messageID, groupID string) error
-	// Nack negatively acknowledges a message for a consumer group (triggers retry).
-	Nack(ctx context.Context, queueName, messageID, groupID string) error
-	// Reject permanently rejects a message by a consumer group (move to DLQ).
-	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
+	Ack(ctx context.Context, queueName, groupID string, offset uint64) error
+	// Nack negatively acknowledges a record for a consumer group (triggers retry).
+	Nack(ctx context.Context, queueName, groupID string, offset uint64) error
+	// Reject permanently rejects a record by a consumer group (move to DLQ).
+	Reject(ctx context.Context, queueName, groupID string, offset uint64, reason string) error
 }
 
 // QueueLifecycle controls queue manager startup/shutdown and heartbeats.
