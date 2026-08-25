@@ -35,7 +35,7 @@ const (
 // QueueHandler defines callbacks for queue distribution operations.
 type QueueHandler interface {
 	// EnqueueLocal enqueues a message on this node (called by remote RPC).
-	EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) (string, error)
+	EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) error
 
 	// DeliverQueueMessage delivers a queue message to a local consumer and takes
 	// ownership of msg on every return path.
@@ -455,7 +455,7 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 	}
 
 	// Standard enqueue to a specific queue
-	messageID, err := handler.EnqueueLocal(ctx, req.Msg.QueueName, req.Msg.Payload, req.Msg.Properties)
+	err := handler.EnqueueLocal(ctx, req.Msg.QueueName, req.Msg.Payload, req.Msg.Properties)
 	if err != nil {
 		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
 			Success: false,
@@ -464,8 +464,7 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 	}
 
 	return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
-		Success:   true,
-		MessageId: messageID,
+		Success: true,
 	}), nil
 }
 
@@ -787,9 +786,8 @@ func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) 
 }
 
 // SendEnqueueRemote sends an enqueue request to a peer node with retry and circuit breaker.
-func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string, forwarded, forwardToLeader bool) (string, error) {
-	var messageID string
-	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
+func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string, forwarded, forwardToLeader bool) error {
+	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
@@ -812,10 +810,8 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 			return fmt.Errorf("enqueue failed: %s", resp.Msg.Error)
 		}
 
-		messageID = resp.Msg.MessageId
 		return nil
 	})
-	return messageID, err
 }
 
 // SendRouteQueueMessage sends a queue message delivery request to a peer node with retry and circuit breaker.

@@ -26,9 +26,9 @@ type v1QueueManager interface {
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
 	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error
-	Ack(ctx context.Context, queueName, messageID, groupID string) error
-	Nack(ctx context.Context, queueName, messageID, groupID string) error
-	Reject(ctx context.Context, queueName, messageID, groupID, reason string) error
+	Ack(ctx context.Context, queueName, groupID string, offset uint64) error
+	Nack(ctx context.Context, queueName, groupID string, offset uint64) error
+	Reject(ctx context.Context, queueName, groupID string, offset uint64, reason string) error
 	Start(ctx context.Context) error
 	Stop() error
 	UpdateHeartbeat(ctx context.Context, clientID string) error

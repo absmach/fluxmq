@@ -70,15 +70,15 @@ func (m *mockSubscribeQueueManager) Unsubscribe(ctx context.Context, queueName, 
 	return nil
 }
 
-func (m *mockSubscribeQueueManager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
+func (m *mockSubscribeQueueManager) Ack(ctx context.Context, queueName, groupID string, offset uint64) error {
 	return nil
 }
 
-func (m *mockSubscribeQueueManager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
+func (m *mockSubscribeQueueManager) Nack(ctx context.Context, queueName, groupID string, offset uint64) error {
 	return nil
 }
 
-func (m *mockSubscribeQueueManager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
+func (m *mockSubscribeQueueManager) Reject(ctx context.Context, queueName, groupID string, offset uint64, reason string) error {
 	return nil
 }
 

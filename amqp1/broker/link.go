@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 
 	"github.com/absmach/fluxmq/amqp1/message"
@@ -54,9 +55,14 @@ type Link struct {
 
 type pendingDelivery struct {
 	deliveryID uint32
-	messageID  string
 	queueName  string
 	groupID    string
+	// offset identifies the queue record to settle. It is resolved once here,
+	// at delivery, rather than parsed back out of a client-supplied identifier
+	// when the disposition arrives. queued reports whether this delivery came
+	// from a queue at all.
+	offset uint64
+	queued bool
 }
 
 const managementAddress = "$management"
@@ -440,10 +446,11 @@ func (l *Link) sendMessage(topic string, payload []byte, props map[string]string
 	if !settled {
 		l.pendingMu.Lock()
 		pd := &pendingDelivery{deliveryID: deliveryID}
-		if msgID, ok := props[coremessage.PropertyMessageID]; ok {
-			pd.messageID = msgID
-			pd.queueName, _ = props[coremessage.PropertyQueueName]
-			pd.groupID, _ = props[coremessage.PropertyGroupID]
+		if offset, queued := coremessage.QueueOffsetFromProperties(props); queued {
+			pd.offset = offset
+			pd.queued = true
+			pd.queueName = props[coremessage.PropertyQueueName]
+			pd.groupID = props[coremessage.PropertyGroupID]
 		}
 		l.pending[deliveryID] = pd
 		l.pendingMu.Unlock()
@@ -500,8 +507,13 @@ func (l *Link) sendAMQPMessage(msg any, qos byte) {
 	if !settled && amqpMsg.ApplicationProperties != nil {
 		l.pendingMu.Lock()
 		pd := &pendingDelivery{deliveryID: deliveryID}
-		if msgID, ok := amqpMsg.ApplicationProperties[coremessage.PropertyMessageID]; ok {
-			pd.messageID, _ = msgID.(string)
+		if raw, ok := amqpMsg.ApplicationProperties[coremessage.PropertyOffset]; ok {
+			if offset, queued := coremessage.QueueOffsetFromProperties(
+				map[string]string{coremessage.PropertyOffset: applicationPropertyString(raw)},
+			); queued {
+				pd.offset = offset
+				pd.queued = true
+			}
 		}
 		if qn, ok := amqpMsg.ApplicationProperties[coremessage.PropertyQueueName]; ok {
 			pd.queueName, _ = qn.(string)
@@ -533,15 +545,15 @@ func (l *Link) handleDisposition(disp *performatives.Disposition) {
 			continue
 		}
 
-		if pd.messageID != "" && qm != nil {
+		if pd.queued && qm != nil {
 			ctx := context.Background()
 			switch disp.State.(type) {
 			case *performatives.Accepted:
-				qm.Ack(ctx, pd.queueName, pd.messageID, pd.groupID) //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
+				qm.Ack(ctx, pd.queueName, pd.groupID, pd.offset) //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
 			case *performatives.Rejected:
-				qm.Reject(ctx, pd.queueName, pd.messageID, pd.groupID, "rejected by client") //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
+				qm.Reject(ctx, pd.queueName, pd.groupID, pd.offset, "rejected by client") //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
 			case *performatives.Released:
-				qm.Nack(ctx, pd.queueName, pd.messageID, pd.groupID) //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
+				qm.Nack(ctx, pd.queueName, pd.groupID, pd.offset) //nolint:errcheck // disposition errors are non-fatal; visibility handled by queue manager
 			}
 		}
 
@@ -589,4 +601,24 @@ func (l *Link) handleManagementTransfer(transfer *performatives.Transfer, msg *m
 
 func uint32ToBytes(v uint32) []byte {
 	return []byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
+}
+
+// applicationPropertyString renders an application-property value that should
+// carry a numeric string. AMQP 1.0 application-properties are typed, so a peer
+// or an adapter may present the same value as a string or as an integer.
+func applicationPropertyString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	default:
+		return ""
+	}
 }

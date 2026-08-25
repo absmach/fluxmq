@@ -74,15 +74,15 @@ func (m *mockAMQP1QueueLinkManager) Unsubscribe(context.Context, string, string,
 	return nil
 }
 
-func (m *mockAMQP1QueueLinkManager) Ack(context.Context, string, string, string) error {
+func (m *mockAMQP1QueueLinkManager) Ack(context.Context, string, string, uint64) error {
 	return nil
 }
 
-func (m *mockAMQP1QueueLinkManager) Nack(context.Context, string, string, string) error {
+func (m *mockAMQP1QueueLinkManager) Nack(context.Context, string, string, uint64) error {
 	return nil
 }
 
-func (m *mockAMQP1QueueLinkManager) Reject(context.Context, string, string, string, string) error {
+func (m *mockAMQP1QueueLinkManager) Reject(context.Context, string, string, uint64, string) error {
 	return nil
 }
 

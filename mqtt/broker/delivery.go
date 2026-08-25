@@ -241,16 +241,16 @@ func (b *Broker) ackQueueDelivery(msg *message.Envelope) {
 	}
 
 	queueName := msg.Broker.Queue.Name
-	messageID := msg.Broker.Queue.MessageID
 	groupID := msg.Broker.Queue.GroupID
-	if queueName == "" || messageID == "" || groupID == "" {
+	if queueName == "" || groupID == "" {
 		return
 	}
+	offset := msg.Broker.Queue.Offset
 
-	if err := b.queueManager.Ack(context.Background(), queueName, messageID, groupID); err != nil {
+	if err := b.queueManager.Ack(context.Background(), queueName, groupID, offset); err != nil {
 		b.logError("queue_ack_on_delivery_ack", err,
 			slog.String("queue", queueName),
-			slog.String("message_id", messageID),
+			slog.Uint64("offset", offset),
 			slog.String("group_id", groupID))
 	}
 }

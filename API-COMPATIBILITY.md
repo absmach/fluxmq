@@ -115,10 +115,16 @@ The existing broker interfaces are unchanged.
 - Stream-mode `Consume` only peeks. An adapter calls `CommitConsume` after it
   has delivered the selected prefix, so a send failure does not advance the
   stream cursor past an undelivered record.
+- `Ack`, `Nack`, and `Reject` identify a record by its queue offset. A protocol
+  that exposes a textual message identifier to its clients derives it at its own
+  boundary; it is never parsed back into an offset. Adapters that receive a
+  delivery as a property map rather than an envelope resolve the offset once, at
+  delivery, from the projected `offset` property.
 - `Ack`, `Nack`, and `Reject` enforce pending ownership when a consumer ID is
   present. Compatibility adapters that cannot carry a consumer ID resolve the
-  owner from the group PEL. A multi-offset command stops at its first failure
-  and its in-process outcome identifies the successfully settled prefix.
+  owner from the group PEL. A multi-offset command stops at its first failure,
+  and both its in-process outcome and the `QueueProgressDetail` on the returned
+  error identify the successfully settled prefix and the group cursor it left.
 - `Nack` releases an entry for redelivery after at least the requested delay;
   normal visibility and claim-idle rules may extend that wait. A zero delay
   makes the entry immediately eligible.

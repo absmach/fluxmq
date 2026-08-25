@@ -23,10 +23,10 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	var lastMessageID string
+	var lastOffset uint64
 	var lastGroupID string
 	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
-		lastMessageID = msg.Broker.Queue.MessageID
+		lastOffset = msg.Broker.Queue.Offset
 		lastGroupID = msg.Broker.Queue.GroupID
 		return nil
 	})
@@ -50,7 +50,7 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		lastMessageID = ""
+		lastOffset = 0
 		lastGroupID = ""
 
 		if err := mgr.Publish(ctx, types.PublishRequest{
@@ -66,14 +66,11 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 			b.Fatalf("deliverQueue returned no delivery")
 		}
 
-		if lastMessageID == "" {
-			b.Fatalf("expected delivered message-id")
-		}
 		if lastGroupID == "" {
 			b.Fatalf("expected delivered group-id")
 		}
 
-		if err := mgr.Ack(ctx, "q-0", lastMessageID, lastGroupID); err != nil {
+		if err := mgr.Ack(ctx, "q-0", lastGroupID, lastOffset); err != nil {
 			if err == storage.ErrConsumerNotFound {
 				b.Fatalf("Ack failed with consumer not found: %v", err)
 			}

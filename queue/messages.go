@@ -4,8 +4,6 @@
 package queue
 
 import (
-	"strconv"
-	"sync/atomic"
 	"time"
 )
 
@@ -36,20 +34,4 @@ func extractGroupFromClientID(clientID string) string {
 // subscriber does not provide one explicitly.
 func DefaultConsumerGroupID(clientID string) string {
 	return extractGroupFromClientID(clientID)
-}
-
-var messageIDCounter atomic.Uint64
-
-func generateMessageID() string {
-	return strconv.FormatUint(messageIDCounter.Add(1), 10)
-}
-
-func parseMessageID(messageID string) (uint64, error) {
-	// Format: queueName:offset (we only need the offset)
-	for i := len(messageID) - 1; i >= 0; i-- {
-		if messageID[i] == ':' {
-			return strconv.ParseUint(messageID[i+1:], 10, 64)
-		}
-	}
-	return strconv.ParseUint(messageID, 10, 64)
 }

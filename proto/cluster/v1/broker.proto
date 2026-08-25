@@ -195,7 +195,6 @@ message EnqueueRemoteRequest {
 message EnqueueRemoteResponse {
   bool success = 1;
   string error = 2;
-  string message_id = 3;
 }
 
 message RouteQueueMessageRequest {

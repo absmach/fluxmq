@@ -1633,7 +1633,6 @@ func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConf
 	msg.Broker.Trace = publish.Trace
 	msg.Broker.Delivery.PublishedAt = publish.PublishedAt
 	msg.Broker.Delivery.ExpiresAt = publish.ExpiresAt
-	msg.Broker.Queue.MessageID = generateMessageID()
 	msg.Broker.Queue.State = message.QueueStateQueued
 	msg.Broker.Queue.CreatedAt = now
 	if queueConfig.MessageTTL > 0 {
@@ -1718,20 +1717,22 @@ func (m *Manager) moveToDLQ(ctx context.Context, queueName, groupID string, msg 
 		return fmt.Errorf("get DLQ queue %q: %w", dlqQueueName, storage.ErrQueueNotFound)
 	}
 
+	// One clock reading for the whole transfer, in UTC like every other
+	// broker-owned timestamp, so the record and its transfer cannot disagree.
+	now := time.Now().UTC()
 	transferID := dlqTransferID(queueName, groupID, sourceOffset)
 	dlqMsg := msg.Clone()
 	dlqMsg.Topic = dlqTopic
 	dlqMsg.Broker.Delivery = message.DeliveryMetadata{}
 	dlqMsg.Broker.Source.Topic = msg.Topic
 	dlqMsg.Broker.Queue = message.QueueMetadata{
-		MessageID: transferID,
 		State:     message.QueueStateDLQ,
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 	}
 	dlqMsg.Broker.Transfer = message.TransferMetadata{
 		ID:            transferID,
 		FailureReason: reason,
-		CompletedAt:   time.Now().UTC(),
+		CompletedAt:   now,
 		SourceQueue:   queueName,
 		SourceGroup:   groupID,
 		SourceOffset:  sourceOffset,
@@ -2135,12 +2136,8 @@ func (m *Manager) Unsubscribe(ctx context.Context, queueName, pattern string, cl
 // --- Ack Operations ---
 
 // Ack acknowledges a message.
-func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string) error {
-	offset, err := parseMessageID(messageID)
-	if err != nil {
-		return err
-	}
-	_, err = m.stateMachine.Ack(ctx, AckCommand{
+func (m *Manager) Ack(ctx context.Context, queueName, groupID string, offset uint64) error {
+	_, err := m.stateMachine.Ack(ctx, AckCommand{
 		QueueName: queueName,
 		GroupID:   groupID,
 		Offsets:   []uint64{offset},
@@ -2148,14 +2145,9 @@ func (m *Manager) Ack(ctx context.Context, queueName, messageID, groupID string)
 	return err
 }
 
-// Nack negatively acknowledges a message.
-func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string) error {
-	offset, err := parseMessageID(messageID)
-	if err != nil {
-		return err
-	}
-
-	_, err = m.stateMachine.Nack(ctx, NackCommand{
+// Nack negatively acknowledges a record.
+func (m *Manager) Nack(ctx context.Context, queueName, groupID string, offset uint64) error {
+	_, err := m.stateMachine.Nack(ctx, NackCommand{
 		QueueName: queueName,
 		GroupID:   groupID,
 		Offsets:   []uint64{offset},
@@ -2163,14 +2155,9 @@ func (m *Manager) Nack(ctx context.Context, queueName, messageID, groupID string
 	return err
 }
 
-// Reject rejects a message and moves it to DLQ.
-func (m *Manager) Reject(ctx context.Context, queueName, messageID, groupID, reason string) error {
-	offset, err := parseMessageID(messageID)
-	if err != nil {
-		return err
-	}
-
-	_, err = m.stateMachine.Reject(ctx, RejectCommand{
+// Reject rejects a record and moves it to the DLQ.
+func (m *Manager) Reject(ctx context.Context, queueName, groupID string, offset uint64, reason string) error {
+	_, err := m.stateMachine.Reject(ctx, RejectCommand{
 		QueueName: queueName,
 		GroupID:   groupID,
 		Offsets:   []uint64{offset},
@@ -2584,23 +2571,18 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 // --- Cluster QueueHandler Implementation ---
 
 // EnqueueLocal implements cluster.QueueHandler.EnqueueLocal.
-func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) (string, error) {
-	err := m.Publish(ctx, types.PublishRequest{
+//
+// It routes by topic pattern and so may append to several queues, which is why
+// it reports no offset: there is no single record to name. Callers that need an
+// exact offset use the append path instead.
+func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
+	return m.Publish(ctx, types.PublishRequest{
 		Source:     message.SourceFromProperties(properties),
 		Trace:      message.TraceFromProperties(properties),
 		Topic:      topic,
 		Payload:    payload,
 		Properties: message.FilterUserProperties(properties),
 	})
-	if err != nil {
-		return "", err
-	}
-
-	if properties != nil && properties[message.PropertyMessageID] != "" {
-		return properties[message.PropertyMessageID], nil
-	}
-
-	return generateMessageID(), nil
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.

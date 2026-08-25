@@ -100,15 +100,15 @@ func (m *mockChannelQueueManager) Unsubscribe(_ context.Context, queueName, _, _
 	return nil
 }
 
-func (m *mockChannelQueueManager) Ack(context.Context, string, string, string) error {
+func (m *mockChannelQueueManager) Ack(context.Context, string, string, uint64) error {
 	return nil
 }
 
-func (m *mockChannelQueueManager) Nack(context.Context, string, string, string) error {
+func (m *mockChannelQueueManager) Nack(context.Context, string, string, uint64) error {
 	return nil
 }
 
-func (m *mockChannelQueueManager) Reject(context.Context, string, string, string, string) error {
+func (m *mockChannelQueueManager) Reject(context.Context, string, string, uint64, string) error {
 	return nil
 }
 

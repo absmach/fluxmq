@@ -1241,7 +1241,6 @@ type EnqueueRemoteResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1286,13 +1285,6 @@ func (x *EnqueueRemoteResponse) GetSuccess() bool {
 func (x *EnqueueRemoteResponse) GetError() string {
 	if x != nil {
 		return x.Error
-	}
-	return ""
-}
-
-func (x *EnqueueRemoteResponse) GetMessageId() string {
-	if x != nil {
-		return x.MessageId
 	}
 	return ""
 }
@@ -2110,12 +2102,10 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x11forward_to_leader\x18\x05 \x01(\bR\x0fforwardToLeader\x1a=\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"f\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
 	"\x15EnqueueRemoteResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
-	"\n" +
-	"message_id\x18\x03 \x01(\tR\tmessageId\"\xdd\x02\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xdd\x02\n" +
 	"\x18RouteQueueMessageRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +

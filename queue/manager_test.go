@@ -1347,7 +1347,7 @@ func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
 
-	if err := mgr.Ack(context.Background(), testQueueEvents, "events:0", "streamer"); err != nil {
+	if err := mgr.Ack(context.Background(), testQueueEvents, "streamer", 0); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
 
@@ -1384,7 +1384,7 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	if err := mgr.Reject(context.Background(), testQueueEvents, "events:0", "streamer", "bad message"); err != nil {
+	if err := mgr.Reject(context.Background(), testQueueEvents, "streamer", 0, "bad message"); err != nil {
 		t.Fatalf("Reject failed: %v", err)
 	}
 
@@ -1414,7 +1414,7 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	_, err = mgr.consumerManager.Claim(ctx, "tasks", testGroupWorkers, testConsumer, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Reject(ctx, "tasks", "tasks:0", testGroupWorkers, "invalid payload"))
+	require.NoError(t, mgr.Reject(ctx, "tasks", testGroupWorkers, 0, "invalid payload"))
 	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, testConsumer)
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -1440,7 +1440,7 @@ func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
 	_, err = mgr.consumerManager.Claim(ctx, "tasks", testGroupWorkers, testConsumer, nil)
 	require.NoError(t, err)
 
-	require.ErrorIs(t, mgr.Reject(ctx, "tasks", "tasks:0", testGroupWorkers, "invalid payload"), ErrDLQDisabled)
+	require.ErrorIs(t, mgr.Reject(ctx, "tasks", testGroupWorkers, 0, "invalid payload"), ErrDLQDisabled)
 	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, testConsumer)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -3089,7 +3089,7 @@ func TestEnqueueLocal(t *testing.T) {
 	}
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
-	msgID, err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{
+	err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{
 		"key":                    testCustomValue,
 		message.PropertyClientID: "mqtt:remote-client",
 		message.PropertyProtocol: string(message.ProtocolMQTT),
@@ -3099,9 +3099,8 @@ func TestEnqueueLocal(t *testing.T) {
 		t.Fatalf("EnqueueLocal failed: %v", err)
 	}
 
-	if msgID == "" {
-		t.Error("Expected non-empty message ID")
-	}
+	// EnqueueLocal routes by topic pattern and may append to several queues, so
+	// it reports no offset. The append itself is asserted below.
 
 	// The message should be routed to the mqtt queue (topic pattern $queue/#)
 	tail, err := logStore.Tail(ctx, "mqtt")
@@ -3374,9 +3373,8 @@ func TestPELCapRejectsClaim(t *testing.T) {
 		t.Fatalf("expected ErrNoMessages (PEL full), got: %v", err)
 	}
 
-	// Ack one message to free PEL space (message ID format is queueName:offset)
-	ackID := fmt.Sprintf("pelcap:%d", msgs[0].Broker.Queue.Offset)
-	if err := mgr.Ack(ctx, "pelcap", ackID, "g1"); err != nil {
+	// Ack one message to free PEL space.
+	if err := mgr.Ack(ctx, "pelcap", "g1", msgs[0].Broker.Queue.Offset); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
 
@@ -3447,8 +3445,17 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if msg.Broker.Transfer.SourceOffset != 42 {
 		t.Fatalf("expected original offset 42, got %d", msg.Broker.Transfer.SourceOffset)
 	}
-	if msg.Broker.Transfer.ID == "" || msg.Broker.Queue.MessageID != msg.Broker.Transfer.ID {
-		t.Fatalf("expected stable transfer identity, id=%q transfer=%q", msg.Broker.Queue.MessageID, msg.Broker.Transfer.ID)
+	// Transfer.ID is the DLQ record's stable identity, derived from the source
+	// queue, group and offset. Queue.MessageID is a delivery-time projection and
+	// is deliberately not reused for it.
+	if msg.Broker.Transfer.ID == "" {
+		t.Fatal("expected a stable transfer identity")
+	}
+	if msg.Broker.Transfer.ID != dlqTransferID("tasks", testGroupWorkers, 42) {
+		t.Fatalf("transfer identity is not derived from the source coordinates: %q", msg.Broker.Transfer.ID)
+	}
+	if msg.Broker.Queue.MessageID != "" {
+		t.Fatalf("queue message id must be left to delivery, got %q", msg.Broker.Queue.MessageID)
 	}
 	if msg.Broker.Transfer.FailureReason != "decode failed" {
 		t.Fatalf("expected reject reason, got %q", msg.Broker.Transfer.FailureReason)
