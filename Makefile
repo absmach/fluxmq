@@ -287,7 +287,11 @@ lint:
 .PHONY: fmt
 fmt:
 	$(GO) fmt ./...
-	goimports -w .
+	# Generated protobuf code is excluded: goimports regroups its imports, which
+	# `make proto` then reverts, so formatting it makes the CI
+	# `make proto && git diff --exit-code` gate fail on unrelated changes.
+	@find . -name '*.go' -not -path './pkg/proto/*' -not -path './build/*' -print0 \
+		| xargs -0 goimports -w
 
 .PHONY: deps
 deps:
