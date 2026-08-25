@@ -445,7 +445,7 @@ route with **no authentication middleware**:
   `/api/v1/overview`.
 - The full Connect `QueueService` handler (`server/queue/handler.go`):
   `CreateQueue:95`, `DeleteQueue:181`, `UpdateQueue:195`, `Append:235`,
-  `AppendBatch:261`, `AppendStream:300`, `Read:348`, `Tail:385`,
+  `AppendBatch:261`, `AppendQueue:300`, `Read:348`, `Tail:385`,
   `SeekToOffset:420`, `CreateConsumerGroup:498`, `DeleteConsumerGroup:557`,
   `JoinGroup:567`, `Ack:712`, `Nack:751`, `Claim:780`.
 

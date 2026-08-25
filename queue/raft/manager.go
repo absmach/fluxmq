@@ -624,11 +624,11 @@ func (m *Manager) ApplyTruncate(ctx context.Context, queueName string, minOffset
 
 // ApplyCreateGroup submits a create consumer group operation to Raft.
 func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
-	if !m.IsEnabled() {
-		return ErrRaftDisabled
-	}
 	if group == nil {
 		return fmt.Errorf("%w: create group requires a group", ErrInvalidOperation)
+	}
+	if !m.IsEnabled() {
+		return ErrRaftDisabled
 	}
 
 	op := &Operation{
@@ -652,6 +652,9 @@ func (m *Manager) ApplyCreateGroup(ctx context.Context, queueName string, group 
 
 // ApplyUpdateGroup submits a full consumer group state update operation to Raft.
 func (m *Manager) ApplyUpdateGroup(ctx context.Context, queueName string, group *types.ConsumerGroup) error {
+	if group == nil {
+		return fmt.Errorf("%w: update group requires a group", ErrInvalidOperation)
+	}
 	if !m.IsEnabled() {
 		return ErrRaftDisabled
 	}

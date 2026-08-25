@@ -258,14 +258,14 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 	}), nil
 }
 
-// AppendStream appends a stream of messages to one queue. The stream is pinned
+// AppendQueue appends a stream of messages to one queue. The stream is pinned
 // to the first message's queue: a mid-stream change would make the single
 // returned offset range meaningless.
 //
 // The stream commits a prefix and stops at the first failed append. The error
-// carries that prefix as QueueProgressDetail so the client can resume rather
+// carries that prefix as AppendProgress so the client can resume rather
 // than re-send and duplicate it.
-func (h *Handler) AppendStream(ctx context.Context, stream *connect.ClientStream[queuev1.AppendRequest]) (*connect.Response[queuev1.AppendBatchResponse], error) {
+func (h *Handler) AppendQueue(ctx context.Context, stream *connect.ClientStream[queuev1.AppendRequest]) (*connect.Response[queuev1.AppendBatchResponse], error) {
 	var (
 		queueName     string
 		firstOffset   uint64
@@ -679,7 +679,7 @@ func (h *Handler) Consume(ctx context.Context, req *connect.Request[queuev1.Cons
 	}), nil
 }
 
-func (h *Handler) ConsumeStream(ctx context.Context, req *connect.Request[queuev1.ConsumeQueueRequest], stream *connect.ServerStream[queuev1.Message]) error {
+func (h *Handler) ConsumeQueue(ctx context.Context, req *connect.Request[queuev1.ConsumeQueueRequest], stream *connect.ServerStream[queuev1.Message]) error {
 	msg := req.Msg
 	if h.manager == nil {
 		return newConnectError(queue.ErrorCodeFailedPrecondition, fmt.Errorf("queue state machine is unavailable"))

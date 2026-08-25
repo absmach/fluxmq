@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/absmach/fluxmq/logstorage"
 	coremessage "github.com/absmach/fluxmq/message"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
+	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -176,7 +178,7 @@ func TestAckPartialFailureReportsProgress(t *testing.T) {
 // A failed append has no offset to report: the record was never written. Its
 // position in the request is the only coordinate that names it, which is why
 // append progress carries an index rather than an offset.
-func TestAppendStreamProgressNamesTheFailedIndex(t *testing.T) {
+func TestAppendQueueProgressNamesTheFailedIndex(t *testing.T) {
 	detail := &queuev1.QueueErrorDetail{}
 	setter := appendProgress(3, 10, 12)
 	require.NotNil(t, setter)
@@ -200,6 +202,41 @@ func TestAppendStreamProgressNamesTheFailedIndex(t *testing.T) {
 	// Nothing committed means no progress at all, rather than a zero-valued
 	// report that a client could mistake for a commit at offset 0.
 	assert.Nil(t, appendProgress(0, 0, 0))
+}
+
+func TestAppendQueuePartialFailureReportsProgress(t *testing.T) {
+	h, store, ctx := newAppendHandler(t)
+	_, service := queuev1connect.NewQueueServiceHandler(h)
+	server := httptest.NewServer(service)
+	t.Cleanup(server.Close)
+
+	client := queuev1connect.NewQueueServiceClient(server.Client(), server.URL)
+	stream := client.AppendQueue(ctx)
+	require.NoError(t, stream.Send(&queuev1.AppendRequest{
+		QueueName: testQueueAppends,
+		Value:     []byte("committed"),
+	}))
+	require.NoError(t, stream.Send(&queuev1.AppendRequest{
+		QueueName: "different-queue",
+		Value:     []byte("rejected"),
+	}))
+
+	_, err := stream.CloseAndReceive()
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+
+	progress := queueErrorDetail(t, err).GetAppendProgress()
+	require.NotNil(t, progress)
+	assert.Equal(t, uint32(1), progress.GetProcessedCount())
+	assert.Equal(t, uint32(1), progress.GetFailedIndex())
+	assert.Equal(t, uint64(0), progress.GetFirstOffset())
+	assert.Equal(t, uint64(0), progress.GetLastOffset())
+	require.NotNil(t, progress.FirstOffset, "offset zero must carry explicit presence")
+	require.NotNil(t, progress.LastOffset, "offset zero must carry explicit presence")
+
+	stored, readErr := store.Read(ctx, testQueueAppends, 0)
+	require.NoError(t, readErr)
+	coremessage.Release(stored)
 }
 
 // Settlement over the public API must name its consumer group. Without one the

@@ -6,6 +6,7 @@ package queue
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/queue/raft"
@@ -35,8 +36,8 @@ var (
 // It rejects operation types that are not group mutations: the leader applies
 // those directly through Raft and never receives them over this RPC.
 func encodeGroupOperation(op *raft.Operation) (*clusterv1.GroupOperation, error) {
-	if op == nil {
-		return nil, fmt.Errorf("%w: operation is nil", ErrUnsupportedGroupOp)
+	if err := validateGroupOperation(op); err != nil {
+		return nil, err
 	}
 
 	wire := &clusterv1.GroupOperation{
@@ -108,12 +109,6 @@ func decodeGroupOperation(wire *clusterv1.GroupOperation) (*raft.Operation, erro
 	if wire == nil {
 		return nil, fmt.Errorf("%w: operation is missing", ErrMalformedGroupOp)
 	}
-	if wire.QueueName == "" {
-		return nil, fmt.Errorf("%w: queue name is required", ErrMalformedGroupOp)
-	}
-	if wire.GroupId == "" {
-		return nil, fmt.Errorf("%w: group id is required", ErrMalformedGroupOp)
-	}
 
 	op := &raft.Operation{
 		QueueName: wire.QueueName,
@@ -129,14 +124,14 @@ func decodeGroupOperation(wire *clusterv1.GroupOperation) (*raft.Operation, erro
 	switch payload := wire.Operation.(type) {
 	case *clusterv1.GroupOperation_CreateGroup:
 		op.Type = raft.OpCreateGroup
-		group, err := decodeConsumerGroup(payload.CreateGroup.GetGroup(), wire.QueueName, wire.GroupId)
+		group, err := decodeConsumerGroup(payload.CreateGroup.GetGroup())
 		if err != nil {
 			return nil, err
 		}
 		op.GroupState = group
 	case *clusterv1.GroupOperation_UpdateGroup:
 		op.Type = raft.OpUpdateGroup
-		group, err := decodeConsumerGroup(payload.UpdateGroup.GetGroup(), wire.QueueName, wire.GroupId)
+		group, err := decodeConsumerGroup(payload.UpdateGroup.GetGroup())
 		if err != nil {
 			return nil, err
 		}
@@ -155,22 +150,13 @@ func decodeGroupOperation(wire *clusterv1.GroupOperation) (*raft.Operation, erro
 		if err != nil {
 			return nil, err
 		}
-		if entry == nil {
-			return nil, fmt.Errorf("%w: add pending requires an entry", ErrMalformedGroupOp)
-		}
 		op.PendingEntry = entry
 	case *clusterv1.GroupOperation_RemovePending:
 		op.Type = raft.OpRemovePending
-		if payload.RemovePending.GetConsumerId() == "" {
-			return nil, fmt.Errorf("%w: remove pending requires a consumer id", ErrMalformedGroupOp)
-		}
 		op.ConsumerID = payload.RemovePending.GetConsumerId()
 		op.Offset = payload.RemovePending.GetOffset()
 	case *clusterv1.GroupOperation_TransferPending:
 		op.Type = raft.OpTransferPending
-		if payload.TransferPending.GetFromConsumer() == "" || payload.TransferPending.GetToConsumer() == "" {
-			return nil, fmt.Errorf("%w: transfer pending requires both consumers", ErrMalformedGroupOp)
-		}
 		op.Offset = payload.TransferPending.GetOffset()
 		op.FromConsumer = payload.TransferPending.GetFromConsumer()
 		op.ToConsumer = payload.TransferPending.GetToConsumer()
@@ -180,21 +166,146 @@ func decodeGroupOperation(wire *clusterv1.GroupOperation) (*raft.Operation, erro
 		if err != nil {
 			return nil, err
 		}
-		if consumer == nil || consumer.ID == "" {
-			return nil, fmt.Errorf("%w: register consumer requires a consumer with an id", ErrMalformedGroupOp)
-		}
 		op.ConsumerInfo = consumer
 	case *clusterv1.GroupOperation_UnregisterConsumer:
 		op.Type = raft.OpUnregisterConsumer
-		if payload.UnregisterConsumer.GetConsumerId() == "" {
-			return nil, fmt.Errorf("%w: unregister consumer requires a consumer id", ErrMalformedGroupOp)
-		}
 		op.ConsumerID = payload.UnregisterConsumer.GetConsumerId()
 	default:
+		if wire.Operation == nil {
+			return nil, fmt.Errorf("%w: operation payload is required", ErrMalformedGroupOp)
+		}
 		return nil, fmt.Errorf("%w: %T", ErrUnsupportedGroupOp, wire.Operation)
 	}
 
+	if err := validateGroupOperation(op); err != nil {
+		return nil, err
+	}
 	return op, nil
+}
+
+// validateGroupOperation enforces the semantic contract shared by both sides
+// of the cluster boundary. The encoder catches local programming errors before
+// they cross the network; the decoder repeats the check because peer input is
+// never trusted.
+func validateGroupOperation(op *raft.Operation) error {
+	if op == nil {
+		return fmt.Errorf("%w: operation is required", ErrMalformedGroupOp)
+	}
+
+	switch op.Type {
+	case raft.OpCreateGroup, raft.OpUpdateGroup, raft.OpDeleteGroup,
+		raft.OpUpdateCursor, raft.OpUpdateCommitted, raft.OpAddPending,
+		raft.OpRemovePending, raft.OpTransferPending, raft.OpRegisterConsumer,
+		raft.OpUnregisterConsumer:
+	default:
+		return fmt.Errorf("%w: type %d", ErrUnsupportedGroupOp, op.Type)
+	}
+
+	if op.QueueName == "" {
+		return fmt.Errorf("%w: queue name is required", ErrMalformedGroupOp)
+	}
+	if op.GroupID == "" {
+		return fmt.Errorf("%w: group id is required", ErrMalformedGroupOp)
+	}
+	if err := validateGroupTimestamp("timestamp", op.Timestamp); err != nil {
+		return err
+	}
+
+	switch op.Type {
+	case raft.OpCreateGroup, raft.OpUpdateGroup:
+		return validateConsumerGroup(op.GroupState, op.QueueName, op.GroupID)
+	case raft.OpAddPending:
+		return validatePendingEntry(op.PendingEntry)
+	case raft.OpRemovePending:
+		if op.ConsumerID == "" {
+			return fmt.Errorf("%w: remove pending requires a consumer id", ErrMalformedGroupOp)
+		}
+	case raft.OpTransferPending:
+		if op.FromConsumer == "" || op.ToConsumer == "" {
+			return fmt.Errorf("%w: transfer pending requires both consumers", ErrMalformedGroupOp)
+		}
+	case raft.OpRegisterConsumer:
+		return validateConsumerInfo(op.ConsumerInfo)
+	case raft.OpUnregisterConsumer:
+		if op.ConsumerID == "" {
+			return fmt.Errorf("%w: unregister consumer requires a consumer id", ErrMalformedGroupOp)
+		}
+	}
+
+	return nil
+}
+
+func validateConsumerGroup(group *types.ConsumerGroup, queueName, groupID string) error {
+	if group == nil {
+		return fmt.Errorf("%w: group state is required", ErrMalformedGroupOp)
+	}
+
+	snapshot := group.Snapshot()
+	if snapshot.ID == "" || snapshot.QueueName == "" {
+		return fmt.Errorf("%w: group state requires an id and a queue name", ErrMalformedGroupOp)
+	}
+	if snapshot.ID != groupID || snapshot.QueueName != queueName {
+		return fmt.Errorf("%w: group state names %q/%q, operation names %q/%q",
+			ErrMalformedGroupOp, snapshot.QueueName, snapshot.ID, queueName, groupID)
+	}
+	if err := validateGroupTimestamp("group created_at", snapshot.CreatedAt); err != nil {
+		return err
+	}
+	if err := validateGroupTimestamp("group updated_at", snapshot.UpdatedAt); err != nil {
+		return err
+	}
+	for consumerID, entries := range snapshot.PEL {
+		for _, entry := range entries {
+			if err := validatePendingEntry(entry); err != nil {
+				return err
+			}
+			if entry.ConsumerID != consumerID {
+				return fmt.Errorf("%w: pending entry consumer %q is stored under %q",
+					ErrMalformedGroupOp, entry.ConsumerID, consumerID)
+			}
+		}
+	}
+	for consumerID, consumer := range snapshot.Consumers {
+		if err := validateConsumerInfo(consumer); err != nil {
+			return err
+		}
+		if consumer.ID != consumerID {
+			return fmt.Errorf("%w: consumer %q is stored under %q",
+				ErrMalformedGroupOp, consumer.ID, consumerID)
+		}
+	}
+
+	return nil
+}
+
+func validatePendingEntry(entry *types.PendingEntry) error {
+	if entry == nil {
+		return fmt.Errorf("%w: add pending requires an entry", ErrMalformedGroupOp)
+	}
+	if entry.ConsumerID == "" {
+		return fmt.Errorf("%w: pending entry requires a consumer id", ErrMalformedGroupOp)
+	}
+	return validateGroupTimestamp("pending entry claimed_at", entry.ClaimedAt)
+}
+
+func validateConsumerInfo(consumer *types.ConsumerInfo) error {
+	if consumer == nil || consumer.ID == "" {
+		return fmt.Errorf("%w: register consumer requires a consumer with an id", ErrMalformedGroupOp)
+	}
+	if err := validateGroupTimestamp("consumer registered_at", consumer.RegisteredAt); err != nil {
+		return err
+	}
+	return validateGroupTimestamp("consumer last_heartbeat", consumer.LastHeartbeat)
+}
+
+func validateGroupTimestamp(field string, value time.Time) error {
+	if value.IsZero() {
+		return nil
+	}
+	if err := timestamppb.New(value).CheckValid(); err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrMalformedGroupOp, field, err)
+	}
+	return nil
 }
 
 func encodeConsumerGroup(group *types.ConsumerGroup) *clusterv1.ConsumerGroupState {
@@ -233,19 +344,11 @@ func encodeConsumerGroup(group *types.ConsumerGroup) *clusterv1.ConsumerGroupSta
 	return state
 }
 
-// decodeConsumerGroup rebuilds a group's replicated state. queueName and
-// groupID come from the enclosing operation: the nested identity must agree
-// with it, so a peer cannot address one group and carry the state of another.
-func decodeConsumerGroup(state *clusterv1.ConsumerGroupState, queueName, groupID string) (*types.ConsumerGroup, error) {
+// decodeConsumerGroup rebuilds a group's replicated state. The shared operation
+// validator checks its identity against the enclosing operation afterwards.
+func decodeConsumerGroup(state *clusterv1.ConsumerGroupState) (*types.ConsumerGroup, error) {
 	if state == nil {
-		return nil, fmt.Errorf("%w: group state is required", ErrMalformedGroupOp)
-	}
-	if state.Id == "" || state.QueueName == "" {
-		return nil, fmt.Errorf("%w: group state requires an id and a queue name", ErrMalformedGroupOp)
-	}
-	if state.Id != groupID || state.QueueName != queueName {
-		return nil, fmt.Errorf("%w: group state names %q/%q, operation names %q/%q",
-			ErrMalformedGroupOp, state.QueueName, state.Id, queueName, groupID)
+		return nil, nil
 	}
 
 	group := types.NewConsumerGroupState(state.QueueName, state.Id, state.Pattern)
@@ -254,17 +357,18 @@ func decodeConsumerGroup(state *clusterv1.ConsumerGroupState, queueName, groupID
 	if cursor := state.GetCursor(); cursor != nil {
 		group.Cursor = &types.QueueCursor{Cursor: cursor.Cursor, Committed: cursor.Committed}
 	}
+	var createdAt, updatedAt time.Time
 	if state.CreatedAt != nil {
 		if err := state.CreatedAt.CheckValid(); err != nil {
 			return nil, fmt.Errorf("%w: group created_at: %w", ErrMalformedGroupOp, err)
 		}
-		group.CreatedAt = state.CreatedAt.AsTime()
+		createdAt = state.CreatedAt.AsTime()
 	}
 	if state.UpdatedAt != nil {
 		if err := state.UpdatedAt.CheckValid(); err != nil {
 			return nil, fmt.Errorf("%w: group updated_at: %w", ErrMalformedGroupOp, err)
 		}
-		group.UpdatedAt = state.UpdatedAt.AsTime()
+		updatedAt = state.UpdatedAt.AsTime()
 	}
 
 	// The wire form flattens the pending list; each entry names its consumer,
@@ -294,6 +398,12 @@ func decodeConsumerGroup(state *clusterv1.ConsumerGroupState, queueName, groupID
 		consumers[decoded.ID] = decoded
 	}
 	group.ReplaceConsumers(consumers)
+	if !createdAt.IsZero() {
+		group.CreatedAt = createdAt
+	}
+	if !updatedAt.IsZero() {
+		group.UpdatedAt = updatedAt
+	}
 
 	return group, nil
 }

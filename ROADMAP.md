@@ -927,7 +927,7 @@ middleware of any kind**. What that leaves open, in one place:
   `/api/v1/stats`, `/api/v1/cluster`, `/api/v1/overview`.
 - The whole Connect `QueueService` (`server/queue/handler.go`) —
   `CreateQueue`, `DeleteQueue`, `UpdateQueue`, `Append`, `AppendBatch`,
-  `AppendStream`, `Read`, `Tail`, `Ack`, `Nack`, `Claim`, `JoinGroup`,
+  `AppendQueue`, `Read`, `Tail`, `Ack`, `Nack`, `Claim`, `JoinGroup`,
   `DeleteConsumerGroup`, and the seek operations.
 
 `deployments/docker/compose.yaml:12` publishes that surface to the host on
