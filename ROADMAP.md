@@ -1,10 +1,10 @@
 # FluxMQ Roadmap to 1.0
 
 **Current:** `v0.51.0`
-**Last updated:** 2026-08-24
+**Last updated:** 2026-08-25
 **State:** the broker-core short-term plan, public API/error-contract freeze,
-and shared queue state machine are complete; the next active track versions the
-message envelope and reserves broker metadata
+shared queue state machine, and strict v1 message envelope are complete; the
+next active track is a recoverable queue-transition boundary
 **Companion document:** [`V1-READINESS.md`](./V1-READINESS.md) — findings, evidence, file:line references.
 
 This roadmap exists because the repository had no committed plan. `plan.md` was
@@ -323,12 +323,18 @@ Prioritize the next work by the cost of changing it after 1.0:
    MQTT and AMQP retain their frozen interfaces over this model; Connect and
    the delivery engine use it directly. Shared behavioral contracts run against
    memory and persistent log storage and across the supported adapter seams.
-3. **Version the message envelope and reserve metadata ownership.** Separate
-   user properties from broker-owned source, queue, group, offset, transfer,
-   trace, and delivery metadata. Give the internal envelope an explicit version
-   and define projection/filtering rules per protocol so future metadata cannot
-   collide with user keys or silently change wire behavior.
-4. **Create one recoverable queue-transition boundary.** DLQ movement is now
+3. ~~**Version the message envelope and reserve metadata ownership.**~~
+   **✅ DONE 2026-08-25.** `message.Envelope` is the only in-memory and persisted
+   broker message. Its strict schema accepts version 1 only—zero, legacy, and
+   future versions fail instead of entering a compatibility decoder. User,
+   source, delivery, queue/stream, transfer, and trace metadata have distinct
+   typed namespaces; public and trusted-service projections define which
+   broker-owned values may cross each protocol boundary. Storage, retained,
+   inflight, queue, Raft, cluster, MQTT, AMQP, HTTP, and CoAP paths use the same
+   envelope and one immutable reference-counted payload representation. Explicit
+   ownership contracts and tests cover cloning, asynchronous capture, storage,
+   session takeover, queue delivery, and protocol metadata/expiry preservation.
+4. **NEXT — Create one recoverable queue-transition boundary.** DLQ movement is now
    loss-safe but source settlement and destination append are not one atomic
    storage operation. Introduce a durable transition journal/outbox with stable
    operation IDs and replay semantics, initially for DLQ and settlement and
@@ -340,12 +346,13 @@ Prioritize the next work by the cost of changing it after 1.0:
    Raft configuration. Queue Raft stays disabled by default and outside the 1.0
    compatibility contract; this boundary lets it evolve without changing the
    stable queue API.
-6. **Optimize only the resulting stable paths.** Establish allocation-reporting
-   baselines for append/delivery, session takeover, and queue transitions. The
-   first candidates are an immutable or reference-counted envelope, batched
-   append/apply and group-state updates, and cached validated queue plans. Take
-   a change only for a measured bottleneck and reject unexplained regressions
-   above 10%.
+6. **Optimize only the resulting stable paths.** The immutable reference-counted
+   envelope is delivered and removes duplicate payload representations and
+   payload copies from fanout, retry, retained, and inflight paths. Establish
+   allocation-reporting baselines for append/delivery, session takeover, and
+   queue transitions. The next candidates are batched append/apply and
+   group-state updates, and cached validated queue plans. Take a change only for
+   a measured bottleneck and reject unexplained regressions above 10%.
 
 Of the pre-existing Milestone 1 items, 1.3 (authorization decision caching),
 1.7 (TLS revocation verification), and 1.8 (the second protocol audit) fit this

@@ -1,16 +1,21 @@
 # FluxMQ V1.0 Readiness Assessment
 
-**Date:** 2026-08-24
-**Assessed version:** `v0.51.0` (`main` @ `3511ac3e8`), plus the 2026-08-24
-public API/error-contract freeze and protocol-independent queue state machine
+**Date:** 2026-08-25
+**Assessed version:** `v0.51.0` (`main` @ `b29fbeefdc`), plus the current-tree
+public API/error-contract freeze, protocol-independent queue state machine, and
+strict v1 message envelope
 **Scope:** the original repo-wide audit, plus targeted current-tree revalidation
 of the cluster wire, session ownership, DLQ, cluster TLS, experimental
 replication paths, the public protobuf/Go/YAML queue contract, and shared queue
-command behavior across protocol adapters and storage backends
+command behavior across protocol adapters and storage backends, including
+message ownership, persisted envelope decoding, reserved metadata projection,
+and protocol metadata/expiry preservation
 
-**Validation:** the final assessed tree passes the repository-wide short race
-suite, `golangci-lint --config .golangci.yaml run` with zero findings, Buf lint,
-and the frozen protobuf breaking-change check.
+**Validation:** the final assessed tree passes the split repository-wide short
+race suite, `golangci-lint --config .golangci.yaml run` with zero findings, Buf
+lint, and the frozen protobuf breaking-change check. The race suite was split
+because the combined build exceeded the environment's `/tmp` quota; the
+package groups themselves pass.
 
 ---
 
@@ -35,11 +40,14 @@ The tag is still blocked by work that the short-term plan explicitly deferred:
 - **Roadmap 1.8:** the protocol/parser and concurrency surfaces listed below
   have not received the required second audit pass.
 
-The public queue API/error model and protocol-independent queue state machine
-are now complete. The next broker-core work is a versioned message envelope
-with reserved broker metadata, followed by a recoverable transition boundary
-and a capability interface that keeps experimental Raft outside the stable
-API. See [`ROADMAP.md`](./ROADMAP.md#next).
+The public queue API/error model, protocol-independent queue state machine, and
+strict v1 message envelope are now complete. There is no legacy envelope
+decoder or dual payload/message representation: every broker path uses one
+versioned envelope with typed ownership namespaces and an immutable
+reference-counted payload. The next broker-core work is a recoverable
+transition boundary, followed by a capability interface that keeps
+experimental Raft outside the stable API. See
+[`ROADMAP.md`](./ROADMAP.md#next).
 
 This assessment distinguishes **stable-core readiness** from **release
 readiness**. Completing the former is necessary and valuable; it is not a claim
@@ -711,6 +719,12 @@ codebase:
   method set is guarded too, while its concrete state machine remains private.
   Queue clients receive typed failures instead of needing to parse
   implementation error strings.
+- **The message model now has one strict ownership boundary.** Version 1 is the
+  only accepted persisted envelope schema. User metadata cannot occupy
+  broker-owned source, delivery, queue/stream, transfer, or trace namespaces;
+  protocol adapters use explicit public or trusted projections. Clones share
+  one immutable reference-counted payload while deep-copying mutable metadata,
+  and storage/session/queue interfaces state who owns each reference.
 - **Session ownership now has an explicit fencing model.** etcd transactions
   arbitrate acquisition and takeover; lease loss disconnects local sessions;
   caches are observational rather than authoritative.
@@ -735,9 +749,11 @@ The active sequence is architecture-first and API-stability-first:
 2. ~~**Move append/consume/settlement operations behind one typed queue state
    machine and a shared cross-protocol conformance suite.**~~ **Done
    2026-08-24.**
-3. **Next:** introduce a versioned message envelope with separate user and
-   broker-owned metadata namespaces.
-4. Add a recoverable transition journal/outbox for source settlement plus
+3. ~~**Introduce a versioned message envelope with separate user and
+   broker-owned metadata namespaces.**~~ **Done 2026-08-25.** The implementation
+   is strict v1 only, with no backward decoder, aliases, or parallel message
+   representation.
+4. **Next:** add a recoverable transition journal/outbox for source settlement plus
    destination append.
 5. Put experimental replication behind a capability contract, then optimize
    only measured stable paths.
