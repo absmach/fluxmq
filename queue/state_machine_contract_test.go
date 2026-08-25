@@ -118,8 +118,8 @@ func TestMQTTAndAMQPManagerAdapterContract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get final group: %v", err)
 			}
-			if final.PendingCount() != 0 || final.GetCursor().Committed != 3 {
-				t.Fatalf("final group pending=%d cursor=%+v", final.PendingCount(), final.GetCursor())
+			if final.PendingCount() != 0 || final.CursorView().Committed != 3 {
+				t.Fatalf("final group pending=%d cursor=%+v", final.PendingCount(), final.CursorView())
 			}
 		})
 	}
@@ -249,7 +249,7 @@ func runStateMachineStorageContract(t *testing.T, backend stateMachineContractBa
 	if err != nil {
 		t.Fatalf("get final group: %v", err)
 	}
-	if final.PendingCount() != 0 || final.GetCursor().Committed != 4 {
-		t.Fatalf("final group pending=%d cursor=%+v", final.PendingCount(), final.GetCursor())
+	if final.PendingCount() != 0 || final.CursorView().Committed != 4 {
+		t.Fatalf("final group pending=%d cursor=%+v", final.PendingCount(), final.CursorView())
 	}
 }

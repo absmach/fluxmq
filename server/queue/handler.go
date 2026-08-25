@@ -1102,7 +1102,7 @@ func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGrou
 		})
 	}
 
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	queueCursor := &queuev1.QueueCursor{
 		Cursor:    cursor.Cursor,
 		Committed: cursor.Committed,

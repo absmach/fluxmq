@@ -88,8 +88,8 @@ func TestDirtyKeysDistinguishSlashesInQueueNames(t *testing.T) {
 	store.mu.RUnlock()
 	assert.Equal(t, 2, dirty, "two distinct groups must occupy two dirty entries")
 
-	assert.Equal(t, uint64(4), first.GetCursor().Committed)
-	assert.Equal(t, uint64(9), second.GetCursor().Committed)
+	assert.Equal(t, uint64(4), first.CursorView().Committed)
+	assert.Equal(t, uint64(9), second.CursorView().Committed)
 }
 
 // Sync must write the groups the dirty set names and clear them, rather than
@@ -119,7 +119,7 @@ func TestSyncWritesDirtyGroupsAndClearsThem(t *testing.T) {
 	require.NoError(t, err)
 	recovered, err := reopened.Get("beta", "workers")
 	require.NoError(t, err)
-	assert.Equal(t, uint64(12), recovered.GetCursor().Cursor)
+	assert.Equal(t, uint64(12), recovered.CursorView().Cursor)
 }
 
 // A group deleted while dirty must not be resurrected by the next Sync, and

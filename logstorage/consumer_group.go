@@ -430,19 +430,22 @@ func (s *ConsumerGroupStateStore) UpdateCursor(queueName, groupID string, cursor
 }
 
 // GetCursor retrieves cursor state for a queue.
-func (s *ConsumerGroupStateStore) GetCursor(queueName, groupID string) (*types.QueueCursor, error) {
+//
+// The cursor is returned by value: handing out the group's live pointer let
+// callers write group state without the group's lock.
+func (s *ConsumerGroupStateStore) GetCursor(queueName, groupID string) (types.QueueCursor, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	groups, ok := s.groups[queueName]
 	if !ok {
-		return nil, ErrGroupNotFound
+		return types.QueueCursor{}, ErrGroupNotFound
 	}
 
 	state, ok := groups[groupID]
 	if !ok {
-		return nil, ErrGroupNotFound
+		return types.QueueCursor{}, ErrGroupNotFound
 	}
 
-	return state.GetCursor(), nil
+	return state.CursorView(), nil
 }

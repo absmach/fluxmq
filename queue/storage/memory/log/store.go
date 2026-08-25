@@ -659,9 +659,7 @@ func (s *Store) UpdateCursor(ctx context.Context, queueName, groupID string, cur
 		return err
 	}
 
-	c := group.GetCursor()
-	c.Cursor = cursor
-	group.UpdatedAt = time.Now()
+	group.SetCursorPosition(cursor)
 
 	return nil
 }
@@ -673,9 +671,7 @@ func (s *Store) UpdateCommitted(ctx context.Context, queueName, groupID string, 
 		return err
 	}
 
-	c := group.GetCursor()
-	c.Committed = committed
-	group.UpdatedAt = time.Now()
+	group.SetCommitted(committed)
 
 	return nil
 }

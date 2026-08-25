@@ -94,14 +94,14 @@ func TestAdapter_StreamCursorAndCommitDoNotRegress(t *testing.T) {
 
 	got, err := adapter.GetConsumerGroup(ctx, "events", "streamers")
 	require.NoError(t, err)
-	assert.Equal(t, uint64(7), got.GetCursor().Cursor)
+	assert.Equal(t, uint64(7), got.CursorView().Cursor)
 
 	require.NoError(t, adapter.UpdateCommitted(ctx, "events", "streamers", 7))
 
 	got, err = adapter.GetConsumerGroup(ctx, "events", "streamers")
 	require.NoError(t, err)
-	assert.Equal(t, uint64(7), got.GetCursor().Cursor)
-	assert.Equal(t, uint64(7), got.GetCursor().Committed)
+	assert.Equal(t, uint64(7), got.CursorView().Cursor)
+	assert.Equal(t, uint64(7), got.CursorView().Committed)
 }
 
 func TestAdapter_UpdateQueueRefreshesTopicIndex(t *testing.T) {

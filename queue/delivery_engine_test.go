@@ -767,7 +767,7 @@ func TestDeliverStreamDoesNotAdvanceCursorForMissingLocalTarget(t *testing.T) {
 	if updated.GetConsumer("c1") != nil {
 		t.Fatal("expected disconnected consumer to be removed")
 	}
-	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+	if cursor := updated.CursorView().Cursor; cursor != 0 {
 		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
 	}
 }
@@ -803,7 +803,7 @@ func TestDeliverStreamKeepsConsumerForQueueableOfflineTarget(t *testing.T) {
 	if updated.GetConsumer("c1") == nil {
 		t.Fatal("expected queueable offline consumer to remain registered")
 	}
-	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+	if cursor := updated.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
 	}
 }
@@ -839,7 +839,7 @@ func TestDeliverStreamCommitsCursorAfterSuccessfulDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get group failed: %v", err)
 	}
-	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+	if cursor := updated.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
 	}
 }
@@ -875,7 +875,7 @@ func TestDeliverStreamRemovesConsumerOnClientNotConnectedError(t *testing.T) {
 	if updated.GetConsumer("c1") != nil {
 		t.Fatal("expected stale consumer to be removed")
 	}
-	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+	if cursor := updated.CursorView().Cursor; cursor != 0 {
 		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
 	}
 }
@@ -917,7 +917,7 @@ func TestDeliverStreamRemovesRemoteConsumerOnBatchClientNotConnectedError(t *tes
 	if updated.GetConsumer(testRemoteConsumerID) != nil {
 		t.Fatal("expected stale remote consumer to be removed")
 	}
-	if cursor := updated.GetCursor().Cursor; cursor != 0 {
+	if cursor := updated.CursorView().Cursor; cursor != 0 {
 		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
 	}
 	if len(remote.removed) != 1 {
@@ -961,7 +961,7 @@ func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccess
 	if updated.GetConsumer(testRemoteConsumerID) == nil {
 		t.Fatal("expected remote consumer to remain registered")
 	}
-	if cursor := updated.GetCursor().Cursor; cursor != 1 {
+	if cursor := updated.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor to advance to 1, got %d", cursor)
 	}
 	if len(remote.removed) != 0 {

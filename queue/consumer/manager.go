@@ -413,7 +413,7 @@ func (m *Manager) CommitStreamCursor(ctx context.Context, queueName, groupID str
 }
 
 func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.ConsumerGroup, filter *Filter, limit int) ([]*message.Envelope, uint64, error) {
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	tail, err := m.queueStore.Tail(ctx, group.QueueName)
 	if err != nil {
 		return nil, cursor.Cursor, err
@@ -461,7 +461,7 @@ func (m *Manager) peekBatchStreamLocked(ctx context.Context, group *types.Consum
 }
 
 func (m *Manager) updateStreamCursorLocked(ctx context.Context, group *types.ConsumerGroup, newCursor uint64) error {
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	if newCursor <= cursor.Cursor {
 		return nil
 	}
@@ -521,7 +521,7 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 		}
 	}
 
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 
 	// Get log tail
 	tail, err := m.queueStore.Tail(ctx, group.QueueName)
@@ -904,19 +904,23 @@ func releaseMessages(envelopes []*message.Envelope) {
 
 // advanceCommitted updates the committed offset to the minimum pending offset.
 func (m *Manager) advanceCommitted(ctx context.Context, group *types.ConsumerGroup) error {
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 
 	// Find minimum pending offset
 	minOffset, found := group.MinPendingOffset()
 
-	if !found {
+	committed := cursor.Committed
+	switch {
+	case !found:
 		// No pending entries - committed = cursor
-		cursor.Committed = cursor.Cursor
-	} else if minOffset > cursor.Committed {
-		cursor.Committed = minOffset
+		committed = cursor.Cursor
+	case minOffset > cursor.Committed:
+		committed = minOffset
 	}
 
-	return m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, cursor.Committed)
+	// The store owns the write; mutating the cursor here as well would race
+	// every reader of the group.
+	return m.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, committed)
 }
 
 // GetPendingCount returns the number of pending messages for a group.
@@ -936,7 +940,7 @@ func (m *Manager) GetLag(ctx context.Context, queueName, groupID string) (uint64
 		return 0, err
 	}
 
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 
 	tail, err := m.queueStore.Tail(ctx, queueName)
 	if err != nil {
@@ -959,7 +963,7 @@ func (m *Manager) GetCommittedOffset(ctx context.Context, queueName, groupID str
 		return 0, err
 	}
 
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	return cursor.Committed, nil
 }
 
@@ -979,7 +983,7 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 		return ErrCommitOffsetOnlyForStreamMode
 	}
 
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	if offset > cursor.Cursor {
 		return ErrInvalidOffset
 	}
@@ -1004,7 +1008,7 @@ func (m *Manager) GetMinCommittedOffset(ctx context.Context, queueName string) (
 	first := true
 
 	for _, group := range groups {
-		cursor := group.GetCursor()
+		cursor := group.CursorView()
 		if first || cursor.Committed < minCommitted {
 			minCommitted = cursor.Committed
 			first = false
@@ -1029,7 +1033,7 @@ func (m *Manager) GetMinCommittedOffsetByMode(ctx context.Context, queueName str
 		if mode != "" && group.Mode != mode {
 			continue
 		}
-		cursor := group.GetCursor()
+		cursor := group.CursorView()
 		if first || cursor.Committed < minCommitted {
 			minCommitted = cursor.Committed
 			first = false

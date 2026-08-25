@@ -263,7 +263,7 @@ func (s *stateMachine) Consume(ctx context.Context, command ConsumeCommand) (Con
 		releaseEnvelopes(messages)
 		return ConsumeOutcome{}, err
 	}
-	return ConsumeOutcome{Messages: messages, Mode: types.GroupModeQueue, NextOffset: fresh.GetCursor().Cursor}, nil
+	return ConsumeOutcome{Messages: messages, Mode: types.GroupModeQueue, NextOffset: fresh.CursorView().Cursor}, nil
 }
 
 // CommitConsume advances a stream cursor after an adapter confirms delivery.
@@ -503,7 +503,7 @@ func (s *stateMachine) ackStream(ctx context.Context, group *types.ConsumerGroup
 	if !group.AutoCommit {
 		return nil
 	}
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	next := offset + 1
 	if next > cursor.Cursor {
 		return consumer.ErrInvalidOffset
@@ -522,7 +522,7 @@ func (s *stateMachine) partialSettlement(ctx context.Context, queueName, groupID
 		return outcome, cause
 	}
 	if group, err := s.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
-		cursor := group.GetCursor()
+		cursor := group.CursorView()
 		outcome.Cursor = cursor.Cursor
 		outcome.Committed = cursor.Committed
 	}
@@ -540,7 +540,7 @@ func (s *stateMachine) finishSettlement(ctx context.Context, queueName, groupID 
 	if err != nil {
 		return outcome, err
 	}
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	outcome.Cursor = cursor.Cursor
 	outcome.Committed = cursor.Committed
 	return outcome, nil

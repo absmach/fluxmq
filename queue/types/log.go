@@ -93,18 +93,21 @@ func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroup {
 	}
 }
 
-// GetCursor returns the queue cursor, creating if needed.
-func (g *ConsumerGroup) GetCursor() *QueueCursor {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+// CursorView returns a copy of the group's cursor positions.
+//
+// It is a copy rather than the live pointer because a pointer escaping the lock
+// is a write nobody can see coming: callers mutated it freely, racing every
+// reader of the group and every encode of it. Advancing a cursor goes through
+// SetCursor, SetCursorPosition, SetCommitted or AdvanceCommitted, each of which
+// takes the group's lock.
+func (g *ConsumerGroup) CursorView() QueueCursor {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 
 	if g.Cursor == nil {
-		g.Cursor = &QueueCursor{
-			Cursor:    0,
-			Committed: 0,
-		}
+		return QueueCursor{}
 	}
-	return g.Cursor
+	return *g.Cursor
 }
 
 // SetCursor atomically updates both cursor positions.
@@ -133,6 +136,18 @@ func (g *ConsumerGroup) SetCursorPosition(cursor uint64) {
 		g.Cursor = &QueueCursor{}
 	}
 	g.Cursor.Cursor = cursor
+	g.UpdatedAt = time.Now()
+}
+
+// SetCommitted records the committed safe point, leaving the cursor alone.
+func (g *ConsumerGroup) SetCommitted(committed uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	g.Cursor.Committed = committed
 	g.UpdatedAt = time.Now()
 }
 

@@ -336,9 +336,7 @@ func (s *mockGroupStore) UpdateCursor(ctx context.Context, queueName, groupID st
 		return storage.ErrConsumerNotFound
 	}
 
-	group := s.groups[queueName][groupID]
-	pc := group.GetCursor()
-	pc.Cursor = cursor
+	s.groups[queueName][groupID].SetCursorPosition(cursor)
 	return nil
 }
 
@@ -350,9 +348,7 @@ func (s *mockGroupStore) UpdateCommitted(ctx context.Context, queueName, groupID
 		return storage.ErrConsumerNotFound
 	}
 
-	group := s.groups[queueName][groupID]
-	pc := group.GetCursor()
-	pc.Committed = committed
+	s.groups[queueName][groupID].SetCommitted(committed)
 	return nil
 }
 
@@ -1065,7 +1061,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	if count := group.PendingCount(); count != 0 {
 		t.Fatalf("expected no pending entries, got %d", count)
 	}
-	if cursor := group.GetCursor().Cursor; cursor != 1 {
+	if cursor := group.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", cursor)
 	}
 }
@@ -1356,10 +1352,10 @@ func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if cursor := stored.GetCursor().Cursor; cursor != 1 {
+	if cursor := stored.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", cursor)
 	}
-	if committed := stored.GetCursor().Committed; committed != 0 {
+	if committed := stored.CursorView().Committed; committed != 0 {
 		t.Fatalf("expected committed offset 0, got %d", committed)
 	}
 }
@@ -1393,10 +1389,10 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if c := group.GetCursor().Cursor; c != 1 {
+	if c := group.CursorView().Cursor; c != 1 {
 		t.Fatalf("expected cursor 1 after reject, got %d", c)
 	}
-	if c := group.GetCursor().Committed; c != 1 {
+	if c := group.CursorView().Committed; c != 1 {
 		t.Fatalf("expected committed 1 after reject, got %d", c)
 	}
 }
@@ -2352,10 +2348,10 @@ func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if cursor := stored.GetCursor().Cursor; cursor != 7 {
+	if cursor := stored.CursorView().Cursor; cursor != 7 {
 		t.Fatalf("expected cursor 7 to be preserved, got %d", cursor)
 	}
-	if committed := stored.GetCursor().Committed; committed != 7 {
+	if committed := stored.CursorView().Committed; committed != 7 {
 		t.Fatalf("expected committed 7 to be preserved, got %d", committed)
 	}
 }

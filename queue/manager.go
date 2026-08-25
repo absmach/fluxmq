@@ -2286,7 +2286,7 @@ func (m *Manager) rejectStream(ctx context.Context, queueName string, group *typ
 		return err
 	}
 
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	next := offset + 1
 	if next > cursor.Cursor {
 		if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, next); err != nil {
