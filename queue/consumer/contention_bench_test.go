@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/message"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
@@ -117,6 +118,88 @@ func BenchmarkConsumerGroupContention(b *testing.B) {
 // that removes it.
 func BenchmarkConsumerSingleGroupContention(b *testing.B) {
 	manager, names := benchFixture(b)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if err := manager.CommitOffset(ctx, names[0], "workers", 0); err != nil {
+				b.Errorf("commit offset: %v", err)
+				return
+			}
+		}
+	})
+}
+
+// benchDurableFixture is benchFixture against the persistent log store, so the
+// critical section is the storage work a deployment actually performs rather
+// than a map lookup. The lock overhead is fixed; what changes is what it is
+// being compared against.
+func benchDurableFixture(b *testing.B) (*Manager, []string) {
+	b.Helper()
+
+	ctx := context.Background()
+	store, err := logstorage.NewAdapter(b.TempDir(), logstorage.DefaultAdapterConfig())
+	if err != nil {
+		b.Fatalf("create adapter: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			b.Errorf("close adapter: %v", err)
+		}
+	})
+
+	names := make([]string, benchGroups)
+	for i := range names {
+		name := "bench-queue-" + strconv.Itoa(i)
+		names[i] = name
+
+		if err := store.CreateQueue(ctx, types.DefaultQueueConfig(name, name+"/#")); err != nil {
+			b.Fatalf("create queue: %v", err)
+		}
+		if _, err := store.Append(ctx, name, message.New(name, []byte("payload"))); err != nil {
+			b.Fatalf("append: %v", err)
+		}
+		group := types.NewConsumerGroupState(name, "workers", "")
+		group.Mode = types.GroupModeStream
+		if err := store.CreateConsumerGroup(ctx, group); err != nil {
+			b.Fatalf("create group: %v", err)
+		}
+	}
+
+	manager := NewManager(store, store, Config{
+		VisibilityTimeout:  time.Minute,
+		MaxDeliveryCount:   5,
+		ClaimBatchSize:     10,
+		StealBatchSize:     5,
+		AutoCommitInterval: 0,
+		MaxPELSize:         1000,
+	})
+
+	return manager, names
+}
+
+func BenchmarkConsumerGroupContentionDurable(b *testing.B) {
+	manager, names := benchDurableFixture(b)
+	ctx := context.Background()
+
+	var next atomic.Uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			name := names[next.Add(1)%benchGroups]
+			if err := manager.CommitOffset(ctx, name, "workers", 0); err != nil {
+				b.Errorf("commit offset: %v", err)
+				return
+			}
+		}
+	})
+}
+
+func BenchmarkConsumerSingleGroupContentionDurable(b *testing.B) {
+	manager, names := benchDurableFixture(b)
 	ctx := context.Background()
 
 	b.ReportAllocs()
