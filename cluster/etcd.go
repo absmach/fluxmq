@@ -652,15 +652,15 @@ func (c *EtcdCluster) loadRetainedCache() error {
 	// entries whose delete events were missed.
 	fresh := make(map[string]*message.Envelope, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
-		var msg message.Envelope
-		if err := json.Unmarshal(kv.Value, &msg); err != nil {
+		msg, err := message.UnmarshalBinary(kv.Value)
+		if err != nil {
 			c.logger.Warn("failed to unmarshal retained message during cache load", slog.String("error", err.Error()))
 			continue
 		}
 
 		// Extract topic from key (remove prefix)
 		topic := strings.TrimPrefix(string(kv.Key), retainedPrefix)
-		fresh[topic] = &msg
+		fresh[topic] = msg
 	}
 
 	c.retainedCacheMu.Lock()
@@ -713,13 +713,13 @@ func (c *EtcdCluster) watchRetained() {
 
 					switch event.Type {
 					case clientv3.EventTypePut:
-						var msg message.Envelope
-						if err := json.Unmarshal(event.Kv.Value, &msg); err != nil {
+						msg, err := message.UnmarshalBinary(event.Kv.Value)
+						if err != nil {
 							c.logger.Warn("failed to unmarshal retained message", slog.String("error", err.Error()))
 							continue
 						}
 						message.Release(c.retainedCache[topic])
-						c.retainedCache[topic] = &msg
+						c.retainedCache[topic] = msg
 
 					case clientv3.EventTypeDelete:
 						message.Release(c.retainedCache[topic])
@@ -1462,7 +1462,7 @@ func (s *etcdRetainedStore) Set(ctx context.Context, topic string, msg *message.
 		return s.Delete(ctx, topic)
 	}
 
-	data, err := json.Marshal(msg)
+	data, err := message.MarshalBinary(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal retained message: %w", err)
 	}
@@ -1483,12 +1483,12 @@ func (s *etcdRetainedStore) Get(ctx context.Context, topic string) (*message.Env
 		return nil, storage.ErrNotFound
 	}
 
-	var msg message.Envelope
-	if err := json.Unmarshal(resp.Kvs[0].Value, &msg); err != nil {
+	msg, err := message.UnmarshalBinary(resp.Kvs[0].Value)
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal retained message: %w", err)
 	}
 
-	return &msg, nil
+	return msg, nil
 }
 
 func (s *etcdRetainedStore) Delete(ctx context.Context, topic string) error {

@@ -275,7 +275,7 @@ func TestRetainedWatchSeesEarlyPut(t *testing.T) {
 	topic := "gap/retained"
 	msg := message.NewDelivery(topic, []byte("hello"), 1, false)
 	defer msg.ReleasePayload()
-	data, err := json.Marshal(msg)
+	data, err := message.MarshalBinary(msg)
 	require.NoError(t, err)
 
 	_, err = c.client.Put(ctx, retainedPrefix+topic, string(data))

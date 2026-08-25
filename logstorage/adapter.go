@@ -5,7 +5,6 @@ package logstorage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -232,25 +231,10 @@ func (a *Adapter) queueConfigExists(queueName string) error {
 	return nil
 }
 
-type persistedQueueEnvelope struct {
-	Version message.Version        `json:"version"`
-	Topic   string                 `json:"topic"`
-	User    message.UserMetadata   `json:"user,omitempty"`
-	Broker  message.BrokerMetadata `json:"broker,omitempty"`
-}
-
 func encodeMessage(envelope *message.Envelope) ([]byte, []byte, map[string][]byte, error) {
-	if err := envelope.Validate(); err != nil {
-		return nil, nil, nil, err
-	}
-	metadata, err := json.Marshal(persistedQueueEnvelope{
-		Version: envelope.Version,
-		Topic:   envelope.Topic,
-		User:    envelope.User,
-		Broker:  envelope.Broker,
-	})
+	metadata, err := message.MarshalMetadata(envelope)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("marshal queue envelope metadata: %w", err)
+		return nil, nil, nil, fmt.Errorf("encode queue envelope metadata: %w", err)
 	}
 	return envelope.PayloadBytes(), envelope.User.Key, map[string][]byte{headerEnvelope: metadata}, nil
 }
@@ -746,18 +730,10 @@ func (a *Adapter) syncPELFromStore(queueName, groupID string, group *types.Consu
 }
 
 func logMessageToEnvelope(msg *Message) (*message.Envelope, error) {
-	var metadata persistedQueueEnvelope
-	if err := json.Unmarshal(msg.Headers[headerEnvelope], &metadata); err != nil {
+	envelope, err := message.UnmarshalMetadata(msg.Headers[headerEnvelope], msg.Value, msg.Key)
+	if err != nil {
 		return nil, fmt.Errorf("decode queue envelope metadata at offset %d: %w", msg.Offset, err)
 	}
-	if metadata.Version != message.Version1 {
-		return nil, fmt.Errorf("%w: %d", message.ErrUnsupportedVersion, metadata.Version)
-	}
-	envelope := message.New(metadata.Topic, msg.Value)
-	envelope.Version = metadata.Version
-	envelope.User = metadata.User
-	envelope.User.Key = msg.Key
-	envelope.Broker = metadata.Broker
 	envelope.Broker.Queue.Offset = msg.Offset
 	if envelope.Broker.Queue.CreatedAt.IsZero() {
 		envelope.Broker.Queue.CreatedAt = msg.Timestamp

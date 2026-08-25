@@ -152,7 +152,7 @@ func TestAdapter_ExpiresAtRoundtrip(t *testing.T) {
 
 	got, err := adapter.Read(ctx, "q1", offset)
 	require.NoError(t, err)
-	assert.Equal(t, expiry, got.Broker.Queue.ExpiresAt)
+	assert.True(t, expiry.Equal(got.Broker.Queue.ExpiresAt))
 }
 
 func TestAdapter_ExpiresAtZeroNotPersisted(t *testing.T) {
@@ -195,7 +195,7 @@ func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
 
 	got0, err := adapter.Read(ctx, "q1", 0)
 	require.NoError(t, err)
-	assert.Equal(t, expiry, got0.Broker.Queue.ExpiresAt)
+	assert.True(t, expiry.Equal(got0.Broker.Queue.ExpiresAt))
 
 	got1, err := adapter.Read(ctx, "q1", 1)
 	require.NoError(t, err)

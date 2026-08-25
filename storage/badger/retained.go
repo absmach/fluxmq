@@ -5,7 +5,6 @@ package badger
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/absmach/fluxmq/message"
@@ -42,7 +41,7 @@ func (r *RetainedStore) Set(ctx context.Context, topic string, msg *message.Enve
 	}
 
 	key := []byte("retained:" + topic)
-	data, err := json.Marshal(msg)
+	data, err := message.MarshalBinary(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal retained message: %w", err)
 	}
@@ -67,8 +66,8 @@ func (r *RetainedStore) Get(ctx context.Context, topic string) (*message.Envelop
 		}
 
 		return item.Value(func(val []byte) error {
-			msg = &message.Envelope{}
-			return json.Unmarshal(val, msg)
+			msg, err = message.UnmarshalBinary(val)
+			return err
 		})
 	})
 	if err != nil {
@@ -107,11 +106,11 @@ func (r *RetainedStore) Match(ctx context.Context, filter string) ([]*message.En
 			// Check if topic matches the filter
 			if topicMatchesFilter(topic, filter) {
 				err := item.Value(func(val []byte) error {
-					var msg message.Envelope
-					if err := json.Unmarshal(val, &msg); err != nil {
+					msg, err := message.UnmarshalBinary(val)
+					if err != nil {
 						return err
 					}
-					matched = append(matched, &msg)
+					matched = append(matched, msg)
 					return nil
 				})
 				if err != nil {

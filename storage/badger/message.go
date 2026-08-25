@@ -4,7 +4,6 @@
 package badger
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/absmach/fluxmq/message"
@@ -37,7 +36,7 @@ func newMessageStore(db *db) *MessageStore {
 
 // Store stores a message with the given key.
 func (m *MessageStore) Store(key string, msg *message.Envelope) error {
-	data, err := json.Marshal(msg)
+	data, err := message.MarshalBinary(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
@@ -61,8 +60,8 @@ func (m *MessageStore) Get(key string) (*message.Envelope, error) {
 		}
 
 		return item.Value(func(val []byte) error {
-			msg = &message.Envelope{}
-			return json.Unmarshal(val, msg)
+			msg, err = message.UnmarshalBinary(val)
+			return err
 		})
 	})
 	if err != nil {
@@ -93,11 +92,11 @@ func (m *MessageStore) List(prefix string) ([]*message.Envelope, error) {
 			item := it.Item()
 
 			err := item.Value(func(val []byte) error {
-				var msg message.Envelope
-				if err := json.Unmarshal(val, &msg); err != nil {
+				msg, err := message.UnmarshalBinary(val)
+				if err != nil {
 					return err
 				}
-				messages = append(messages, &msg)
+				messages = append(messages, msg)
 				return nil
 			})
 			if err != nil {
