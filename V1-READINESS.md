@@ -64,10 +64,17 @@ It is true now, and of the current tree rather than of the assessed tag:
   redelivery count and its TTL.
 - One schema of record. `proto/message/v1/envelope.proto` states the stored
   format, and the format is pinned three ways: a conformance pair holding the
-  hand-written codec and the schema against each other field for field, a golden
+  hand-written codec and the schema against each other field for field, a
+  reflection check that rejects unpopulated or unknown schema fields, a golden
   encoding that fails on any byte change, and its own breaking-change baseline
-  beside the public and cluster ones. Until that existed the persisted format
-  was defined only by two Go switch statements kept aligned by hand.
+  beside the public and cluster ones. Protocol and queue lifecycle values are
+  compact validated enums rather than unchecked persisted strings. Until that
+  existed the format was defined only by two Go switch statements kept aligned
+  by hand.
+- One frozen in-process API. `api/compat/go-message-v1.txt` pins the envelope,
+  metadata values, methods, and constructors. Mutable maps, slices, pointer
+  optionals, and the raw payload-buffer field are no longer exposed: clones
+  share immutable metadata and writers replace it through copy-on-write values.
 
 The next broker-core work is a recoverable transition boundary, followed by a
 capability interface that keeps experimental Raft outside the stable API. See
@@ -745,18 +752,17 @@ codebase:
   explicit drop on overflow (`delivery.go:134`). This is the failure mode that
   OOMs most brokers, and it is handled.
 - **Authorization fails closed** on callout error (`authcallout/http.go:143`).
-- **Public contract drift is mechanically guarded.** CI compares the current
-  protobufs to `api/compat/proto-v1.binpb`; exact Go-interface and YAML-schema
-  tests fail on unreviewed shape changes. The exact `queue.CommandProcessor`
-  method set is guarded too, while its concrete state machine remains private.
-  Queue clients receive typed failures instead of needing to parse
-  implementation error strings.
+- **Contract drift is mechanically guarded.** CI compares the public, cluster,
+  and stored-message protobufs to separate reviewed descriptor images; exact
+  queue/message Go-API and YAML-schema tests fail on unreviewed shape changes.
+  The concrete queue state machine remains private, and queue clients receive
+  typed failures instead of needing to parse implementation error strings.
 - **The message model now has one strict ownership boundary.** Version 1 is the
   only accepted persisted envelope schema. User metadata cannot occupy
   broker-owned source, delivery, queue/stream, transfer, or trace namespaces;
   protocol adapters use explicit public or trusted projections. Clones share
-  one immutable reference-counted payload while deep-copying mutable metadata,
-  and storage/session/queue interfaces state who owns each reference.
+  one immutable reference-counted payload and immutable copy-on-write metadata
+  in O(1), and storage/session/queue interfaces state who owns each reference.
 - **Session ownership now has an explicit fencing model.** etcd transactions
   arbitrate acquisition and takeover; lease loss disconnects local sessions;
   caches are observational rather than authoritative.
@@ -782,9 +788,10 @@ The active sequence is architecture-first and API-stability-first:
    machine and a shared cross-protocol conformance suite.**~~ **Done
    2026-08-24.**
 3. ~~**Introduce a versioned message envelope with separate user and
-   broker-owned metadata namespaces.**~~ **Done 2026-08-25.** The implementation
+   broker-owned metadata namespaces.**~~ **Done 2026-08-26.** The implementation
    is strict v1 only, with no backward decoder, aliases, or parallel message
-   representation.
+   representation. Its persisted enums, immutable metadata API, schema
+   coverage, golden bytes, protobuf baseline, and Go baseline are pinned.
 4. **Next:** add a recoverable transition journal/outbox for source settlement plus
    destination append.
 5. Put experimental replication behind a capability contract, then optimize
