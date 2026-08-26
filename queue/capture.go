@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/absmach/fluxmq/queue/types"
+	"github.com/absmach/fluxmq/message"
 )
 
 const (
@@ -44,11 +44,13 @@ const (
 // nil — the per-publish cluster forward for queues this node does not know.
 //
 // Jobs are per target rather than per publish so that a lane can be chosen by
-// queue name. The publish they share is already detached from the protocol
-// broker's buffers by the time it is enqueued, and the workers only read it.
+// queue name. Each job owns its envelope: the protocol broker's buffers are
+// gone by the time a worker runs, so the envelope is detached from them before
+// it is enqueued. The dispatcher releases it on every path out — applied,
+// drained at shutdown, or dropped — so a job that never runs is not a leak.
 type captureJob struct {
-	publish types.PublishRequest
-	target  *queuePublishTarget
+	envelope *message.Envelope
+	target   *queuePublishTarget
 }
 
 // captureDispatcher moves the storage half of topic capture off the publish
@@ -185,6 +187,14 @@ func (d *captureDispatcher) enqueue(job captureJob) bool {
 // saturated backlog would otherwise write a log line per publish — the very
 // thing dispatching capture exists to keep off that path.
 func (d *captureDispatcher) drop(job captureJob, reason string) {
+	// Every loss path funnels through here, so this is where a dropped job's
+	// envelope goes back to the pool.
+	topic := ""
+	if job.envelope != nil {
+		topic = job.envelope.Topic
+		message.Release(job.envelope)
+	}
+
 	if d.metrics != nil {
 		d.metrics.RecordCaptureDropped()
 	}
@@ -199,7 +209,7 @@ func (d *captureDispatcher) drop(job captureJob, reason string) {
 	d.logger.Warn("capture job dropped",
 		slog.String("reason", reason),
 		slog.String("queue", queueName),
-		slog.String("topic", job.publish.Topic))
+		slog.String("topic", topic))
 }
 
 func (d *captureDispatcher) shouldWarn() bool {

@@ -44,20 +44,15 @@ func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 }
 
 type mockAMQP1QueueLinkManager struct {
-	publishCh  chan qtypes.PublishRequest
+	publishCh  chan *coremessage.Envelope
 	publishErr error
 }
 
-func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
+// The envelope is borrowed for the call, so the mock takes its own reference
+// before handing it to a reader on another goroutine.
+func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, msg *coremessage.Envelope) error {
 	if m.publishCh != nil {
-		cloned := publish
-		if len(publish.Properties) > 0 {
-			cloned.Properties = make(map[string]string, len(publish.Properties))
-			for k, v := range publish.Properties {
-				cloned.Properties[k] = v
-			}
-		}
-		m.publishCh <- cloned
+		m.publishCh <- msg.Clone()
 	}
 	return m.publishErr
 }
@@ -692,7 +687,7 @@ func readDeliveredMessage(t *testing.T, c *amqpconn.Connection) *message.Message
 }
 
 func TestQueueTransferCarriesClientID(t *testing.T) {
-	mockQM := &mockAMQP1QueueLinkManager{publishCh: make(chan qtypes.PublishRequest, 1)}
+	mockQM := &mockAMQP1QueueLinkManager{publishCh: make(chan *coremessage.Envelope, 1)}
 	b := New(nil, nil, nil)
 	b.queueLinkManager = mockQM
 	serverConn, clientConn := net.Pipe()
@@ -746,10 +741,10 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 
 	select {
 	case publish := <-mockQM.publishCh:
-		require.Equal(t, PrefixedClientID("sender-client"), publish.Source.ClientID)
-		require.Equal(t, coremessage.ProtocolAMQP1, publish.Source.Protocol)
-		require.Equal(t, testTraceValue, publish.Properties[testTraceKey])
-		require.NotContains(t, publish.Properties, coremessage.PropertyClientID)
+		require.Equal(t, PrefixedClientID("sender-client"), publish.Broker.Source.ClientID)
+		require.Equal(t, coremessage.ProtocolAMQP1, publish.Broker.Source.Protocol)
+		require.Equal(t, testTraceValue, publish.User.Properties[testTraceKey])
+		require.NotContains(t, publish.User.Properties, coremessage.PropertyClientID)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for queue publish")
 	}

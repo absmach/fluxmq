@@ -58,10 +58,7 @@ func TestCaptureDoesNotBlockThePublishPath(t *testing.T) {
 
 	// Publish once and wait for the worker to be stuck inside the store, so the
 	// stall is real rather than assumed by timing.
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 		t.Fatalf("PublishToMatchingQueues failed: %v", err)
 	}
 	select {
@@ -76,10 +73,7 @@ func TestCaptureDoesNotBlockThePublishPath(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range 100 {
-			if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-				Topic:   testCapturedTopic,
-				Payload: []byte("payload"),
-			}); err != nil {
+			if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 				t.Errorf("PublishToMatchingQueues failed: %v", err)
 				return
 			}
@@ -122,10 +116,7 @@ func TestCaptureDropsAndCountsWhenBacklogIsFull(t *testing.T) {
 	})
 
 	publish := func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	}
@@ -166,10 +157,7 @@ func TestCapturePreservesPerQueueOrder(t *testing.T) {
 
 	flushCapture(t, mgr, func() {
 		for i := range messages {
-			if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-				Topic:   testCapturedTopic,
-				Payload: []byte{byte(i % 256)},
-			}); err != nil {
+			if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte{byte(i % 256)})); err != nil {
 				t.Fatalf("PublishToMatchingQueues failed: %v", err)
 			}
 		}
@@ -228,10 +216,7 @@ func TestCaptureAccountsForEveryJobAcrossShutdown(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range perPublisher {
-				if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-					Topic:   testCapturedTopic,
-					Payload: []byte("payload"),
-				}); err != nil {
+				if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 					t.Errorf("PublishToMatchingQueues failed: %v", err)
 					return
 				}
@@ -270,10 +255,7 @@ func TestCaptureRefusesAndCountsJobsAfterStop(t *testing.T) {
 
 	const after = 5
 	for range after {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	}
@@ -307,10 +289,7 @@ func TestCaptureStopIsBoundedByDrainTimeout(t *testing.T) {
 	mgr.capture.Start(ctx)
 	t.Cleanup(func() { close(blocking.release) })
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 		t.Fatalf("PublishToMatchingQueues failed: %v", err)
 	}
 	select {
@@ -361,10 +340,7 @@ func TestManagerStopReportsCaptureStillUsingTheStore(t *testing.T) {
 	// inside the store while Stop is examined.
 	t.Cleanup(func() { close(blocking.release) })
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 		t.Fatalf("PublishToMatchingQueues failed: %v", err)
 	}
 	select {

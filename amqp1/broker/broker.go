@@ -17,7 +17,6 @@ import (
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
 	coremessage "github.com/absmach/fluxmq/message"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
 type queueLinkManager interface {
@@ -112,17 +111,14 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// A capture failure never fails the publish: see
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueLinkManager.(corebroker.TopicQueuePublisher); ok {
-		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-			Source: coremessage.SourceMetadata{
-				ClientID:   props[coremessage.PropertyClientID],
-				ExternalID: props[coremessage.PropertyExternalID],
-				Protocol:   coremessage.Protocol(props[coremessage.PropertyProtocol]),
-			},
-			Trace:      coremessage.TraceFromProperties(props),
-			Topic:      topic,
-			Payload:    payload,
-			Properties: coremessage.FilterUserProperties(props),
-		}); err != nil {
+		captured := queuePublishEnvelope(topic, payload, props, coremessage.SourceMetadata{
+			ClientID:   props[coremessage.PropertyClientID],
+			ExternalID: props[coremessage.PropertyExternalID],
+			Protocol:   coremessage.Protocol(props[coremessage.PropertyProtocol]),
+		})
+		err := publisher.PublishToMatchingQueues(ctx, captured)
+		coremessage.Release(captured)
+		if err != nil {
 			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
 	}
@@ -344,4 +340,17 @@ func PrefixedClientID(containerID string) string {
 // IsAMQPClient checks if a client ID belongs to an AMQP 1.0 client.
 func IsAMQPClient(clientID string) bool {
 	return corebroker.IsAMQP1Client(clientID)
+}
+
+// queuePublishEnvelope builds the envelope an AMQP 1.0 publish hands to the
+// queue manager. The manager borrows it, so the caller releases it once the
+// publish returns.
+func queuePublishEnvelope(
+	topic string, payload []byte, props map[string]string, source coremessage.SourceMetadata,
+) *coremessage.Envelope {
+	envelope := coremessage.New(topic, payload)
+	envelope.Broker.Source = source
+	envelope.Broker.Trace = coremessage.TraceFromProperties(props)
+	envelope.User.Properties = coremessage.FilterUserProperties(props)
+	return envelope
 }

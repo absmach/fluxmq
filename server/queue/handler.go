@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/absmach/fluxmq/message"
 	coremessage "github.com/absmach/fluxmq/message"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
@@ -203,14 +204,12 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.AppendRequest]) (*connect.Response[queuev1.AppendResponse], error) {
 	msg := req.Msg
 
+	envelope := appendEnvelope(msg.QueueName, msg.Value, msg.Key, msg.Headers)
+	defer message.Release(envelope)
+
 	outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 		QueueName: msg.QueueName,
-		Messages: []types.PublishRequest{{
-			Topic:   msg.QueueName,
-			Payload: msg.Value,
-			Key:     msg.Key,
-			Headers: msg.Headers,
-		}},
+		Envelopes: []*message.Envelope{envelope},
 	})
 	if err != nil {
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -231,19 +230,19 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errEmptyBatch)
 	}
 
-	publishes := make([]types.PublishRequest, len(msg.Messages))
+	envelopes := make([]*message.Envelope, len(msg.Messages))
 	for i, entry := range msg.Messages {
-		publishes[i] = types.PublishRequest{
-			Topic:   msg.QueueName,
-			Payload: entry.Value,
-			Key:     entry.Key,
-			Headers: entry.Headers,
-		}
+		envelopes[i] = appendEnvelope(msg.QueueName, entry.Value, entry.Key, entry.Headers)
 	}
+	defer func() {
+		for _, envelope := range envelopes {
+			message.Release(envelope)
+		}
+	}()
 
 	outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 		QueueName:   msg.QueueName,
-		Messages:    publishes,
+		Envelopes:   envelopes,
 		AtomicBatch: true,
 	})
 	if err != nil {
@@ -287,15 +286,12 @@ func (h *Handler) AppendQueue(ctx context.Context, stream *connect.ClientStream[
 			)
 		}
 
+		envelope := appendEnvelope(msg.QueueName, msg.Value, msg.Key, msg.Headers)
 		outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 			QueueName: msg.QueueName,
-			Messages: []types.PublishRequest{{
-				Topic:   msg.QueueName,
-				Payload: msg.Value,
-				Key:     msg.Key,
-				Headers: msg.Headers,
-			}},
+			Envelopes: []*message.Envelope{envelope},
 		})
+		message.Release(envelope)
 		if err != nil {
 			return nil, newConnectErrorWithProgress(
 				queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
@@ -1178,4 +1174,13 @@ func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGrou
 		PendingCount: pendingCount,
 		CreatedAt:    timestamppb.New(group.CreatedAt),
 	}
+}
+
+// appendEnvelope builds the envelope one Connect append request names. The
+// command borrows it, so the caller releases it once the append returns.
+func appendEnvelope(queueName string, value, key []byte, headers map[string][]byte) *message.Envelope {
+	envelope := message.New(queueName, value)
+	envelope.User.Key = key
+	envelope.User.Headers = headers
+	return envelope
 }

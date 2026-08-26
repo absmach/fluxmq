@@ -52,14 +52,12 @@ func BenchmarkPublishToMatchingQueues(b *testing.B) {
 			ctx := context.Background()
 			payload := []byte("payload")
 
+			captured := publishEnvelope(b, "m/acme/c/temp/reading", payload)
+			captured.Broker.Source = message.SourceMetadata{ClientID: "publisher", Protocol: message.ProtocolMQTT}
+
 			b.ReportAllocs()
-			b.ResetTimer()
 			for b.Loop() {
-				if err := manager.PublishToMatchingQueues(ctx, types.PublishRequest{
-					Source:  message.SourceMetadata{ClientID: "publisher", Protocol: message.ProtocolMQTT},
-					Topic:   "m/acme/c/temp/reading",
-					Payload: payload,
-				}); err != nil {
+				if err := manager.PublishToMatchingQueues(ctx, captured); err != nil {
 					b.Fatalf("PublishToMatchingQueues failed: %v", err)
 				}
 			}

@@ -452,7 +452,7 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	payload := []byte("hello world")
 
 	t.Logf("Publishing message to %s", publishTopic)
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: publishTopic, Payload: payload}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, publishTopic, payload)); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -488,10 +488,7 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		manager, store := newManager()
-		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-			Topic:   testAuditQueueTopic,
-			Payload: []byte("{}"),
-		})
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 		if !errors.Is(err, storage.ErrQueueNotFound) {
 			t.Fatalf("error = %v, want queue not found", err)
 		}
@@ -507,10 +504,7 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 		if err := store.QueueStore.CreateQueue(ctx, queueConfig); err != nil {
 			t.Fatalf("create classic queue: %v", err)
 		}
-		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-			Topic:   testAuditQueueTopic,
-			Payload: []byte("{}"),
-		})
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 		if !errors.Is(err, ErrProtectedQueueContractDrift) {
 			t.Fatalf("error = %v, want ErrProtectedQueueContractDrift", err)
 		}
@@ -543,10 +537,7 @@ func TestProtectedQueuesRejectStoreWithoutRealDurableSync(t *testing.T) {
 	}
 	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-	err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-		Topic:   testAuditQueueTopic,
-		Payload: []byte("{}"),
-	})
+	err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 	if !errors.Is(err, ErrDurableSyncUnsupported) {
 		t.Fatalf("error = %v, want ErrDurableSyncUnsupported", err)
 	}
@@ -589,10 +580,7 @@ func TestPublishToDurableStreamDoesNotBlockContractReload(t *testing.T) {
 
 	publishErr := make(chan error, 1)
 	go func() {
-		publishErr <- manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-			Topic:   testAuditQueueTopic,
-			Payload: []byte("{}"),
-		})
+		publishErr <- manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 	}()
 
 	select {
@@ -689,10 +677,7 @@ func TestPublishToDurableStreamRejectsUnsafeConfigurationBeforeAppend(t *testing
 			}
 			manager := NewManager(managerStore, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-				Topic:   testAuditQueueTopic,
-				Payload: []byte("{}"),
-			})
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -849,7 +834,7 @@ func TestPublishToDurableStreamRejectsPersistedContractDrift(t *testing.T) {
 			}
 			store := &recordingDurableQueueStore{QueueStore: base}
 			manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
-			err := manager.PublishToDurableStream(ctx, expected.Name, types.PublishRequest{Payload: []byte("{}")})
+			err := manager.PublishToDurableStream(ctx, expected.Name, publishEnvelope(t, "", []byte("{}")))
 			if !errors.Is(err, ErrProtectedQueueContractDrift) {
 				t.Fatalf("PublishToDurableStream() error = %v, want ErrProtectedQueueContractDrift", err)
 			}
@@ -868,7 +853,7 @@ func TestPublishToDurableStreamRejectsPersistedContractDrift(t *testing.T) {
 		}
 		store := &recordingDurableQueueStore{QueueStore: base}
 		manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
-		if err := manager.PublishToDurableStream(ctx, expected.Name, types.PublishRequest{Payload: []byte("{}")}); err != nil {
+		if err := manager.PublishToDurableStream(ctx, expected.Name, publishEnvelope(t, "", []byte("{}"))); err != nil {
 			t.Fatalf("PublishToDurableStream() rejected MaxDepth drift: %v", err)
 		}
 	})
@@ -888,10 +873,7 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 		}
 	}
 
-	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-		Topic:   testAuditQueueTopic,
-		Payload: []byte("audit-event"),
-	}); err != nil {
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("audit-event"))); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
 	}
 	if operations := store.Operations(); fmt.Sprint(operations) != "[append:audit.events sync:audit.events]" {
@@ -927,10 +909,7 @@ func TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords(t *testing.T) {
 	}
 
 	payload := []byte(`{"id":"durability-1"}`)
-	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-		Topic:   testAuditQueueTopic,
-		Payload: payload,
-	}); err != nil {
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, payload)); err != nil {
 		t.Fatalf("PublishToDurableStream() error = %v", err)
 	}
 	if err := store.Close(); err != nil {
@@ -981,10 +960,7 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 				t.Fatalf("create stream: %v", err)
 			}
 
-			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-				Topic:   testAuditQueueTopic,
-				Payload: []byte("{}"),
-			})
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -1005,7 +981,7 @@ func TestPublishPropagatesQueueAppendFailure(t *testing.T) {
 		t.Fatalf("create queue: %v", err)
 	}
 
-	err := manager.Publish(ctx, types.PublishRequest{Topic: "events/created", Payload: []byte("event")})
+	err := manager.Publish(ctx, publishEnvelope(t, "events/created", []byte("event")))
 	if !errors.Is(err, errTestAppend) {
 		t.Fatalf("error = %v, want append failure", err)
 	}
@@ -1037,11 +1013,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	if err := mgr.Publish(context.Background(), types.PublishRequest{
-		Topic:      "$queue/events/test",
-		Payload:    []byte("hello"),
-		Properties: nil,
-	}); err != nil {
+	if err := mgr.Publish(context.Background(), publishEnvelope(t, "$queue/events/test", []byte("hello"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -1089,11 +1061,9 @@ func TestPublishCarriesTypedSourceMetadata(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := mgr.Publish(ctx, types.PublishRequest{
-		Source:  message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT},
-		Topic:   "$queue/orders/process",
-		Payload: []byte("hello"),
-	}); err != nil {
+	sourced := publishEnvelope(t, "$queue/orders/process", []byte("hello"))
+	sourced.Broker.Source = message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT}
+	if err := mgr.Publish(ctx, sourced); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -1124,12 +1094,10 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	payload := []byte("original")
 	properties := map[string]string{"source": "device"}
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Source:     message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT},
-			Topic:      testCapturedTopic,
-			Payload:    payload,
-			Properties: properties,
-		}); err != nil {
+		captured := publishEnvelope(t, testCapturedTopic, payload)
+		captured.Broker.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
+		captured.User.Properties = properties
+		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	})
@@ -1166,10 +1134,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   "unmatched/topic",
-		Payload: []byte("ignored"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, "unmatched/topic", []byte("ignored"))); err != nil {
 		t.Fatalf("unmatched PublishToMatchingQueues failed: %v", err)
 	}
 	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); !errors.Is(err, storage.ErrQueueNotFound) {
@@ -1202,10 +1167,7 @@ func TestPublishToMatchingQueuesRoutesCapturedStreamToRemoteConsumerOnce(t *test
 	}
 
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	})
@@ -1253,10 +1215,7 @@ func TestPublishToExistingQueueDoesNotForwardSecondAppend(t *testing.T) {
 		t.Fatalf("CreateQueue writers failed: %v", err)
 	}
 
-	if err := mgr.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/writers/domain/c/channel/tst",
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.Publish(ctx, publishEnvelope(t, "$queue/writers/domain/c/channel/tst", []byte("payload"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 	mgr.deliverMessages()
@@ -1461,11 +1420,7 @@ func TestRetentionOffsetMessages(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := mgr.Publish(context.Background(), types.PublishRequest{
-			Topic:      "$queue/events/test",
-			Payload:    []byte("msg"),
-			Properties: nil,
-		}); err != nil {
+		if err := mgr.Publish(context.Background(), publishEnvelope(t, "$queue/events/test", []byte("msg"))); err != nil {
 			t.Fatalf("Publish failed: %v", err)
 		}
 	}
@@ -1512,7 +1467,7 @@ func TestExactQueueSubscription(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/tasks", Payload: []byte("task1")}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "$queue/tasks", []byte("task1"))); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -1561,7 +1516,7 @@ func TestMultiLevelWildcard(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte(topic)}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte(topic))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1619,13 +1574,13 @@ func TestSingleLevelWildcard(t *testing.T) {
 	}
 
 	for _, topic := range matching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("match")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("match"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
 
 	for _, topic := range nonMatching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("nomatch")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("nomatch"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1693,13 +1648,13 @@ func TestQueueNameWildcardSingleLevel(t *testing.T) {
 	}
 
 	for _, topic := range matching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("match")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("match"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
 
 	for _, topic := range nonMatching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("nomatch")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("nomatch"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -2099,7 +2054,7 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 		t.Fatalf("Subscribe remote client failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/test/msg", Payload: []byte("hello")}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "$queue/test/msg", []byte("hello"))); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -2184,7 +2139,9 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: testQueueTasksNew, Payload: []byte("job"), Properties: map[string]string{"custom": testCustomValue}}); err != nil {
+	job := publishEnvelope(t, testQueueTasksNew, []byte("job"))
+	job.User.Properties = map[string]string{"custom": testCustomValue}
+	if err := manager.Publish(ctx, job); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -2245,7 +2202,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/events/user.action", Payload: []byte("event-1")}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "$queue/events/user.action", []byte("event-1"))); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -2402,10 +2359,7 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/test/msg",
-		Payload: []byte("hello"),
-	})
+	err := manager.Publish(ctx, publishEnvelope(t, "$queue/test/msg", []byte("hello")))
 	if err != nil {
 		t.Fatalf("Publish returned error: %v", err)
 	}
@@ -2456,10 +2410,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/hot-events/msg",
-		Payload: []byte("hello"),
-	})
+	err := manager.Publish(ctx, publishEnvelope(t, "$queue/hot-events/msg", []byte("hello")))
 	if err != nil {
 		t.Fatalf("Publish returned error: %v", err)
 	}
@@ -2555,10 +2506,7 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 		t.Fatalf("CreateQueue q2 failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "shared/topic",
-		Payload: []byte("hello"),
-	}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "shared/topic", []byte("hello"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -2606,10 +2554,9 @@ func TestPublishForcedTargets(t *testing.T) {
 		t.Fatalf("CreateQueue q2 failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:               "shared/topic",
-		Payload:             []byte("hello"),
-		ForwardTargetQueues: []string{"q1"},
+	if err := manager.PublishCommand(ctx, QueuePublishCommand{
+		Envelope:      publishEnvelope(t, "shared/topic", []byte("hello")),
+		ForcedTargets: []string{"q1"},
 	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -2650,10 +2597,7 @@ func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
 	}), config, logger, mockCl)
 
 	ctx := context.Background()
-	err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/test/tpc/msg",
-		Payload: []byte("hello"),
-	})
+	err := manager.Publish(ctx, publishEnvelope(t, "$queue/test/tpc/msg", []byte("hello")))
 	if err != nil {
 		t.Fatalf("Publish returned error: %v", err)
 	}
@@ -2851,10 +2795,7 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 	ctx := context.Background()
 	topic := "$queue/demo-events"
 
-	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   topic,
-		Payload: []byte("hello"),
-	}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("hello"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -3373,10 +3314,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 
 	// Publish more messages than MaxPELSize
 	for i := 0; i < 5; i++ {
-		if err := mgr.Publish(ctx, types.PublishRequest{
-			Topic:   "$queue/pelcap/test",
-			Payload: []byte("msg"),
-		}); err != nil {
+		if err := mgr.Publish(ctx, publishEnvelope(t, "$queue/pelcap/test", []byte("msg"))); err != nil {
 			t.Fatalf("Publish failed: %v", err)
 		}
 	}
@@ -3607,10 +3545,7 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 	// The append now happens off the publish path, so the caller is told
 	// nothing; the counter is the report.
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("capture must not fail the publish: %v", err)
 		}
 	})
@@ -3620,10 +3555,7 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 
 	mgr.capture = newCaptureDispatcher(0, 0, 0, mgr.metrics, mgr.logger, mgr.applyCaptureJob)
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   "h/acme/temp",
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, "h/acme/temp", []byte("payload"))); err != nil {
 			t.Fatalf("healthy queue capture failed: %v", err)
 		}
 	})
@@ -3658,14 +3590,12 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	key := []byte("key")
 	headers := map[string][]byte{"binary": {0x00, 0xff}}
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Source:     message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT},
-			Topic:      testCapturedTopic,
-			Payload:    payload,
-			Key:        key,
-			Headers:    headers,
-			Properties: properties,
-		}); err != nil {
+		captured := publishEnvelope(t, testCapturedTopic, payload)
+		captured.Broker.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
+		captured.User.Key = key
+		captured.User.Headers = headers
+		captured.User.Properties = properties
+		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	})
@@ -3734,10 +3664,7 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 	}
 
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("capture must not fail the publish: %v", err)
 		}
 	})
@@ -3782,10 +3709,7 @@ func TestPublishToMatchingQueuesCountsUnresolvedTargets(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 		t.Fatalf("PublishToMatchingQueues failed: %v", err)
 	}
 
@@ -3823,10 +3747,7 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 		t.Fatalf("CreateQueue local failed: %v", err)
 	}
 
-	err := mgr.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/replicated/item",
-		Payload: []byte("payload"),
-	})
+	err := mgr.Publish(ctx, publishEnvelope(t, "$queue/replicated/item", []byte("payload")))
 	if err == nil {
 		t.Fatal("expected the reject write policy to refuse the publish")
 	}
@@ -3894,7 +3815,7 @@ func TestReplicatedPublishNeverFallsBackToLocalAppend(t *testing.T) {
 	cfg.WritePolicy = WritePolicyReject
 	mgr := NewManager(store, newMockGroupStore(), nil, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-	err := mgr.Publish(ctx, types.PublishRequest{Topic: "$queue/replicated/item", Payload: []byte("payload")})
+	err := mgr.Publish(ctx, publishEnvelope(t, "$queue/replicated/item", []byte("payload")))
 	require.ErrorIs(t, err, ErrReplicationUnavailable)
 	count, err := store.Count(ctx, testReplicatedQueue)
 	require.NoError(t, err)
@@ -3930,10 +3851,7 @@ func TestPublishToMatchingQueuesCountsEachLostTarget(t *testing.T) {
 	}
 
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("capture must not fail the publish: %v", err)
 		}
 	})

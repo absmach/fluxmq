@@ -63,31 +63,6 @@ func TestSetMQTT5MetadataCopiesScalarPointers(t *testing.T) {
 	assert.Equal(t, byte(1), *envelope.User.PayloadFormat)
 }
 
-func TestQueuePublishRequestPreservesMQTT5Metadata(t *testing.T) {
-	payloadFormat := byte(1)
-	messageExpiry := uint32(30)
-	publishedAt := time.Now()
-	expiresAt := publishedAt.Add(30 * time.Second)
-	envelope := message.New("requests/42", []byte("payload"))
-	defer message.Release(envelope)
-	envelope.User.ContentType = "application/json"
-	envelope.User.ResponseTopic = "responses/42"
-	envelope.User.CorrelationData = []byte{0x00, 0xff}
-	envelope.User.PayloadFormat = &payloadFormat
-	envelope.User.MessageExpiry = &messageExpiry
-	envelope.Broker.Delivery.PublishedAt = publishedAt
-	envelope.Broker.Delivery.ExpiresAt = expiresAt
-
-	publish := queuePublishRequest(envelope)
-	assert.Equal(t, envelope.User.ContentType, publish.ContentType)
-	assert.Equal(t, envelope.User.ResponseTopic, publish.ResponseTopic)
-	assert.Equal(t, envelope.User.CorrelationData, publish.CorrelationData)
-	assert.Equal(t, envelope.User.PayloadFormat, publish.PayloadFormat)
-	assert.Equal(t, envelope.User.MessageExpiry, publish.MessageExpiry)
-	assert.Equal(t, publishedAt, publish.PublishedAt)
-	assert.Equal(t, expiresAt, publish.ExpiresAt)
-}
-
 func TestExtractUserPropertiesNil(t *testing.T) {
 	result := extractUserProperties(nil)
 

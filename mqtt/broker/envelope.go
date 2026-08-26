@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/message"
-	"github.com/absmach/fluxmq/queue/types"
 )
 
 func newMQTTEnvelope(topic string, data []byte, clientID, externalID string, qos byte, retain bool, properties map[string]string) *message.Envelope {
@@ -39,24 +38,4 @@ func setMQTT5Metadata(envelope *message.Envelope, expiry *uint32, expiresAt, pub
 	envelope.User.CorrelationData = bytes.Clone(correlationData)
 	envelope.Broker.Delivery.ExpiresAt = expiresAt
 	envelope.Broker.Delivery.PublishedAt = publishedAt
-}
-
-func queuePublishRequest(envelope *message.Envelope) types.PublishRequest {
-	return types.PublishRequest{
-		Source:          envelope.Broker.Source,
-		Trace:           envelope.Broker.Trace,
-		Topic:           envelope.Topic,
-		Payload:         envelope.PayloadBytes(),
-		Key:             envelope.User.Key,
-		Headers:         envelope.User.Headers,
-		Properties:      envelope.User.Properties,
-		ContentType:     envelope.User.ContentType,
-		ContentEncoding: envelope.User.ContentEncoding,
-		ResponseTopic:   envelope.User.ResponseTopic,
-		CorrelationData: bytes.Clone(envelope.User.CorrelationData),
-		PayloadFormat:   envelope.User.PayloadFormat,
-		MessageExpiry:   envelope.User.MessageExpiry,
-		PublishedAt:     envelope.Broker.Delivery.PublishedAt,
-		ExpiresAt:       envelope.Broker.Delivery.ExpiresAt,
-	}
 }

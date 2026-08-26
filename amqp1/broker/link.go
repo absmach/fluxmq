@@ -335,13 +335,9 @@ func (l *Link) receiveTransfer(transfer *performatives.Transfer, payload []byte)
 				publishTopic = resolver.QueueTopic(l.queueName, subject)
 			}
 
-			queuePublishErr = qm.Publish(l.session.conn.ctx, qtypes.PublishRequest{
-				Source:     coremessage.SourceFromProperties(props),
-				Trace:      coremessage.TraceFromProperties(props),
-				Topic:      publishTopic,
-				Payload:    data,
-				Properties: coremessage.FilterUserProperties(props),
-			})
+			queued := queuePublishEnvelope(publishTopic, data, props, coremessage.SourceFromProperties(props))
+			queuePublishErr = qm.Publish(l.session.conn.ctx, queued)
+			coremessage.Release(queued)
 			if queuePublishErr != nil {
 				l.logger.Error("queue publish failed", "topic", publishTopic, "error", queuePublishErr)
 			}

@@ -68,10 +68,7 @@ func newDurabilityManager(t *testing.T, store storage.QueueStore, policy AckDura
 
 func publishTo(t *testing.T, mgr *Manager, queueName string) {
 	t.Helper()
-	require.NoError(t, mgr.Publish(context.Background(), types.PublishRequest{
-		Topic:   "$queue/" + queueName,
-		Payload: []byte("payload"),
-	}))
+	require.NoError(t, mgr.Publish(context.Background(), publishEnvelope(t, "$queue/"+queueName, []byte("payload"))))
 }
 
 // TestAckDurabilityFsyncSyncsDurableQueuePublish is the guarantee the default

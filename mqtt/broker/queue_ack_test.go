@@ -39,7 +39,7 @@ type rejectCall struct {
 
 func (m *mockQueueManager) Start(ctx context.Context) error { return nil }
 func (m *mockQueueManager) Stop() error                     { return nil }
-func (m *mockQueueManager) Publish(ctx context.Context, publish qtypes.PublishRequest) error {
+func (m *mockQueueManager) Publish(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }
 

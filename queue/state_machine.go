@@ -21,11 +21,31 @@ import (
 var ErrInvalidCommand = errors.New("invalid queue command")
 
 // AppendCommand appends one or more messages to exactly one named queue.
+//
+// It borrows every envelope in Envelopes: the core clones each one into the
+// record it stores, and a successful append takes ownership of that clone. The
+// caller keeps its envelopes and releases them itself, which is a different
+// contract from storage.QueueStore.Append, where a successful append takes the
+// envelope it was given.
 type AppendCommand struct {
 	QueueName               string
-	Messages                []types.PublishRequest
+	Envelopes               []*message.Envelope
 	AtomicBatch             bool
 	RequireProtectedDurable bool
+}
+
+// QueuePublishCommand routes one message to every queue whose topic pattern
+// matches it, which is a different operation from AppendCommand: the
+// destinations are resolved rather than named, and there may be none.
+//
+// It borrows Envelope on the same terms as AppendCommand.
+type QueuePublishCommand struct {
+	Envelope *message.Envelope
+	Mode     types.PublishMode
+	// ForcedTargets names the queues the message must land in, bypassing topic
+	// resolution. It is set when a peer already resolved them, and it is a
+	// routing control the publisher cannot supply.
+	ForcedTargets []string
 }
 
 // AppendOutcome describes the offset range assigned by an append.
@@ -217,28 +237,28 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 	// An empty append is rejected rather than reported as a success at offset 0.
 	// Offset 0 is a valid offset, so "nothing to do" and "wrote at offset 0"
 	// would otherwise be indistinguishable to the caller.
-	if len(command.Messages) == 0 {
+	if len(command.Envelopes) == 0 {
 		return AppendOutcome{}, fmt.Errorf("%w: at least one message is required", ErrInvalidCommand)
 	}
 	if command.RequireProtectedDurable {
-		if len(command.Messages) != 1 || command.AtomicBatch {
+		if len(command.Envelopes) != 1 || command.AtomicBatch {
 			return AppendOutcome{}, fmt.Errorf("%w: protected durable append requires exactly one message", ErrInvalidCommand)
 		}
-		offset, createdAt, err := s.records.publishToDurableStream(ctx, command.QueueName, command.Messages[0])
+		offset, createdAt, err := s.records.publishToDurableStream(ctx, command.QueueName, command.Envelopes[0])
 		if err != nil {
 			return AppendOutcome{}, err
 		}
 		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 	}
-	if len(command.Messages) == 1 && !command.AtomicBatch {
-		offset, createdAt, err := s.records.appendToQueue(ctx, command.QueueName, command.Messages[0])
+	if len(command.Envelopes) == 1 && !command.AtomicBatch {
+		offset, createdAt, err := s.records.appendToQueue(ctx, command.QueueName, command.Envelopes[0])
 		if err != nil {
 			return AppendOutcome{}, err
 		}
 		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 	}
 
-	first, count, lastCreatedAt, err := s.records.appendBatchToQueue(ctx, command.QueueName, command.Messages)
+	first, count, lastCreatedAt, err := s.records.appendBatchToQueue(ctx, command.QueueName, command.Envelopes)
 	if err != nil {
 		return AppendOutcome{}, err
 	}

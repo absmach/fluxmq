@@ -6,6 +6,7 @@ package broker
 import (
 	"context"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
@@ -22,7 +23,7 @@ type v1Authorizer interface {
 }
 
 type v1QueueManager interface {
-	Publish(ctx context.Context, publish types.PublishRequest) error
+	Publish(ctx context.Context, msg *message.Envelope) error
 	Subscribe(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string) error
 	SubscribeWithCursor(ctx context.Context, queueName, pattern, clientID, groupID, proxyNodeID string, cursor *types.CursorOption) error
 	Unsubscribe(ctx context.Context, queueName, pattern, clientID, groupID string) error

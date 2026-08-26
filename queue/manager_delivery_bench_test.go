@@ -50,14 +50,13 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 	}
 
 	b.ResetTimer()
+	published := publishEnvelope(b, "$queue/q-0/jobs", []byte("x"))
+
 	for i := 0; i < b.N; i++ {
 		lastOffset = 0
 		lastGroupID = ""
 
-		if err := mgr.Publish(ctx, types.PublishRequest{
-			Topic:   "$queue/q-0/jobs",
-			Payload: []byte("x"),
-		}); err != nil {
+		if err := mgr.Publish(ctx, published); err != nil {
 			b.Fatalf("Publish failed: %v", err)
 		}
 

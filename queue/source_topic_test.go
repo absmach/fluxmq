@@ -122,18 +122,17 @@ func TestQueueRoundTripPreservesProtocolMetadataAndExpiry(t *testing.T) {
 
 	config := types.DefaultQueueConfig("m", "m/#")
 	config.MessageTTL = 5 * time.Minute
-	queued := newQueuedMessage(types.PublishRequest{
-		Topic:           testSourceTopic,
-		Payload:         []byte("payload"),
-		ContentType:     "application/json",
-		ContentEncoding: "gzip",
-		ResponseTopic:   "responses/42",
-		CorrelationData: correlationData,
-		PayloadFormat:   &payloadFormat,
-		MessageExpiry:   &messageExpiry,
-		PublishedAt:     publishedAt,
-		ExpiresAt:       expiresAt,
-	}, &config)
+	published := publishEnvelope(t, testSourceTopic, []byte("payload"))
+	published.User.ContentType = "application/json"
+	published.User.ContentEncoding = "gzip"
+	published.User.ResponseTopic = "responses/42"
+	published.User.CorrelationData = correlationData
+	published.User.PayloadFormat = &payloadFormat
+	published.User.MessageExpiry = &messageExpiry
+	published.Broker.Delivery.PublishedAt = publishedAt
+	published.Broker.Delivery.ExpiresAt = expiresAt
+
+	queued := newQueuedRecord(published, "m", &config)
 	defer message.Release(queued)
 
 	correlationData[0] = 0xff

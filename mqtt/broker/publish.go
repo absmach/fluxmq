@@ -69,9 +69,9 @@ func (b *Broker) Publish(ctx context.Context, msg *message.Envelope) error {
 		case broker.RouteQueueAck:
 			return b.handleQueueAck(ctx, msg, route)
 		case broker.RouteQueue:
-			// PublishRequest is a byte-slice ingress contract. The queue creates
-			// its own immutable buffer before this envelope is released.
-			return b.queueManager.Publish(ctx, queuePublishRequest(msg))
+			// The queue borrows the envelope and derives its own record from it
+			// before this one is released.
+			return b.queueManager.Publish(ctx, msg)
 		}
 	}
 
@@ -81,7 +81,7 @@ func (b *Broker) Publish(ctx context.Context, msg *message.Envelope) error {
 	//
 	// A capture failure never fails the publish: see broker.TopicQueuePublisher.
 	if publisher, ok := b.queueManager.(broker.TopicQueuePublisher); ok {
-		if err := publisher.PublishToMatchingQueues(ctx, queuePublishRequest(msg)); err != nil {
+		if err := publisher.PublishToMatchingQueues(ctx, msg); err != nil {
 			b.logError("queue_topic_capture", err, slog.String("topic", msg.Topic))
 		}
 	}

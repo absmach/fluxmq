@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/logstorage"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/consumer"
 	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
@@ -80,10 +81,10 @@ func TestMQTTAndAMQPManagerAdapterContract(t *testing.T) {
 			}
 			if _, err := manager.StateMachine().Append(ctx, AppendCommand{
 				QueueName: testQueueJobs,
-				Messages: []types.PublishRequest{
-					{Topic: "jobs/0", Payload: []byte("zero")},
-					{Topic: "jobs/1", Payload: []byte("one")},
-					{Topic: "jobs/2", Payload: []byte("two")},
+				Envelopes: []*message.Envelope{
+					publishEnvelope(t, "jobs/0", []byte("zero")),
+					publishEnvelope(t, "jobs/1", []byte("one")),
+					publishEnvelope(t, "jobs/2", []byte("two")),
 				},
 				AtomicBatch: true,
 			}); err != nil {
@@ -150,11 +151,11 @@ func runStateMachineStorageContract(t *testing.T, backend stateMachineContractBa
 	appended, err := machine.Append(ctx, AppendCommand{
 		QueueName:   testQueueJobs,
 		AtomicBatch: true,
-		Messages: []types.PublishRequest{
-			{Topic: "jobs/0", Payload: []byte("zero")},
-			{Topic: "jobs/1", Payload: []byte("one")},
-			{Topic: "jobs/2", Payload: []byte("two")},
-			{Topic: "jobs/3", Payload: []byte("three")},
+		Envelopes: []*message.Envelope{
+			publishEnvelope(t, "jobs/0", []byte("zero")),
+			publishEnvelope(t, "jobs/1", []byte("one")),
+			publishEnvelope(t, "jobs/2", []byte("two")),
+			publishEnvelope(t, "jobs/3", []byte("three")),
 		},
 	})
 	if err != nil {

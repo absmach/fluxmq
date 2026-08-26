@@ -19,7 +19,7 @@ type OffsetCommitter interface {
 
 type AppendCommand struct {
 	QueueName		string
-	Messages		[]types.PublishRequest
+	Envelopes		[]*message.Envelope
 	AtomicBatch		bool
 	RequireProtectedDurable	bool
 }

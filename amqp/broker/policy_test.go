@@ -416,13 +416,13 @@ func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 	if qm.exactPublishCalls != 1 {
 		t.Fatalf("exact stream publish calls = %d, want 1", qm.exactPublishCalls)
 	}
-	if got := qm.exactPublish.Source.ExternalID; got != testLocalPrincipal {
+	if got := qm.exactPublish.Broker.Source.ExternalID; got != testLocalPrincipal {
 		t.Fatalf("external_id = %q, want %q", got, testLocalPrincipal)
 	}
-	if got := qm.exactPublish.Source.Protocol; got != message.ProtocolAMQP091 {
+	if got := qm.exactPublish.Broker.Source.Protocol; got != message.ProtocolAMQP091 {
 		t.Fatalf("protocol = %q, want %q", got, message.ProtocolAMQP091)
 	}
-	if _, ok := qm.exactPublish.Properties[message.PropertyExternalID]; ok {
+	if _, ok := qm.exactPublish.User.Properties[message.PropertyExternalID]; ok {
 		t.Fatal("broker source identity leaked into user properties")
 	}
 }
@@ -934,7 +934,7 @@ type blockingStreamQueueManager struct {
 	release chan struct{}
 }
 
-func (m *blockingStreamQueueManager) PublishToDurableStream(_ context.Context, _ string, _ qtypes.PublishRequest) error {
+func (m *blockingStreamQueueManager) PublishToDurableStream(_ context.Context, _ string, _ *message.Envelope) error {
 	close(m.entered)
 	<-m.release
 	return nil
@@ -951,7 +951,7 @@ type stalledStreamQueueManager struct {
 	attempts atomic.Int64
 }
 
-func (m *stalledStreamQueueManager) PublishToDurableStream(_ context.Context, _ string, _ qtypes.PublishRequest) error {
+func (m *stalledStreamQueueManager) PublishToDurableStream(_ context.Context, _ string, _ *message.Envelope) error {
 	m.attempts.Add(1)
 	running := m.current.Add(1)
 	for {

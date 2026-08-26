@@ -4,12 +4,10 @@
 package queue
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -410,20 +408,25 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 // applyCaptureJob performs one dispatched capture off the publish path. A job
 // with no target is the per-publish cluster forward.
 func (m *Manager) applyCaptureJob(ctx context.Context, job captureJob) {
+	// The job owns its envelope; running it is one of the paths that ends its
+	// life. The core clones what it stores, so releasing here is safe even
+	// after a successful append.
+	defer message.Release(job.envelope)
+
 	if job.target == nil {
 		if m.cluster != nil {
-			m.forwardToRemoteNodes(ctx, job.publish)
+			m.forwardToRemoteNodes(ctx, job.envelope)
 		}
 		return
 	}
 
 	// Capture is best effort: one target failing must not affect the others,
 	// and they are separate jobs precisely so it cannot.
-	if err := m.writeToTargets(ctx, job.publish, []queuePublishTarget{*job.target}, fanoutBestEffort); err != nil {
+	if err := m.writeToTargets(ctx, job.envelope, []queuePublishTarget{*job.target}, fanoutBestEffort); err != nil {
 		m.metrics.RecordCaptureFailure()
 		m.logger.Warn("capture append failed",
 			slog.String("queue", job.target.name),
-			slog.String("topic", job.publish.Topic),
+			slog.String("topic", job.envelope.Topic),
 			slog.String("error", err.Error()))
 	}
 }
@@ -981,19 +984,34 @@ func (m *Manager) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 // Publish adds a message to all queues whose topic patterns match the topic.
 // This is the NATS JetQueue-style "multi-queue" routing.
 // The delivery engine routes appended records to remote consumers when needed.
-func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) error {
-	publish = normalizePublishRequest(publish)
+// It borrows msg for the duration of the call: the core clones it into the
+// record each matching queue stores.
+func (m *Manager) Publish(ctx context.Context, msg *message.Envelope) error {
+	return m.PublishCommand(ctx, QueuePublishCommand{Envelope: msg})
+}
 
-	targets, err := m.resolvePublishTargets(ctx, publish)
+// PublishCommand is Publish with the routing controls a peer supplies. It
+// borrows cmd.Envelope.
+func (m *Manager) PublishCommand(ctx context.Context, cmd QueuePublishCommand) error {
+	if cmd.Envelope == nil {
+		return fmt.Errorf("%w: an envelope is required", ErrInvalidCommand)
+	}
+
+	switch cmd.Mode {
+	case types.PublishLocal, types.PublishForwarded:
+		return m.publishLocal(ctx, cmd)
+	}
+
+	targets, err := m.resolvePublishTargets(ctx, cmd)
 	if err != nil {
 		return err
 	}
 	if len(targets) == 0 {
-		m.logger.Debug("no queues match topic", slog.String("topic", publish.Topic))
+		m.logger.Debug("no queues match topic", slog.String("topic", cmd.Envelope.Topic))
 		return nil
 	}
 
-	return m.publishToTargets(ctx, publish, targets, fanoutStrict)
+	return m.publishToTargets(ctx, cmd.Envelope, targets, fanoutStrict)
 }
 
 // PublishToMatchingQueues captures an ordinary pub/sub publish in existing
@@ -1010,12 +1028,15 @@ func (m *Manager) Publish(ctx context.Context, publish types.PublishRequest) err
 // attempted: that the matching queues could not be resolved. An append that
 // fails or is dropped afterwards is reported through queues.capture_failures
 // and queues.capture_dropped, which is the only signal capture has.
-func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error {
+func (m *Manager) PublishToMatchingQueues(ctx context.Context, msg *message.Envelope) error {
+	if msg == nil {
+		return fmt.Errorf("%w: an envelope is required", ErrInvalidCommand)
+	}
 	// A target dropped during resolution loses a message as surely as a failed
 	// append, and each lost queue counts. A resolution error is the one coarse
 	// case: the set of queues that would have matched is unknown, so it counts
 	// once.
-	targets, unresolved, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	targets, unresolved, err := m.resolveMatchingPublishTargets(ctx, msg.Topic)
 	if err != nil {
 		m.metrics.RecordCaptureFailure()
 		return err
@@ -1027,30 +1048,22 @@ func (m *Manager) PublishToMatchingQueues(ctx context.Context, publish types.Pub
 		return nil
 	}
 
-	// Protocol brokers release or reuse their message buffers after this call,
-	// and the dispatcher reads the publish long after it returns, so ownership
-	// has to be taken before it is queued.
+	// Protocol brokers release or reuse their buffers after this call and the
+	// dispatcher runs long after it returns, so each job takes an envelope of
+	// its own. Clone shares the payload buffer by reference and retains it, so
+	// N jobs hold one copy of the payload between them rather than N — which is
+	// what the flattened request this replaced had to deep-copy field by field.
 	//
-	// The map is cloned whenever it exists rather than only when it holds
-	// entries: an empty non-nil map is still the caller's, and
-	// normalizePublishRequest writes the client ID into whatever it is given.
-	// Clone leaves a nil map nil, which that call then replaces outright.
-	publish.Payload = bytes.Clone(publish.Payload)
-	publish.Key = bytes.Clone(publish.Key)
-	publish.Headers = cloneByteMap(publish.Headers)
-	publish.Properties = maps.Clone(publish.Properties)
-	publish.CorrelationData = bytes.Clone(publish.CorrelationData)
-	publish.PayloadFormat = clonePointer(publish.PayloadFormat)
-	publish.MessageExpiry = clonePointer(publish.MessageExpiry)
-	publish = normalizePublishRequest(publish)
-
+	// The dispatcher owns every envelope it is handed and releases it on each
+	// path out: applied, drained at shutdown, or dropped.
+	//
 	// One job per target, so each queue is ordered by its own lane and a
 	// stalled queue cannot hold up captures into the others.
 	for i := range targets {
-		m.capture.enqueue(captureJob{publish: publish, target: &targets[i]})
+		m.capture.enqueue(captureJob{envelope: msg.Clone(), target: &targets[i]})
 	}
 	if m.cluster != nil {
-		m.capture.enqueue(captureJob{publish: publish})
+		m.capture.enqueue(captureJob{envelope: msg.Clone()})
 	}
 
 	return nil
@@ -1079,7 +1092,7 @@ const (
 // without any cluster forwarding.
 func (m *Manager) writeToTargets(
 	ctx context.Context,
-	publish types.PublishRequest,
+	msg *message.Envelope,
 	targets []queuePublishTarget,
 	policy fanoutPolicy,
 ) error {
@@ -1132,7 +1145,7 @@ func (m *Manager) writeToTargets(
 
 	// Store locally in queues handled by this node. publishLocalToTargets
 	// already attempts every target and joins their errors.
-	if err := m.publishLocalToTargets(ctx, publish, localTargets); err != nil {
+	if err := m.publishLocalToTargets(ctx, msg, localTargets); err != nil {
 		errs = append(errs, err)
 		if policy == fanoutStrict {
 			return errors.Join(errs...)
@@ -1141,7 +1154,7 @@ func (m *Manager) writeToTargets(
 
 	// Forward leader-owned queue targets to appropriate remote leaders.
 	for leaderID, targetQueues := range forwardTargets {
-		if err := m.forwardPublishToLeader(ctx, publish, leaderID, targetQueues); err != nil {
+		if err := m.forwardPublishToLeader(ctx, msg, leaderID, targetQueues); err != nil {
 			errs = append(errs, err)
 			if policy == fanoutStrict {
 				return errors.Join(errs...)
@@ -1158,15 +1171,15 @@ func (m *Manager) writeToTargets(
 // independent jobs so a queue can be ordered by name.
 func (m *Manager) publishToTargets(
 	ctx context.Context,
-	publish types.PublishRequest,
+	msg *message.Envelope,
 	targets []queuePublishTarget,
 	policy fanoutPolicy,
 ) error {
-	err := m.writeToTargets(ctx, publish, targets, policy)
+	err := m.writeToTargets(ctx, msg, targets, policy)
 
 	// Preserve legacy forwarding for queues known only by remote nodes.
 	if m.cluster != nil {
-		m.forwardToRemoteNodes(ctx, publish)
+		m.forwardToRemoteNodes(ctx, msg)
 	}
 
 	return err
@@ -1188,42 +1201,35 @@ func (m *Manager) publishToTargets(
 // vocabulary, and pushing them onto AppendCommand would spread the core's
 // command surface into every protocol package. It carries no state logic of its
 // own — it builds one command and hands it to the core.
-func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) error {
+func (m *Manager) PublishToDurableStream(ctx context.Context, queueName string, msg *message.Envelope) error {
 	_, err := m.stateMachine.Append(ctx, AppendCommand{
 		QueueName:               queueName,
-		Messages:                []types.PublishRequest{publish},
+		Envelopes:               []*message.Envelope{msg},
 		RequireProtectedDurable: true,
 	})
 	return err
 }
 
-// HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish.
-func (m *Manager) HandleQueuePublish(ctx context.Context, publish types.PublishRequest, mode types.PublishMode) error {
-	publish = normalizePublishRequest(publish)
-
-	switch mode {
-	case types.PublishLocal:
-		return m.publishLocal(ctx, publish)
-	case types.PublishForwarded:
-		return m.publishLocal(ctx, publish)
-	case types.PublishNormal:
-		fallthrough
-	default:
-		return m.Publish(ctx, publish)
-	}
+// HandleQueuePublish implements cluster.QueueHandler.HandleQueuePublish. The
+// cluster package cannot name QueuePublishCommand — queue imports cluster, not
+// the other way round — so the command's fields cross that boundary
+// individually and are reassembled here.
+func (m *Manager) HandleQueuePublish(
+	ctx context.Context, msg *message.Envelope, mode types.PublishMode, forcedTargets []string,
+) error {
+	return m.PublishCommand(ctx, QueuePublishCommand{
+		Envelope:      msg,
+		Mode:          mode,
+		ForcedTargets: forcedTargets,
+	})
 }
 
-func normalizePublishRequest(publish types.PublishRequest) types.PublishRequest {
-	publish.Properties = message.FilterUserProperties(publish.Properties)
-	return publish
-}
-
-func (m *Manager) publishLocal(ctx context.Context, publish types.PublishRequest) error {
-	targets, err := m.resolvePublishTargets(ctx, publish)
+func (m *Manager) publishLocal(ctx context.Context, cmd QueuePublishCommand) error {
+	targets, err := m.resolvePublishTargets(ctx, cmd)
 	if err != nil {
 		return err
 	}
-	return m.publishLocalToTargets(ctx, publish, targets)
+	return m.publishLocalToTargets(ctx, cmd.Envelope, targets)
 }
 
 type queuePublishTarget struct {
@@ -1231,8 +1237,9 @@ type queuePublishTarget struct {
 	config *types.QueueConfig
 }
 
-func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.PublishRequest) ([]queuePublishTarget, error) {
-	forcedTargets := publish.ForwardTargetQueues
+func (m *Manager) resolvePublishTargets(ctx context.Context, cmd QueuePublishCommand) ([]queuePublishTarget, error) {
+	topic := cmd.Envelope.Topic
+	forcedTargets := cmd.ForcedTargets
 	if len(forcedTargets) > 0 {
 		targets := make([]queuePublishTarget, 0, len(forcedTargets))
 		for _, queueName := range forcedTargets {
@@ -1251,19 +1258,19 @@ func (m *Manager) resolvePublishTargets(ctx context.Context, publish types.Publi
 		return targets, nil
 	}
 
-	targets, _, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+	targets, _, err := m.resolveMatchingPublishTargets(ctx, topic)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(targets) == 0 {
-		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", publish.Topic))
-		queueName, queuePattern := autoQueueFromTopic(publish.Topic)
+		m.logger.Debug("no queues match topic, creating new queue", slog.String("topic", topic))
+		queueName, queuePattern := autoQueueFromTopic(topic)
 		if _, err := m.GetOrCreateQueue(ctx, queueName, queuePattern); err != nil {
-			m.logger.Error("failed to create ephemeral queue", slog.String("topic", publish.Topic), slog.String("error", err.Error()))
+			m.logger.Error("failed to create ephemeral queue", slog.String("topic", topic), slog.String("error", err.Error()))
 			return nil, err
 		}
-		created, _, err := m.resolveMatchingPublishTargets(ctx, publish.Topic)
+		created, _, err := m.resolveMatchingPublishTargets(ctx, topic)
 		return created, err
 	}
 
@@ -1299,10 +1306,10 @@ func (m *Manager) resolveMatchingPublishTargets(ctx context.Context, topic strin
 	return targets, unresolved, nil
 }
 
-func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.PublishRequest, targets []queuePublishTarget) error {
+func (m *Manager) publishLocalToTargets(ctx context.Context, msg *message.Envelope, targets []queuePublishTarget) error {
 	errs := make([]error, 0)
 	for _, target := range targets {
-		if err := m.appendLocalTarget(ctx, publish, target); err != nil {
+		if err := m.appendLocalTarget(ctx, msg, target); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -1312,41 +1319,18 @@ func (m *Manager) publishLocalToTargets(ctx context.Context, publish types.Publi
 	return errors.Join(errs...)
 }
 
-func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRequest, target queuePublishTarget) error {
+func (m *Manager) appendLocalTarget(ctx context.Context, msg *message.Envelope, target queuePublishTarget) error {
 	queueName := target.name
 	queueConfig := target.config
 	if queueConfig == nil {
 		return fmt.Errorf("append to queue %q: missing queue configuration", queueName)
 	}
-
-	if queueConfig == nil {
-		return fmt.Errorf("append to queue %q: missing queue configuration", queueName)
-	}
-	_, err := m.records.appendResolved(ctx, queueName, publish, *queueConfig)
+	_, err := m.records.appendResolved(ctx, queueName, msg, *queueConfig)
 	return err
 }
 
 func (m *Manager) validateQueueAckDurability(queueConfig types.QueueConfig) error {
 	return m.queueControl.validateQueueAckDurability(queueConfig)
-}
-
-func clonePointer[T any](src *T) *T {
-	if src == nil {
-		return nil
-	}
-	value := *src
-	return &value
-}
-
-func cloneByteMap(src map[string][]byte) map[string][]byte {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string][]byte, len(src))
-	for key, value := range src {
-		dst[key] = bytes.Clone(value)
-	}
-	return dst
 }
 
 func autoQueueFromTopic(topic string) (queueName, pattern string) {
@@ -1371,7 +1355,7 @@ func autoQueueFromTopic(topic string) (queueName, pattern string) {
 // routes non-replicated records to remote consumers, and Raft makes replicated
 // records available on the consumer's node. Forwarding such a publish as well
 // would append a second copy remotely, so only unknown queues are forwarded.
-func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.PublishRequest) {
+func (m *Manager) forwardToRemoteNodes(ctx context.Context, msg *message.Envelope) {
 	// Get all consumers from the cluster
 	consumers, err := m.cluster.ListAllQueueConsumers(ctx)
 	if err != nil {
@@ -1415,24 +1399,22 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 
 		// Check if this consumer's queue pattern matches the topic
 		queuePattern := "$queue/" + c.QueueName + "/#"
-		if matchesTopic(queuePattern, publish.Topic) {
+		if matchesTopic(queuePattern, msg.Topic) {
 			remoteNodes[c.ProxyNodeID] = true
 		}
 	}
 
 	// Forward to each unique remote node
-	forwarded := publish.Envelope()
-	defer message.Release(forwarded)
 	for nodeID := range remoteNodes {
-		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, forwarded, nil, false); err != nil {
+		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, msg, nil, false); err != nil {
 			m.logger.Warn("failed to forward publish to remote node",
 				slog.String("node", nodeID),
-				slog.String("topic", publish.Topic),
+				slog.String("topic", msg.Topic),
 				slog.String("error", err.Error()))
 		} else {
 			m.logger.Debug("forwarded publish to remote node",
 				slog.String("node", nodeID),
-				slog.String("topic", publish.Topic))
+				slog.String("topic", msg.Topic))
 		}
 	}
 }
@@ -1804,7 +1786,7 @@ func (m *Manager) deliverQueue(ctx context.Context, queueName string) bool {
 	return m.delivery.DeliverQueue(ctx, queueName)
 }
 
-func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.PublishRequest, leaderID string, targetQueues []string) error {
+func (m *Manager) forwardPublishToLeader(ctx context.Context, msg *message.Envelope, leaderID string, targetQueues []string) error {
 	if m.cluster == nil {
 		return fmt.Errorf("cluster not configured for leader forward")
 	}
@@ -1819,10 +1801,7 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 
 	// targetQueues travels beside the envelope as a typed routing control. It
 	// used to be joined into a user property, where a publisher could set it.
-	forwarded := publish.Envelope()
-	defer message.Release(forwarded)
-
-	return m.cluster.ForwardQueuePublish(ctx, leaderID, forwarded, targetQueues, true)
+	return m.cluster.ForwardQueuePublish(ctx, leaderID, msg, targetQueues, true)
 }
 
 // runPoisonSweepLoop performs the dead-letter transfers the claim path defers.
@@ -2116,9 +2095,14 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 // exact offset use the append path instead.
 // It borrows msg for the duration of the call.
 func (m *Manager) EnqueueLocal(ctx context.Context, topic string, msg *message.Envelope) error {
-	publish := types.PublishFromEnvelope(msg)
-	publish.Topic = topic
-	return m.Publish(ctx, publish)
+	if msg == nil {
+		return fmt.Errorf("%w: an envelope is required", ErrInvalidCommand)
+	}
+	// The caller's topic names the route; the envelope only carries it.
+	routed := msg.Clone()
+	defer message.Release(routed)
+	routed.Topic = topic
+	return m.Publish(ctx, routed)
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.

@@ -41,8 +41,12 @@ type QueueHandler interface {
 	// ownership of msg on every return path.
 	DeliverQueueMessage(ctx context.Context, clientID string, msg *message.Envelope) error
 
-	// HandleQueuePublish handles a publish with the given mode.
-	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
+	// HandleQueuePublish handles a publish with the given mode. It borrows msg
+	// for the duration of the call. forcedTargets names the queues the message
+	// must land in, or is empty to route by topic.
+	HandleQueuePublish(
+		ctx context.Context, msg *message.Envelope, mode queueTypes.PublishMode, forcedTargets []string,
+	) error
 
 	// HandleForwardedGroupOp applies a consumer group mutation that was
 	// forwarded from a follower. This node is expected to be the Raft leader
@@ -453,11 +457,7 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 			mode = queueTypes.PublishNormal
 		}
 
-		publish := queueTypes.PublishFromEnvelope(msg)
-		publish.ForwardTargetQueues = req.Msg.ForwardTargetQueues
-
-		err := handler.HandleQueuePublish(ctx, publish, mode)
-		if err != nil {
+		if err := handler.HandleQueuePublish(ctx, msg, mode, req.Msg.ForwardTargetQueues); err != nil {
 			return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
 				Success: false,
 				Error:   err.Error(),

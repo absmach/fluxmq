@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
@@ -18,14 +19,17 @@ type Notifier interface {
 
 // QueuePublisher publishes queue-targeted messages.
 type QueuePublisher interface {
-	// Publish adds a message to all queues whose topic patterns match the topic.
-	Publish(ctx context.Context, publish types.PublishRequest) error
+	// Publish adds a message to all queues whose topic patterns match its
+	// topic. It borrows msg for the duration of the call: an implementation
+	// that stores the message derives its own record from it.
+	Publish(ctx context.Context, msg *message.Envelope) error
 }
 
 // TopicQueuePublisher captures an ordinary pub/sub publish in every existing
 // queue whose configured topic pattern matches it. It never creates a queue.
-// Implementations must copy payload and properties they retain before
-// returning because protocol brokers may release or reuse them afterwards.
+// It borrows msg for the duration of the call: protocol brokers release or
+// reuse their buffers afterwards, so an implementation that outlives the call
+// must take its own reference before returning.
 //
 // A returned error reports that capture failed; it must not fail the publish.
 // Capture is a broker-side policy the publisher never asked for and gets no
@@ -44,7 +48,7 @@ type QueuePublisher interface {
 // returned error reports only that resolution failed. An append that fails or is
 // dropped afterwards is reported through the capture counters instead.
 type TopicQueuePublisher interface {
-	PublishToMatchingQueues(ctx context.Context, publish types.PublishRequest) error
+	PublishToMatchingQueues(ctx context.Context, msg *message.Envelope) error
 }
 
 // QueueSubscriber manages queue subscriptions.

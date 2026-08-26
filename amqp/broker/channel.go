@@ -751,13 +751,10 @@ func (ch *Channel) completePublish() {
 			qm := ch.conn.broker.queueManager
 			if qm != nil {
 				queueTopic := resolver.QueueTopic(b.queue, bindingRoutingKey)
-				if err := qm.Publish(context.Background(), qtypes.PublishRequest{
-					Source:     message.SourceFromProperties(props),
-					Trace:      message.TraceFromProperties(props),
-					Topic:      queueTopic,
-					Payload:    body,
-					Properties: message.FilterUserProperties(props),
-				}); err != nil {
+				queued := queuePublishEnvelope(queueTopic, body, props, message.SourceFromProperties(props))
+				err := qm.Publish(context.Background(), queued)
+				message.Release(queued)
+				if err != nil {
 					ch.conn.logger.Error("queue publish failed", "queue", b.queue, "error", err)
 					publishFailed = true
 				}
@@ -1930,13 +1927,9 @@ func (ch *Channel) handleQueuePublish(queueTopic string, body []byte, props map[
 	if source.Protocol == "" {
 		source.Protocol = message.ProtocolAMQP091
 	}
-	err := qm.Publish(context.Background(), qtypes.PublishRequest{
-		Source:     source,
-		Trace:      message.TraceFromProperties(props),
-		Topic:      queueTopic,
-		Payload:    body,
-		Properties: message.FilterUserProperties(props),
-	})
+	queued := queuePublishEnvelope(queueTopic, body, props, source)
+	err := qm.Publish(context.Background(), queued)
+	message.Release(queued)
 	if err != nil {
 		ch.conn.logger.Error("queue publish failed", "queue", queueTopic, "error", err)
 	}
@@ -1991,13 +1984,11 @@ func (ch *Channel) handleLocalDurableStreamPublish(queueName string, body []byte
 	result := make(chan error, 1)
 	go func() {
 		defer ch.conn.broker.durableAppends.release(queueName)
-		result <- publisher.PublishToDurableStream(ctx, queueName, qtypes.PublishRequest{
-			Source:     message.SourceFromProperties(props),
-			Trace:      message.TraceFromProperties(props),
-			Topic:      ch.conn.broker.routeResolver.QueueTopic(queueName),
-			Payload:    body,
-			Properties: message.FilterUserProperties(props),
-		})
+		queued := queuePublishEnvelope(
+			ch.conn.broker.routeResolver.QueueTopic(queueName), body, props, message.SourceFromProperties(props),
+		)
+		result <- publisher.PublishToDurableStream(ctx, queueName, queued)
+		message.Release(queued)
 	}()
 
 	select {
@@ -2365,4 +2356,17 @@ func extractAutoCommit(args map[string]any) *bool {
 		return &b
 	}
 	return nil
+}
+
+// queuePublishEnvelope builds the envelope an AMQP 0.9.1 publish hands to the
+// queue manager. The manager borrows it, so the caller releases it once the
+// publish returns.
+func queuePublishEnvelope(
+	topic string, body []byte, props map[string]string, source message.SourceMetadata,
+) *message.Envelope {
+	envelope := message.New(topic, body)
+	envelope.Broker.Source = source
+	envelope.Broker.Trace = message.TraceFromProperties(props)
+	envelope.User.Properties = message.FilterUserProperties(props)
+	return envelope
 }

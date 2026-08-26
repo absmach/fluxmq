@@ -38,7 +38,7 @@ type channelQueueManager interface {
 // queue-manager interface. The local-principal listener fails closed unless
 // the concrete manager can target and durably sync one exact stream.
 type durableStreamQueuePublisher interface {
-	PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error
+	PublishToDurableStream(ctx context.Context, queueName string, msg *message.Envelope) error
 }
 
 // IsAMQP091Client checks if a client ID belongs to an AMQP 0.9.1 client.
@@ -294,17 +294,17 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// A capture failure never fails the publish: see
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueManager.(corebroker.TopicQueuePublisher); ok {
-		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-			Source: message.SourceMetadata{
-				ClientID:   props[message.PropertyClientID],
-				ExternalID: props[message.PropertyExternalID],
-				Protocol:   message.Protocol(props[message.PropertyProtocol]),
-			},
-			Trace:      message.TraceFromProperties(props),
-			Topic:      topic,
-			Payload:    payload,
-			Properties: message.FilterUserProperties(props),
-		}); err != nil {
+		captured := message.New(topic, payload)
+		captured.Broker.Source = message.SourceMetadata{
+			ClientID:   props[message.PropertyClientID],
+			ExternalID: props[message.PropertyExternalID],
+			Protocol:   message.Protocol(props[message.PropertyProtocol]),
+		}
+		captured.Broker.Trace = message.TraceFromProperties(props)
+		captured.User.Properties = message.FilterUserProperties(props)
+		err := publisher.PublishToMatchingQueues(ctx, captured)
+		message.Release(captured)
+		if err != nil {
 			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
 	}

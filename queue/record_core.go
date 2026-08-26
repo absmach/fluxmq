@@ -4,7 +4,6 @@
 package queue
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -28,12 +27,12 @@ import (
 // fanout path, and putting it in a public command would let a caller inject a
 // configuration the core never validated, and freeze QueueConfig's shape into
 // that command.
-func (c *recordCore) appendResolved(ctx context.Context, queueName string, publish types.PublishRequest, config types.QueueConfig) (AppendOutcome, error) {
-	queued := newQueuedMessage(publish, &config)
+func (c *recordCore) appendResolved(ctx context.Context, queueName string, msg *message.Envelope, config types.QueueConfig) (AppendOutcome, error) {
+	queued := newQueuedRecord(msg, queueName, &config)
 	createdAt := queued.Broker.Queue.CreatedAt
 
 	offset, err := c.appendConfiguredMessage(ctx, queueName, &config, queued)
-	if err := c.completeAppend(queueName, publish.Topic, offset, err); err != nil {
+	if err := c.completeAppend(queueName, queued.Topic, offset, err); err != nil {
 		return AppendOutcome{}, err
 	}
 
@@ -142,12 +141,7 @@ type recordCore struct {
 	services recordServices
 }
 
-func (c *recordCore) appendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {
-	publish = normalizePublishRequest(publish)
-	if publish.Topic == "" {
-		publish.Topic = queueName
-	}
-
+func (c *recordCore) appendToQueue(ctx context.Context, queueName string, msg *message.Envelope) (uint64, time.Time, error) {
 	queueConfig, err := c.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
 		return 0, time.Time{}, err
@@ -172,20 +166,21 @@ func (c *recordCore) appendToQueue(ctx context.Context, queueName string, publis
 		}
 	}
 
-	msg := newQueuedMessage(publish, queueConfig)
+	record := newQueuedRecord(msg, queueName, queueConfig)
 	// Read the assigned timestamp before the append: a successful append
-	// transfers ownership of msg to the store, which may release it.
-	createdAt := msg.Broker.Queue.CreatedAt
-	offset, err := c.appendConfiguredMessage(ctx, queueName, queueConfig, msg)
-	if err := c.completeAppend(queueName, publish.Topic, offset, err); err != nil {
+	// transfers ownership of the record to the store, which may release it.
+	createdAt := record.Broker.Queue.CreatedAt
+	topic := record.Topic
+	offset, err := c.appendConfiguredMessage(ctx, queueName, queueConfig, record)
+	if err := c.completeAppend(queueName, topic, offset, err); err != nil {
 		return 0, time.Time{}, err
 	}
 	c.delivery.Schedule(queueName)
 	return offset, createdAt, nil
 }
 
-func (c *recordCore) appendBatchToQueue(ctx context.Context, queueName string, publishes []types.PublishRequest) (uint64, uint32, time.Time, error) {
-	if len(publishes) == 0 {
+func (c *recordCore) appendBatchToQueue(ctx context.Context, queueName string, envelopes []*message.Envelope) (uint64, uint32, time.Time, error) {
+	if len(envelopes) == 0 {
 		return 0, 0, time.Time{}, nil
 	}
 
@@ -203,13 +198,9 @@ func (c *recordCore) appendBatchToQueue(ctx context.Context, queueName string, p
 		return 0, 0, time.Time{}, ErrAtomicBatchDurabilityUnsupported
 	}
 
-	messages := make([]*message.Envelope, len(publishes))
-	for i, publish := range publishes {
-		publish = normalizePublishRequest(publish)
-		if publish.Topic == "" {
-			publish.Topic = queueName
-		}
-		messages[i] = newQueuedMessage(publish, queueConfig)
+	messages := make([]*message.Envelope, len(envelopes))
+	for i, envelope := range envelopes {
+		messages[i] = newQueuedRecord(envelope, queueName, queueConfig)
 	}
 
 	// Read the last record's timestamp before the append: a successful append
@@ -229,13 +220,12 @@ func (c *recordCore) appendBatchToQueue(ctx context.Context, queueName string, p
 	return firstOffset, uint32(len(messages)), lastCreatedAt, nil
 }
 
-func (c *recordCore) publishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {
+func (c *recordCore) publishToDurableStream(ctx context.Context, queueName string, msg *message.Envelope) (uint64, time.Time, error) {
 	expected, protected := c.services.protectedQueueContract(queueName)
 	if !protected {
 		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
 	}
 
-	publish = normalizePublishRequest(publish)
 	queueConfig, err := c.queueStore.GetQueue(ctx, queueName)
 	if err != nil {
 		return 0, time.Time{}, fmt.Errorf("get exact stream %q: %w", queueName, err)
@@ -262,25 +252,26 @@ func (c *recordCore) publishToDurableStream(ctx context.Context, queueName strin
 	if err != nil {
 		return 0, time.Time{}, fmt.Errorf("%w: %s", err, queueName)
 	}
-	if queueConfig.MaxMessageSize <= 0 || int64(len(publish.Payload)) > queueConfig.MaxMessageSize {
+	if payloadSize := len(msg.PayloadBytes()); queueConfig.MaxMessageSize <= 0 || int64(payloadSize) > queueConfig.MaxMessageSize {
 		return 0, time.Time{}, fmt.Errorf(
 			"%w: queue %s accepts at most %d bytes, got %d",
 			ErrQueueMessageTooLarge,
 			queueName,
 			queueConfig.MaxMessageSize,
-			len(publish.Payload),
+			payloadSize,
 		)
 	}
 
-	msg := newQueuedMessage(publish, queueConfig)
+	record := newQueuedRecord(msg, queueName, queueConfig)
 	// Read the assigned timestamp before the append: a successful append
-	// transfers ownership of msg to the store.
-	createdAt := msg.Broker.Queue.CreatedAt
-	offset, err := durableStore.AppendAndSync(ctx, queueName, msg)
+	// transfers ownership of the record to the store.
+	createdAt := record.Broker.Queue.CreatedAt
+	topic := record.Topic
+	offset, err := durableStore.AppendAndSync(ctx, queueName, record)
 	if err != nil {
-		message.Release(msg)
+		message.Release(record)
 	}
-	if err := c.completeAppend(queueName, publish.Topic, offset, err); err != nil {
+	if err := c.completeAppend(queueName, topic, offset, err); err != nil {
 		return 0, time.Time{}, err
 	}
 	c.delivery.Schedule(queueName)
@@ -345,31 +336,43 @@ func (c *recordCore) completeAppend(queueName, topic string, offset uint64, err 
 	return nil
 }
 
-func newQueuedMessage(publish types.PublishRequest, queueConfig *types.QueueConfig) *message.Envelope {
+// newQueuedRecord derives the record a queue stores from a borrowed envelope.
+//
+// The caller keeps its envelope. The clone shares the payload buffer by
+// reference rather than copying it, which is the point of the change that
+// removed the flattened request this used to build: that shape forced a second
+// full copy of every payload and a deep copy of every header on the durable
+// publish path. A successful append takes ownership of the clone, never of the
+// caller's envelope.
+func newQueuedRecord(msg *message.Envelope, queueName string, queueConfig *types.QueueConfig) *message.Envelope {
 	now := time.Now()
-	msg := message.New(publish.Topic, publish.Payload)
-	msg.User.Key = bytes.Clone(publish.Key)
-	msg.User.Headers = cloneByteMap(publish.Headers)
-	msg.User.Properties = message.FilterUserProperties(publish.Properties)
-	msg.User.ContentType = publish.ContentType
-	msg.User.ContentEncoding = publish.ContentEncoding
-	msg.User.ResponseTopic = publish.ResponseTopic
-	msg.User.CorrelationData = bytes.Clone(publish.CorrelationData)
-	msg.User.PayloadFormat = clonePointer(publish.PayloadFormat)
-	msg.User.MessageExpiry = clonePointer(publish.MessageExpiry)
-	msg.Broker.Source = publish.Source
-	msg.Broker.Trace = publish.Trace
-	msg.Broker.Delivery.PublishedAt = publish.PublishedAt
-	msg.Broker.Delivery.ExpiresAt = publish.ExpiresAt
-	msg.Broker.Queue.State = message.QueueStateQueued
-	msg.Broker.Queue.CreatedAt = now
+	record := msg.Clone()
+	if record.Topic == "" {
+		record.Topic = queueName
+	}
+	// Properties are re-filtered on the record itself: an ingress may hand over
+	// an envelope whose property map still holds reserved names, and the stored
+	// record is what every later reader sees.
+	record.User.Properties = message.FilterUserProperties(record.User.Properties)
+	// A stored record keeps only the publication timestamps from the delivery
+	// namespace. The rest of it — packet id, QoS, retain, inflight state — is
+	// the ingress connection's transaction state, not the record's.
+	record.Broker.Delivery = message.DeliveryMetadata{
+		PublishedAt: msg.Broker.Delivery.PublishedAt,
+		ExpiresAt:   msg.Broker.Delivery.ExpiresAt,
+	}
+	record.Broker.Queue = message.QueueMetadata{
+		State:     message.QueueStateQueued,
+		CreatedAt: now,
+	}
 	if queueConfig.MessageTTL > 0 {
-		msg.Broker.Queue.ExpiresAt = now.Add(queueConfig.MessageTTL)
+		record.Broker.Queue.ExpiresAt = now.Add(queueConfig.MessageTTL)
 	}
-	if !publish.ExpiresAt.IsZero() && (msg.Broker.Queue.ExpiresAt.IsZero() || publish.ExpiresAt.Before(msg.Broker.Queue.ExpiresAt)) {
-		msg.Broker.Queue.ExpiresAt = publish.ExpiresAt
+	if expiry := msg.Broker.Delivery.ExpiresAt; !expiry.IsZero() &&
+		(record.Broker.Queue.ExpiresAt.IsZero() || expiry.Before(record.Broker.Queue.ExpiresAt)) {
+		record.Broker.Queue.ExpiresAt = expiry
 	}
-	return msg
+	return record
 }
 
 // rejectStream handles reject for stream-mode consumer groups.
