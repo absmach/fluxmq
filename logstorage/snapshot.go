@@ -33,37 +33,35 @@ func (a *Adapter) OpenQueueSnapshot(ctx context.Context, queueName string) (stor
 		return nil, err
 	}
 
-	head, err := a.store.Head(queueName)
-	if err != nil {
-		return nil, translateQueueErr(err)
-	}
-	tail, err := a.store.Tail(queueName)
-	if err != nil {
-		return nil, translateQueueErr(err)
-	}
-	if tail < head {
-		return nil, fmt.Errorf("queue %q tail %d precedes head %d", queueName, tail, head)
-	}
-
-	// The segment manager is captured so a queue replaced under an open view is
-	// caught. Reading by name alone would silently follow a delete-and-recreate
-	// onto a different log, and the snapshot would pair one queue's records with
-	// another's configuration and groups.
+	// The segment manager is captured once and everything afterwards goes
+	// through it. Resolving the queue by name on each read would leave a window
+	// between deciding the queue is still the captured one and reading it, and
+	// a delete-and-recreate landing in that window would hand back the new
+	// queue's records under the old queue's configuration and groups.
 	manager, err := a.store.getQueue(queueName)
 	if err != nil {
 		return nil, translateQueueErr(err)
 	}
 
+	head, tail := manager.Head(), manager.Tail()
+	if tail < head {
+		return nil, fmt.Errorf("queue %q tail %d precedes head %d", queueName, tail, head)
+	}
+
 	return &adapterQueueSnapshot{
-		adapter: a, queueName: queueName, manager: manager,
+		queueName: queueName, manager: manager,
 		head: head, tail: tail, next: head,
 	}, nil
 }
 
-// adapterQueueSnapshot reads a fixed offset range in batches, so the memory it
-// needs is one batch rather than the queue.
+// adapterQueueSnapshot reads a fixed offset range from the segment manager it
+// was opened on, in batches, so the memory it needs is one batch rather than
+// the queue.
+//
+// Nothing here consults the store by name. A queue that is deleted closes the
+// manager, so a capture that outlives its queue fails rather than following the
+// name onto a different log.
 type adapterQueueSnapshot struct {
-	adapter   *Adapter
 	queueName string
 	manager   *SegmentManager
 	head      uint64
@@ -75,24 +73,14 @@ type adapterQueueSnapshot struct {
 func (r *adapterQueueSnapshot) Head() uint64 { return r.head }
 func (r *adapterQueueSnapshot) Tail() uint64 { return r.tail }
 
-func (r *adapterQueueSnapshot) Next(ctx context.Context) (uint64, *message.Envelope, bool, error) {
+func (r *adapterQueueSnapshot) Next(context.Context) (uint64, *message.Envelope, bool, error) {
 	if len(r.buffered) == 0 {
 		if r.next >= r.tail {
 			return 0, nil, false, nil
 		}
-		if err := r.checkNotReplaced(); err != nil {
+		if err := r.fill(); err != nil {
 			return 0, nil, false, err
 		}
-
-		limit := min(int(r.tail-r.next), snapshotReadBatch)
-		batch, err := r.adapter.ReadBatch(ctx, r.queueName, r.next, limit)
-		if err != nil {
-			return 0, nil, false, fmt.Errorf("read queue %q at offset %d: %w", r.queueName, r.next, err)
-		}
-		if len(batch) == 0 {
-			return 0, nil, false, fmt.Errorf("queue %q lost offset %d while it was being captured", r.queueName, r.next)
-		}
-		r.buffered = batch
 	}
 
 	envelope := r.buffered[0]
@@ -102,16 +90,31 @@ func (r *adapterQueueSnapshot) Next(ctx context.Context) (uint64, *message.Envel
 	return offset, envelope, true, nil
 }
 
-// checkNotReplaced fails the capture if the queue it was opened on is gone or
-// has been recreated since.
-func (r *adapterQueueSnapshot) checkNotReplaced() error {
-	current, err := r.adapter.store.getQueue(r.queueName)
+func (r *adapterQueueSnapshot) fill() error {
+	messages, err := r.manager.ReadRange(r.next, r.tail, snapshotReadBatch)
 	if err != nil {
-		return fmt.Errorf("queue %q went away while it was being captured: %w", r.queueName, translateQueueErr(err))
+		return fmt.Errorf("queue %q was replaced or removed while it was being captured: %w", r.queueName, err)
 	}
-	if current != r.manager {
-		return fmt.Errorf("queue %q was replaced while it was being captured", r.queueName)
+	if len(messages) == 0 {
+		return fmt.Errorf("queue %q lost offset %d while it was being captured", r.queueName, r.next)
 	}
+
+	buffered := make([]*message.Envelope, 0, len(messages))
+	for i := range messages {
+		if messages[i].Offset != r.next+uint64(i) {
+			releaseEnvelopes(buffered)
+			return fmt.Errorf("queue %q returned offset %d where %d was expected while it was being captured",
+				r.queueName, messages[i].Offset, r.next+uint64(i))
+		}
+		envelope, decodeErr := logMessageToEnvelope(&messages[i])
+		if decodeErr != nil {
+			releaseEnvelopes(buffered)
+			return fmt.Errorf("decode record %d of queue %q: %w", messages[i].Offset, r.queueName, decodeErr)
+		}
+		buffered = append(buffered, envelope)
+	}
+
+	r.buffered = buffered
 	return nil
 }
 

@@ -208,6 +208,54 @@ func TestAdapterQueueSnapshotFailsWhenQueueIsReplaced(t *testing.T) {
 	assert.Contains(t, err.Error(), "replaced")
 }
 
+// The dangerous window is not before the first read but between one batch and
+// the next: a check made against the store by name, followed by a read resolved
+// by name again, can straddle a delete-and-recreate. Reading through the
+// captured handle is what closes it, so replacement partway through a capture
+// has to fail rather than return the new queue's records.
+func TestAdapterQueueSnapshotFailsWhenQueueIsReplacedMidStream(t *testing.T) {
+	ctx := context.Background()
+	adapter := newSnapshotAdapter(t)
+	config := snapshotQueueConfig("replaced-mid-stream")
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+
+	// More than one batch, so the capture must go back to the log part way.
+	const records = snapshotReadBatch + 1
+	for range records {
+		_, err := adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("old")))
+		require.NoError(t, err)
+	}
+
+	reader, err := adapter.OpenQueueSnapshot(ctx, config.Name)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	// Drain the first batch, which came from the captured log.
+	for range snapshotReadBatch {
+		_, envelope, ok, nextErr := reader.Next(ctx)
+		require.NoError(t, nextErr)
+		require.True(t, ok)
+		assert.Equal(t, "old", string(envelope.PayloadBytes()))
+		message.Release(envelope)
+	}
+
+	// The queue is replaced before the capture reaches back for the rest.
+	require.NoError(t, adapter.DeleteQueue(ctx, config.Name))
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+	_, err = adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("new")))
+	require.NoError(t, err)
+
+	_, envelope, ok, err := reader.Next(ctx)
+	if envelope != nil {
+		assert.NotEqual(t, "new", string(envelope.PayloadBytes()),
+			"a capture must never return a replacement queue's records")
+		message.Release(envelope)
+	}
+	assert.False(t, ok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replaced")
+}
+
 // RestoreQueue replaces what is already there: a snapshot is the group's state,
 // not a change to merge into local state.
 func TestAdapterRestoreQueueReplacesExistingRecords(t *testing.T) {
@@ -322,4 +370,58 @@ func TestAdapterOpenQueueSnapshotDefersReads(t *testing.T) {
 	require.True(t, ok)
 	message.Release(envelope)
 	assert.NotEmpty(t, view.buffered, "records are read only once they are asked for")
+}
+
+// This does not reproduce the window a name-resolving reader leaves open —
+// that window is between the check and the read, and scheduling does not land
+// in it reliably enough to fail a test. It guards the invariant instead: under
+// concurrent replacement, a capture must never yield a record from a log it did
+// not open on. The window itself is closed structurally, by the reader holding
+// its segment manager and never resolving the queue by name again.
+func TestAdapterQueueSnapshotNeverReadsAcrossAReplacement(t *testing.T) {
+	ctx := context.Background()
+	config := snapshotQueueConfig("raced")
+
+	for range 20 {
+		adapter := newSnapshotAdapter(t)
+		require.NoError(t, adapter.CreateQueue(ctx, config))
+		for range snapshotReadBatch + 8 {
+			_, err := adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("old")))
+			require.NoError(t, err)
+		}
+
+		reader, err := adapter.OpenQueueSnapshot(ctx, config.Name)
+		require.NoError(t, err)
+
+		// Force the capture past its first batch, so the next read has to go
+		// back to the log while the replacement is landing.
+		_, first, ok, err := reader.Next(ctx)
+		require.NoError(t, err)
+		require.True(t, ok)
+		message.Release(first)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = adapter.DeleteQueue(ctx, config.Name)
+			_ = adapter.CreateQueue(ctx, config)
+			_, _ = adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("new")))
+		}()
+
+		for {
+			_, envelope, more, nextErr := reader.Next(ctx)
+			if envelope != nil {
+				payload := string(envelope.PayloadBytes())
+				message.Release(envelope)
+				require.NotEqual(t, "new", payload,
+					"a capture returned a record from the queue that replaced the one it opened on")
+			}
+			if nextErr != nil || !more {
+				break
+			}
+		}
+
+		<-done
+		require.NoError(t, reader.Close())
+	}
 }
