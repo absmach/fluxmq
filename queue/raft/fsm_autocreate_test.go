@@ -5,7 +5,6 @@ package raft
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -139,9 +138,8 @@ func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 	}
 }
 
-// The operation still travels to the Raft log as JSON; what it carries is now
-// encoded envelope bytes rather than an envelope object tree. This pins that
-// the payload survives that trip.
+// The operation carries the canonical encoded envelope as protobuf bytes. This
+// pins that the pooled payload survives the wire round trip.
 func TestLogFSM_ApplyAppendWithPayloadBufferAfterOperationRoundTrip(t *testing.T) {
 	fsm, store := newTestLogFSM()
 	ctx := context.Background()
@@ -149,7 +147,7 @@ func TestLogFSM_ApplyAppendWithPayloadBufferAfterOperationRoundTrip(t *testing.T
 
 	msg := newQueuedEnvelope("buffered-msg-1", "$queue/"+queueName, []byte("buffered payload"))
 
-	data, err := json.Marshal(&Operation{
+	data, err := marshalOperation(&Operation{
 		Type:      OpAppend,
 		QueueName: queueName,
 		Message:   encodeOperationEnvelope(t, msg),
@@ -158,12 +156,12 @@ func TestLogFSM_ApplyAppendWithPayloadBufferAfterOperationRoundTrip(t *testing.T
 		t.Fatalf("marshal append operation failed: %v", err)
 	}
 
-	var decoded Operation
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	decoded, err := unmarshalOperation(data)
+	if err != nil {
 		t.Fatalf("unmarshal append operation failed: %v", err)
 	}
 
-	result := fsm.applyAppend(ctx, &decoded)
+	result := fsm.applyAppend(ctx, decoded)
 	if result.Error != nil {
 		t.Fatalf("applyAppend returned error: %v", result.Error)
 	}
@@ -174,77 +172,5 @@ func TestLogFSM_ApplyAppendWithPayloadBufferAfterOperationRoundTrip(t *testing.T
 	}
 	if gotPayload := string(got.PayloadBytes()); gotPayload != "buffered payload" {
 		t.Fatalf("expected buffered payload, got %q", gotPayload)
-	}
-}
-
-func TestLogFSM_ApplyAppendBatchAutoCreatesMissingQueue(t *testing.T) {
-	fsm, store := newTestLogFSM()
-	ctx := context.Background()
-	queueName := "demo-batch"
-
-	result := fsm.applyAppendBatch(ctx, &Operation{
-		QueueName: queueName,
-		Messages: [][]byte{
-			encodeOperationEnvelope(t, newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("one"))),
-			encodeOperationEnvelope(t, newQueuedEnvelope("msg-2", "$queue/"+queueName, []byte("two"))),
-		},
-	})
-	if result.Error != nil {
-		t.Fatalf("applyAppendBatch returned error: %v", result.Error)
-	}
-	if result.Offset != 0 {
-		t.Fatalf("expected first offset to be 0, got %d", result.Offset)
-	}
-
-	count, err := store.Count(ctx, queueName)
-	if err != nil {
-		t.Fatalf("count failed: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("expected 2 messages, got %d", count)
-	}
-}
-
-func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterOperationRoundTrip(t *testing.T) {
-	fsm, store := newTestLogFSM()
-	ctx := context.Background()
-	queueName := "demo-buffered-batch"
-
-	first := encodeOperationEnvelope(t, newQueuedEnvelope("batch-msg-1", "$queue/"+queueName, []byte("one")))
-	second := encodeOperationEnvelope(t, newQueuedEnvelope("batch-msg-2", "$queue/"+queueName, []byte("two")))
-
-	data, err := json.Marshal(&Operation{
-		Type:      OpAppendBatch,
-		QueueName: queueName,
-		Messages:  [][]byte{first, second},
-	})
-	if err != nil {
-		t.Fatalf("marshal append batch operation failed: %v", err)
-	}
-
-	var decoded Operation
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal append batch operation failed: %v", err)
-	}
-
-	result := fsm.applyAppendBatch(ctx, &decoded)
-	if result.Error != nil {
-		t.Fatalf("applyAppendBatch returned error: %v", result.Error)
-	}
-
-	got, err := store.Read(ctx, queueName, 0)
-	if err != nil {
-		t.Fatalf("expected first appended message, got error: %v", err)
-	}
-	if gotPayload := string(got.PayloadBytes()); gotPayload != "one" {
-		t.Fatalf("expected first payload one, got %q", gotPayload)
-	}
-
-	got, err = store.Read(ctx, queueName, 1)
-	if err != nil {
-		t.Fatalf("expected second appended message, got error: %v", err)
-	}
-	if gotPayload := string(got.PayloadBytes()); gotPayload != "two" {
-		t.Fatalf("expected second payload two, got %q", gotPayload)
 	}
 }

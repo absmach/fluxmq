@@ -1,0 +1,256 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package fluxmq.raft.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// Operation is the versioned payload of a committed queue Raft command.
+// The oneof makes impossible field combinations unrepresentable on disk.
+message Operation {
+  uint32 version = 1;
+  google.protobuf.Timestamp timestamp = 2;
+
+  oneof command {
+    AppendOperation append = 3;
+    TruncateOperation truncate = 4;
+    CreateGroupOperation create_group = 5;
+    UpdateGroupOperation update_group = 6;
+    DeleteGroupOperation delete_group = 7;
+    UpdateCursorOperation update_cursor = 8;
+    UpdateCommittedOperation update_committed = 9;
+    AddPendingOperation add_pending = 10;
+    RemovePendingOperation remove_pending = 11;
+    TransferPendingOperation transfer_pending = 12;
+    RegisterConsumerOperation register_consumer = 13;
+    UnregisterConsumerOperation unregister_consumer = 14;
+    CreateQueueOperation create_queue = 15;
+    UpdateQueueOperation update_queue = 16;
+    DeleteQueueOperation delete_queue = 17;
+  }
+}
+
+message AppendOperation {
+  string queue_name = 1;
+  bytes envelope = 2;
+  string dedupe_key = 3;
+}
+
+message TruncateOperation {
+  string queue_name = 1;
+  uint64 min_offset = 2;
+}
+
+message CreateGroupOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  ConsumerGroupState group = 3;
+}
+
+message UpdateGroupOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  ConsumerGroupState group = 3;
+}
+
+message DeleteGroupOperation {
+  string queue_name = 1;
+  string group_id = 2;
+}
+
+message UpdateCursorOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  uint64 cursor = 3;
+}
+
+message UpdateCommittedOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  uint64 committed = 3;
+}
+
+message AddPendingOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  PendingEntryState entry = 3;
+}
+
+message RemovePendingOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  string consumer_id = 3;
+  uint64 offset = 4;
+}
+
+message TransferPendingOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  uint64 offset = 3;
+  string from_consumer = 4;
+  string to_consumer = 5;
+}
+
+message RegisterConsumerOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  ConsumerState consumer = 3;
+}
+
+message UnregisterConsumerOperation {
+  string queue_name = 1;
+  string group_id = 2;
+  string consumer_id = 3;
+}
+
+message CreateQueueOperation {
+  string queue_name = 1;
+  QueueConfigState config = 2;
+}
+
+message UpdateQueueOperation {
+  string queue_name = 1;
+  QueueConfigState config = 2;
+}
+
+message DeleteQueueOperation {
+  string queue_name = 1;
+}
+
+message ConsumerGroupState {
+  string id = 1;
+  string queue_name = 2;
+  string pattern = 3;
+  ConsumerGroupMode mode = 4;
+  bool auto_commit = 5;
+  QueueCursorState cursor = 6;
+  repeated PendingEntryState pending = 7;
+  repeated ConsumerState consumers = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+enum ConsumerGroupMode {
+  CONSUMER_GROUP_MODE_UNSPECIFIED = 0;
+  CONSUMER_GROUP_MODE_QUEUE = 1;
+  CONSUMER_GROUP_MODE_STREAM = 2;
+}
+
+message QueueCursorState {
+  uint64 cursor = 1;
+  uint64 committed = 2;
+}
+
+message PendingEntryState {
+  uint64 offset = 1;
+  string consumer_id = 2;
+  google.protobuf.Timestamp claimed_at = 3;
+  int64 delivery_count = 4;
+}
+
+message ConsumerState {
+  string id = 1;
+  string client_id = 2;
+  string proxy_node_id = 3;
+  google.protobuf.Timestamp registered_at = 4;
+  google.protobuf.Timestamp last_heartbeat = 5;
+}
+
+message QueueConfigState {
+  string name = 1;
+  repeated string topics = 2;
+  bool reserved = 3;
+  QueueType type = 4;
+  string primary_group = 5;
+  bool durable = 6;
+  string ack_durability = 7;
+  google.protobuf.Duration expires_after = 8;
+  google.protobuf.Timestamp last_consumer_disconnect = 9;
+  RetryPolicyState retry_policy = 10;
+  DeadLetterState dead_letter = 11;
+  ReplicationState replication = 12;
+  RetentionState retention = 13;
+  int64 max_message_size = 14;
+  int64 max_depth = 15;
+  google.protobuf.Duration message_ttl = 16;
+  google.protobuf.Duration delivery_timeout = 17;
+  int64 batch_size = 18;
+  google.protobuf.Duration heartbeat_timeout = 19;
+}
+
+enum QueueType {
+  QUEUE_TYPE_UNSPECIFIED = 0;
+  QUEUE_TYPE_CLASSIC = 1;
+  QUEUE_TYPE_STREAM = 2;
+}
+
+message RetryPolicyState {
+  int64 max_retries = 1;
+  google.protobuf.Duration initial_backoff = 2;
+  google.protobuf.Duration max_backoff = 3;
+  double backoff_multiplier = 4;
+  google.protobuf.Duration total_timeout = 5;
+}
+
+message DeadLetterState {
+  bool enabled = 1;
+  string topic = 2;
+  string alert_webhook = 3;
+}
+
+message ReplicationState {
+  bool enabled = 1;
+  string group = 2;
+  int64 replication_factor = 3;
+  ReplicationMode mode = 4;
+  int64 min_in_sync_replicas = 5;
+  google.protobuf.Duration ack_timeout = 6;
+  google.protobuf.Duration heartbeat_timeout = 7;
+  google.protobuf.Duration election_timeout = 8;
+  google.protobuf.Duration snapshot_interval = 9;
+  uint64 snapshot_threshold = 10;
+}
+
+enum ReplicationMode {
+  REPLICATION_MODE_UNSPECIFIED = 0;
+  REPLICATION_MODE_SYNC = 1;
+  REPLICATION_MODE_ASYNC = 2;
+}
+
+message RetentionState {
+  google.protobuf.Duration retention_time = 1;
+  google.protobuf.Duration time_check_interval = 2;
+  int64 retention_bytes = 3;
+  int64 retention_messages = 4;
+  int64 size_check_every = 5;
+  bool compaction_enabled = 6;
+  string compaction_key = 7;
+  google.protobuf.Duration compaction_lag = 8;
+  google.protobuf.Duration compaction_interval = 9;
+}
+
+// LogEntry is the Badger representation of hashicorp/raft.Log. Keeping this
+// binary prevents the protobuf operation bytes from being base64-encoded again
+// by a generic JSON serializer.
+message LogEntry {
+  uint32 version = 1;
+  uint64 index = 2;
+  uint64 term = 3;
+  LogType type = 4;
+  bytes data = 5;
+  bytes extensions = 6;
+  google.protobuf.Timestamp appended_at = 7;
+}
+
+enum LogType {
+  LOG_TYPE_UNSPECIFIED = 0;
+  LOG_TYPE_COMMAND = 1;
+  LOG_TYPE_NOOP = 2;
+  LOG_TYPE_ADD_PEER_DEPRECATED = 3;
+  LOG_TYPE_REMOVE_PEER_DEPRECATED = 4;
+  LOG_TYPE_BARRIER = 5;
+  LOG_TYPE_CONFIGURATION = 6;
+}

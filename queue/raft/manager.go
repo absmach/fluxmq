@@ -6,7 +6,6 @@ package raft
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -453,7 +452,7 @@ func (m *Manager) ApplyWithOptions(ctx context.Context, op *Operation, opts Appl
 
 	op.Timestamp = time.Now()
 
-	data, err := json.Marshal(op)
+	data, err := marshalOperation(op)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal operation: %w", err)
 	}

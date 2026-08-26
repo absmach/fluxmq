@@ -24,11 +24,11 @@ type OpType uint8
 const (
 	// Log operations.
 	OpAppend OpType = iota
-	OpAppendBatch
 	OpTruncate
 
 	// Consumer group operations.
 	OpCreateGroup
+	OpUpdateGroup
 	OpDeleteGroup
 	OpUpdateCursor
 	OpUpdateCommitted
@@ -42,63 +42,55 @@ const (
 	OpCreateQueue
 	OpUpdateQueue
 	OpDeleteQueue
-
-	// Full consumer group state update. Appended at the end to keep existing
-	// OpType numeric values stable across upgrades.
-	OpUpdateGroup
 )
 
-// Operation represents a queue operation to be replicated via Raft.
+// Operation is the in-process form of a queue mutation replicated via Raft.
+// operation_codec.go is the only boundary between this domain type and its
+// versioned protobuf representation in the Raft log.
 type Operation struct {
-	Type      OpType    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      OpType
+	Timestamp time.Time
 
 	// Target identifiers
-	QueueName  string `json:"queue_name,omitempty"`
-	GroupID    string `json:"group_id,omitempty"`
-	ConsumerID string `json:"consumer_id,omitempty"`
+	QueueName  string
+	GroupID    string
+	ConsumerID string
 
 	// Message is a binary-encoded envelope for OpAppend.
 	//
-	// Bytes rather than an *Envelope because the operation is JSON on the way
-	// to the Raft log, and a JSON envelope means the highest-volume path in the
-	// broker carries a base64 payload inside an object tree, and the envelope
-	// carries a second encoder that has to stay in step with the binary one for
-	// no other reason.
-	Message []byte `json:"message,omitempty"`
+	// Keeping the encoded envelope here gives the operation one canonical
+	// message representation and lets protobuf carry it as bytes without an
+	// intermediate object tree or base64 layer.
+	Message []byte
 
 	// DedupeKey, when set on OpAppend, makes the append conditional: each
 	// replica appends only if it does not already hold a record with this key.
 	// The key is part of the replicated entry so every replica asks the same
 	// question, rather than the leader answering it alone and shipping a
 	// result the followers cannot verify.
-	DedupeKey string `json:"dedupe_key,omitempty"`
-
-	// Messages are binary-encoded envelopes for OpAppendBatch.
-	Messages [][]byte `json:"messages,omitempty"`
+	DedupeKey string
 
 	// For OpTruncate
-	MinOffset uint64 `json:"min_offset,omitempty"`
+	MinOffset uint64
 
 	// For OpUpdateCursor, OpUpdateCommitted
-	Cursor    uint64 `json:"cursor,omitempty"`
-	Committed uint64 `json:"committed,omitempty"`
+	Cursor    uint64
+	Committed uint64
 
 	// For OpAddPending, OpRemovePending, OpTransferPending
-	PendingEntry *types.PendingEntry `json:"pending_entry,omitempty"`
-	Offset       uint64              `json:"offset,omitempty"`
-	FromConsumer string              `json:"from_consumer,omitempty"`
-	ToConsumer   string              `json:"to_consumer,omitempty"`
+	PendingEntry *types.PendingEntry
+	Offset       uint64
+	FromConsumer string
+	ToConsumer   string
 
 	// For OpRegisterConsumer
-	ConsumerInfo *types.ConsumerInfo `json:"consumer_info,omitempty"`
+	ConsumerInfo *types.ConsumerInfo
 
 	// For OpCreateGroup, OpUpdateGroup
-	GroupState *types.ConsumerGroup `json:"group_state,omitempty"`
-	Pattern    string               `json:"pattern,omitempty"`
+	GroupState *types.ConsumerGroup
 
 	// For OpCreateQueue, OpUpdateQueue
-	QueueConfig *types.QueueConfig `json:"queue_config,omitempty"`
+	QueueConfig *types.QueueConfig
 }
 
 // ApplyResult holds the result of an FSM apply operation.
@@ -136,8 +128,8 @@ func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupSt
 // Apply applies a Raft log entry to the FSM.
 // This is called by Raft when a log entry is committed.
 func (f *LogFSM) Apply(l *raft.Log) any {
-	var op Operation
-	if err := json.Unmarshal(l.Data, &op); err != nil {
+	op, err := unmarshalOperation(l.Data)
+	if err != nil {
 		f.logger.Error("failed to unmarshal operation",
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -147,37 +139,35 @@ func (f *LogFSM) Apply(l *raft.Log) any {
 
 	switch op.Type {
 	case OpCreateQueue:
-		return f.applyCreateQueue(ctx, &op)
+		return f.applyCreateQueue(ctx, op)
 	case OpUpdateQueue:
-		return f.applyUpdateQueue(ctx, &op)
+		return f.applyUpdateQueue(ctx, op)
 	case OpDeleteQueue:
-		return f.applyDeleteQueue(ctx, &op)
+		return f.applyDeleteQueue(ctx, op)
 	case OpAppend:
-		return f.applyAppend(ctx, &op)
-	case OpAppendBatch:
-		return f.applyAppendBatch(ctx, &op)
+		return f.applyAppend(ctx, op)
 	case OpTruncate:
-		return f.applyTruncate(ctx, &op)
+		return f.applyTruncate(ctx, op)
 	case OpCreateGroup:
-		return f.applyCreateGroup(ctx, &op)
+		return f.applyCreateGroup(ctx, op)
 	case OpUpdateGroup:
-		return f.applyUpdateGroup(ctx, &op)
+		return f.applyUpdateGroup(ctx, op)
 	case OpDeleteGroup:
-		return f.applyDeleteGroup(ctx, &op)
+		return f.applyDeleteGroup(ctx, op)
 	case OpUpdateCursor:
-		return f.applyUpdateCursor(ctx, &op)
+		return f.applyUpdateCursor(ctx, op)
 	case OpUpdateCommitted:
-		return f.applyUpdateCommitted(ctx, &op)
+		return f.applyUpdateCommitted(ctx, op)
 	case OpAddPending:
-		return f.applyAddPending(ctx, &op)
+		return f.applyAddPending(ctx, op)
 	case OpRemovePending:
-		return f.applyRemovePending(ctx, &op)
+		return f.applyRemovePending(ctx, op)
 	case OpTransferPending:
-		return f.applyTransferPending(ctx, &op)
+		return f.applyTransferPending(ctx, op)
 	case OpRegisterConsumer:
-		return f.applyRegisterConsumer(ctx, &op)
+		return f.applyRegisterConsumer(ctx, op)
 	case OpUnregisterConsumer:
-		return f.applyUnregisterConsumer(ctx, &op)
+		return f.applyUnregisterConsumer(ctx, op)
 	default:
 		err := fmt.Errorf("unknown operation type: %d", op.Type)
 		f.logger.Error("unknown operation",
@@ -331,56 +321,6 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 		slog.Bool("deduplicated", deduplicated))
 
 	return &ApplyResult{Offset: offset, Deduplicated: deduplicated}
-}
-
-func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResult {
-	if len(op.Messages) == 0 {
-		return &ApplyResult{Error: fmt.Errorf("empty messages in append batch operation")}
-	}
-
-	envelopes := make([]*message.Envelope, 0, len(op.Messages))
-	for _, encoded := range op.Messages {
-		envelope, err := decodeOperationMessage(encoded)
-		if err != nil {
-			releaseMessages(envelopes)
-			return &ApplyResult{Error: err}
-		}
-		envelopes = append(envelopes, envelope)
-	}
-	count := len(envelopes)
-
-	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, envelopes)
-	if errors.Is(err, storage.ErrQueueNotFound) {
-		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
-			releaseMessages(envelopes)
-			f.logger.Error("failed to auto-create queue for append batch",
-				slog.String("queue", op.QueueName),
-				slog.String("error", createErr.Error()))
-			return &ApplyResult{Error: createErr}
-		}
-		offset, err = f.queueStore.AppendBatch(ctx, op.QueueName, envelopes)
-	}
-	if err != nil {
-		releaseMessages(envelopes)
-		f.logger.Error("failed to apply append batch",
-			slog.String("queue", op.QueueName),
-			slog.Int("count", count),
-			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
-	}
-
-	f.logger.Debug("applied append batch",
-		slog.String("queue", op.QueueName),
-		slog.Int("count", count),
-		slog.Uint64("first_offset", offset))
-
-	return &ApplyResult{Offset: offset}
-}
-
-func releaseMessages(messages []*message.Envelope) {
-	for _, msg := range messages {
-		message.Release(msg)
-	}
 }
 
 func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {
