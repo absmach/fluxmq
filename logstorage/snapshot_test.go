@@ -6,6 +6,7 @@ package logstorage
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
@@ -55,8 +56,7 @@ func TestAdapterSnapshotRoundTripsRecords(t *testing.T) {
 	// Retention has taken the first two, so the log no longer starts at zero.
 	require.NoError(t, source.Truncate(ctx, config.Name, 2))
 
-	head, records, err := source.SnapshotQueue(ctx, config.Name)
-	require.NoError(t, err)
+	head, records := drainQueueSnapshot(t, source, config.Name)
 	assert.Equal(t, uint64(2), head)
 	require.Len(t, records, 2)
 
@@ -94,8 +94,7 @@ func TestAdapterRestoreRebuildsDeduplicationIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, deduplicated)
 
-	head, records, err := source.SnapshotQueue(ctx, config.Name)
-	require.NoError(t, err)
+	head, records := drainQueueSnapshot(t, source, config.Name)
 	require.Len(t, records, 1)
 
 	target := newSnapshotAdapter(t)
@@ -113,7 +112,10 @@ func TestAdapterRestoreRebuildsDeduplicationIndex(t *testing.T) {
 	assert.Equal(t, uint64(1), count, "a recognised retry must not append a second record")
 }
 
-func TestAdapterRestoreRecordRejectsOffsetGap(t *testing.T) {
+// Raft reports a failed install without moving lastApplied, so a record written
+// before the rejection is left in a store the FSM believes it never touched.
+// Refusing has to happen before anything is durable.
+func TestAdapterRestoreRecordRejectsOffsetGapWithoutWriting(t *testing.T) {
 	ctx := context.Background()
 	adapter := newSnapshotAdapter(t)
 	config := snapshotQueueConfig("gapped")
@@ -121,6 +123,52 @@ func TestAdapterRestoreRecordRejectsOffsetGap(t *testing.T) {
 
 	err := adapter.RestoreRecord(ctx, config.Name, 11, message.New(config.Name+"/x", []byte("payload")))
 	assert.ErrorIs(t, err, storage.ErrOffsetOutOfRange, "a record that does not continue the log must be refused")
+
+	count, err := adapter.Count(ctx, config.Name)
+	require.NoError(t, err)
+	assert.Zero(t, count, "a refused record must not be written")
+
+	tail, err := adapter.Tail(ctx, config.Name)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(10), tail, "a refused record must not move the tail")
+
+	_, err = adapter.Read(ctx, config.Name, 10)
+	assert.Error(t, err, "a refused record must not be readable")
+}
+
+// The operational cursor and pending list live in the log store, not beside the
+// group metadata: delivery, acknowledgement and redelivery all read them there.
+// A restored group written only to the metadata store reads back with a cursor
+// of zero and a pending list no settlement can act on.
+func TestAdapterCreateConsumerGroupSeedsOperationalState(t *testing.T) {
+	ctx := context.Background()
+	adapter := newSnapshotAdapter(t)
+	config := snapshotQueueConfig("jobs")
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+
+	claimedAt := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+	group := &types.ConsumerGroup{
+		ID: "workers", QueueName: config.Name, Mode: types.GroupModeQueue,
+		Cursor: &types.QueueCursor{Cursor: 8, Committed: 7},
+		PEL: map[string][]*types.PendingEntry{
+			"c1": {{Offset: 6, ConsumerID: "c1", ClaimedAt: claimedAt, DeliveryCount: 3}},
+		},
+		Consumers: map[string]*types.ConsumerInfo{},
+	}
+	require.NoError(t, adapter.CreateConsumerGroup(ctx, group))
+
+	got, err := adapter.GetConsumerGroup(ctx, config.Name, "workers")
+	require.NoError(t, err)
+	snapshot := got.Snapshot()
+	assert.Equal(t, uint64(8), snapshot.Cursor.Cursor, "the cursor must survive the restore")
+	require.Len(t, snapshot.PEL["c1"], 1)
+	assert.Equal(t, uint64(6), snapshot.PEL["c1"][0].Offset)
+	assert.Equal(t, 3, snapshot.PEL["c1"][0].DeliveryCount,
+		"the attempt count decides redelivery and dead-lettering, so it must survive too")
+
+	// The entry has to be actionable, not merely visible.
+	assert.NoError(t, adapter.RemovePendingEntry(ctx, config.Name, "workers", "c1", 6),
+		"a restored pending entry must be settleable")
 }
 
 // RestoreQueue replaces what is already there: a snapshot is the group's state,
@@ -187,4 +235,54 @@ func TestAdapterRestoreSurvivesReopen(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "restored", string(got.PayloadBytes()))
 	message.Release(got)
+}
+
+// drainQueueSnapshot reads a captured view to the end, the way Persist does.
+func drainQueueSnapshot(t *testing.T, adapter *Adapter, queueName string) (uint64, []*message.Envelope) {
+	t.Helper()
+
+	reader, err := adapter.OpenQueueSnapshot(context.Background(), queueName)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	var records []*message.Envelope
+	for {
+		_, envelope, ok, nextErr := reader.Next(context.Background())
+		require.NoError(t, nextErr)
+		if !ok {
+			return reader.Head(), records
+		}
+		records = append(records, envelope)
+	}
+}
+
+// A snapshot is taken on the raft goroutine, which cannot apply entries while it
+// runs. Opening the view must therefore not read the queue.
+func TestAdapterOpenQueueSnapshotDefersReads(t *testing.T) {
+	ctx := context.Background()
+	adapter := newSnapshotAdapter(t)
+	config := snapshotQueueConfig("deferred")
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+
+	for range 4 {
+		_, err := adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("payload")))
+		require.NoError(t, err)
+	}
+
+	reader, err := adapter.OpenQueueSnapshot(ctx, config.Name)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	assert.Equal(t, uint64(0), reader.Head())
+	assert.Equal(t, uint64(4), reader.Tail(), "the range is captured up front")
+
+	view, ok := reader.(*adapterQueueSnapshot)
+	require.True(t, ok)
+	assert.Empty(t, view.buffered, "opening the view must not have read any record")
+
+	_, envelope, ok, err := reader.Next(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	message.Release(envelope)
+	assert.NotEmpty(t, view.buffered, "records are read only once they are asked for")
 }

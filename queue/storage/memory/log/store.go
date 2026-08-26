@@ -860,29 +860,59 @@ func (s *Store) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey stri
 // record is covered: the index is pruned only by truncation.
 func (s *Store) DeduplicationWindow() int { return 0 }
 
-// SnapshotQueue implements storage.SnapshotableQueueStore.
+// OpenQueueSnapshot implements storage.SnapshotableQueueStore.
 //
-// The records are cloned rather than referenced because the snapshot is
-// serialized after the FSM has moved on: a clone is an O(1) metadata copy that
-// retains the payload, so capturing a whole log costs a pooled envelope and a
-// refcount per record rather than a copy of the bytes.
-func (s *Store) SnapshotQueue(ctx context.Context, queueName string) (uint64, []*message.Envelope, error) {
+// The whole log is in memory and has no read view, so the records are cloned
+// under the queue lock and the reader walks that copy. A clone is an O(1)
+// metadata copy that retains the payload, so capturing a log costs a pooled
+// envelope and a refcount per record rather than a copy of the bytes.
+func (s *Store) OpenQueueSnapshot(ctx context.Context, queueName string) (storage.QueueSnapshotReader, error) {
 	sl, err := s.getQueueLog(queueName)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
 	sl.mu.RLock()
 	defer sl.mu.RUnlock()
 	if sl.deleted {
-		return 0, nil, storage.ErrQueueNotFound
+		return nil, storage.ErrQueueNotFound
 	}
 
 	records := make([]*message.Envelope, 0, len(sl.messages))
 	for _, envelope := range sl.messages {
 		records = append(records, envelope.Clone())
 	}
-	return sl.head, records, nil
+	return &memoryQueueSnapshot{head: sl.head, tail: sl.head + uint64(len(records)), records: records}, nil
+}
+
+// memoryQueueSnapshot walks the clones captured when it was opened.
+type memoryQueueSnapshot struct {
+	head    uint64
+	tail    uint64
+	records []*message.Envelope
+	next    int
+}
+
+func (r *memoryQueueSnapshot) Head() uint64 { return r.head }
+func (r *memoryQueueSnapshot) Tail() uint64 { return r.tail }
+
+func (r *memoryQueueSnapshot) Next(context.Context) (uint64, *message.Envelope, bool, error) {
+	if r.next >= len(r.records) {
+		return 0, nil, false, nil
+	}
+	envelope := r.records[r.next]
+	r.records[r.next] = nil
+	offset := r.head + uint64(r.next)
+	r.next++
+	return offset, envelope, true, nil
+}
+
+func (r *memoryQueueSnapshot) Close() error {
+	for _, envelope := range r.records[r.next:] {
+		message.Release(envelope)
+	}
+	r.records = nil
+	return nil
 }
 
 // RestoreQueue implements storage.SnapshotableQueueStore.

@@ -248,6 +248,11 @@ const (
 	OpClaimBatch
 	OpAdvanceFloor
 	OpSetCursor
+
+	// OpRestorePending seeds a pending entry exactly as a snapshot recorded it.
+	// Appended last so the values of the operations above stay stable in op
+	// logs already on disk.
+	OpRestorePending
 )
 
 // Operation represents an operation in the log.
@@ -257,6 +262,12 @@ type Operation struct {
 	Offsets    []uint64 `json:"os,omitempty"` // For batch operations
 	ConsumerID string   `json:"c,omitempty"`
 	Timestamp  int64    `json:"ts"`
+
+	// DeliveryCount carries the attempt count of a restored pending entry.
+	// Delivery alone cannot express it: redelivery timing and the dead-letter
+	// threshold both read it, so a restored replica that reset it to one would
+	// give a record more attempts than the rest of the group agreed on.
+	DeliveryCount uint16 `json:"dc,omitempty"`
 }
 
 // replayOpLog replays the operation log on top of loaded snapshots.
@@ -312,6 +323,8 @@ func (cs *ConsumerState) applyOp(op *Operation) {
 		cs.applyAdvanceFloor(op.Offset)
 	case OpSetCursor:
 		cs.applySetCursor(op.Offset, op.Timestamp)
+	case OpRestorePending:
+		cs.applyRestorePending(op.Offset, op.ConsumerID, op.Timestamp, op.DeliveryCount)
 	}
 }
 
@@ -340,6 +353,35 @@ func (cs *ConsumerState) applyDeliver(offset uint64, consumerID string, ts int64
 	}
 	shard.byConsumer[consumerID][offset] = struct{}{}
 	shard.dirty = true
+}
+
+// applyRestorePending puts a pending entry back as a snapshot recorded it.
+//
+// Unlike a delivery it leaves the cursor alone. A snapshot states the cursor
+// itself, and the entries it carries sit below that position by definition, so
+// letting each one drag the cursor forward would end the restore somewhere the
+// group never was.
+func (cs *ConsumerState) applyRestorePending(offset uint64, consumerID string, ts int64, deliveryCount uint16) {
+	if deliveryCount == 0 {
+		deliveryCount = 1
+	}
+
+	entry := &PendingEntry{
+		Offset:        offset,
+		ConsumerID:    consumerID,
+		DeliveredAt:   ts,
+		DeliveryCount: deliveryCount,
+		LastAttempt:   ts,
+	}
+
+	shard := cs.pelShards[cs.ShardKey(offset)]
+	shard.entries[offset] = entry
+	if shard.byConsumer[consumerID] == nil {
+		shard.byConsumer[consumerID] = make(map[uint64]struct{})
+	}
+	shard.byConsumer[consumerID][offset] = struct{}{}
+	shard.dirty = true
+	cs.state.UpdatedAt = ts
 }
 
 // applyAck applies an ack operation.
@@ -478,6 +520,27 @@ func (cs *ConsumerState) Deliver(offset uint64, consumerID string) error {
 		Offset:     offset,
 		ConsumerID: consumerID,
 		Timestamp:  ts,
+	})
+}
+
+// RestorePending puts a pending entry back with the consumer, claim time and
+// attempt count a snapshot recorded for it.
+func (cs *ConsumerState) RestorePending(offset uint64, consumerID string, claimedAt time.Time, deliveryCount uint16) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	ts := claimedAt.UnixMilli()
+	if claimedAt.IsZero() {
+		ts = time.Now().UnixMilli()
+	}
+	cs.applyRestorePending(offset, consumerID, ts, deliveryCount)
+
+	return cs.writeOp(&Operation{
+		Type:          OpRestorePending,
+		Offset:        offset,
+		ConsumerID:    consumerID,
+		Timestamp:     ts,
+		DeliveryCount: deliveryCount,
 	})
 }
 

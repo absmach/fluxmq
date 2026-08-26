@@ -13,6 +13,7 @@ import (
 	raftv1 "github.com/absmach/fluxmq/pkg/proto/raft/v1"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/encoding/protodelim"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -50,6 +51,16 @@ func newSnapshotWriter(w io.Writer) *snapshotWriter {
 }
 
 func (sw *snapshotWriter) writeFrame(frame *raftv1.SnapshotFrame) error {
+	// A frame larger than the reader accepts must not be written at all. Raft
+	// compacts the log against a snapshot it was told succeeded, so a frame
+	// that only fails on the way back in produces a snapshot nothing can
+	// restore and a log that no longer holds what it described. Nothing bounds
+	// max_message_size from above, so this is checked rather than assumed.
+	if size := int64(proto.Size(frame)); size > snapshotMaxFrame {
+		return fmt.Errorf("%w: frame of %d bytes exceeds the %d byte limit a restore accepts",
+			errMalformedSnapshot, size, snapshotMaxFrame)
+	}
+
 	n, err := protodelim.MarshalTo(sw.w, frame)
 	if err != nil {
 		return fmt.Errorf("write queue raft snapshot frame: %w", err)

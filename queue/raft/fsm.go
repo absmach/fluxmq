@@ -619,7 +619,7 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 			return nil, fmt.Errorf("failed to list consumer groups of queue %q: %w", queueName, err)
 		}
 
-		head, records, err := snapshotable.SnapshotQueue(ctx, queueName)
+		reader, err := snapshotable.OpenQueueSnapshot(ctx, queueName)
 		if err != nil {
 			snapshot.Release()
 			return nil, fmt.Errorf("failed to capture queue %q: %w", queueName, err)
@@ -642,10 +642,10 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 				QueueName:   queueName,
 				QueueConfig: &cfgCopy,
 				Groups:      captured,
-				Head:        head,
-				Tail:        head + uint64(len(records)),
+				Head:        reader.Head(),
+				Tail:        reader.Tail(),
 			},
-			records: records,
+			reader: reader,
 		})
 	}
 
@@ -681,9 +681,26 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 	var (
 		current    string
+		expected   uint64
+		next       uint64
 		queueCount int
 		records    uint64
 	)
+	// Each queue frame states the tail its records reach. Checking it as the
+	// next queue opens, and again at the end, is what separates a snapshot that
+	// carried everything from one that was cut short: both decode cleanly, and
+	// raft compacts the log against either.
+	closeQueue := func() error {
+		if current == "" {
+			return nil
+		}
+		if next != expected {
+			return fmt.Errorf("%w: queue %q declared tail %d but carried records to %d",
+				errMalformedSnapshot, current, expected, next)
+		}
+		return nil
+	}
+
 	for {
 		entry, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -697,10 +714,13 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 		switch {
 		case entry.Queue != nil:
+			if err := closeQueue(); err != nil {
+				return err
+			}
 			if err := f.restoreQueue(ctx, snapshotable, entry.Queue); err != nil {
 				return err
 			}
-			current = entry.Queue.QueueName
+			current, expected, next = entry.Queue.QueueName, entry.Queue.Tail, entry.Queue.Head
 			queueCount++
 		case entry.Record != nil:
 			if current == "" {
@@ -717,8 +737,13 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 					slog.String("error", err.Error()))
 				return err
 			}
+			next = entry.Record.Offset + 1
 			records++
 		}
+	}
+
+	if err := closeQueue(); err != nil {
+		return err
 	}
 
 	f.logger.Info("restored snapshot",
@@ -802,12 +827,12 @@ func (f *LogFSM) resetState(ctx context.Context, store storage.SnapshotableQueue
 	return nil
 }
 
-// capturedQueue is a queue's metadata plus the records captured with it. The
-// records are clones, so they stay valid while the FSM moves on and Persist
-// serializes them.
+// capturedQueue is a queue's metadata plus the open view its records are read
+// from. Holding a reader rather than the records is what keeps taking a
+// snapshot independent of how much the queue holds.
 type capturedQueue struct {
 	QueueSnapshotData
-	records []*message.Envelope
+	reader storage.QueueSnapshotReader
 }
 
 // GlobalSnapshot implements raft.FSMSnapshot for all queues.
@@ -818,9 +843,9 @@ type GlobalSnapshot struct {
 
 // Persist streams the snapshot to the sink.
 //
-// Records are encoded one frame at a time rather than gathered into a single
-// message, so what this costs in memory does not grow with what the queues
-// hold.
+// Records are read from the captured views and encoded one frame at a time, so
+// neither the read nor the write side holds more than a record and whatever
+// batch the store reads under it.
 func (s *GlobalSnapshot) Persist(sink raft.SnapshotSink) error {
 	writer := newSnapshotWriter(sink)
 	if err := s.write(writer); err != nil {
@@ -851,26 +876,40 @@ func (s *GlobalSnapshot) write(writer *snapshotWriter) error {
 		if err := writer.WriteQueue(queue.QueueSnapshotData); err != nil {
 			return err
 		}
-		offset := queue.Head
-		for _, record := range queue.records {
-			encoded, err := message.MarshalBinary(record)
-			if err != nil {
-				return fmt.Errorf("encode record %d of queue %q: %w", offset, queue.QueueName, err)
-			}
-			if err := writer.WriteRecord(offset, encoded); err != nil {
-				return err
-			}
-			offset++
+		if err := writeQueueRecords(writer, queue); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// Release drops the record clones captured for this snapshot.
+func writeQueueRecords(writer *snapshotWriter, queue capturedQueue) error {
+	ctx := context.Background()
+	for {
+		offset, record, ok, err := queue.reader.Next(ctx)
+		if err != nil {
+			return fmt.Errorf("read record of queue %q: %w", queue.QueueName, err)
+		}
+		if !ok {
+			return nil
+		}
+
+		encoded, err := message.MarshalBinary(record)
+		message.Release(record)
+		if err != nil {
+			return fmt.Errorf("encode record %d of queue %q: %w", offset, queue.QueueName, err)
+		}
+		if err := writer.WriteRecord(offset, encoded); err != nil {
+			return err
+		}
+	}
+}
+
+// Release closes the views this snapshot was captured from.
 func (s *GlobalSnapshot) Release() {
 	for _, queue := range s.queues {
-		for _, record := range queue.records {
-			message.Release(record)
+		if queue.reader != nil {
+			_ = queue.reader.Close()
 		}
 	}
 	s.queues = nil

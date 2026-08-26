@@ -18,49 +18,78 @@ import (
 // holds the whole set either way.
 const snapshotReadBatch = 256
 
-// SnapshotQueue implements storage.SnapshotableQueueStore.
+// OpenQueueSnapshot implements storage.SnapshotableQueueStore.
 //
-// The range is fixed to the head and tail observed at the start. Retention runs
-// outside the raft group and can truncate underneath a capture; a record that
-// has gone by the time it is read fails the snapshot rather than silently
-// producing one with a hole, since raft compacts the log against whatever this
-// returns.
-func (a *Adapter) SnapshotQueue(ctx context.Context, queueName string) (uint64, []*message.Envelope, error) {
+// Only the offset range is captured. Segments are append-only files, so the
+// records in [head, tail) do not change under the reader; the one thing that
+// can remove them is retention, and a record that has gone by the time it is
+// read fails the snapshot rather than leaving a hole in it, since raft compacts
+// the log against whatever the snapshot reports.
+//
+// Reading is deferred so that taking a snapshot does not scan the queue on the
+// raft goroutine, which cannot apply entries while it runs.
+func (a *Adapter) OpenQueueSnapshot(ctx context.Context, queueName string) (storage.QueueSnapshotReader, error) {
 	if err := a.queueConfigExists(queueName); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
 	head, err := a.store.Head(queueName)
 	if err != nil {
-		return 0, nil, translateQueueErr(err)
+		return nil, translateQueueErr(err)
 	}
 	tail, err := a.store.Tail(queueName)
 	if err != nil {
-		return 0, nil, translateQueueErr(err)
+		return nil, translateQueueErr(err)
 	}
 	if tail < head {
-		return 0, nil, fmt.Errorf("queue %q tail %d precedes head %d", queueName, tail, head)
+		return nil, fmt.Errorf("queue %q tail %d precedes head %d", queueName, tail, head)
 	}
 
-	records := make([]*message.Envelope, 0, tail-head)
-	for offset := head; offset < tail; {
-		limit := min(int(tail-offset), snapshotReadBatch)
+	return &adapterQueueSnapshot{adapter: a, queueName: queueName, head: head, tail: tail, next: head}, nil
+}
 
-		batch, readErr := a.ReadBatch(ctx, queueName, offset, limit)
-		if readErr != nil {
-			releaseEnvelopes(records)
-			return 0, nil, fmt.Errorf("read queue %q at offset %d: %w", queueName, offset, readErr)
+// adapterQueueSnapshot reads a fixed offset range in batches, so the memory it
+// needs is one batch rather than the queue.
+type adapterQueueSnapshot struct {
+	adapter   *Adapter
+	queueName string
+	head      uint64
+	tail      uint64
+	next      uint64
+	buffered  []*message.Envelope
+}
+
+func (r *adapterQueueSnapshot) Head() uint64 { return r.head }
+func (r *adapterQueueSnapshot) Tail() uint64 { return r.tail }
+
+func (r *adapterQueueSnapshot) Next(ctx context.Context) (uint64, *message.Envelope, bool, error) {
+	if len(r.buffered) == 0 {
+		if r.next >= r.tail {
+			return 0, nil, false, nil
+		}
+
+		limit := min(int(r.tail-r.next), snapshotReadBatch)
+		batch, err := r.adapter.ReadBatch(ctx, r.queueName, r.next, limit)
+		if err != nil {
+			return 0, nil, false, fmt.Errorf("read queue %q at offset %d: %w", r.queueName, r.next, err)
 		}
 		if len(batch) == 0 {
-			releaseEnvelopes(records)
-			return 0, nil, fmt.Errorf("queue %q lost offset %d while it was being captured", queueName, offset)
+			return 0, nil, false, fmt.Errorf("queue %q lost offset %d while it was being captured", r.queueName, r.next)
 		}
-
-		records = append(records, batch...)
-		offset += uint64(len(batch))
+		r.buffered = batch
 	}
 
-	return head, records, nil
+	envelope := r.buffered[0]
+	r.buffered = r.buffered[1:]
+	offset := r.next
+	r.next++
+	return offset, envelope, true, nil
+}
+
+func (r *adapterQueueSnapshot) Close() error {
+	releaseEnvelopes(r.buffered)
+	r.buffered = nil
+	return nil
 }
 
 // RestoreQueue implements storage.SnapshotableQueueStore.
@@ -111,6 +140,22 @@ func (a *Adapter) RestoreRecord(ctx context.Context, queueName string, offset ui
 	queueLock.Lock()
 	defer queueLock.Unlock()
 
+	// The offset is checked against the tail before anything is written. A
+	// snapshot describes a contiguous log, so an offset that does not continue
+	// it means the stream is damaged — and raft reports a failed install
+	// without moving lastApplied, so a record appended before the rejection
+	// would be left behind in a store the FSM believes it never touched.
+	tail, err := a.store.Tail(queueName)
+	if err != nil {
+		message.Release(msg)
+		return translateQueueErr(err)
+	}
+	if offset != tail {
+		message.Release(msg)
+		return fmt.Errorf("%w: restoring queue %q expected offset %d, snapshot carried %d",
+			storage.ErrOffsetOutOfRange, queueName, tail, offset)
+	}
+
 	value, key, headers, err := encodeMessage(msg)
 	if err != nil {
 		message.Release(msg)
@@ -125,8 +170,6 @@ func (a *Adapter) RestoreRecord(ctx context.Context, queueName string, offset ui
 	}
 	message.Release(msg)
 
-	// A snapshot describes a contiguous log. An offset that does not continue it
-	// means the stream is damaged, and every later record would land wrong.
 	if assigned != offset {
 		return fmt.Errorf("%w: restoring queue %q expected offset %d, log assigned %d",
 			storage.ErrOffsetOutOfRange, queueName, offset, assigned)

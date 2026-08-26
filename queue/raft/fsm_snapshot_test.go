@@ -482,3 +482,25 @@ type failingGroupStore struct{ noopGroupStore }
 func (failingGroupStore) ListConsumerGroups(context.Context, string) ([]*types.ConsumerGroup, error) {
 	return nil, errors.New("group store is unavailable")
 }
+
+// A queue frame states the tail its records reach. A snapshot cut short decodes
+// as cleanly as a complete one, and raft compacts the log against either, so the
+// declared tail has to be checked at the next queue and again at the end.
+func TestLogFSMRestoreRejectsShortSnapshot(t *testing.T) {
+	store := memlog.New()
+	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
+
+	config := conformanceQueueConfig()
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	require.NoError(t, writer.WriteHeader(conformanceTime))
+	// Declares two records, carries one.
+	require.NoError(t, writer.WriteQueue(QueueSnapshotData{
+		QueueName: config.Name, QueueConfig: &config, Head: 0, Tail: 2,
+	}))
+	require.NoError(t, writer.WriteRecord(0, encodeOperationEnvelope(t,
+		newQueuedEnvelope("only", "$queue/"+config.Name, []byte("only")))))
+
+	err := fsm.Restore(io.NopCloser(bytes.NewReader(buf.Bytes())))
+	assert.ErrorIs(t, err, errMalformedSnapshot, "a snapshot that stops short of its declared tail must be refused")
+}

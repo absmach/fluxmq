@@ -230,3 +230,18 @@ func completeWireQueueConfig() *raftv1.QueueConfigState {
 		Retention:   &raftv1.RetentionState{},
 	}
 }
+
+// A frame larger than a restore accepts must not be written. Nothing bounds
+// max_message_size from above, and raft compacts the log against a snapshot it
+// was told succeeded, so a frame that only fails on the way back in leaves a
+// snapshot nothing can restore and a log that no longer holds what it described.
+func TestSnapshotCodecRefusesFrameLargerThanARestoreAccepts(t *testing.T) {
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	require.NoError(t, writer.WriteHeader(conformanceTime))
+
+	oversized := make([]byte, snapshotMaxFrame+1)
+	err := writer.WriteRecord(0, oversized)
+	assert.ErrorIs(t, err, errMalformedSnapshot, "an unrestorable frame must not be written")
+	assert.Equal(t, int64(buf.Len()), writer.written, "a refused frame must not reach the sink")
+}

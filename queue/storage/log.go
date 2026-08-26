@@ -98,6 +98,24 @@ type QueueStore interface {
 	Count(ctx context.Context, queueName string) (uint64, error)
 }
 
+// QueueSnapshotReader streams one queue's records in ascending offset order
+// from the view held open when it was opened. Close releases whatever the view
+// holds and must be called.
+type QueueSnapshotReader interface {
+	// Head is the offset the captured log begins at.
+	Head() uint64
+
+	// Tail is one past the last offset the captured log holds.
+	Tail() uint64
+
+	// Next reports the next record and its offset, or ok false at the end of
+	// the view. The caller takes ownership of the envelope and must release it.
+	Next(ctx context.Context) (offset uint64, msg *message.Envelope, ok bool, err error)
+
+	// Close releases the view.
+	Close() error
+}
+
 // SnapshotableQueueStore is a queue store whose logs can be captured for a
 // Raft snapshot and rebuilt from one.
 //
@@ -116,10 +134,16 @@ type QueueStore interface {
 type SnapshotableQueueStore interface {
 	QueueStore
 
-	// SnapshotQueue returns the queue's first valid offset and an owned copy of
-	// every record it holds, in ascending offset order. The caller must release
-	// every returned envelope.
-	SnapshotQueue(ctx context.Context, queueName string) (head uint64, records []*message.Envelope, err error)
+	// OpenQueueSnapshot captures a stable view of a queue's log that can be
+	// read after the store has moved on.
+	//
+	// It returns a reader rather than the records themselves because a snapshot
+	// is taken on the raft goroutine, which cannot apply entries while it runs,
+	// and is serialized afterwards. Materializing every retained record here
+	// would stop writes for a whole scan of the queue and hold every payload at
+	// once. What a store captures to make the view stable is its own business;
+	// what it must not do is make that capture proportional to the log.
+	OpenQueueSnapshot(ctx context.Context, queueName string) (QueueSnapshotReader, error)
 
 	// RestoreQueue replaces any queue of this name with an empty log whose next
 	// offset is head, so restored records keep the offsets they were written at.
