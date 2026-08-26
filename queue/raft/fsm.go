@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
@@ -107,21 +108,47 @@ type ApplyResult struct {
 // It applies committed operations to the underlying queue and consumer group stores.
 // This is a shared FSM that handles all queues based on operation data.
 type LogFSM struct {
+	// groupID names the raft group this FSM replicates.
+	//
+	// Every group in the process shares one queue store, so a queue belongs to
+	// exactly one of them — the group named by its replication config — and a
+	// snapshot must describe that group's queues alone. A snapshot covering
+	// every queue would, on install, overwrite the queues of the other groups
+	// and delete the ones that are not replicated at all.
+	groupID string
+
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	logger     *slog.Logger
 }
 
 // NewLogFSM creates a new FSM for queue operations.
-func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *LogFSM {
+func NewLogFSM(groupID string, queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *LogFSM {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &LogFSM{
+		groupID:    groupID,
 		queueStore: queueStore,
 		groupStore: groupStore,
 		logger:     logger,
 	}
+}
+
+// owns reports whether a queue is replicated by this FSM's raft group.
+//
+// A queue with replication disabled belongs to no group and is never carried
+// by a snapshot; one with replication enabled belongs to the group it names,
+// defaulting to DefaultGroupID when it names none.
+func (f *LogFSM) owns(config types.QueueConfig) bool {
+	if !config.Replication.Enabled {
+		return false
+	}
+	group := strings.TrimSpace(config.Replication.Group)
+	if group == "" {
+		group = DefaultGroupID
+	}
+	return group == f.groupID
 }
 
 // Apply applies a Raft log entry to the FSM.
@@ -329,8 +356,29 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 	return &ApplyResult{Offset: offset, Deduplicated: deduplicated}
 }
 
+// ensureQueueExists creates the queue an append names when it is not here yet.
+//
+// The queue is tagged as replicated by this group because that is what it is:
+// it came into being through this group's log, on every replica, and the
+// records about to land in it are replicated the same way. Left untagged it
+// would belong to no group, so no snapshot would carry it and its records
+// would be lost the first time the log was compacted.
 func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {
 	cfg := types.DefaultEphemeralQueueConfig(queueName, "$queue/"+queueName+"/#")
+	cfg.Replication.Enabled = true
+	cfg.Replication.Group = f.groupID
+	if cfg.Replication.ReplicationFactor < 1 {
+		cfg.Replication.ReplicationFactor = 1
+	}
+	if cfg.Replication.MinInSyncReplicas < 1 {
+		cfg.Replication.MinInSyncReplicas = 1
+	}
+	if cfg.Replication.Mode == "" {
+		cfg.Replication.Mode = types.ReplicationSync
+	}
+	if cfg.Replication.AckTimeout <= 0 {
+		cfg.Replication.AckTimeout = 5 * time.Second
+	}
 	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		return err
 	}
@@ -553,17 +601,22 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 		return nil, fmt.Errorf("failed to list queues: %w", err)
 	}
 
-	snapshot := &GlobalSnapshot{queueStore: f.queueStore, logger: f.logger}
+	snapshot := &GlobalSnapshot{logger: f.logger}
 	for _, queueCfg := range queues {
+		if !f.owns(queueCfg) {
+			continue
+		}
 		queueName := queueCfg.Name
 		cfgCopy := queueCfg
 
+		// A queue whose groups cannot be listed cannot be described. Omitting
+		// it and reporting success would hand raft a snapshot it then compacts
+		// the log against, so the records behind the missing entry would be
+		// unreachable from either side.
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueName)
 		if err != nil {
-			f.logger.Warn("failed to list consumer groups for queue",
-				slog.String("queue", queueName),
-				slog.String("error", err.Error()))
-			continue
+			snapshot.Release()
+			return nil, fmt.Errorf("failed to list consumer groups of queue %q: %w", queueName, err)
 		}
 
 		head, records, err := snapshotable.SnapshotQueue(ctx, queueName)
@@ -572,11 +625,23 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 			return nil, fmt.Errorf("failed to capture queue %q: %w", queueName, err)
 		}
 
+		// The groups are detached here rather than during Persist: the FSM goes
+		// on applying entries while the snapshot is serialized, and a live
+		// pointer would carry mutations from entries after the index this
+		// snapshot claims to describe.
+		captured := make([]*types.ConsumerGroup, 0, len(groups))
+		for _, group := range groups {
+			if group == nil {
+				continue
+			}
+			captured = append(captured, consumerGroupFromSnapshot(group.Snapshot()))
+		}
+
 		snapshot.queues = append(snapshot.queues, capturedQueue{
 			QueueSnapshotData: QueueSnapshotData{
 				QueueName:   queueName,
 				QueueConfig: &cfgCopy,
-				Groups:      groups,
+				Groups:      captured,
 				Head:        head,
 				Tail:        head + uint64(len(records)),
 			},
@@ -665,6 +730,12 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 func (f *LogFSM) restoreQueue(ctx context.Context, store storage.SnapshotableQueueStore, queue *QueueSnapshotData) error {
 	config := queue.QueueConfig
+	if config != nil && !f.owns(*config) {
+		// The snapshot came from this group's leader, so every queue in it
+		// should be this group's. One that is not would overwrite a queue
+		// another group owns, which is the failure the scoping exists to stop.
+		return fmt.Errorf("%w: queue %q is not replicated by group %q", errMalformedSnapshot, queue.QueueName, f.groupID)
+	}
 	if config == nil {
 		// A queue frame without a config predates nothing this build writes,
 		// but a snapshot is still expected to name what it restores. Fall back
@@ -702,25 +773,30 @@ func (f *LogFSM) resetState(ctx context.Context, store storage.SnapshotableQueue
 	if err != nil {
 		return fmt.Errorf("failed to list queues for restore: %w", err)
 	}
+
+	owned := make([]string, 0, len(queues))
 	for _, queueCfg := range queues {
+		if !f.owns(queueCfg) {
+			continue
+		}
+		owned = append(owned, queueCfg.Name)
+
+		// A group left behind because its listing or its deletion failed is
+		// state from before the snapshot surviving underneath it. Reporting the
+		// restore as successful would leave this replica holding a group the
+		// rest of the cluster does not have.
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueCfg.Name)
 		if err != nil {
-			f.logger.Warn("failed to list consumer groups for restore",
-				slog.String("queue", queueCfg.Name),
-				slog.String("error", err.Error()))
-			continue
+			return fmt.Errorf("failed to list consumer groups of queue %q for restore: %w", queueCfg.Name, err)
 		}
 		for _, group := range groups {
 			if err := f.groupStore.DeleteConsumerGroup(ctx, queueCfg.Name, group.ID); err != nil {
-				f.logger.Warn("failed to drop consumer group for restore",
-					slog.String("queue", queueCfg.Name),
-					slog.String("group", group.ID),
-					slog.String("error", err.Error()))
+				return fmt.Errorf("failed to drop consumer group %q of queue %q for restore: %w", group.ID, queueCfg.Name, err)
 			}
 		}
 	}
 
-	if err := store.ResetForRestore(ctx); err != nil {
+	if err := store.ResetForRestore(ctx, owned); err != nil {
 		return fmt.Errorf("failed to clear queues for restore: %w", err)
 	}
 	return nil
@@ -736,9 +812,8 @@ type capturedQueue struct {
 
 // GlobalSnapshot implements raft.FSMSnapshot for all queues.
 type GlobalSnapshot struct {
-	queues     []capturedQueue
-	queueStore storage.QueueStore
-	logger     *slog.Logger
+	queues []capturedQueue
+	logger *slog.Logger
 }
 
 // Persist streams the snapshot to the sink.

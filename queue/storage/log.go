@@ -130,11 +130,15 @@ type SnapshotableQueueStore interface {
 	// with no gaps; an offset that does not continue the log is an error.
 	RestoreRecord(ctx context.Context, queueName string, offset uint64, msg *message.Envelope) error
 
-	// ResetForRestore drops every queue and its records, reserved queues
-	// included, so a snapshot can be laid down over an empty store. A queue the
-	// snapshot does not mention is one the group no longer has; leaving it
-	// behind would keep this replica holding records nothing else does.
-	ResetForRestore(ctx context.Context) error
+	// ResetForRestore drops the named queues and their records, reserved queues
+	// included, so a snapshot can be laid down over them. A queue the snapshot
+	// does not mention is one its group no longer has; leaving it behind would
+	// keep this replica holding records nothing else does.
+	//
+	// Only the named queues are touched. One store backs every raft group in
+	// the process along with the queues no group replicates, so clearing it
+	// wholesale would delete state this caller does not own.
+	ResetForRestore(ctx context.Context, queueNames []string) error
 }
 
 // DeduplicatingQueueStore appends at most one record per deduplication key.

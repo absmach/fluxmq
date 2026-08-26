@@ -23,6 +23,15 @@ const snapshotWireVersion uint32 = 1
 // stream is.
 const snapshotReadBuffer = 64 << 10
 
+// snapshotMaxFrame caps a single frame.
+//
+// protodelim defaults to 4 MiB, which is below what a queue may hold: a record
+// frame carries a whole envelope, and max_message_size defaults to 10 MiB and
+// can be configured higher. A cap under that produces snapshots this build
+// writes happily and then cannot read, so it has to be well clear of any record
+// the broker would have accepted in the first place.
+const snapshotMaxFrame = 128 << 20
+
 var errMalformedSnapshot = errors.New("malformed queue raft snapshot")
 
 // snapshotWriter writes a snapshot as length-delimited frames.
@@ -117,7 +126,7 @@ type snapshotReader struct {
 func newSnapshotReader(r io.Reader) *snapshotReader {
 	return &snapshotReader{
 		r:         bufio.NewReaderSize(r, snapshotReadBuffer),
-		unmarshal: protodelim.UnmarshalOptions{},
+		unmarshal: protodelim.UnmarshalOptions{MaxSize: snapshotMaxFrame},
 	}
 }
 

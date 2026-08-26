@@ -332,7 +332,38 @@ func encodeOperationGroup(group *types.ConsumerGroup) (*raftv1.ConsumerGroupStat
 	if group == nil {
 		return nil, errors.New("group state is missing")
 	}
-	snapshot := group.Snapshot()
+	return encodeOperationGroupSnapshot(group.Snapshot())
+}
+
+// consumerGroupFromSnapshot rebuilds a detached group from a point-in-time
+// copy. A snapshot has to stop referring to live group state the moment it is
+// captured: the FSM keeps applying entries while the snapshot is serialized,
+// and a group read through a live pointer would pick up mutations from log
+// entries after the index the snapshot claims to describe.
+func consumerGroupFromSnapshot(snapshot types.ConsumerGroupSnapshot) *types.ConsumerGroup {
+	cursor := snapshot.Cursor
+	group := &types.ConsumerGroup{
+		ID:         snapshot.ID,
+		QueueName:  snapshot.QueueName,
+		Pattern:    snapshot.Pattern,
+		Mode:       snapshot.Mode,
+		AutoCommit: snapshot.AutoCommit,
+		Cursor:     &cursor,
+		PEL:        make(map[string][]*types.PendingEntry, len(snapshot.PEL)),
+		Consumers:  make(map[string]*types.ConsumerInfo, len(snapshot.Consumers)),
+		CreatedAt:  snapshot.CreatedAt,
+		UpdatedAt:  snapshot.UpdatedAt,
+	}
+	for consumerID, entries := range snapshot.PEL {
+		group.PEL[consumerID] = entries
+	}
+	for consumerID, consumer := range snapshot.Consumers {
+		group.Consumers[consumerID] = consumer
+	}
+	return group
+}
+
+func encodeOperationGroupSnapshot(snapshot types.ConsumerGroupSnapshot) (*raftv1.ConsumerGroupState, error) {
 	mode, err := encodeOperationGroupMode(snapshot.Mode)
 	if err != nil {
 		return nil, err

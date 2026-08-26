@@ -959,11 +959,14 @@ func (s *Store) RestoreRecord(ctx context.Context, queueName string, offset uint
 }
 
 // ResetForRestore implements storage.SnapshotableQueueStore.
-func (s *Store) ResetForRestore(ctx context.Context) error {
-	s.logs.Range(func(key, value any) bool {
-		name, _ := key.(string)
+func (s *Store) ResetForRestore(ctx context.Context, queueNames []string) error {
+	for _, name := range queueNames {
+		value, exists := s.logs.Load(name)
+		if !exists {
+			continue
+		}
 		if !s.logs.CompareAndDelete(name, value) {
-			return true
+			continue
 		}
 		stale := value.(*log)
 		stale.mu.Lock()
@@ -974,16 +977,10 @@ func (s *Store) ResetForRestore(ctx context.Context) error {
 		stale.messages = nil
 		stale.dedupe = nil
 		stale.mu.Unlock()
+
 		s.topicIndex.RemoveQueue(name)
-		return true
-	})
-	s.groups.Range(func(key, _ any) bool {
-		s.groups.Delete(key)
-		return true
-	})
-	s.consumers.Range(func(key, _ any) bool {
-		s.consumers.Delete(key)
-		return true
-	})
+		s.groups.Delete(name)
+		s.consumers.Delete(name)
+	}
 	return nil
 }

@@ -77,7 +77,7 @@ func TestLogFSMSnapshotRestoresQueuesGroupsAndRecords(t *testing.T) {
 	ctx := context.Background()
 	source := memlog.New()
 	sourceGroups := newRecordingGroupStore()
-	fsm := NewLogFSM(source, sourceGroups, discardLogger())
+	fsm := NewLogFSM(testFSMGroup, source, sourceGroups, discardLogger())
 
 	config := conformanceQueueConfig()
 	require.NoError(t, source.CreateQueue(ctx, config))
@@ -104,7 +104,7 @@ func TestLogFSMSnapshotRestoresQueuesGroupsAndRecords(t *testing.T) {
 
 	restored := memlog.New()
 	restoredGroups := newRecordingGroupStore()
-	target := NewLogFSM(restored, restoredGroups, discardLogger())
+	target := NewLogFSM(testFSMGroup, restored, restoredGroups, discardLogger())
 	require.NoError(t, target.Restore(io.NopCloser(bytes.NewReader(sink.Bytes()))))
 
 	restoredConfig, err := restored.GetQueue(ctx, testOperationQueue)
@@ -144,7 +144,7 @@ func TestLogFSMRestoreReplacesExistingState(t *testing.T) {
 	ctx := context.Background()
 
 	source := memlog.New()
-	fsm := NewLogFSM(source, newRecordingGroupStore(), discardLogger())
+	fsm := NewLogFSM(testFSMGroup, source, newRecordingGroupStore(), discardLogger())
 	config := conformanceQueueConfig()
 	require.NoError(t, source.CreateQueue(ctx, config))
 
@@ -157,7 +157,7 @@ func TestLogFSMRestoreReplacesExistingState(t *testing.T) {
 	// The target holds a queue the snapshot never mentions, and records in the
 	// queue it does.
 	target := memlog.New()
-	targetFSM := NewLogFSM(target, newRecordingGroupStore(), discardLogger())
+	targetFSM := NewLogFSM(testFSMGroup, target, newRecordingGroupStore(), discardLogger())
 	require.NoError(t, target.CreateQueue(ctx, config))
 	_, err = target.Append(ctx, config.Name, newQueuedEnvelope("stale", "$queue/"+config.Name, []byte("stale")))
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestLogFSMRestoreReplacesExistingState(t *testing.T) {
 // Apply must stop the process instead of reporting the error and moving on.
 func TestLogFSMApplyStopsOnUndecodableCommittedEntry(t *testing.T) {
 	store := memlog.New()
-	fsm := NewLogFSM(store, newRecordingGroupStore(), discardLogger())
+	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
 
 	assert.Panics(t, func() {
 		fsm.Apply(&hraft.Log{Index: 12, Term: 3, Type: hraft.LogCommand, Data: []byte("not protobuf at all")})
@@ -201,7 +201,7 @@ func TestLogFSMApplyStopsOnUndecodableCommittedEntry(t *testing.T) {
 // applied the real one, with nothing left in the next snapshot to show it.
 func TestLogFSMApplyStopsOnUnknownFieldFromNewerPeer(t *testing.T) {
 	store := memlog.New()
-	fsm := NewLogFSM(store, newRecordingGroupStore(), discardLogger())
+	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
 
 	config := conformanceQueueConfig()
 	wire, err := encodeOperation(&Operation{Type: OpCreateQueue, QueueName: testOperationQueue, QueueConfig: &config})
@@ -256,7 +256,7 @@ func (s failingQueueStore) CreateQueue(ctx context.Context, config types.QueueCo
 func TestLogFSMApplyStopsOnLocalStoreFailure(t *testing.T) {
 	t.Run("append", func(t *testing.T) {
 		backing := memlog.New()
-		fsm := NewLogFSM(failingQueueStore{QueueStore: backing, failAppend: true}, newRecordingGroupStore(), discardLogger())
+		fsm := NewLogFSM(testFSMGroup, failingQueueStore{QueueStore: backing, failAppend: true}, newRecordingGroupStore(), discardLogger())
 
 		config := conformanceQueueConfig()
 		require.NoError(t, backing.CreateQueue(context.Background(), config))
@@ -274,7 +274,7 @@ func TestLogFSMApplyStopsOnLocalStoreFailure(t *testing.T) {
 
 	t.Run("create queue", func(t *testing.T) {
 		backing := memlog.New()
-		fsm := NewLogFSM(failingQueueStore{QueueStore: backing, failCreate: true}, newRecordingGroupStore(), discardLogger())
+		fsm := NewLogFSM(testFSMGroup, failingQueueStore{QueueStore: backing, failCreate: true}, newRecordingGroupStore(), discardLogger())
 
 		config := conformanceQueueConfig()
 		data, err := marshalOperation(&Operation{Type: OpCreateQueue, QueueName: config.Name, QueueConfig: &config})
@@ -291,7 +291,7 @@ func TestLogFSMApplyStopsOnLocalStoreFailure(t *testing.T) {
 // rather than stopping.
 func TestLogFSMApplyReportsDeterministicRefusal(t *testing.T) {
 	store := memlog.New()
-	fsm := NewLogFSM(store, newRecordingGroupStore(), discardLogger())
+	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
 
 	data, err := marshalOperation(&Operation{Type: OpAppend, QueueName: testOperationQueue, Message: []byte("not an envelope")})
 	require.NoError(t, err)
@@ -299,4 +299,180 @@ func TestLogFSMApplyReportsDeterministicRefusal(t *testing.T) {
 	result, ok := fsm.Apply(&hraft.Log{Index: 22, Term: 4, Type: hraft.LogCommand, Data: data}).(*ApplyResult)
 	require.True(t, ok)
 	assert.Error(t, result.Error, "an undecodable payload is refused the same way on every replica")
+}
+
+// Every raft group in the process shares one queue store. A snapshot that
+// described every queue would, on install, overwrite the queues belonging to
+// the other groups and delete the ones no group replicates at all.
+func TestLogFSMSnapshotCoversOnlyItsOwnGroup(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	groups := newRecordingGroupStore()
+	fsm := NewLogFSM(testFSMGroup, store, groups, discardLogger())
+
+	mine := conformanceQueueConfig()
+	require.NoError(t, store.CreateQueue(ctx, mine))
+
+	theirs := conformanceQueueConfig()
+	theirs.Name = "other-group-queue"
+	theirs.Replication.Group = "other-group"
+	require.NoError(t, store.CreateQueue(ctx, theirs))
+
+	unreplicated := conformanceQueueConfig()
+	unreplicated.Name = "unreplicated"
+	unreplicated.Replication = types.ReplicationConfig{}
+	require.NoError(t, store.CreateQueue(ctx, unreplicated))
+
+	for _, name := range []string{theirs.Name, unreplicated.Name} {
+		_, err := store.Append(ctx, name, newQueuedEnvelope("keep", "$queue/"+name, []byte("keep")))
+		require.NoError(t, err)
+	}
+
+	snapshot, err := fsm.Snapshot()
+	require.NoError(t, err)
+	sink := new(memSink)
+	require.NoError(t, snapshot.Persist(sink))
+	snapshot.Release()
+
+	names := snapshotQueueNames(t, sink.Bytes())
+	assert.Equal(t, []string{mine.Name}, names, "a snapshot must describe its own group's queues alone")
+
+	// Restoring must leave the other group's queue, and the unreplicated one,
+	// exactly as they were.
+	require.NoError(t, fsm.Restore(io.NopCloser(bytes.NewReader(sink.Bytes()))))
+	for _, name := range []string{theirs.Name, unreplicated.Name} {
+		count, countErr := store.Count(ctx, name)
+		require.NoError(t, countErr, "queue %q must survive another group's restore", name)
+		assert.Equal(t, uint64(1), count, "queue %q must keep its records", name)
+	}
+}
+
+// A queue frame naming a group this FSM does not replicate would overwrite
+// another group's queue, which is the failure the scoping exists to prevent.
+func TestLogFSMRestoreRejectsForeignQueue(t *testing.T) {
+	store := memlog.New()
+	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
+
+	foreign := conformanceQueueConfig()
+	foreign.Replication.Group = "other-group"
+
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	require.NoError(t, writer.WriteHeader(conformanceTime))
+	require.NoError(t, writer.WriteQueue(QueueSnapshotData{QueueName: foreign.Name, QueueConfig: &foreign}))
+
+	err := fsm.Restore(io.NopCloser(bytes.NewReader(buf.Bytes())))
+	assert.ErrorIs(t, err, errMalformedSnapshot)
+}
+
+// A queue whose groups cannot be listed cannot be described. Reporting success
+// would hand raft a snapshot it then compacts the log against, leaving the
+// omitted queue's records unreachable from either side.
+func TestLogFSMSnapshotFailsOnPartialCapture(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	fsm := NewLogFSM(testFSMGroup, store, failingGroupStore{}, discardLogger())
+
+	require.NoError(t, store.CreateQueue(ctx, conformanceQueueConfig()))
+
+	_, err := fsm.Snapshot()
+	assert.Error(t, err, "a queue that cannot be described must not be silently omitted")
+}
+
+// The FSM keeps applying entries while a snapshot is serialized. A group read
+// through a live pointer would carry mutations from entries after the index the
+// snapshot claims to describe, and replaying them could duplicate pending
+// entries.
+func TestLogFSMSnapshotCapturesGroupsPointInTime(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	groups := newRecordingGroupStore()
+	fsm := NewLogFSM(testFSMGroup, store, groups, discardLogger())
+
+	config := conformanceQueueConfig()
+	require.NoError(t, store.CreateQueue(ctx, config))
+	live := conformanceConsumerGroup(conformanceTime)
+	require.NoError(t, groups.CreateConsumerGroup(ctx, live))
+
+	snapshot, err := fsm.Snapshot()
+	require.NoError(t, err)
+
+	// A later entry lands between the capture and the write.
+	live.AddPending(testOperationConsumerA, &types.PendingEntry{
+		Offset: 99, ConsumerID: testOperationConsumerA, ClaimedAt: conformanceTime, DeliveryCount: 1,
+	})
+
+	sink := new(memSink)
+	require.NoError(t, snapshot.Persist(sink))
+	snapshot.Release()
+
+	restored := memlog.New()
+	restoredGroups := newRecordingGroupStore()
+	target := NewLogFSM(testFSMGroup, restored, restoredGroups, discardLogger())
+	require.NoError(t, target.Restore(io.NopCloser(bytes.NewReader(sink.Bytes()))))
+
+	group, err := restoredGroups.GetConsumerGroup(ctx, testOperationQueue, testOperationGroup)
+	require.NoError(t, err)
+	for _, entry := range group.Snapshot().PEL[testOperationConsumerA] {
+		assert.NotEqual(t, uint64(99), entry.Offset,
+			"a mutation applied after the capture must not appear in the snapshot")
+	}
+}
+
+// A record frame carries a whole envelope, and max_message_size defaults to
+// 10 MiB — above protodelim's 4 MiB default. A snapshot this build writes must
+// be one it can read back.
+func TestLogFSMSnapshotRoundTripsRecordAboveProtodelimDefault(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
+
+	config := conformanceQueueConfig()
+	require.NoError(t, store.CreateQueue(ctx, config))
+
+	payload := bytes.Repeat([]byte("x"), 6<<20)
+	_, err := store.Append(ctx, config.Name, newQueuedEnvelope("big", "$queue/"+config.Name, payload))
+	require.NoError(t, err)
+
+	snapshot, err := fsm.Snapshot()
+	require.NoError(t, err)
+	sink := new(memSink)
+	require.NoError(t, snapshot.Persist(sink))
+	snapshot.Release()
+
+	restored := memlog.New()
+	target := NewLogFSM(testFSMGroup, restored, newRecordingGroupStore(), discardLogger())
+	require.NoError(t, target.Restore(io.NopCloser(bytes.NewReader(sink.Bytes()))),
+		"a record the broker accepts must survive the snapshot it is written into")
+
+	got, err := restored.Read(ctx, config.Name, 0)
+	require.NoError(t, err)
+	assert.Equal(t, len(payload), len(got.PayloadBytes()))
+	message.Release(got)
+}
+
+func snapshotQueueNames(t *testing.T, data []byte) []string {
+	t.Helper()
+
+	reader := newSnapshotReader(bytes.NewReader(data))
+	require.NoError(t, reader.ReadHeader())
+
+	var names []string
+	for {
+		entry, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return names
+		}
+		require.NoError(t, err)
+		if entry.Queue != nil {
+			names = append(names, entry.Queue.QueueName)
+		}
+	}
+}
+
+// failingGroupStore cannot list groups, the way a broken backend would not.
+type failingGroupStore struct{ noopGroupStore }
+
+func (failingGroupStore) ListConsumerGroups(context.Context, string) ([]*types.ConsumerGroup, error) {
+	return nil, errors.New("group store is unavailable")
 }

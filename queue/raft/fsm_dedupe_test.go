@@ -135,7 +135,7 @@ func TestLogFSMAppendOnceRefusesStoreWithoutCapability(t *testing.T) {
 	queueName := "dedupe-unsupported"
 	backing := memlog.New()
 	require.NoError(t, backing.CreateQueue(ctx, types.DefaultQueueConfig(queueName, queueName+"/#")))
-	fsm := NewLogFSM(plainQueueStore{QueueStore: backing}, noopGroupStore{}, discardLogger())
+	fsm := NewLogFSM(testFSMGroup, plainQueueStore{QueueStore: backing}, noopGroupStore{}, discardLogger())
 
 	result := fsm.applyAppend(ctx, dedupeOperation(t, queueName, testDedupeKey, "one"))
 	require.ErrorIs(t, result.Error, storage.ErrDeduplicationUnsupported)

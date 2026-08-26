@@ -16,6 +16,10 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
+// testFSMGroup is the raft group the test FSMs replicate. It matches the
+// replication group conformanceQueueConfig names, so those queues are owned.
+const testFSMGroup = testOperationQueue
+
 type noopGroupStore struct{}
 
 func (noopGroupStore) CreateConsumerGroup(context.Context, *types.ConsumerGroup) error {
@@ -98,7 +102,7 @@ func encodeOperationEnvelope(t *testing.T, envelope *message.Envelope) []byte {
 
 func newTestLogFSM() (*LogFSM, *memlog.Store) {
 	queueStore := memlog.New()
-	return NewLogFSM(queueStore, noopGroupStore{}, discardLogger()), queueStore
+	return NewLogFSM(testFSMGroup, queueStore, noopGroupStore{}, discardLogger()), queueStore
 }
 
 func newQueuedEnvelope(id, topic string, data []byte) *message.Envelope {
