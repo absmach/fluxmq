@@ -116,4 +116,3 @@ type SeekOutcome struct {
 	Timestamp	time.Time
 	ExactMatch	bool
 }
-

@@ -263,6 +263,8 @@ func benchStealFixture(b *testing.B, pending int) (*Manager, *types.ConsumerGrou
 // pay to walk its pending list.
 func BenchmarkStealSweepWithoutPoison(b *testing.B) {
 	manager, group := benchStealFixture(b, 512)
+	manager.config.VisibilityTimeout = 0
+	manager.config.MaxDeliveryCount = int(^uint(0) >> 1)
 	ctx := context.Background()
 
 	b.ReportAllocs()

@@ -336,7 +336,7 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
 
-	if true && settledGroup != nil {
+	if settledGroup != nil {
 		s.records.metrics.UpdatePELSize(uint64(settledGroup.PendingCount()))
 	}
 
@@ -406,7 +406,7 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
-		if true && group.Mode != types.GroupModeStream {
+		if group.Mode != types.GroupModeStream {
 			s.records.metrics.RecordReject()
 		}
 		outcome.Offsets = append(outcome.Offsets, offset)
@@ -617,7 +617,7 @@ func (s *stateMachine) partialSettlement(ctx context.Context, queueName, groupID
 }
 
 func (s *stateMachine) finishSettlement(ctx context.Context, queueName, groupID string, outcome SettlementOutcome) (SettlementOutcome, error) {
-	if true && len(outcome.Offsets) > 0 {
+	if len(outcome.Offsets) > 0 {
 		s.records.delivery.Schedule(queueName)
 	}
 	if groupID == "" {
