@@ -4,10 +4,10 @@
 package logstorage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/absmach/fluxmq/internal/keylock"
 	"github.com/absmach/fluxmq/message"
@@ -15,125 +15,50 @@ import (
 )
 
 // A deduplication key lives exactly as long as the record that carries it.
-//
-// There is one rule, and truncation, deletion and recovery all enforce it: a key
-// is recognised while its record is retained, and forgotten when the record goes.
-// An earlier version bounded recovery to a fixed number of recent records, which
-// made the live index and a rebuilt one disagree — ordinary appends move the tail
-// arbitrarily far while a key stays live in memory, so the same retry was
-// deduplicated before a restart and duplicated after one. Retention already
-// bounds the population, so the window bounded nothing that was not bounded
-// anyway and cost correctness for it.
-//
-// The rebuild reads the queue from its head on first use after startup. That is
-// proportional to what the queue retains, which for a dead-letter queue is what
-// its retention policy allows.
-
-// dedupeIndex maps deduplication keys to the offsets already carrying them, for
-// one queue.
-//
-// It holds no authority of its own: the keys live in the records, written as
-// the envelope's transfer identity, and this index is only a lookup rebuilt
-// from them. A crash costs the index, not the guarantee — the next AppendOnce
-// on that queue rebuilds it from the log before answering.
-type dedupeIndex struct {
-	mu      sync.Mutex
-	built   bool
-	offsets map[string]dedupeEntry
-}
-
-// dedupeEntry is where a key's record landed and whether that record is known
-// durable.
-//
-// The distinction exists because a durability barrier can fail after the record
-// is written. Forgetting such a key duplicates the record on retry; treating it
-// as durable settles the caller's source against a record that may not have
-// survived. Neither is acceptable, so the entry is remembered as unconfirmed
-// and the next attempt establishes the barrier before reporting success.
-type dedupeEntry struct {
-	offset    uint64
-	confirmed bool
-}
-
-// dedupeIndexes holds one index per queue, guarded per queue so a rebuild on
-// one does not block appends to another.
+// The durable index is derived state: every entry is checked against the raw
+// record before it can settle a source, and truncation removes entries with
+// their records. A pre-append reservation records the old tail, so a crash in
+// the only non-atomic gap recovers by scanning that uncertain suffix rather
+// than decoding the queue's retained history.
 type dedupeIndexes struct {
-	locks   keylock.Sharded
-	mu      sync.RWMutex
-	byQueue map[string]*dedupeIndex
+	locks keylock.Sharded
+	state *dedupeStateStore
 }
 
-func newDedupeIndexes() *dedupeIndexes {
-	return &dedupeIndexes{byQueue: make(map[string]*dedupeIndex)}
-}
-
-func (d *dedupeIndexes) forQueue(queueName string) *dedupeIndex {
-	d.mu.RLock()
-	index, ok := d.byQueue[queueName]
-	d.mu.RUnlock()
-	if ok {
-		return index
+func newDedupeIndexes(baseDir string) (*dedupeIndexes, error) {
+	state, err := openDedupeStateStore(baseDir)
+	if err != nil {
+		return nil, err
 	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if index, ok := d.byQueue[queueName]; ok {
-		return index
-	}
-	index = &dedupeIndex{offsets: make(map[string]dedupeEntry)}
-	d.byQueue[queueName] = index
-	return index
+	return &dedupeIndexes{state: state}, nil
 }
 
-func (d *dedupeIndexes) forget(queueName string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	delete(d.byQueue, queueName)
-}
-
-// pruneBelow drops keys whose record is no longer at or after minOffset.
-//
-// A key that outlives its record is worse than a missing key: AppendOnce would
-// report the transfer already present, at an offset holding nothing, and the
-// caller would settle its source against a record that does not exist. That
-// loses the message, which is the failure this whole mechanism exists to
-// prevent.
-func (d *dedupeIndexes) pruneBelow(queueName string, minOffset uint64) {
-	d.mu.RLock()
-	index, ok := d.byQueue[queueName]
-	d.mu.RUnlock()
-	if !ok {
-		return
-	}
-
-	index.mu.Lock()
-	defer index.mu.Unlock()
-	for key, entry := range index.offsets {
-		if entry.offset < minOffset {
-			delete(index.offsets, key)
-		}
-	}
-}
+type dedupeAppend func(queueName string, value, key []byte, headers map[string][]byte) (uint64, error)
 
 // AppendOnce implements storage.DeduplicatingQueueStore.
-//
-// The check and the append are serialised per queue, so two concurrent retries
-// of the same transfer cannot both observe an empty index and both append.
 func (a *Adapter) AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
-	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.Append)
+	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.store.Append)
 }
 
-// appendOnce performs the check and the append as one operation, writing
-// through the supplied append so the caller's durability policy survives the
-// deduplication rather than being replaced by it.
+// AppendOnceAndSync implements storage.DeduplicatingQueueStore.
+func (a *Adapter) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.store.AppendAndSync)
+}
+
+// appendOnce serializes the identity check, reservation and append per queue.
+// It writes the log directly so envelope ownership changes only after both the
+// record and its durable identity entry are confirmed.
 func (a *Adapter) appendOnce(
 	ctx context.Context,
 	queueName, dedupeKey string,
 	msg *message.Envelope,
-	append func(context.Context, string, *message.Envelope) (uint64, error),
+	appendRecord dedupeAppend,
 ) (uint64, bool, error) {
 	if dedupeKey == "" {
 		return 0, false, storage.ErrDeduplicationKeyRequired
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
 	}
 	if err := a.queueConfigExists(queueName); err != nil {
 		return 0, false, err
@@ -143,123 +68,141 @@ func (a *Adapter) appendOnce(
 	queueLock.Lock()
 	defer queueLock.Unlock()
 
-	index := a.dedupe.forQueue(queueName)
-	if err := a.ensureDedupeIndex(ctx, queueName, index); err != nil {
-		return 0, false, err
-	}
-
-	index.mu.Lock()
-	entry, seen := index.offsets[dedupeKey]
-	index.mu.Unlock()
-	if seen {
-		if !entry.confirmed {
-			// The record exists but its barrier failed. Establish it before
-			// reporting success: the caller settles its source on that answer,
-			// and a record that is not durable cannot carry a settlement.
-			//
-			// The envelope is not released on this path. An error leaves
-			// ownership with the caller, as everywhere else in this contract,
-			// and releasing first would double-release when it retries.
-			if err := a.SyncQueue(ctx, queueName); err != nil {
-				return 0, false, fmt.Errorf("%w: confirming deduplicated record at offset %d: %w",
-					ErrDurabilityBarrier, entry.offset, err)
-			}
-			index.mu.Lock()
-			entry.confirmed = true
-			index.offsets[dedupeKey] = entry
-			index.mu.Unlock()
-		}
-
-		// Consumed only now that the answer is success. Releasing here is what
-		// lets a caller retry without tracking whether its previous attempt
-		// landed.
-		message.Release(msg)
-
-		return entry.offset, true, nil
-	}
-
-	// The key must reach the record, or a rebuild after a crash cannot see it.
-	msg.Broker.Transfer.ID = dedupeKey
-
-	appended, err := append(ctx, queueName, msg)
+	entry, found, err := a.dedupe.state.lookup(queueName, dedupeKey)
 	if err != nil {
-		if errors.Is(err, ErrDurabilityBarrier) {
-			// The record is on the log; only the barrier over it failed. Losing
-			// the key here is what let the retry append a second copy, so it is
-			// remembered as unconfirmed and a later attempt confirms it instead.
-			index.mu.Lock()
-			index.offsets[dedupeKey] = dedupeEntry{offset: appended}
-			index.mu.Unlock()
+		return 0, false, fmt.Errorf("read deduplication state: %w", err)
+	}
+	if found {
+		entry, found, err = a.resolveDedupeEntry(ctx, queueName, dedupeKey, entry)
+		if err != nil {
+			return 0, false, err
 		}
+		if found {
+			if entry.state != dedupeConfirmed {
+				if err := a.SyncQueue(ctx, queueName); err != nil {
+					return entry.offset, false, fmt.Errorf("%w: confirming deduplicated record at offset %d: %w",
+						storage.ErrDurabilityUnconfirmed, entry.offset, err)
+				}
+				entry.state = dedupeConfirmed
+				if err := a.dedupe.state.put(queueName, dedupeKey, entry); err != nil {
+					return entry.offset, false, fmt.Errorf("%w: confirm recovered key: %v",
+						storage.ErrDeduplicationStateUnconfirmed, err)
+				}
+			}
+
+			message.Release(msg)
+			return entry.offset, true, nil
+		}
+		if err := a.dedupe.state.remove(queueName, dedupeKey); err != nil {
+			return 0, false, fmt.Errorf("remove stale deduplication state: %w", err)
+		}
+	}
+
+	tail, err := a.store.Tail(queueName)
+	if err != nil {
+		return 0, false, fmt.Errorf("read tail before deduplicated append: %w", err)
+	}
+	if _, found, err := a.dedupe.state.reserve(queueName, dedupeKey, tail); err != nil {
+		return 0, false, fmt.Errorf("reserve deduplication key: %w", err)
+	} else if found {
+		return 0, false, fmt.Errorf("deduplication key appeared while queue lock was held")
+	}
+
+	// The raw header lets the exceptional pending-reservation recovery path find
+	// the identity without unmarshalling envelope metadata or payloads.
+	msg.Broker.Transfer.ID = dedupeKey
+	value, key, headers, err := encodeMessage(msg)
+	if err != nil {
+		_ = a.dedupe.state.remove(queueName, dedupeKey)
 		return 0, false, err
 	}
 
-	index.mu.Lock()
-	index.offsets[dedupeKey] = dedupeEntry{offset: appended, confirmed: true}
-	index.mu.Unlock()
-
-	return appended, false, nil
-}
-
-// AppendOnceAndSync implements storage.DeduplicatingQueueStore.
-func (a *Adapter) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
-	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.AppendAndSync)
-}
-
-// DeduplicationWindow implements storage.DeduplicatingQueueStore. Zero: every
-// record the queue retains is covered, because a key is dropped only when its
-// record is.
-func (a *Adapter) DeduplicationWindow() int { return 0 }
-
-// ensureDedupeIndex rebuilds a queue's index from the tail of its log the first
-// time the queue is used after startup.
-//
-// Reading the records back is what makes the guarantee survive a crash: the
-// index is derived state, and the keys it holds were written into the records
-// by the append that created them.
-func (a *Adapter) ensureDedupeIndex(ctx context.Context, queueName string, index *dedupeIndex) error {
-	index.mu.Lock()
-	defer index.mu.Unlock()
-	if index.built {
-		return nil
+	offset, appendErr := appendRecord(queueName, value, key, headers)
+	if appendErr != nil {
+		if errors.Is(appendErr, storage.ErrDurabilityUnconfirmed) {
+			entry = dedupeEntry{offset: offset, state: dedupeUnconfirmed}
+			if stateErr := a.dedupe.state.put(queueName, dedupeKey, entry); stateErr != nil {
+				return offset, false, errors.Join(appendErr,
+					fmt.Errorf("%w: persist accepted offset: %v", storage.ErrDeduplicationStateUnconfirmed, stateErr))
+			}
+			return offset, false, appendErr
+		}
+		if stateErr := a.dedupe.state.remove(queueName, dedupeKey); stateErr != nil {
+			return offset, false, errors.Join(appendErr, fmt.Errorf("clear deduplication reservation: %w", stateErr))
+		}
+		return offset, false, appendErr
 	}
 
+	entry = dedupeEntry{offset: offset, state: dedupeConfirmed}
+	if err := a.dedupe.state.put(queueName, dedupeKey, entry); err != nil {
+		// The reservation remains authoritative enough to make a retry safe: it
+		// points recovery at the suffix that can contain this record.
+		return offset, false, fmt.Errorf("%w: persist accepted offset %d: %v",
+			storage.ErrDeduplicationStateUnconfirmed, offset, err)
+	}
+
+	message.Release(msg)
+	return offset, false, nil
+}
+
+// resolveDedupeEntry validates derived state against the raw log. Confirmed
+// entries cost one indexed record read. Pending entries are the crash-only path
+// and scan from the pre-append tail until they find the key or reach the tail.
+func (a *Adapter) resolveDedupeEntry(ctx context.Context, queueName, dedupeKey string, entry dedupeEntry) (dedupeEntry, bool, error) {
+	if entry.state == dedupePending {
+		offset, found, err := a.findDedupeRecord(ctx, queueName, dedupeKey, entry.offset)
+		if err != nil || !found {
+			return entry, found, err
+		}
+		return dedupeEntry{offset: offset, state: dedupeUnconfirmed}, true, nil
+	}
+
+	record, err := a.store.Read(queueName, entry.offset)
+	if errors.Is(err, ErrOffsetOutOfRange) {
+		return entry, false, nil
+	}
+	if err != nil {
+		return entry, false, fmt.Errorf("validate deduplication record at offset %d: %w", entry.offset, err)
+	}
+	return entry, bytes.Equal(record.Headers[headerDedupeKey], []byte(dedupeKey)), nil
+}
+
+func (a *Adapter) findDedupeRecord(ctx context.Context, queueName, dedupeKey string, start uint64) (uint64, bool, error) {
 	head, err := a.store.Head(queueName)
 	if err != nil {
-		return fmt.Errorf("read head for deduplication rebuild: %w", err)
+		return 0, false, fmt.Errorf("read head for pending deduplication recovery: %w", err)
+	}
+	if start < head {
+		start = head
 	}
 	tail, err := a.store.Tail(queueName)
 	if err != nil {
-		return fmt.Errorf("read tail for deduplication rebuild: %w", err)
+		return 0, false, fmt.Errorf("read tail for pending deduplication recovery: %w", err)
 	}
 
-	for offset := head; offset < tail; {
-		batch, err := a.ReadBatch(ctx, queueName, offset, dedupeRebuildBatch)
-		if err != nil {
-			if errors.Is(err, storage.ErrOffsetOutOfRange) {
-				break
-			}
-			return fmt.Errorf("read records for deduplication rebuild: %w", err)
+	for start < tail {
+		if err := ctx.Err(); err != nil {
+			return 0, false, err
 		}
-		if len(batch) == 0 {
+		messages, err := a.store.ReadRange(queueName, start, tail, dedupeRecoveryBatch)
+		if err != nil {
+			return 0, false, fmt.Errorf("read pending deduplication suffix: %w", err)
+		}
+		if len(messages) == 0 {
 			break
 		}
-		for _, envelope := range batch {
-			if key := envelope.Broker.Transfer.ID; key != "" {
-				// Read back from the log, so the record survived: confirmed by
-				// the fact that it is here to be read.
-				index.offsets[key] = dedupeEntry{offset: envelope.Broker.Queue.Offset, confirmed: true}
+		for i := range messages {
+			if bytes.Equal(messages[i].Headers[headerDedupeKey], []byte(dedupeKey)) {
+				return messages[i].Offset, true, nil
 			}
 		}
-		offset = batch[len(batch)-1].Broker.Queue.Offset + 1
-		for _, envelope := range batch {
-			message.Release(envelope)
-		}
+		start = messages[len(messages)-1].Offset + 1
 	}
-
-	index.built = true
-	return nil
+	return 0, false, nil
 }
 
-// dedupeRebuildBatch bounds how many records a rebuild reads at a time.
-const dedupeRebuildBatch = 256
+// DeduplicationWindow implements storage.DeduplicatingQueueStore. Zero means
+// every retained record is covered.
+func (a *Adapter) DeduplicationWindow() int { return 0 }
+
+const dedupeRecoveryBatch = 256

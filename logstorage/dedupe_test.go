@@ -77,9 +77,8 @@ func TestAppendOnceKeepsDistinctKeys(t *testing.T) {
 	assert.Equal(t, uint64(5), count)
 }
 
-// The index is derived state. Reopening the store must rebuild it from the
-// records, or a retry after a crash appends a second copy — which is the whole
-// failure this exists to prevent.
+// The index is durable derived state. Reopening the store must validate it
+// against the record without decoding the retained queue.
 func TestAppendOnceSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -90,7 +89,7 @@ func TestAppendOnceSurvivesReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, adapter.Close())
 
-	// Reopen: the in-memory index is gone, the records are not.
+	// Reopen: both the record and its durable identity entry remain.
 	reopened, err := NewAdapter(dir, DefaultAdapterConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = reopened.Close() })
@@ -103,6 +102,104 @@ func TestAppendOnceSurvivesReopen(t *testing.T) {
 	count, err := reopened.Count(ctx, testDedupeQueue)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), count, "a retry after restart must not duplicate")
+}
+
+func TestDedupeRecoveryDoesNotDecodeRetainedQueue(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	adapter := newDedupeAdapter(t, dir)
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+	first, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("target"))
+	require.NoError(t, err)
+
+	// A raw record whose envelope metadata cannot be decoded is still a valid
+	// log record. A retained-queue rebuild would trip over it; an indexed lookup
+	// of the target never needs to read it.
+	_, err = adapter.store.Append(testDedupeQueue, []byte("payload"), nil,
+		map[string][]byte{headerEnvelope: []byte("not-envelope-metadata")})
+	require.NoError(t, err)
+	require.NoError(t, adapter.Close())
+
+	reopened, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	offset, duplicated, err := reopened.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.True(t, duplicated)
+	assert.Equal(t, first, offset)
+}
+
+// A crash can happen after the reservation is durable and after the record is
+// written, but before the accepted offset reaches the index. The reservation's
+// old tail must make that gap recoverable without scanning retained history.
+func TestPendingDedupeReservationRecoversAcceptedRecord(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	adapter := newDedupeAdapter(t, dir)
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	for range 100 {
+		_, err := adapter.Append(ctx, testDedupeQueue, dedupeEnvelope("retained"))
+		require.NoError(t, err)
+	}
+	tail, err := adapter.Tail(ctx, testDedupeQueue)
+	require.NoError(t, err)
+	_, found, err := adapter.dedupe.state.reserve(testDedupeQueue, testDedupeKey, tail)
+	require.NoError(t, err)
+	require.False(t, found)
+
+	landed := dedupeEnvelope("accepted-before-crash")
+	landed.Broker.Transfer.ID = testDedupeKey
+	value, key, headers, err := encodeMessage(landed)
+	require.NoError(t, err)
+	first, err := adapter.store.Append(testDedupeQueue, value, key, headers)
+	require.NoError(t, err)
+	message.Release(landed)
+	require.NoError(t, adapter.Close())
+
+	reopened, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	recovered, duplicated, err := reopened.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.True(t, duplicated)
+	assert.Equal(t, first, recovered)
+}
+
+// A reservation can also survive while its append does not. Recovery must
+// prove there is no matching record in the uncertain suffix before appending.
+func TestPendingDedupeReservationWithoutRecordCanRetry(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	tail, err := adapter.Tail(ctx, testDedupeQueue)
+	require.NoError(t, err)
+	_, _, err = adapter.dedupe.state.reserve(testDedupeQueue, testDedupeKey, tail)
+	require.NoError(t, err)
+
+	offset, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.False(t, duplicated)
+	assert.Equal(t, tail, offset)
+}
+
+// The persistent index is never authoritative by itself. A stale entry that
+// points at another record must be discarded instead of settling the source.
+func TestDedupeIndexValidatesReferencedRecord(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	wrongOffset, err := adapter.Append(ctx, testDedupeQueue, dedupeEnvelope("unrelated"))
+	require.NoError(t, err)
+	require.NoError(t, adapter.dedupe.state.put(testDedupeQueue, testDedupeKey,
+		dedupeEntry{offset: wrongOffset, state: dedupeConfirmed}))
+
+	offset, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("transfer"))
+	require.NoError(t, err)
+	assert.False(t, duplicated)
+	assert.NotEqual(t, wrongOffset, offset)
 }
 
 // The key has to be written into the record, not just remembered, or the
@@ -234,7 +331,7 @@ func TestKeyIsRecognisedWhileItsRecordIsRetained(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, duplicated, "a retained record's key must still be recognised")
 
-	// And a rebuild must reach the same answer.
+	// And recovery must reach the same answer without scanning the fillers.
 	require.NoError(t, adapter.Close())
 	reopened, err := NewAdapter(base, DefaultAdapterConfig())
 	require.NoError(t, err)
@@ -325,16 +422,16 @@ func TestFailedDurabilityBarrierDoesNotDuplicate(t *testing.T) {
 	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
 
 	// The record lands; the barrier over it does not.
-	barrierFailed := func(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
-		offset, err := adapter.Append(ctx, queueName, msg)
+	barrierFailed := func(queueName string, value, key []byte, headers map[string][]byte) (uint64, error) {
+		offset, err := adapter.store.Append(queueName, value, key, headers)
 		if err != nil {
 			return offset, err
 		}
-		return offset, fmt.Errorf("%w: injected", ErrDurabilityBarrier)
+		return offset, fmt.Errorf("%w: injected", storage.ErrDurabilityUnconfirmed)
 	}
 
 	first, _, err := adapter.appendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("transfer"), barrierFailed)
-	require.ErrorIs(t, err, ErrDurabilityBarrier, "the caller must learn the record is not durable")
+	require.ErrorIs(t, err, storage.ErrDurabilityUnconfirmed, "the caller must learn the record is not durable")
 
 	// The retry runs against a working barrier, as it would once the transient
 	// failure clears.

@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	headerEnvelope = "_envelope"
+	headerEnvelope  = "_envelope"
+	headerDedupeKey = "_dedupe"
 )
 
 var (
@@ -67,12 +68,20 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 		return nil, err
 	}
 
+	dedupe, err := newDedupeIndexes(baseDir)
+	if err != nil {
+		store.Close()
+		queueStore.Close()
+		groupStore.Close()
+		return nil, err
+	}
+
 	adapter := &Adapter{
 		store:      store,
 		queueStore: queueStore,
 		groupStore: groupStore,
 		topicIndex: storage.NewTopicIndex(),
-		dedupe:     newDedupeIndexes(),
+		dedupe:     dedupe,
 	}
 
 	// Rebuild topic index from existing queues.
@@ -110,6 +119,10 @@ func reportMalformedFilter(logger func(string, ...any), queueName, filter string
 // Close closes the adapter and underlying store.
 func (a *Adapter) Close() error {
 	var lastErr error
+
+	if err := a.dedupe.state.close(); err != nil {
+		lastErr = err
+	}
 
 	if err := a.groupStore.Close(); err != nil {
 		lastErr = err
@@ -213,12 +226,14 @@ func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
 
 	// Remove from topic index
 	a.topicIndex.RemoveQueue(queueName)
-	a.dedupe.forget(queueName)
 
 	if err := a.queueStore.Delete(queueName); err != nil {
 		return err
 	}
-	return a.store.DeleteQueue(queueName)
+	if err := a.store.DeleteQueue(queueName); err != nil {
+		return err
+	}
+	return a.dedupe.state.forget(queueName)
 }
 
 // ListQueues returns all queue configurations.
@@ -246,7 +261,11 @@ func encodeMessage(envelope *message.Envelope) ([]byte, []byte, map[string][]byt
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("encode queue envelope metadata: %w", err)
 	}
-	return envelope.PayloadBytes(), envelope.User.Key, map[string][]byte{headerEnvelope: metadata}, nil
+	headers := map[string][]byte{headerEnvelope: metadata}
+	if envelope.Broker.Transfer.ID != "" {
+		headers[headerDedupeKey] = []byte(envelope.Broker.Transfer.ID)
+	}
+	return envelope.PayloadBytes(), envelope.User.Key, headers, nil
 }
 
 // Append adds a message to the end of a queue's log.
@@ -442,9 +461,7 @@ func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint
 	if err := a.store.Truncate(queueName, minOffset); err != nil {
 		return err
 	}
-	a.dedupe.pruneBelow(queueName, minOffset)
-
-	return nil
+	return a.dedupe.state.pruneBelow(queueName, minOffset)
 }
 
 // Count returns the number of messages in a queue.
