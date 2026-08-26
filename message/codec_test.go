@@ -44,7 +44,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 		},
 		Queue: QueueMetadata{
 			MessageID:   testMessageID,
-			Name:        "queue",
+			Name:        testQueueName,
 			GroupID:     "group",
 			Offset:      9,
 			State:       QueueStateRetry,
