@@ -58,8 +58,14 @@ type Operation struct {
 	GroupID    string `json:"group_id,omitempty"`
 	ConsumerID string `json:"consumer_id,omitempty"`
 
-	// For OpAppend
-	Message *message.Envelope `json:"message,omitempty"`
+	// Message is a binary-encoded envelope for OpAppend.
+	//
+	// Bytes rather than an *Envelope because the operation is JSON on the way
+	// to the Raft log, and a JSON envelope means the highest-volume path in the
+	// broker carries a base64 payload inside an object tree, and the envelope
+	// carries a second encoder that has to stay in step with the binary one for
+	// no other reason.
+	Message []byte `json:"message,omitempty"`
 
 	// DedupeKey, when set on OpAppend, makes the append conditional: each
 	// replica appends only if it does not already hold a record with this key.
@@ -68,8 +74,8 @@ type Operation struct {
 	// result the followers cannot verify.
 	DedupeKey string `json:"dedupe_key,omitempty"`
 
-	// For OpAppendBatch
-	Messages []*message.Envelope `json:"messages,omitempty"`
+	// Messages are binary-encoded envelopes for OpAppendBatch.
+	Messages [][]byte `json:"messages,omitempty"`
 
 	// For OpTruncate
 	MinOffset uint64 `json:"min_offset,omitempty"`
@@ -227,30 +233,39 @@ func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResu
 	return &ApplyResult{}
 }
 
-func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
-	if op.Message == nil {
-		return &ApplyResult{Error: fmt.Errorf("nil message in append operation")}
+// decodeOperationMessage decodes a replicated envelope. The caller owns the
+// result and must release it.
+func decodeOperationMessage(encoded []byte) (*message.Envelope, error) {
+	if len(encoded) == 0 {
+		return nil, errors.New("empty message in append operation")
 	}
+	return message.UnmarshalBinary(encoded)
+}
+
+func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	if op.DedupeKey != "" {
 		return f.applyAppendOnce(ctx, op)
 	}
-	messageID := op.Message.Broker.Queue.MessageID
 
-	offset, err := f.queueStore.Append(ctx, op.QueueName, op.Message)
+	envelope, err := decodeOperationMessage(op.Message)
+	if err != nil {
+		return &ApplyResult{Error: err}
+	}
+	messageID := envelope.Broker.Queue.MessageID
+
+	offset, err := f.queueStore.Append(ctx, op.QueueName, envelope)
 	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
-			message.Release(op.Message)
-			op.Message = nil
+			message.Release(envelope)
 			f.logger.Error("failed to auto-create queue for append",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
 			return &ApplyResult{Error: createErr}
 		}
-		offset, err = f.queueStore.Append(ctx, op.QueueName, op.Message)
+		offset, err = f.queueStore.Append(ctx, op.QueueName, envelope)
 	}
 	if err != nil {
-		message.Release(op.Message)
-		op.Message = nil
+		message.Release(envelope)
 		f.logger.Error("failed to apply append",
 			slog.String("queue", op.QueueName),
 			slog.String("message_id", messageID),
@@ -262,7 +277,6 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 		slog.String("queue", op.QueueName),
 		slog.String("message_id", messageID),
 		slog.Uint64("offset", offset))
-	op.Message = nil
 
 	return &ApplyResult{Offset: offset}
 }
@@ -282,31 +296,31 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 		// cannot would write it, and the two would disagree about what the
 		// queue holds. Refusing keeps the replicas identical and leaves the
 		// source entry pending for a later retry.
-		message.Release(op.Message)
-		op.Message = nil
 		f.logger.Error("store cannot apply a deduplicated append",
 			slog.String("queue", op.QueueName),
 			slog.String("dedupe_key", op.DedupeKey))
 		return &ApplyResult{Error: storage.ErrDeduplicationUnsupported}
 	}
 
-	messageID := op.Message.Broker.Queue.MessageID
+	envelope, err := decodeOperationMessage(op.Message)
+	if err != nil {
+		return &ApplyResult{Error: err}
+	}
+	messageID := envelope.Broker.Queue.MessageID
 
-	offset, deduplicated, err := deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, op.Message)
+	offset, deduplicated, err := deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, envelope)
 	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
-			message.Release(op.Message)
-			op.Message = nil
+			message.Release(envelope)
 			f.logger.Error("failed to auto-create queue for deduplicated append",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
 			return &ApplyResult{Error: createErr}
 		}
-		offset, deduplicated, err = deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, op.Message)
+		offset, deduplicated, err = deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, envelope)
 	}
 	if err != nil {
-		message.Release(op.Message)
-		op.Message = nil
+		message.Release(envelope)
 		f.logger.Error("failed to apply deduplicated append",
 			slog.String("queue", op.QueueName),
 			slog.String("message_id", messageID),
@@ -314,10 +328,6 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
 	}
-
-	// AppendOnce consumed the envelope on both success paths: it either stored
-	// it or released it.
-	op.Message = nil
 
 	f.logger.Debug("applied deduplicated append",
 		slog.String("queue", op.QueueName),
@@ -334,22 +344,30 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: fmt.Errorf("empty messages in append batch operation")}
 	}
 
-	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
+	envelopes := make([]*message.Envelope, 0, len(op.Messages))
+	for _, encoded := range op.Messages {
+		envelope, err := decodeOperationMessage(encoded)
+		if err != nil {
+			releaseMessages(envelopes)
+			return &ApplyResult{Error: err}
+		}
+		envelopes = append(envelopes, envelope)
+	}
+	count := len(envelopes)
+
+	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, envelopes)
 	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
-			releaseMessages(op.Messages)
-			op.Messages = nil
+			releaseMessages(envelopes)
 			f.logger.Error("failed to auto-create queue for append batch",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
 			return &ApplyResult{Error: createErr}
 		}
-		offset, err = f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
+		offset, err = f.queueStore.AppendBatch(ctx, op.QueueName, envelopes)
 	}
 	if err != nil {
-		count := len(op.Messages)
-		releaseMessages(op.Messages)
-		op.Messages = nil
+		releaseMessages(envelopes)
 		f.logger.Error("failed to apply append batch",
 			slog.String("queue", op.QueueName),
 			slog.Int("count", count),
@@ -357,12 +375,10 @@ func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: err}
 	}
 
-	count := len(op.Messages)
 	f.logger.Debug("applied append batch",
 		slog.String("queue", op.QueueName),
 		slog.Int("count", count),
 		slog.Uint64("first_offset", offset))
-	op.Messages = nil
 
 	return &ApplyResult{Offset: offset}
 }

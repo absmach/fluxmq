@@ -41,12 +41,12 @@ func replicate(t *testing.T, op *Operation, replicas ...*LogFSM) []*ApplyResult 
 	return results
 }
 
-func dedupeOperation(queueName, key, payload string) *Operation {
+func dedupeOperation(t *testing.T, queueName, key, payload string) *Operation {
 	return &Operation{
 		Type:      OpAppend,
 		QueueName: queueName,
 		DedupeKey: key,
-		Message:   newQueuedEnvelope("msg", "$queue/"+queueName, []byte(payload)),
+		Message:   encodeOperationEnvelope(t, newQueuedEnvelope("msg", "$queue/"+queueName, []byte(payload))),
 	}
 }
 
@@ -57,11 +57,11 @@ func TestLogFSMAppendOnceDeduplicatesRepeatedKey(t *testing.T) {
 	ctx := context.Background()
 	queueName := "dedupe-events"
 
-	first := fsm.applyAppend(ctx, dedupeOperation(queueName, testDedupeKey, "one"))
+	first := fsm.applyAppend(ctx, dedupeOperation(t, queueName, testDedupeKey, "one"))
 	require.NoError(t, first.Error)
 	assert.False(t, first.Deduplicated)
 
-	second := fsm.applyAppend(ctx, dedupeOperation(queueName, testDedupeKey, "two"))
+	second := fsm.applyAppend(ctx, dedupeOperation(t, queueName, testDedupeKey, "two"))
 	require.NoError(t, second.Error)
 	assert.True(t, second.Deduplicated, "a repeated key must be recognised")
 	assert.Equal(t, first.Offset, second.Offset, "the caller must learn where the record is")
@@ -83,7 +83,7 @@ func TestLogFSMAppendOnceKeepsReplicasIdentical(t *testing.T) {
 
 	// The transfer, then a retry of it after a settlement that never landed.
 	for _, payload := range []string{"transfer", "retry"} {
-		results := replicate(t, dedupeOperation(queueName, testDedupeKey, payload), leader, follower)
+		results := replicate(t, dedupeOperation(t, queueName, testDedupeKey, payload), leader, follower)
 		require.NoError(t, results[0].Error)
 		require.NoError(t, results[1].Error)
 		assert.Equal(t, results[0].Deduplicated, results[1].Deduplicated,
@@ -92,7 +92,7 @@ func TestLogFSMAppendOnceKeepsReplicasIdentical(t *testing.T) {
 	}
 
 	// A distinct key is a distinct record on both.
-	results := replicate(t, dedupeOperation(queueName, "dlq-other", "second"), leader, follower)
+	results := replicate(t, dedupeOperation(t, queueName, "dlq-other", "second"), leader, follower)
 	require.NoError(t, results[0].Error)
 	require.NoError(t, results[1].Error)
 	assert.False(t, results[0].Deduplicated)
@@ -119,13 +119,12 @@ func TestLogFSMAppendOnceKeepsReplicasIdentical(t *testing.T) {
 // follower doing a plain append while the leader deduplicated, which is exactly
 // the divergence this design exists to prevent.
 func TestLogFSMAppendOnceCarriesKeyThroughJSON(t *testing.T) {
-	data, err := json.Marshal(dedupeOperation("dedupe-json", testDedupeKey, "one"))
+	data, err := json.Marshal(dedupeOperation(t, "dedupe-json", testDedupeKey, "one"))
 	require.NoError(t, err)
 
 	var decoded Operation
 	require.NoError(t, json.Unmarshal(data, &decoded))
-	require.NotNil(t, decoded.Message)
-	decoded.Message.ReleasePayload()
+	require.NotEmpty(t, decoded.Message, "the encoded envelope must survive replication")
 
 	assert.Equal(t, testDedupeKey, decoded.DedupeKey, "the key must survive replication")
 }
@@ -140,7 +139,7 @@ func TestLogFSMAppendOnceRefusesStoreWithoutCapability(t *testing.T) {
 	require.NoError(t, backing.CreateQueue(ctx, types.DefaultQueueConfig(queueName, queueName+"/#")))
 	fsm := NewLogFSM(plainQueueStore{QueueStore: backing}, noopGroupStore{}, discardLogger())
 
-	result := fsm.applyAppend(ctx, dedupeOperation(queueName, testDedupeKey, "one"))
+	result := fsm.applyAppend(ctx, dedupeOperation(t, queueName, testDedupeKey, "one"))
 	require.ErrorIs(t, result.Error, storage.ErrDeduplicationUnsupported)
 
 	count, err := backing.Count(ctx, queueName)
@@ -158,7 +157,7 @@ func TestLogFSMAppendWithoutKeyIsNotDeduplicated(t *testing.T) {
 		result := fsm.applyAppend(ctx, &Operation{
 			Type:      OpAppend,
 			QueueName: queueName,
-			Message:   newQueuedEnvelope("msg", "$queue/"+queueName, []byte("payload")),
+			Message:   encodeOperationEnvelope(t, newQueuedEnvelope("msg", "$queue/"+queueName, []byte("payload"))),
 		})
 		require.NoError(t, result.Error)
 		assert.False(t, result.Deduplicated)
@@ -176,7 +175,7 @@ func TestLogFSMAppendOnceAutoCreatesMissingQueue(t *testing.T) {
 	ctx := context.Background()
 	queueName := "dedupe-autocreate"
 
-	result := fsm.applyAppend(ctx, dedupeOperation(queueName, testDedupeKey, "one"))
+	result := fsm.applyAppend(ctx, dedupeOperation(t, queueName, testDedupeKey, "one"))
 	require.NoError(t, result.Error)
 
 	stored, err := store.Read(ctx, queueName, result.Offset)

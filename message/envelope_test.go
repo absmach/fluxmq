@@ -4,8 +4,6 @@
 package message
 
 import (
-	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/absmach/fluxmq/payload"
@@ -18,37 +16,6 @@ const (
 	testPropertyValue = "value"
 	testSubject       = "subject"
 )
-
-func TestEnvelopeJSONRequiresVersion1(t *testing.T) {
-	original := New("devices/1", []byte("payload"))
-	original.Broker.Source = SourceMetadata{ClientID: testClientID, Protocol: ProtocolMQTT}
-	original.User.Properties = map[string]string{"content": "json"}
-	defer Release(original)
-
-	encoded, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded Envelope
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	defer Release(&decoded)
-	if decoded.Version != Version1 || decoded.Topic != original.Topic || string(decoded.PayloadBytes()) != "payload" {
-		t.Fatalf("unexpected decoded envelope: %#v", decoded)
-	}
-
-	for _, raw := range []string{
-		`{"topic":"devices/1","payload":"cGF5bG9hZA=="}`,
-		`{"version":2,"topic":"devices/1"}`,
-	} {
-		var unsupported Envelope
-		if err := json.Unmarshal([]byte(raw), &unsupported); !errors.Is(err, ErrUnsupportedVersion) {
-			t.Fatalf("unmarshal %s error = %v", raw, err)
-		}
-	}
-}
 
 func TestEnvelopeCloneSharesOnlyImmutablePayload(t *testing.T) {
 	original := New("devices/1", []byte("payload"))

@@ -506,10 +506,17 @@ func (m *Manager) ApplyAppendWithOptions(ctx context.Context, queueName string, 
 		return 0, ErrRaftDisabled
 	}
 
+	// Encoded once here, in the binary form the store uses. The caller retains
+	// ownership of msg and releases it; the replicas decode their own copy.
+	encoded, err := message.MarshalBinary(msg)
+	if err != nil {
+		return 0, fmt.Errorf("encode replicated append: %w", err)
+	}
+
 	op := &Operation{
 		Type:      OpAppend,
 		QueueName: queueName,
-		Message:   msg,
+		Message:   encoded,
 	}
 
 	result, err := m.ApplyWithOptions(ctx, op, opts)
@@ -543,10 +550,15 @@ func (m *Manager) ApplyAppendOnceWithOptions(ctx context.Context, queueName, ded
 		return 0, false, storage.ErrDeduplicationKeyRequired
 	}
 
+	encoded, err := message.MarshalBinary(msg)
+	if err != nil {
+		return 0, false, fmt.Errorf("encode replicated deduplicated append: %w", err)
+	}
+
 	op := &Operation{
 		Type:      OpAppend,
 		QueueName: queueName,
-		Message:   msg,
+		Message:   encoded,
 		DedupeKey: dedupeKey,
 	}
 

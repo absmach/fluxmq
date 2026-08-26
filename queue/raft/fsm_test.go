@@ -66,7 +66,7 @@ func TestFSM_ApplyEnqueue(t *testing.T) {
 
 	op := Operation{
 		Type:    OpEnqueue,
-		Message: msg,
+		Message: encodeOperationEnvelope(t, msg),
 	}
 
 	data, err := json.Marshal(op)

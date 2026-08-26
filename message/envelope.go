@@ -6,7 +6,6 @@ package message
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -53,103 +52,103 @@ const (
 // UserMetadata contains publisher-owned message metadata. Protocol adapters
 // may project only fields their wire format supports.
 type UserMetadata struct {
-	Key             []byte            `json:"key,omitempty"`
-	Headers         map[string][]byte `json:"headers,omitempty"`
-	Properties      map[string]string `json:"properties,omitempty"`
-	ContentType     string            `json:"content_type,omitempty"`
-	ContentEncoding string            `json:"content_encoding,omitempty"`
-	ResponseTopic   string            `json:"response_topic,omitempty"`
-	CorrelationData []byte            `json:"correlation_data,omitempty"`
-	PayloadFormat   *byte             `json:"payload_format,omitempty"`
-	MessageExpiry   *uint32           `json:"message_expiry,omitempty"`
+	Key             []byte
+	Headers         map[string][]byte
+	Properties      map[string]string
+	ContentType     string
+	ContentEncoding string
+	ResponseTopic   string
+	CorrelationData []byte
+	PayloadFormat   *byte
+	MessageExpiry   *uint32
 }
 
 // SourceMetadata identifies the authenticated origin. It is broker-owned and
 // never accepted from an untrusted peer as user metadata.
 type SourceMetadata struct {
-	ClientID   string   `json:"client_id,omitempty"`
-	ExternalID string   `json:"external_id,omitempty"`
-	Protocol   Protocol `json:"protocol,omitempty"`
-	Topic      string   `json:"topic,omitempty"`
+	ClientID   string
+	ExternalID string
+	Protocol   Protocol
+	Topic      string
 }
 
 // DeliveryMetadata contains broker delivery and MQTT transaction state.
 type DeliveryMetadata struct {
-	PublishedAt       time.Time `json:"published_at,omitempty"`
-	ExpiresAt         time.Time `json:"expires_at,omitempty"`
-	SubscriptionIDs   []uint32  `json:"subscription_ids,omitempty"`
-	PacketID          uint16    `json:"packet_id,omitempty"`
-	QoS               byte      `json:"qos,omitempty"`
-	InflightDirection byte      `json:"inflight_direction,omitempty"`
-	InflightState     byte      `json:"inflight_state,omitempty"`
-	Retain            bool      `json:"retain,omitempty"`
-	Duplicate         bool      `json:"duplicate,omitempty"`
+	PublishedAt       time.Time
+	ExpiresAt         time.Time
+	SubscriptionIDs   []uint32
+	PacketID          uint16
+	QoS               byte
+	InflightDirection byte
+	InflightState     byte
+	Retain            bool
+	Duplicate         bool
 }
 
 // StreamMetadata records broker-owned stream projection state.
 type StreamMetadata struct {
-	Offset             uint64 `json:"offset,omitempty"`
-	Timestamp          int64  `json:"timestamp,omitempty"`
-	CommittedOffset    uint64 `json:"committed_offset,omitempty"`
-	HasCommittedOffset bool   `json:"has_committed_offset,omitempty"`
-	WorkAcknowledged   bool   `json:"work_acknowledged,omitempty"`
-	WorkGroup          string `json:"work_group,omitempty"`
+	Offset             uint64
+	Timestamp          int64
+	CommittedOffset    uint64
+	HasCommittedOffset bool
+	WorkAcknowledged   bool
+	WorkGroup          string
 }
 
 // QueueMetadata contains durable-queue identity and lifecycle state.
 type QueueMetadata struct {
-	MessageID   string          `json:"message_id,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	GroupID     string          `json:"group_id,omitempty"`
-	Offset      uint64          `json:"offset,omitempty"`
-	State       QueueState      `json:"state,omitempty"`
-	CreatedAt   time.Time       `json:"created_at,omitempty"`
-	DeliveredAt time.Time       `json:"delivered_at,omitempty"`
-	NextRetryAt time.Time       `json:"next_retry_at,omitempty"`
-	RetryCount  int             `json:"retry_count,omitempty"`
-	ExpiresAt   time.Time       `json:"expires_at,omitempty"`
-	Stream      *StreamMetadata `json:"stream,omitempty"`
+	MessageID   string
+	Name        string
+	GroupID     string
+	Offset      uint64
+	State       QueueState
+	CreatedAt   time.Time
+	DeliveredAt time.Time
+	NextRetryAt time.Time
+	RetryCount  int
+	ExpiresAt   time.Time
+	Stream      *StreamMetadata
 }
 
 // TransferMetadata records a recoverable broker-owned message transfer such
 // as a move to a dead-letter queue.
 type TransferMetadata struct {
-	ID            string    `json:"id,omitempty"`
-	FailureReason string    `json:"failure_reason,omitempty"`
-	FirstAttempt  time.Time `json:"first_attempt,omitempty"`
-	LastAttempt   time.Time `json:"last_attempt,omitempty"`
-	CompletedAt   time.Time `json:"completed_at,omitempty"`
-	SourceQueue   string    `json:"source_queue,omitempty"`
-	SourceGroup   string    `json:"source_group,omitempty"`
-	SourceOffset  uint64    `json:"source_offset,omitempty"`
-	DeliveryCount int       `json:"delivery_count,omitempty"`
+	ID            string
+	FailureReason string
+	FirstAttempt  time.Time
+	LastAttempt   time.Time
+	CompletedAt   time.Time
+	SourceQueue   string
+	SourceGroup   string
+	SourceOffset  uint64
+	DeliveryCount int
 }
 
 // TraceMetadata is a typed broker-owned trace context. It is not a bag of
 // arbitrary user-visible properties.
 type TraceMetadata struct {
-	TraceParent string `json:"trace_parent,omitempty"`
-	TraceState  string `json:"trace_state,omitempty"`
-	TraceID     string `json:"trace_id,omitempty"`
+	TraceParent string
+	TraceState  string
+	TraceID     string
 }
 
 // BrokerMetadata contains state owned exclusively by the broker.
 type BrokerMetadata struct {
-	Source   SourceMetadata   `json:"source,omitempty"`
-	Delivery DeliveryMetadata `json:"delivery,omitempty"`
-	Queue    QueueMetadata    `json:"queue,omitempty"`
-	Transfer TransferMetadata `json:"transfer,omitempty"`
-	Trace    TraceMetadata    `json:"trace,omitempty"`
+	Source   SourceMetadata
+	Delivery DeliveryMetadata
+	Queue    QueueMetadata
+	Transfer TransferMetadata
+	Trace    TraceMetadata
 }
 
 // Envelope is the canonical in-memory and persisted broker message. Payload
 // has exactly one representation: an immutable reference-counted buffer.
 type Envelope struct {
-	Version Version         `json:"version"`
-	Topic   string          `json:"topic"`
-	Payload *payload.Buffer `json:"-"`
-	User    UserMetadata    `json:"user,omitempty"`
-	Broker  BrokerMetadata  `json:"broker,omitempty"`
+	Version Version
+	Topic   string
+	Payload *payload.Buffer
+	User    UserMetadata
+	Broker  BrokerMetadata
 }
 
 // New constructs a Version1 envelope and copies payload into the broker pool.
@@ -325,47 +324,4 @@ func cloneQueueMetadata(src QueueMetadata) QueueMetadata {
 		dst.Stream = &stream
 	}
 	return dst
-}
-
-type persistedEnvelope struct {
-	Version Version        `json:"version"`
-	Topic   string         `json:"topic"`
-	Payload []byte         `json:"payload,omitempty"`
-	User    UserMetadata   `json:"user,omitempty"`
-	Broker  BrokerMetadata `json:"broker,omitempty"`
-}
-
-// MarshalJSON persists only Version1. The payload bytes are read synchronously
-// from their sole in-memory representation without an intermediate copy.
-func (e Envelope) MarshalJSON() ([]byte, error) {
-	if err := (&e).Validate(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(persistedEnvelope{
-		Version: e.Version,
-		Topic:   e.Topic,
-		Payload: e.PayloadBytes(),
-		User:    e.User,
-		Broker:  e.Broker,
-	})
-}
-
-// UnmarshalJSON accepts only Version1 and never attempts a legacy decode.
-func (e *Envelope) UnmarshalJSON(data []byte) error {
-	var stored persistedEnvelope
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return err
-	}
-	if stored.Version != Version1 {
-		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, stored.Version)
-	}
-	if e.Payload != nil {
-		e.Payload.Release()
-	}
-	e.Version = stored.Version
-	e.Topic = stored.Topic
-	e.Payload = payload.FromBytes(stored.Payload)
-	e.User = stored.User
-	e.Broker = stored.Broker
-	return nil
 }
