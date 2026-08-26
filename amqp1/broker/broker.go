@@ -17,7 +17,6 @@ import (
 	"github.com/absmach/fluxmq/broker/router"
 	"github.com/absmach/fluxmq/cluster"
 	coremessage "github.com/absmach/fluxmq/message"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 )
 
 type queueLinkManager interface {
@@ -112,17 +111,14 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// A capture failure never fails the publish: see
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueLinkManager.(corebroker.TopicQueuePublisher); ok {
-		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-			Source: coremessage.SourceMetadata{
-				ClientID:   props[coremessage.PropertyClientID],
-				ExternalID: props[coremessage.PropertyExternalID],
-				Protocol:   coremessage.Protocol(props[coremessage.PropertyProtocol]),
-			},
-			Trace:      coremessage.TraceFromProperties(props),
-			Topic:      topic,
-			Payload:    payload,
-			Properties: coremessage.FilterUserProperties(props),
-		}); err != nil {
+		captured := queuePublishEnvelope(topic, payload, props, coremessage.SourceMetadata{
+			ClientID:   props[coremessage.PropertyClientID],
+			ExternalID: props[coremessage.PropertyExternalID],
+			Protocol:   coremessage.Protocol(props[coremessage.PropertyProtocol]),
+		})
+		err := publisher.PublishToMatchingQueues(ctx, captured)
+		coremessage.Release(captured)
+		if err != nil {
 			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
 	}
@@ -157,7 +153,15 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 		// cluster routes, but cap with a timeout.
 		routeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := cl.RoutePublish(routeCtx, topic, payload, 1, false, props); err != nil {
+		routed := coremessage.New(topic, payload)
+		if err := coremessage.ApplyTrustedProperties(routed, props); err != nil {
+			b.logger.Warn("AMQP cluster route publish dropped malformed properties",
+				"topic", topic, "error", err)
+		}
+		routed.BrokerMeta.Delivery.QoS = 1
+		err := cl.RoutePublish(routeCtx, routed)
+		coremessage.Release(routed)
+		if err != nil {
 			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
 		}
 	}
@@ -224,11 +228,15 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core
 			amqpMsg.ApplicationProperties[key] = value
 		}
 	}
-	if msg.Broker.Queue.MessageID != "" {
-		amqpMsg.Properties.MessageID = msg.Broker.Queue.MessageID
+	// A durable delivery is named by the broker's handle; anything else carries
+	// whatever identifier the publisher set.
+	if handle := msg.BrokerMeta.Queue.DeliveryID(); handle != "" {
+		amqpMsg.Properties.MessageID = handle
+	} else if msg.PublisherMeta.MessageID != "" {
+		amqpMsg.Properties.MessageID = msg.PublisherMeta.MessageID
 	}
 
-	c.deliverAMQPMessage(msg.Topic, amqpMsg, msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+	c.deliverAMQPMessage(msg.Topic, amqpMsg, msg.BrokerMeta.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	return nil
 }
 
@@ -250,7 +258,7 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 		return fmt.Errorf("%w: AMQP client not found: %s", corebroker.ErrClientNotConnected, containerID)
 	}
 	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.PayloadBytes(), coremessage.ProjectProperties(msg, coremessage.PublicProjection), msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+	c.deliverMessage(msg.Topic, msg.PayloadBytes(), coremessage.ProjectProperties(msg, coremessage.PublicProjection), msg.BrokerMeta.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	return nil
 }
 
@@ -332,4 +340,17 @@ func PrefixedClientID(containerID string) string {
 // IsAMQPClient checks if a client ID belongs to an AMQP 1.0 client.
 func IsAMQPClient(clientID string) bool {
 	return corebroker.IsAMQP1Client(clientID)
+}
+
+// queuePublishEnvelope builds the envelope an AMQP 1.0 publish hands to the
+// queue manager. The manager borrows it, so the caller releases it once the
+// publish returns.
+func queuePublishEnvelope(
+	topic string, payload []byte, props map[string]string, source coremessage.SourceMetadata,
+) *coremessage.Envelope {
+	envelope := coremessage.New(topic, payload)
+	envelope.BrokerMeta.Source = source
+	envelope.BrokerMeta.Trace = coremessage.TraceFromProperties(props)
+	envelope.PublisherMeta.Properties = coremessage.FilterUserProperties(props)
+	return envelope
 }

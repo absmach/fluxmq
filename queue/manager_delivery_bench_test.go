@@ -27,8 +27,8 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 	var lastOffset uint64
 	var lastGroupID string
 	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
-		lastOffset = msg.Broker.Queue.Offset
-		lastGroupID = msg.Broker.Queue.GroupID
+		lastOffset = msg.BrokerMeta.Queue.Offset
+		lastGroupID = msg.BrokerMeta.Queue.GroupID
 		return nil
 	})
 
@@ -50,14 +50,13 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 	}
 
 	b.ResetTimer()
+	published := publishEnvelope(b, "$queue/q-0/jobs", []byte("x"))
+
 	for i := 0; i < b.N; i++ {
 		lastOffset = 0
 		lastGroupID = ""
 
-		if err := mgr.Publish(ctx, types.PublishRequest{
-			Topic:   "$queue/q-0/jobs",
-			Payload: []byte("x"),
-		}); err != nil {
+		if err := mgr.Publish(ctx, published); err != nil {
 			b.Fatalf("Publish failed: %v", err)
 		}
 

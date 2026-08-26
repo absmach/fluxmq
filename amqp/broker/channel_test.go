@@ -33,11 +33,11 @@ const (
 
 type mockChannelQueueManager struct {
 	lastCursor           *qtypes.CursorOption
-	lastPublish          qtypes.PublishRequest
+	lastPublish          *message.Envelope
 	publishCalls         int
 	publishErr           error
 	exactStreamName      string
-	exactPublish         qtypes.PublishRequest
+	exactPublish         *message.Envelope
 	exactPublishCalls    int
 	exactPublishErr      error
 	exactPublishCtx      context.Context
@@ -56,15 +56,16 @@ type mockChannelQueueManager struct {
 	updateQueueErr       error
 }
 
-func (m *mockChannelQueueManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
-	m.lastPublish = publish
+// The envelope is borrowed for the call, so the mock keeps its own reference.
+func (m *mockChannelQueueManager) Publish(_ context.Context, msg *message.Envelope) error {
+	m.lastPublish = msg.Clone()
 	m.publishCalls++
 	return m.publishErr
 }
 
-func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error {
+func (m *mockChannelQueueManager) PublishToDurableStream(ctx context.Context, queueName string, msg *message.Envelope) error {
 	m.exactStreamName = queueName
-	m.exactPublish = publish
+	m.exactPublish = msg.Clone()
 	m.exactPublishCtx = ctx
 	m.exactPublishCalls++
 	if err := ctx.Err(); err != nil {
@@ -446,8 +447,8 @@ func TestExchangePublishUsesHookRoutingKeyForBindings(t *testing.T) {
 	if mockQM.lastPublish.Topic != "$queue/orders/canonical" {
 		t.Fatalf("expected normalized queue topic, got %q", mockQM.lastPublish.Topic)
 	}
-	if !bytes.Equal(mockQM.lastPublish.Payload, payload) {
-		t.Fatalf("expected payload %q, got %q", payload, mockQM.lastPublish.Payload)
+	if !bytes.Equal(mockQM.lastPublish.PayloadBytes(), payload) {
+		t.Fatalf("expected payload %q, got %q", payload, mockQM.lastPublish.PayloadBytes())
 	}
 }
 
@@ -461,16 +462,16 @@ func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	if mockQM.publishCalls != 1 {
 		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
 	}
-	if mockQM.lastPublish.Source.ClientID != PrefixedClientID(testConnectionID) {
-		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.Source.ClientID)
+	if mockQM.lastPublish.BrokerMeta.Source.ClientID != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.BrokerMeta.Source.ClientID)
 	}
-	if mockQM.lastPublish.Properties["trace"] != "1" {
-		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.Properties["trace"])
+	if trace, _ := mockQM.lastPublish.PublisherMeta.Properties.Get("trace"); trace != "1" {
+		t.Fatalf("expected trace property preserved, got %q", trace)
 	}
-	if mockQM.lastPublish.Source.Protocol != message.ProtocolAMQP091 {
-		t.Fatalf("expected protocol %q, got %q", message.ProtocolAMQP091, mockQM.lastPublish.Source.Protocol)
+	if mockQM.lastPublish.BrokerMeta.Source.Protocol != message.ProtocolAMQP091 {
+		t.Fatalf("expected protocol %q, got %q", message.ProtocolAMQP091, mockQM.lastPublish.BrokerMeta.Source.Protocol)
 	}
-	if _, ok := mockQM.lastPublish.Properties[message.PropertyClientID]; ok {
+	if _, ok := mockQM.lastPublish.PublisherMeta.Properties.Get(message.PropertyClientID); ok {
 		t.Fatal("broker source identity leaked into user properties")
 	}
 }

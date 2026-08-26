@@ -110,7 +110,7 @@ func (a *Adapter) appendOnce(
 
 	// The raw header lets the exceptional pending-reservation recovery path find
 	// the identity without unmarshalling envelope metadata or payloads.
-	msg.Broker.Transfer.ID = dedupeKey
+	msg.BrokerMeta.Transfer.ID = dedupeKey
 	value, key, headers, err := encodeMessage(msg)
 	if err != nil {
 		_ = a.dedupe.state.remove(queueName, dedupeKey)

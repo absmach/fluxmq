@@ -34,7 +34,7 @@ func TestEncodePublishRetainsPayloadBuffer(t *testing.T) {
 		{"v5", packets.V5},
 	} {
 		t.Run(version.name, func(t *testing.T) {
-			pool := payloadbuf.NewPoolWithCapacity(4, 4, 4)
+			pool := payloadbuf.NewPool()
 			buf := pool.FromBytes([]byte("payload-bytes"))
 
 			msg := message.Acquire()
@@ -49,7 +49,7 @@ func TestEncodePublishRetainsPayloadBuffer(t *testing.T) {
 
 			require.Equal(t, int32(1), buf.RefCount(),
 				"packet must hold the only remaining reference after the message is released")
-			assert.NotSame(t, buf, pool.Get(len("payload-bytes")),
+			assert.NotSame(t, buf, pool.FromBytes([]byte("payload-bytes")),
 				"buffer must not be back in the pool while a queued packet points into it")
 
 			pkt.Release()
@@ -76,7 +76,7 @@ func TestAsyncDeliveryKeepsPayloadIntact(t *testing.T) {
 	}, nil))
 	conn.awaitWrite(t)
 
-	pool := payloadbuf.NewPoolWithCapacity(4, 4, 4)
+	pool := payloadbuf.NewPool()
 	buf := pool.FromBytes([]byte(payload))
 
 	msg := message.Acquire()
@@ -92,7 +92,7 @@ func TestAsyncDeliveryKeepsPayloadIntact(t *testing.T) {
 
 	// A concurrent publish reusing a recycled buffer would overwrite the bytes
 	// the queued packet points into.
-	overwrite := pool.Get(len(payload))
+	overwrite := pool.FromBytes([]byte(payload))
 	require.NotSame(t, buf, overwrite, "payload buffer must not be recycled while a queued packet points into it")
 	copy(overwrite.Bytes(), bytes.Repeat([]byte("X"), len(payload)))
 

@@ -156,20 +156,22 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 	require.NoError(t, errConn)
 
 	msg := message.NewWithBuffer("topic", payload.FromBytes([]byte("payload")))
-	msg.Broker.Delivery.QoS = 1
-	buf := msg.Payload
+	msg.BrokerMeta.Delivery.QoS = 1
+	buf := msg.RetainPayload()
 	require.NotNil(t, buf)
-	require.Equal(t, int32(1), buf.RefCount())
+	require.Equal(t, int32(2), buf.RefCount())
 
 	require.True(t, s.TryEnqueuePending(msg, nil))
 	require.NoError(t, s.Disconnect(false, v5.DisconnectNormalDisconnection))
 
 	require.Equal(t, 1, s.OfflineQueue().Len())
-	require.Equal(t, int32(1), buf.RefCount())
+	require.Equal(t, int32(2), buf.RefCount())
 
 	queued := s.OfflineQueue().Dequeue()
 	require.NotNil(t, queued)
 	queued.ReleasePayload()
 	message.Release(queued)
+	require.Equal(t, int32(1), buf.RefCount())
+	buf.Release()
 	require.Equal(t, int32(0), buf.RefCount())
 }

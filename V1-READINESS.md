@@ -41,12 +41,60 @@ The tag is still blocked by work that the short-term plan explicitly deferred:
   have not received the required second audit pass.
 
 The public queue API/error model, protocol-independent queue state machine, and
-strict v1 message envelope are now complete. There is no legacy envelope
-decoder or dual payload/message representation: every broker path uses one
-versioned envelope with typed ownership namespaces and an immutable
-reference-counted payload. The next broker-core work is a recoverable
-transition boundary, followed by a capability interface that keeps
-experimental Raft outside the stable API. See
+strict v1 message envelope are now complete.
+
+**Corrected 2026-08-26.** This paragraph previously claimed there was "no legacy
+envelope decoder or dual payload/message representation". That was not true when
+it was written. A JSON envelope encoder existed for Raft operations, and
+`queue/types.PublishRequest` restated the envelope's publisher namespace field
+for field, so the durable publish path copied every payload twice and the
+cluster boundary flattened typed broker metadata into a `map[string]string` that
+could not carry most of it. Each hop silently dropped the queue state, its
+timestamps and retry count, most of the transfer metadata, and every publisher
+field except properties.
+
+It is true now, and of the current tree rather than of the assessed tag:
+
+- One representation. The JSON encoder is gone, `PublishRequest` is deleted, and
+  the publish and append commands name `*message.Envelope` directly. They borrow
+  it — the queue clones what it stores, and a successful storage append owns
+  that clone, never the caller's envelope.
+- One wire. Peer RPCs carry a complete binary envelope rather than a payload
+  beside a flattened property map, so a delivery crossing a node keeps its
+  redelivery count and its TTL.
+- One schema of record. `proto/message/v1/envelope.proto` states the stored
+  format, and the format is pinned three ways: a conformance pair holding the
+  hand-written codec and the schema against each other field for field, a
+  reflection check that rejects unpopulated or unknown schema fields, a golden
+  encoding that fails on any byte change, and its own breaking-change baseline
+  beside the public and cluster ones. Protocol and queue lifecycle values are
+  compact validated enums rather than unchecked persisted strings. Until that
+  existed the format was defined only by two Go switch statements kept aligned
+  by hand.
+- One frozen in-process API. `api/compat/go-message-v1.txt` pins the envelope,
+  metadata values, methods, and constructors. Mutable maps, slices, pointer
+  optionals, and the raw payload-buffer field are no longer exposed: clones
+  share immutable metadata and writers replace it through copy-on-write values.
+
+**Upgrading over existing queue data is a break, and a deliberate one.** Making
+protocol and queue lifecycle compact validated enums changed how they sit on the
+wire — a varint where a UTF-8 string used to be. A string and an enum cannot be
+told apart by value, only by wire type, so accepting both would put an arbitrary
+number where a validated enum belongs. The decoder refuses the old form instead,
+and `TestLegacyStringEnumsAreRejectedNotMisread` pins that it is refused rather
+than misread.
+
+What an operator sees: **the broker starts normally**, because nothing decodes
+envelopes at startup or during recovery. Every read from a queue holding
+pre-upgrade records then fails with `decode queue envelope metadata at offset N`,
+and delivery from that queue stops. The records are unreadable, not destroyed.
+
+A queue log written before this change has to be discarded before the queue will
+deliver again. This is the pre-1.0 freedom being spent deliberately; after the
+tag the same change would need a version field and a reader for both forms.
+
+The next broker-core work is a recoverable transition boundary, followed by a
+capability interface that keeps experimental Raft outside the stable API. See
 [`ROADMAP.md`](./ROADMAP.md#next).
 
 This assessment distinguishes **stable-core readiness** from **release
@@ -77,7 +125,15 @@ and publish-path hooks.
 - MQTT codec DoS surface (attacker-controlled length prefixes)
 - MQTT v5 topic-alias and property round-trip correctness
 - Queue consumer-group rebalance and retention/compaction races beyond the
-  focused ownership, settlement, and DLQ transition tests
+  focused ownership, settlement, and DLQ transition tests. Those focused tests
+  are narrower than they read: the MQTT settlement tests built their envelopes
+  by hand and wrote the broker-owned namespace directly, so none of them crossed
+  the ingress boundary that strips reserved properties from client input. Every
+  explicit MQTT v5 ack, nack and reject therefore failed on the wire — the
+  documented client recipe could not work — and no test noticed, because only
+  the implicit PUBACK path was exercised end to end. Fixed 2026-08-26; a
+  settlement now travels in the inbound command namespace. Read the rest of this
+  list as "untested", not "tested at the seam".
 - WebSocket / HTTP / CoAP transport DoS surface, CoAP UDP amplification
 - `pkg/tls` CRL/OCSP fail-open behavior (the code is untested, see P0-8)
 - `ratelimit/` per-IP map growth and `X-Forwarded-For` handling
@@ -713,18 +769,17 @@ codebase:
   explicit drop on overflow (`delivery.go:134`). This is the failure mode that
   OOMs most brokers, and it is handled.
 - **Authorization fails closed** on callout error (`authcallout/http.go:143`).
-- **Public contract drift is mechanically guarded.** CI compares the current
-  protobufs to `api/compat/proto-v1.binpb`; exact Go-interface and YAML-schema
-  tests fail on unreviewed shape changes. The exact `queue.CommandProcessor`
-  method set is guarded too, while its concrete state machine remains private.
-  Queue clients receive typed failures instead of needing to parse
-  implementation error strings.
+- **Contract drift is mechanically guarded.** CI compares the public, cluster,
+  and stored-message protobufs to separate reviewed descriptor images; exact
+  queue/message Go-API and YAML-schema tests fail on unreviewed shape changes.
+  The concrete queue state machine remains private, and queue clients receive
+  typed failures instead of needing to parse implementation error strings.
 - **The message model now has one strict ownership boundary.** Version 1 is the
   only accepted persisted envelope schema. User metadata cannot occupy
   broker-owned source, delivery, queue/stream, transfer, or trace namespaces;
   protocol adapters use explicit public or trusted projections. Clones share
-  one immutable reference-counted payload while deep-copying mutable metadata,
-  and storage/session/queue interfaces state who owns each reference.
+  one immutable reference-counted payload and immutable copy-on-write metadata
+  in O(1), and storage/session/queue interfaces state who owns each reference.
 - **Session ownership now has an explicit fencing model.** etcd transactions
   arbitrate acquisition and takeover; lease loss disconnects local sessions;
   caches are observational rather than authoritative.
@@ -750,9 +805,10 @@ The active sequence is architecture-first and API-stability-first:
    machine and a shared cross-protocol conformance suite.**~~ **Done
    2026-08-24.**
 3. ~~**Introduce a versioned message envelope with separate user and
-   broker-owned metadata namespaces.**~~ **Done 2026-08-25.** The implementation
+   broker-owned metadata namespaces.**~~ **Done 2026-08-26.** The implementation
    is strict v1 only, with no backward decoder, aliases, or parallel message
-   representation.
+   representation. Its persisted enums, immutable metadata API, schema
+   coverage, golden bytes, protobuf baseline, and Go baseline are pinned.
 4. **Next:** add a recoverable transition journal/outbox for source settlement plus
    destination append.
 5. Put experimental replication behind a capability contract, then optimize

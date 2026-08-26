@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -349,7 +348,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 				deliveredAny = true
 				delivered = true
 				if group.Mode == types.GroupModeStream {
-					committedCursor = msg.Broker.Queue.Offset + 1
+					committedCursor = msg.BrokerMeta.Queue.Offset + 1
 				}
 			}
 		}
@@ -441,7 +440,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 					),
 				})
 			}
-			lastOffset := msgs[len(msgs)-1].Broker.Queue.Offset
+			lastOffset := msgs[len(msgs)-1].BrokerMeta.Queue.Offset
 			releaseDeliverySources(msgs)
 
 			if err := e.routeRemoteBatch(ctx, consumerInfo.ProxyNodeID, deliveries); err != nil {
@@ -579,17 +578,18 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 func createDeliveryMessage(msg *message.Envelope, groupID string, queueName string) *message.Envelope {
 	delivery := msg.Clone()
 	delivery.Topic = queueDeliveryTopic(queueName, msg.Topic)
-	delivery.Broker.Source.Topic = msg.Topic
-	delivery.Broker.Delivery = message.DeliveryMetadata{
-		PublishedAt: msg.Broker.Delivery.PublishedAt,
-		ExpiresAt:   msg.Broker.Delivery.ExpiresAt,
+	delivery.BrokerMeta.Source.Topic = msg.Topic
+	delivery.BrokerMeta.Delivery = message.DeliveryMetadata{
+		PublishedAt: msg.BrokerMeta.Delivery.PublishedAt,
+		ExpiresAt:   msg.BrokerMeta.Delivery.ExpiresAt,
 		QoS:         1,
 	}
-	delivery.Broker.Queue = message.QueueMetadata{
-		MessageID: queueName + ":" + strconv.FormatUint(msg.Broker.Queue.Offset, 10),
-		Name:      queueName,
-		GroupID:   groupID,
-		Offset:    msg.Broker.Queue.Offset,
+	// No delivery handle is stored: the queue and offset are the identity, and
+	// the string a consumer sees is rendered from them at the protocol boundary.
+	delivery.BrokerMeta.Queue = message.QueueMetadata{
+		Name:    queueName,
+		GroupID: groupID,
+		Offset:  msg.BrokerMeta.Queue.Offset,
 	}
 	return delivery
 }
@@ -604,16 +604,17 @@ func decorateStreamDelivery(delivery *message.Envelope, msg *message.Envelope, w
 	if delivery == nil || msg == nil {
 		return
 	}
-	delivery.Broker.Queue.Stream = &message.StreamMetadata{
-		Offset:    msg.Broker.Queue.Offset,
-		Timestamp: msg.Broker.Queue.CreatedAt.UnixMilli(),
+	stream := message.StreamMetadata{
+		Offset:    msg.BrokerMeta.Queue.Offset,
+		Timestamp: msg.BrokerMeta.Queue.CreatedAt.UnixMilli(),
 	}
 	if hasWorkCommitted {
-		delivery.Broker.Queue.Stream.HasCommittedOffset = true
-		delivery.Broker.Queue.Stream.CommittedOffset = workCommitted
-		delivery.Broker.Queue.Stream.WorkAcknowledged = msg.Broker.Queue.Offset < workCommitted
-		delivery.Broker.Queue.Stream.WorkGroup = primaryGroup
+		stream.HasCommittedOffset = true
+		stream.CommittedOffset = workCommitted
+		stream.WorkAcknowledged = msg.BrokerMeta.Queue.Offset < workCommitted
+		stream.WorkGroup = primaryGroup
 	}
+	delivery.BrokerMeta.Queue.Stream = message.Some(stream)
 }
 
 func createRoutedQueueMessage(msg *message.Envelope, groupID, queueName string, stream bool, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) *message.Envelope {

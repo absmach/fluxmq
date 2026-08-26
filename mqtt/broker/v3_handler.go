@@ -42,7 +42,8 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		return ErrInvalidPacketType
 	}
 
-	h.broker.telemetry.logger.Info("v3_connect",
+	h.broker.telemetry.logger.Info(
+		"v3_connect",
 		slog.String("remote_addr", conn.RemoteAddr().String()),
 		slog.String("client_id", p.ClientID),
 	)
@@ -165,7 +166,8 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	}
 
 	h.broker.telemetry.stats.IncrementConnections()
-	h.broker.telemetry.logger.Info("v3_connect_success",
+	h.broker.telemetry.logger.Info(
+		"v3_connect_success",
 		slog.String("client_id", clientID),
 		slog.Bool("session_present", sessionPresent),
 		slog.Duration("duration", time.Since(start)),
@@ -198,7 +200,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return nil
 	}
 
-	h.broker.telemetry.logger.Debug("v3_publish",
+	h.broker.telemetry.logger.Debug(
+		"v3_publish",
 		slog.String("client_id", s.ID),
 		slog.String("topic", p.TopicName),
 		slog.Int("qos", int(p.FixedHeader.QoS)),
@@ -223,7 +226,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// publisher retransmitting forever. MQTT 3.1.1 has no way to advertise a
 	// maximum QoS or to report one in a response, so the connection is closed.
 	if maxQoS := s.MaxQoS(); qos > maxQoS {
-		h.broker.telemetry.logger.Warn("v3_publish_qos_not_supported",
+		h.broker.telemetry.logger.Warn(
+			"v3_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),
 			slog.Int("server_max_qos", int(maxQoS)),
@@ -235,7 +239,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// is the limit broker.max_message_size actually documents: the application
 	// payload. MQTT 3.1.1 has no way to report it, so the connection is closed.
 	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
-		h.broker.telemetry.logger.Warn("v3_publish_payload_too_large",
+		h.broker.telemetry.logger.Warn(
+			"v3_publish_payload_too_large",
 			slog.String("client_id", s.ID),
 			slog.Int("payload_size", len(payload)),
 			slog.Int("max_message_size", maxSize),
@@ -299,7 +304,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	case 0:
 		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
 		err := h.broker.Publish(context.Background(), msg)
-		h.broker.telemetry.logger.Debug("v3_publish_complete",
+		h.broker.telemetry.logger.Debug(
+			"v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 			slog.Any("error", err),
@@ -311,7 +317,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		if err := h.broker.Publish(context.Background(), msg); err != nil {
 			return err
 		}
-		h.broker.telemetry.logger.Debug("v3_publish_complete",
+		h.broker.telemetry.logger.Debug(
+			"v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
@@ -323,7 +330,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 
 	case 2:
 		storeMsg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
-		storeMsg.Broker.Delivery.PacketID = packetID
+		storeMsg.BrokerMeta.Delivery.PacketID = packetID
 		accepted, err := s.AddInbound(packetID, storeMsg)
 		if !accepted {
 			message.Release(storeMsg)
@@ -332,7 +339,8 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 			return err
 		}
 
-		h.broker.telemetry.logger.Debug("v3_publish_complete",
+		h.broker.telemetry.logger.Debug(
+			"v3_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
@@ -479,18 +487,19 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 		retained, err := h.broker.GetRetainedMatching(filter)
 		if err == nil {
 			for _, msg := range retained {
-				deliverQoS := msg.Broker.Delivery.QoS
+				deliverQoS := msg.BrokerMeta.Delivery.QoS
 				if grantedQoS < deliverQoS {
 					deliverQoS = grantedQoS
 				}
-				msg.Broker.Delivery.QoS = deliverQoS
-				msg.Broker.Delivery.Retain = true
+				msg.BrokerMeta.Delivery.QoS = deliverQoS
+				msg.BrokerMeta.Delivery.Retain = true
 				h.broker.DeliverToSession(context.Background(), s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
 			}
 		}
 	}
 
-	h.broker.telemetry.logger.Info("v3_subscribe_complete",
+	h.broker.telemetry.logger.Info(
+		"v3_subscribe_complete",
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
@@ -525,7 +534,8 @@ func (h *v3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 		h.broker.unsubscribeInternal(s.Session, filter) //nolint:errcheck // best-effort unsubscribe; errors are non-fatal
 	}
 
-	h.broker.telemetry.logger.Info("v3_unsubscribe_complete",
+	h.broker.telemetry.logger.Info(
+		"v3_unsubscribe_complete",
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)

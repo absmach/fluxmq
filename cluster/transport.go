@@ -4,7 +4,6 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -35,14 +34,19 @@ const (
 // QueueHandler defines callbacks for queue distribution operations.
 type QueueHandler interface {
 	// EnqueueLocal enqueues a message on this node (called by remote RPC).
-	EnqueueLocal(ctx context.Context, queueName string, payload []byte, properties map[string]string) error
+	// It borrows msg for the duration of the call.
+	EnqueueLocal(ctx context.Context, queueName string, msg *message.Envelope) error
 
 	// DeliverQueueMessage delivers a queue message to a local consumer and takes
 	// ownership of msg on every return path.
 	DeliverQueueMessage(ctx context.Context, clientID string, msg *message.Envelope) error
 
-	// HandleQueuePublish handles a publish with the given mode.
-	HandleQueuePublish(ctx context.Context, publish queueTypes.PublishRequest, mode queueTypes.PublishMode) error
+	// HandleQueuePublish handles a publish with the given mode. It borrows msg
+	// for the duration of the call. forcedTargets names the queues the message
+	// must land in, or is empty to route by topic.
+	HandleQueuePublish(
+		ctx context.Context, msg *message.Envelope, mode queueTypes.PublishMode, forcedTargets []string,
+	) error
 
 	// HandleForwardedGroupOp applies a consumer group mutation that was
 	// forwarded from a follower. This node is expected to be the Raft leader
@@ -247,10 +251,15 @@ func (t *Transport) RoutePublish(ctx context.Context, req *PublishReq) (*Publish
 		}), nil
 	}
 
-	msg := envelopeFromWire(req.Msg.Topic, req.Msg.Payload, byte(req.Msg.Qos), req.Msg.Retain, req.Msg.Dup, req.Msg.Properties)
-
-	err := t.handler.DeliverToClient(ctx, req.Msg.ClientId, msg)
+	msg, err := decodeEnvelope(req.Msg.Envelope)
 	if err != nil {
+		return connect.NewResponse(&clusterv1.PublishResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
+
+	if err := t.handler.DeliverToClient(ctx, req.Msg.ClientId, msg); err != nil {
 		return connect.NewResponse(&clusterv1.PublishResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -285,7 +294,15 @@ func (t *Transport) RoutePublishBatch(ctx context.Context, req *PublishBatchReq)
 			continue
 		}
 
-		msg := envelopeFromWire(m.Topic, m.Payload, byte(m.Qos), m.Retain, m.Dup, m.Properties)
+		msg, err := decodeEnvelope(m.Envelope)
+		if err != nil {
+			failures = append(failures, &clusterv1.PublishBatchError{
+				Index:    uint32(idx),
+				ClientId: m.ClientId,
+				Error:    err.Error(),
+			})
+			continue
+		}
 
 		if err := t.handler.DeliverToClient(ctx, m.ClientId, msg); err != nil {
 			failures = append(failures, &clusterv1.PublishBatchError{
@@ -358,18 +375,17 @@ func (t *Transport) FetchRetained(ctx context.Context, req *FetchRetainedReq) (*
 	}
 	defer message.Release(msg)
 
-	grpcMsg := &clusterv1.RetainedMessage{
-		Topic:      msg.Topic,
-		Payload:    bytes.Clone(msg.PayloadBytes()),
-		Qos:        uint32(msg.Broker.Delivery.QoS),
-		Retain:     msg.Broker.Delivery.Retain,
-		Properties: message.ProjectProperties(msg, message.TrustedServiceProjection),
-		Timestamp:  msg.Broker.Delivery.PublishedAt.Unix(),
+	encoded, err := encodeEnvelope(msg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	return connect.NewResponse(&clusterv1.FetchRetainedResponse{
-		Found:   true,
-		Message: grpcMsg,
+		Found: true,
+		Message: &clusterv1.RetainedMessage{
+			Envelope:  encoded,
+			Timestamp: msg.BrokerMeta.Delivery.PublishedAt.Unix(),
+		},
 	}), nil
 }
 
@@ -423,27 +439,25 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 		}), nil
 	}
 
-	forwardedPublish := req.Msg.ForwardedPublish
-	forwardToLeader := req.Msg.ForwardToLeader
+	msg, err := decodeEnvelope(req.Msg.Envelope)
+	if err != nil {
+		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
+			Success: false,
+			Error:   err.Error(),
+		}), nil
+	}
+	// Both handlers borrow msg: they copy the payload into the envelope they
+	// append, so it is released once the call returns either way.
+	defer message.Release(msg)
 
-	// Check if this is a forwarded publish (topic-based) vs direct enqueue (queue-based)
-	if forwardedPublish {
-		// This is a forwarded publish - handle with mode
-		topic := req.Msg.QueueName // topic is passed in queueName field for forwards
+	// A forwarded publish routes by topic; a direct enqueue names one queue.
+	if req.Msg.ForwardedPublish {
 		mode := queueTypes.PublishForwarded
-		if forwardToLeader {
+		if req.Msg.ForwardToLeader {
 			mode = queueTypes.PublishNormal
 		}
 
-		err := handler.HandleQueuePublish(ctx, queueTypes.PublishRequest{
-			Source:              message.SourceFromProperties(req.Msg.Properties),
-			Trace:               message.TraceFromProperties(req.Msg.Properties),
-			Topic:               topic,
-			Payload:             req.Msg.Payload,
-			Properties:          message.FilterUserProperties(req.Msg.Properties),
-			ForwardTargetQueues: splitPropertyList(req.Msg.Properties[message.PropertyForwardTargetQueues]),
-		}, mode)
-		if err != nil {
+		if err := handler.HandleQueuePublish(ctx, msg, mode, req.Msg.ForwardTargetQueues); err != nil {
 			return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
 				Success: false,
 				Error:   err.Error(),
@@ -455,8 +469,7 @@ func (t *Transport) EnqueueRemote(ctx context.Context, req *EnqueueRemoteReq) (*
 	}
 
 	// Standard enqueue to a specific queue
-	err := handler.EnqueueLocal(ctx, req.Msg.QueueName, req.Msg.Payload, req.Msg.Properties)
-	if err != nil {
+	if err := handler.EnqueueLocal(ctx, req.Msg.QueueName, msg); err != nil {
 		return connect.NewResponse(&clusterv1.EnqueueRemoteResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -616,15 +629,23 @@ func (t *Transport) ForwardPublishBatch(ctx context.Context, req *ForwardPublish
 			continue
 		}
 
-		msg := envelopeFromWire(m.Topic, m.Payload, byte(m.Qos), m.Retain, false, m.Properties)
+		msg, err := decodeEnvelope(m.Envelope)
+		if err != nil {
+			failures = append(failures, &clusterv1.ForwardPublishBatchError{
+				Index: uint32(idx),
+				Error: err.Error(),
+			})
+			continue
+		}
 
+		topic := msg.Topic
 		if err := handler.ForwardPublish(ctx, msg); err != nil {
 			t.logger.Warn("forward publish delivery failed",
-				slog.String("topic", m.Topic),
+				slog.String("topic", topic),
 				slog.String("error", err.Error()))
 			failures = append(failures, &clusterv1.ForwardPublishBatchError{
 				Index: uint32(idx),
-				Topic: m.Topic,
+				Topic: topic,
 				Error: err.Error(),
 			})
 			continue
@@ -658,8 +679,14 @@ func (t *Transport) SetForwardPublishHandler(handler ForwardPublishHandler) {
 	t.forwardHandler = handler
 }
 
-// SendPublish sends a PUBLISH message to a specific peer node with retry and circuit breaker.
-func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
+// SendPublish sends a PUBLISH message to a specific peer node with retry and
+// circuit breaker. It borrows msg for the duration of the call.
+func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
+	encoded, err := encodeEnvelope(msg)
+	if err != nil {
+		return err
+	}
+
 	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
@@ -667,13 +694,8 @@ func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID, topic str
 		}
 
 		req := connect.NewRequest(&clusterv1.PublishRequest{
-			ClientId:   clientID,
-			Topic:      topic,
-			Payload:    payload,
-			Qos:        uint32(qos),
-			Retain:     retain,
-			Dup:        dup,
-			Properties: properties,
+			ClientId: clientID,
+			Envelope: encoded,
 		})
 
 		resp, err := client.RoutePublish(ctx, req)
@@ -785,8 +807,20 @@ func (t *Transport) SendFetchWill(ctx context.Context, nodeID, clientID string) 
 	return will, err
 }
 
-// SendEnqueueRemote sends an enqueue request to a peer node with retry and circuit breaker.
-func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string, forwarded, forwardToLeader bool) error {
+// SendEnqueueRemote sends an enqueue request to a peer node with retry and
+// circuit breaker. It borrows msg for the duration of the call.
+func (t *Transport) SendEnqueueRemote(
+	ctx context.Context,
+	nodeID, queueName string,
+	msg *message.Envelope,
+	targetQueues []string,
+	forwarded, forwardToLeader bool,
+) error {
+	encoded, err := encodeEnvelope(msg)
+	if err != nil {
+		return err
+	}
+
 	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
@@ -794,11 +828,11 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 		}
 
 		req := connect.NewRequest(&clusterv1.EnqueueRemoteRequest{
-			QueueName:        queueName,
-			Payload:          payload,
-			Properties:       properties,
-			ForwardedPublish: forwarded,
-			ForwardToLeader:  forwardToLeader,
+			QueueName:           queueName,
+			Envelope:            encoded,
+			ForwardTargetQueues: targetQueues,
+			ForwardedPublish:    forwarded,
+			ForwardToLeader:     forwardToLeader,
 		})
 
 		resp, err := client.EnqueueRemote(ctx, req)
@@ -816,17 +850,20 @@ func (t *Transport) SendEnqueueRemote(ctx context.Context, nodeID, queueName str
 
 // SendRouteQueueMessage sends a queue message delivery request to a peer node with retry and circuit breaker.
 func (t *Transport) SendRouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
+	// Encode once, outside the retry: the wire form does not change between
+	// attempts, and the caller only lends msg for the duration of the call.
+	wire, err := encodeRouteQueueMessage(clientID, msg)
+	if err != nil {
+		return err
+	}
+
 	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
 		}
 
-		if msg == nil {
-			return fmt.Errorf("queue message is nil")
-		}
-
-		req := connect.NewRequest(encodeRouteQueueMessage(clientID, msg))
+		req := connect.NewRequest(wire)
 
 		resp, err := client.RouteQueueMessage(ctx, req)
 		if err != nil {
@@ -996,23 +1033,29 @@ func (t *Transport) sendRouteQueueBatchOnce(
 ) ([]queueBatchFailure, error) {
 	var failures []queueBatchFailure
 
+	// Encode once, outside the retry loop: the wire form is identical on every
+	// attempt, and the caller only lends the envelopes for this call.
+	wireMsgs := make([]*clusterv1.RouteQueueMessageRequest, 0, len(deliveries))
+	wireToDelivery := make([]int, 0, len(deliveries))
+	for i, delivery := range deliveries {
+		if delivery.Message == nil {
+			continue
+		}
+		wire, err := encodeRouteQueueMessage(delivery.ClientID, delivery.Message)
+		if err != nil {
+			return nil, err
+		}
+		wireMsgs = append(wireMsgs, wire)
+		wireToDelivery = append(wireToDelivery, i)
+	}
+	if len(wireMsgs) == 0 {
+		return nil, nil
+	}
+
 	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
 			return err
-		}
-
-		wireMsgs := make([]*clusterv1.RouteQueueMessageRequest, 0, len(deliveries))
-		wireToDelivery := make([]int, 0, len(deliveries))
-		for i, delivery := range deliveries {
-			if delivery.Message == nil {
-				continue
-			}
-			wireMsgs = append(wireMsgs, encodeRouteQueueMessage(delivery.ClientID, delivery.Message))
-			wireToDelivery = append(wireToDelivery, i)
-		}
-		if len(wireMsgs) == 0 {
-			return nil
 		}
 
 		req := connect.NewRequest(&clusterv1.RouteQueueBatchRequest{
@@ -1083,7 +1126,7 @@ func summarizeQueueBatchFailures(failures []queueBatchFailure) string {
 			reason = "unknown error"
 		}
 		parts = append(parts, fmt.Sprintf("client %s queue %s: %s",
-			failure.delivery.ClientID, failure.delivery.Message.Broker.Queue.Name, reason))
+			failure.delivery.ClientID, failure.delivery.Message.BrokerMeta.Queue.Name, reason))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -1222,7 +1265,7 @@ func allPublishBatchQoS0(messages []*clusterv1.PublishRequest) bool {
 	}
 
 	for _, msg := range messages {
-		if msg == nil || msg.Qos != 0 {
+		if msg == nil || !encodedIsQoS0(msg.Envelope) {
 			return false
 		}
 	}
@@ -1235,63 +1278,60 @@ func allForwardPublishBatchQoS0(messages []*clusterv1.ForwardPublishRequest) boo
 	}
 
 	for _, msg := range messages {
-		if msg == nil || msg.Qos != 0 {
+		if msg == nil || !encodedIsQoS0(msg.Envelope) {
 			return false
 		}
 	}
 	return true
 }
 
-func encodeRouteQueueMessage(clientID string, msg *message.Envelope) *clusterv1.RouteQueueMessageRequest {
-	return &clusterv1.RouteQueueMessageRequest{
-		ClientId:   clientID,
-		QueueName:  msg.Broker.Queue.Name,
-		MessageId:  msg.Broker.Queue.MessageID,
-		Topic:      msg.Topic,
-		Payload:    msg.PayloadBytes(),
-		Properties: message.ProjectProperties(msg, message.TrustedServiceProjection),
-		Sequence:   int64(msg.Broker.Queue.Offset),
+// encodedIsQoS0 reports whether a wire envelope is fire-and-forget, which
+// decides whether a batch that failed every retry may be swallowed. It runs
+// only on that exhausted-retry path, so the decode cost is not on any hot path;
+// an envelope that will not decode is never treated as droppable.
+func encodedIsQoS0(encoded []byte) bool {
+	envelope, err := decodeEnvelope(encoded)
+	if err != nil {
+		return false
 	}
+	qos := envelope.BrokerMeta.Delivery.QoS
+	message.Release(envelope)
+	return qos == 0
+}
+
+func encodeRouteQueueMessage(clientID string, msg *message.Envelope) (*clusterv1.RouteQueueMessageRequest, error) {
+	encoded, err := encodeEnvelope(msg)
+	if err != nil {
+		return nil, err
+	}
+	return &clusterv1.RouteQueueMessageRequest{
+		ClientId:  clientID,
+		QueueName: msg.BrokerMeta.Queue.Name,
+		Sequence:  int64(msg.BrokerMeta.Queue.Offset),
+		Envelope:  encoded,
+	}, nil
 }
 
 func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) (*message.Envelope, error) {
 	if wire == nil {
 		return nil, errors.New(errMessageIsNil)
 	}
-	if wire.Topic == "" {
+	envelope, err := decodeEnvelope(wire.Envelope)
+	if err != nil {
+		return nil, err
+	}
+	if envelope.Topic == "" {
+		message.Release(envelope)
 		return nil, errors.New("queue delivery topic is required")
 	}
-	envelope := message.New(wire.Topic, wire.Payload)
-	message.ApplyTrustedProperties(envelope, wire.Properties)
-	if wire.MessageId != "" {
-		envelope.Broker.Queue.MessageID = wire.MessageId
-	}
+	// The routing controls stay authoritative: they are what the sender used to
+	// pick this node, and a receiver reads them without decoding.
 	if wire.QueueName != "" {
-		envelope.Broker.Queue.Name = wire.QueueName
+		envelope.BrokerMeta.Queue.Name = wire.QueueName
 	}
 	if wire.Sequence >= 0 {
-		envelope.Broker.Queue.Offset = uint64(wire.Sequence)
+		envelope.BrokerMeta.Queue.Offset = uint64(wire.Sequence)
 	}
-	envelope.Broker.Delivery.QoS = 1
+	envelope.BrokerMeta.Delivery.QoS = 1
 	return envelope, nil
-}
-
-func splitPropertyList(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	values := make([]string, 0, 4)
-	for _, item := range strings.Split(raw, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if _, exists := seen[item]; exists {
-			continue
-		}
-		seen[item] = struct{}{}
-		values = append(values, item)
-	}
-	return values
 }

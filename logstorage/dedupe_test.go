@@ -149,7 +149,7 @@ func TestPendingDedupeReservationRecoversAcceptedRecord(t *testing.T) {
 	require.False(t, found)
 
 	landed := dedupeEnvelope("accepted-before-crash")
-	landed.Broker.Transfer.ID = testDedupeKey
+	landed.BrokerMeta.Transfer.ID = testDedupeKey
 	value, key, headers, err := encodeMessage(landed)
 	require.NoError(t, err)
 	first, err := adapter.store.Append(testDedupeQueue, value, key, headers)
@@ -216,7 +216,7 @@ func TestAppendOncePersistsKeyInRecord(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { message.Release(stored) })
 
-	assert.Equal(t, testDedupeKey, stored.Broker.Transfer.ID,
+	assert.Equal(t, testDedupeKey, stored.BrokerMeta.Transfer.ID,
 		"the deduplication key must reach the record so a rebuild can recover it")
 }
 

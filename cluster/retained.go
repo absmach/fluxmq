@@ -185,7 +185,7 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *message.Enve
 	metadata := &RetainedMetadata{
 		NodeID:     h.nodeID,
 		Topic:      topic,
-		QoS:        msg.Broker.Delivery.QoS,
+		QoS:        msg.BrokerMeta.Delivery.QoS,
 		Size:       len(payload),
 		Replicated: len(payload) < h.sizeThreshold,
 		Timestamp:  time.Now(),
@@ -461,11 +461,13 @@ func (h *RetainedStore) fetchRemoteRetained(ctx context.Context, topic, nodeID s
 		return nil, storage.ErrNotFound
 	}
 
-	msg := message.New(grpcMsg.Topic, grpcMsg.Payload)
-	msg.Broker.Delivery.QoS = byte(grpcMsg.Qos)
-	msg.Broker.Delivery.Retain = grpcMsg.Retain
-	msg.Broker.Delivery.PublishedAt = time.Unix(grpcMsg.Timestamp, 0)
-	message.ApplyTrustedProperties(msg, grpcMsg.Properties)
+	// The envelope carries PublishedAt at full precision. RetainedMessage.timestamp
+	// is a second-resolution copy for readers that do not decode, so it must not
+	// overwrite what the envelope already says.
+	msg, err := decodeEnvelope(grpcMsg.Envelope)
+	if err != nil {
+		return nil, err
+	}
 
 	// Cache it locally for future reads
 	if err := h.localStore.Set(ctx, topic, msg); err != nil {
@@ -610,10 +612,14 @@ func (h *RetainedStore) storeReplicatedEntry(ctx context.Context, topic string, 
 	}
 
 	msg := message.New(topic, payload)
-	msg.Broker.Delivery.QoS = entry.Metadata.QoS
-	msg.Broker.Delivery.Retain = true
-	msg.Broker.Delivery.PublishedAt = entry.Metadata.Timestamp
-	message.ApplyTrustedProperties(msg, entry.Properties)
+	msg.BrokerMeta.Delivery.QoS = entry.Metadata.QoS
+	msg.BrokerMeta.Delivery.Retain = true
+	msg.BrokerMeta.Delivery.PublishedAt = entry.Metadata.Timestamp
+	if err := message.ApplyTrustedProperties(msg, entry.Properties); err != nil {
+		h.logger.Warn("replicated retained message has malformed properties",
+			slog.String("topic", topic),
+			slog.String("error", err.Error()))
+	}
 
 	if err := h.localStore.Set(ctx, topic, msg); err != nil {
 		h.logger.Warn("failed to store replicated message locally",

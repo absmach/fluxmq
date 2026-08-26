@@ -55,8 +55,8 @@ func newTestTransport(nodeID string, mock *mockBrokerClient) *Transport {
 
 func newQueueDelivery(clientID, queueName, messageID, body string) QueueDelivery {
 	envelope := message.New("", []byte(body))
-	envelope.Broker.Queue.Name = queueName
-	envelope.Broker.Queue.MessageID = messageID
+	envelope.BrokerMeta.Queue.Name = queueName
+	envelope.PublisherMeta.MessageID = messageID
 	return QueueDelivery{ClientID: clientID, Message: envelope}
 }
 
@@ -74,8 +74,8 @@ func TestSendForwardPublishBatch_AllSucceed(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.ForwardPublishRequest{
-		{Topic: testTopicAB, Payload: []byte("1")},
-		{Topic: testTopicCD, Payload: []byte("2")},
+		wireForward(t, testTopicAB, 0, []byte("1")),
+		wireForward(t, testTopicCD, 0, []byte("2")),
 	}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -116,8 +116,8 @@ func TestSendForwardPublishBatch_PartialFailureRetriesSubset(t *testing.T) {
 			if len(msgs) != 1 {
 				t.Errorf("call 2: expected 1 message (retry subset), got %d", len(msgs))
 			}
-			if msgs[0].Topic != testTopicBC {
-				t.Errorf("call 2: expected topic b/c, got %s", msgs[0].Topic)
+			if got := wireTopic(t, msgs[0].Envelope); got != testTopicBC {
+				t.Errorf("call 2: expected topic b/c, got %s", got)
 			}
 			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
 				Success:   true,
@@ -128,9 +128,9 @@ func TestSendForwardPublishBatch_PartialFailureRetriesSubset(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.ForwardPublishRequest{
-		{Topic: testTopicAB, Payload: []byte("1")},
-		{Topic: testTopicBC, Payload: []byte("2")},
-		{Topic: testTopicCD, Payload: []byte("3")},
+		wireForward(t, testTopicAB, 0, []byte("1")),
+		wireForward(t, testTopicBC, 0, []byte("2")),
+		wireForward(t, testTopicCD, 0, []byte("3")),
 	}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -148,7 +148,7 @@ func TestSendForwardPublishBatch_TransportError(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: testTopicAB}}
+	msgs := []*clusterv1.ForwardPublishRequest{wireForward(t, testTopicAB, 0, nil)}
 	err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs)
 	if err == nil {
 		t.Fatal("expected transport error to propagate")
@@ -173,7 +173,7 @@ func TestSendForwardPublishBatch_ExhaustsPartialRetries(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "fail/always", Qos: 0}}
+	msgs := []*clusterv1.ForwardPublishRequest{wireForward(t, "fail/always", 0, nil)}
 	err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs)
 	if err != nil {
 		t.Fatalf("expected nil error for QoS 0 best-effort retries, got: %v", err)
@@ -200,7 +200,7 @@ func TestSendForwardPublishBatch_ExhaustsPartialRetries_QoS1ReturnsError(t *test
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: "fail/always", Qos: 1}}
+	msgs := []*clusterv1.ForwardPublishRequest{wireForward(t, "fail/always", 1, nil)}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err == nil {
 		t.Fatal("expected error for QoS > 0 after exhausted partial retries")
 	}
@@ -220,7 +220,7 @@ func TestSendForwardPublishBatch_FailedWithoutIndexedFailures(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.ForwardPublishRequest{{Topic: testTopicAB, Qos: 1}}
+	msgs := []*clusterv1.ForwardPublishRequest{wireForward(t, testTopicAB, 1, nil)}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err == nil {
 		t.Fatal("expected error when response is unsuccessful without indexed failures")
 	}
@@ -240,8 +240,8 @@ func TestSendPublishBatch_AllSucceed(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.PublishRequest{
-		{ClientId: "c1", Topic: testTopicAB, Payload: []byte("1")},
-		{ClientId: "c2", Topic: testTopicCD, Payload: []byte("2")},
+		wirePublish(t, "c1", testTopicAB, 0, []byte("1")),
+		wirePublish(t, "c2", testTopicCD, 0, []byte("2")),
 	}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -292,9 +292,9 @@ func TestSendPublishBatch_PartialFailureRetriesSubset(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.PublishRequest{
-		{ClientId: "c1", Topic: "a"},
-		{ClientId: "c2", Topic: "b"},
-		{ClientId: "c3", Topic: "c"},
+		wirePublish(t, "c1", "a", 0, nil),
+		wirePublish(t, "c2", "b", 0, nil),
+		wirePublish(t, "c3", "c", 0, nil),
 	}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -312,7 +312,7 @@ func TestSendPublishBatch_TransportError(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a"}}
+	msgs := []*clusterv1.PublishRequest{wirePublish(t, "c1", "a", 0, nil)}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err == nil {
 		t.Fatal("expected transport error to propagate")
 	}
@@ -334,7 +334,7 @@ func TestSendPublishBatch_ExhaustsPartialRetries_QoS0BestEffort(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a", Qos: 0}}
+	msgs := []*clusterv1.PublishRequest{wirePublish(t, "c1", "a", 0, nil)}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("expected nil error for QoS 0 best-effort retries, got: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestSendPublishBatch_ExhaustsPartialRetries_QoS1ReturnsError(t *testing.T) 
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a", Qos: 1}}
+	msgs := []*clusterv1.PublishRequest{wirePublish(t, "c1", "a", 1, nil)}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err == nil {
 		t.Fatal("expected error for QoS > 0 after exhausted partial retries")
 	}
@@ -379,7 +379,7 @@ func TestSendPublishBatch_FailedWithoutIndexedFailures(t *testing.T) {
 	}
 	tr := newTestTransport("peer1", mock)
 
-	msgs := []*clusterv1.PublishRequest{{ClientId: "c1", Topic: "a", Qos: 1}}
+	msgs := []*clusterv1.PublishRequest{wirePublish(t, "c1", "a", 1, nil)}
 	if err := tr.SendPublishBatch(context.Background(), "peer1", msgs); err == nil {
 		t.Fatal("expected error when response is unsuccessful without indexed failures")
 	}
@@ -719,8 +719,8 @@ func TestSendForwardPublishBatch_MultipleFailuresRetried(t *testing.T) {
 			}
 			wantTopics := []string{"t0", "t2", "t4"}
 			for i, want := range wantTopics {
-				if msgs[i].Topic != want {
-					t.Errorf("call 2: msg[%d] topic = %s, want %s", i, msgs[i].Topic, want)
+				if got := wireTopic(t, msgs[i].Envelope); got != want {
+					t.Errorf("call 2: msg[%d] topic = %s, want %s", i, got, want)
 				}
 			}
 			return connect.NewResponse(&clusterv1.ForwardPublishBatchResponse{
@@ -733,7 +733,7 @@ func TestSendForwardPublishBatch_MultipleFailuresRetried(t *testing.T) {
 
 	msgs := make([]*clusterv1.ForwardPublishRequest, 5)
 	for i := range msgs {
-		msgs[i] = &clusterv1.ForwardPublishRequest{Topic: fmt.Sprintf("t%d", i)}
+		msgs[i] = wireForward(t, fmt.Sprintf("t%d", i), 0, nil)
 	}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -793,7 +793,7 @@ func TestSendForwardPublishBatch_ShrinkingRetries(t *testing.T) {
 	tr := newTestTransport("peer1", mock)
 
 	msgs := []*clusterv1.ForwardPublishRequest{
-		{Topic: "a"}, {Topic: "b"}, {Topic: "c"},
+		wireForward(t, "a", 0, nil), wireForward(t, "b", 0, nil), wireForward(t, "c", 0, nil),
 	}
 	if err := tr.SendForwardPublishBatch(context.Background(), "peer1", msgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -801,4 +801,39 @@ func TestSendForwardPublishBatch_ShrinkingRetries(t *testing.T) {
 	if c := callCount.Load(); c != 3 {
 		t.Fatalf("expected 3 calls, got %d", c)
 	}
+}
+
+// wireForward, wirePublish and wireTopic keep these tests expressed in the terms
+// they assert on — a topic and a QoS — now that the wire carries one opaque
+// envelope instead of flattened fields.
+func wireForward(t *testing.T, topic string, qos byte, payload []byte) *clusterv1.ForwardPublishRequest {
+	t.Helper()
+	return &clusterv1.ForwardPublishRequest{Envelope: wireEnvelope(t, topic, qos, payload)}
+}
+
+func wirePublish(t *testing.T, clientID, topic string, qos byte, payload []byte) *clusterv1.PublishRequest {
+	t.Helper()
+	return &clusterv1.PublishRequest{ClientId: clientID, Envelope: wireEnvelope(t, topic, qos, payload)}
+}
+
+func wireEnvelope(t *testing.T, topic string, qos byte, payload []byte) []byte {
+	t.Helper()
+	msg := message.New(topic, payload)
+	defer message.Release(msg)
+	msg.BrokerMeta.Delivery.QoS = qos
+	encoded, err := message.MarshalBinary(msg)
+	if err != nil {
+		t.Fatalf("encode wire envelope: %v", err)
+	}
+	return encoded
+}
+
+func wireTopic(t *testing.T, encoded []byte) string {
+	t.Helper()
+	msg, err := message.UnmarshalBinary(encoded)
+	if err != nil {
+		t.Fatalf("decode wire envelope: %v", err)
+	}
+	defer message.Release(msg)
+	return msg.Topic
 }

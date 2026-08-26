@@ -24,18 +24,18 @@ func Release(envelope *Envelope) {
 	if envelope == nil {
 		return
 	}
-	envelope.Reset()
+	envelope.reset()
 	envelopePool.Put(envelope)
 }
 
-// Reset clears an envelope while preserving the current schema version.
-func (e *Envelope) Reset() {
+// reset clears an envelope while preserving the current schema version.
+func (e *Envelope) reset() {
 	if e == nil {
 		return
 	}
 	e.ReleasePayload()
 	e.Version = Version1
 	e.Topic = ""
-	e.User = UserMetadata{}
-	e.Broker = BrokerMetadata{}
+	e.PublisherMeta = PublisherMetadata{}
+	e.BrokerMeta = BrokerMetadata{}
 }

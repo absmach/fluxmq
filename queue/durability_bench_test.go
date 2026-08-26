@@ -38,10 +38,7 @@ func benchmarkAckDurability(b *testing.B, policy AckDurability) {
 		b.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	publish := types.PublishRequest{
-		Topic:   "$queue/" + queueName,
-		Payload: make([]byte, 256),
-	}
+	publish := publishEnvelope(b, "$queue/"+queueName, make([]byte, 256))
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -82,7 +79,7 @@ func BenchmarkAckDurabilityFsyncParallel(b *testing.B) {
 	if err := mgr.CreateQueue(ctx, types.DefaultQueueConfig(queueName, "$queue/"+queueName)); err != nil {
 		b.Fatalf("CreateQueue failed: %v", err)
 	}
-	publish := types.PublishRequest{Topic: "$queue/" + queueName, Payload: make([]byte, 256)}
+	publish := publishEnvelope(b, "$queue/"+queueName, make([]byte, 256))
 
 	b.ReportAllocs()
 	b.ResetTimer()

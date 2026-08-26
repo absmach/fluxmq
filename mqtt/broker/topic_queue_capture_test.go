@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/message"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
 
@@ -20,12 +19,13 @@ const (
 
 type recordingTopicQueueManager struct {
 	mockQueueManager
-	captures []qtypes.PublishRequest
+	captures []*message.Envelope
 }
 
-func (m *recordingTopicQueueManager) PublishToMatchingQueues(_ context.Context, publish qtypes.PublishRequest) error {
-	publish.Payload = append([]byte(nil), publish.Payload...)
-	m.captures = append(m.captures, publish)
+// The envelope is only borrowed for the call, so the recorder takes its own
+// reference — which is what the interface asks every implementation to do.
+func (m *recordingTopicQueueManager) PublishToMatchingQueues(_ context.Context, msg *message.Envelope) error {
+	m.captures = append(m.captures, msg.Clone())
 	return nil
 }
 
@@ -38,7 +38,7 @@ func TestPublishCapturesOrdinaryTopicInMatchingQueues(t *testing.T) {
 	}
 
 	msg := message.New(topicCaptureTopic, []byte("payload"))
-	msg.Broker.Source.ClientID = topicCapturePublisherID
+	msg.BrokerMeta.Source.ClientID = topicCapturePublisherID
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestPublishCapturesOrdinaryTopicInMatchingQueues(t *testing.T) {
 	if got := qm.captures[0].Topic; got != topicCaptureTopic {
 		t.Fatalf("captured topic = %q", got)
 	}
-	if got := string(qm.captures[0].Payload); got != "payload" {
+	if got := string(qm.captures[0].PayloadBytes()); got != "payload" {
 		t.Fatalf("captured payload = %q", got)
 	}
 }
@@ -77,7 +77,7 @@ type failingTopicQueueManager struct {
 	calls int
 }
 
-func (m *failingTopicQueueManager) PublishToMatchingQueues(_ context.Context, _ qtypes.PublishRequest) error {
+func (m *failingTopicQueueManager) PublishToMatchingQueues(_ context.Context, _ *message.Envelope) error {
 	m.calls++
 	return errors.New("append to queue \"messages\": storage unavailable")
 }
@@ -103,7 +103,7 @@ func TestPublishSurvivesQueueCaptureFailure(t *testing.T) {
 	})
 
 	msg := message.New(topicCaptureTopic, []byte("payload"))
-	msg.Broker.Source.ClientID = topicCapturePublisherID
+	msg.BrokerMeta.Source.ClientID = topicCapturePublisherID
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("capture failure must not fail the publish, got %v", err)
 	}

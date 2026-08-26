@@ -80,7 +80,7 @@ func TestDeliverToClusterMessage(t *testing.T) {
 	b.connections.Store(c.connID, c)
 
 	msg := message.New(testTelemetryRoom1, []byte("hello"))
-	msg.Broker.Queue.MessageID = "m1"
+	msg.PublisherMeta.MessageID = "m1"
 	if err := b.DeliverToClusterMessage(context.Background(), PrefixedClientID(c.connID), msg); err != nil {
 		t.Fatalf("DeliverToClusterMessage failed: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestForwardPublishSkipsCrossProtocolDispatch(t *testing.T) {
 	})
 
 	msg := message.NewDelivery(testTelemetryRoom1, []byte("hello"), 1, false)
-	msg.Broker.Queue.MessageID = "m1"
+	msg.PublisherMeta.MessageID = "m1"
 	if err := b.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}

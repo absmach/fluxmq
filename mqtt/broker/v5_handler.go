@@ -47,7 +47,8 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		return ErrInvalidPacketType
 	}
 
-	h.broker.telemetry.logger.Info("v5_connect",
+	h.broker.telemetry.logger.Info(
+		"v5_connect",
 		slog.String("remote_addr", conn.RemoteAddr().String()),
 		slog.String("client_id", p.ClientID),
 	)
@@ -198,7 +199,8 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	}
 
 	h.broker.telemetry.stats.IncrementConnections()
-	h.broker.telemetry.logger.Info("v5_connect_success",
+	h.broker.telemetry.logger.Info(
+		"v5_connect_success",
 		slog.String("client_id", clientID),
 		slog.Bool("session_present", sessionPresent),
 		slog.Duration("duration", time.Since(start)),
@@ -231,7 +233,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		return nil
 	}
 
-	h.broker.telemetry.logger.Debug("v5_publish",
+	h.broker.telemetry.logger.Debug(
+		"v5_publish",
 		slog.String("client_id", s.ID),
 		slog.String("topic", p.TopicName),
 		slog.Int("qos", int(p.FixedHeader.QoS)),
@@ -250,7 +253,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// CONNACK Maximum QoS property, so exceeding it is a protocol error:
 	// [MQTT-3.2.2-11] requires DISCONNECT with 0x9B (QoS not supported).
 	if maxQoS := s.MaxQoS(); qos > maxQoS {
-		h.broker.telemetry.logger.Warn("v5_publish_qos_not_supported",
+		h.broker.telemetry.logger.Warn(
+			"v5_publish_qos_not_supported",
 			slog.String("client_id", s.ID),
 			slog.Int("requested_qos", int(qos)),
 			slog.Int("server_max_qos", int(maxQoS)),
@@ -263,7 +267,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	// properties. This is the limit broker.max_message_size actually documents:
 	// the application payload.
 	if maxSize := h.broker.MaxMessageSize(); maxSize > 0 && len(payload) > maxSize {
-		h.broker.telemetry.logger.Warn("v5_publish_payload_too_large",
+		h.broker.telemetry.logger.Warn(
+			"v5_publish_payload_too_large",
 			slog.String("client_id", s.ID),
 			slog.Int("payload_size", len(payload)),
 			slog.Int("max_message_size", maxSize),
@@ -370,7 +375,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
 		setMQTT5Metadata(msg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
 		err := h.broker.Publish(context.Background(), msg)
-		h.broker.telemetry.logger.Debug("v5_publish_complete",
+		h.broker.telemetry.logger.Debug(
+			"v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 			slog.Any("error", err),
@@ -384,7 +390,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 			reasonCode, reason := mqtt5QueuePublishError(err)
 			return sendV5PubAck(s, packetID, reasonCode, reason)
 		}
-		h.broker.telemetry.logger.Debug("v5_publish_complete",
+		h.broker.telemetry.logger.Debug(
+			"v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
@@ -392,7 +399,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 
 	case 2:
 		storeMsg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
-		storeMsg.Broker.Delivery.PacketID = packetID
+		storeMsg.BrokerMeta.Delivery.PacketID = packetID
 		setMQTT5Metadata(storeMsg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
 		accepted, err := s.AddInbound(packetID, storeMsg)
 		if !accepted {
@@ -402,7 +409,8 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 			return err
 		}
 
-		h.broker.telemetry.logger.Debug("v5_publish_complete",
+		h.broker.telemetry.logger.Debug(
+			"v5_publish_complete",
 			slog.String("client_id", s.ID),
 			slog.Duration("duration", time.Since(start)),
 		)
@@ -590,19 +598,20 @@ func (h *v5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 			retained, err := h.broker.GetRetainedMatching(filter)
 			if err == nil {
 				for _, msg := range retained {
-					deliverQoS := msg.Broker.Delivery.QoS
+					deliverQoS := msg.BrokerMeta.Delivery.QoS
 					if grantedQoS < deliverQoS {
 						deliverQoS = grantedQoS
 					}
-					msg.Broker.Delivery.QoS = deliverQoS
-					msg.Broker.Delivery.Retain = true
+					msg.BrokerMeta.Delivery.QoS = deliverQoS
+					msg.BrokerMeta.Delivery.Retain = true
 					h.broker.DeliverToSession(context.Background(), s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
 				}
 			}
 		}
 	}
 
-	h.broker.telemetry.logger.Info("v5_subscribe_complete",
+	h.broker.telemetry.logger.Info(
+		"v5_subscribe_complete",
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)
@@ -644,7 +653,8 @@ func (h *v5Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 		}
 	}
 
-	h.broker.telemetry.logger.Info("v5_unsubscribe_complete",
+	h.broker.telemetry.logger.Info(
+		"v5_unsubscribe_complete",
 		slog.String("client_id", s.ID),
 		slog.Duration("duration", time.Since(start)),
 	)

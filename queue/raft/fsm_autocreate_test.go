@@ -83,6 +83,20 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// encodeOperationEnvelope encodes an envelope the way a producer does before it
+// reaches the Raft log, and releases the caller's copy.
+func encodeOperationEnvelope(t *testing.T, envelope *message.Envelope) []byte {
+	t.Helper()
+
+	encoded, err := message.MarshalBinary(envelope)
+	if err != nil {
+		t.Fatalf("encode operation envelope: %v", err)
+	}
+	message.Release(envelope)
+
+	return encoded
+}
+
 func newTestLogFSM() (*LogFSM, *memlog.Store) {
 	queueStore := memlog.New()
 	return NewLogFSM(queueStore, noopGroupStore{}, discardLogger()), queueStore
@@ -90,9 +104,9 @@ func newTestLogFSM() (*LogFSM, *memlog.Store) {
 
 func newQueuedEnvelope(id, topic string, data []byte) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.Broker.Queue.MessageID = id
-	envelope.Broker.Queue.State = message.QueueStateQueued
-	envelope.Broker.Queue.CreatedAt = time.Now()
+	envelope.PublisherMeta.MessageID = id
+	envelope.BrokerMeta.Queue.State = message.QueueStateQueued
+	envelope.BrokerMeta.Queue.CreatedAt = time.Now()
 	return envelope
 }
 
@@ -103,7 +117,7 @@ func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 
 	result := fsm.applyAppend(ctx, &Operation{
 		QueueName: queueName,
-		Message:   newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("payload-1")),
+		Message:   encodeOperationEnvelope(t, newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("payload-1"))),
 	})
 	if result.Error != nil {
 		t.Fatalf("applyAppend returned error: %v", result.Error)
@@ -125,18 +139,20 @@ func TestLogFSM_ApplyAppendAutoCreatesMissingQueue(t *testing.T) {
 	}
 }
 
-func TestLogFSM_ApplyAppendWithPayloadBufferAfterJSONRoundTrip(t *testing.T) {
+// The operation still travels to the Raft log as JSON; what it carries is now
+// encoded envelope bytes rather than an envelope object tree. This pins that
+// the payload survives that trip.
+func TestLogFSM_ApplyAppendWithPayloadBufferAfterOperationRoundTrip(t *testing.T) {
 	fsm, store := newTestLogFSM()
 	ctx := context.Background()
 	queueName := "demo-buffered"
 
 	msg := newQueuedEnvelope("buffered-msg-1", "$queue/"+queueName, []byte("buffered payload"))
-	defer msg.ReleasePayload()
 
 	data, err := json.Marshal(&Operation{
 		Type:      OpAppend,
 		QueueName: queueName,
-		Message:   msg,
+		Message:   encodeOperationEnvelope(t, msg),
 	})
 	if err != nil {
 		t.Fatalf("marshal append operation failed: %v", err)
@@ -168,9 +184,9 @@ func TestLogFSM_ApplyAppendBatchAutoCreatesMissingQueue(t *testing.T) {
 
 	result := fsm.applyAppendBatch(ctx, &Operation{
 		QueueName: queueName,
-		Messages: []*message.Envelope{
-			newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("one")),
-			newQueuedEnvelope("msg-2", "$queue/"+queueName, []byte("two")),
+		Messages: [][]byte{
+			encodeOperationEnvelope(t, newQueuedEnvelope("msg-1", "$queue/"+queueName, []byte("one"))),
+			encodeOperationEnvelope(t, newQueuedEnvelope("msg-2", "$queue/"+queueName, []byte("two"))),
 		},
 	})
 	if result.Error != nil {
@@ -189,20 +205,18 @@ func TestLogFSM_ApplyAppendBatchAutoCreatesMissingQueue(t *testing.T) {
 	}
 }
 
-func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterJSONRoundTrip(t *testing.T) {
+func TestLogFSM_ApplyAppendBatchWithPayloadBuffersAfterOperationRoundTrip(t *testing.T) {
 	fsm, store := newTestLogFSM()
 	ctx := context.Background()
 	queueName := "demo-buffered-batch"
 
-	first := newQueuedEnvelope("batch-msg-1", "$queue/"+queueName, []byte("one"))
-	defer first.ReleasePayload()
-	second := newQueuedEnvelope("batch-msg-2", "$queue/"+queueName, []byte("two"))
-	defer second.ReleasePayload()
+	first := encodeOperationEnvelope(t, newQueuedEnvelope("batch-msg-1", "$queue/"+queueName, []byte("one")))
+	second := encodeOperationEnvelope(t, newQueuedEnvelope("batch-msg-2", "$queue/"+queueName, []byte("two")))
 
 	data, err := json.Marshal(&Operation{
 		Type:      OpAppendBatch,
 		QueueName: queueName,
-		Messages:  []*message.Envelope{first, second},
+		Messages:  [][]byte{first, second},
 	})
 	if err != nil {
 		t.Fatalf("marshal append batch operation failed: %v", err)

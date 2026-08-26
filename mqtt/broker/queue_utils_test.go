@@ -10,6 +10,7 @@ import (
 	"github.com/absmach/fluxmq/message"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetMQTT5MetadataPreservesCorrelationData(t *testing.T) {
@@ -44,7 +45,7 @@ func TestSetMQTT5MetadataPreservesCorrelationData(t *testing.T) {
 			if len(input) > 0 {
 				input[0] ^= 0xff
 			}
-			assert.Equal(t, tt.correlationData, envelope.User.CorrelationData)
+			assert.Equal(t, tt.correlationData, envelope.PublisherMeta.CorrelationData.Bytes())
 		})
 	}
 }
@@ -59,33 +60,12 @@ func TestSetMQTT5MetadataCopiesScalarPointers(t *testing.T) {
 	expiry = 1
 	payloadFormat = 0
 
-	assert.Equal(t, uint32(30), *envelope.User.MessageExpiry)
-	assert.Equal(t, byte(1), *envelope.User.PayloadFormat)
-}
-
-func TestQueuePublishRequestPreservesMQTT5Metadata(t *testing.T) {
-	payloadFormat := byte(1)
-	messageExpiry := uint32(30)
-	publishedAt := time.Now()
-	expiresAt := publishedAt.Add(30 * time.Second)
-	envelope := message.New("requests/42", []byte("payload"))
-	defer message.Release(envelope)
-	envelope.User.ContentType = "application/json"
-	envelope.User.ResponseTopic = "responses/42"
-	envelope.User.CorrelationData = []byte{0x00, 0xff}
-	envelope.User.PayloadFormat = &payloadFormat
-	envelope.User.MessageExpiry = &messageExpiry
-	envelope.Broker.Delivery.PublishedAt = publishedAt
-	envelope.Broker.Delivery.ExpiresAt = expiresAt
-
-	publish := queuePublishRequest(envelope)
-	assert.Equal(t, envelope.User.ContentType, publish.ContentType)
-	assert.Equal(t, envelope.User.ResponseTopic, publish.ResponseTopic)
-	assert.Equal(t, envelope.User.CorrelationData, publish.CorrelationData)
-	assert.Equal(t, envelope.User.PayloadFormat, publish.PayloadFormat)
-	assert.Equal(t, envelope.User.MessageExpiry, publish.MessageExpiry)
-	assert.Equal(t, publishedAt, publish.PublishedAt)
-	assert.Equal(t, expiresAt, publish.ExpiresAt)
+	expiryValue, ok := envelope.PublisherMeta.MessageExpiry.Value()
+	require.True(t, ok)
+	payloadFormatValue, ok := envelope.PublisherMeta.PayloadFormat.Value()
+	require.True(t, ok)
+	assert.Equal(t, uint32(30), expiryValue)
+	assert.Equal(t, byte(1), payloadFormatValue)
 }
 
 func TestExtractUserPropertiesNil(t *testing.T) {

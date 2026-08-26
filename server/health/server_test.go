@@ -101,7 +101,7 @@ func (m *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.Que
 	return nil, nil
 }
 
-func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
+func (m *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID string, msg *message.Envelope, targetQueues []string, forwardToLeader bool) error {
 	return nil
 }
 
@@ -110,7 +110,7 @@ func (m *mockCluster) ForwardGroupOp(ctx context.Context, nodeID, queueName stri
 }
 func (m *mockCluster) Retained() storage.RetainedStore { return nil }
 func (m *mockCluster) Wills() storage.WillStore        { return nil }
-func (m *mockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
+func (m *mockCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }
 

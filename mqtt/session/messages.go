@@ -149,7 +149,7 @@ func (h *msgHandler) resendMessage(writer core.PacketWriter, inflight *messages.
 		markRetry(inflight.PacketID)
 	}
 
-	if msg.Broker.Delivery.QoS == 2 && inflight.State == messages.StatePubRecReceived {
+	if msg.BrokerMeta.Delivery.QoS == 2 && inflight.State == messages.StatePubRecReceived {
 		rel := h.newPubRelPacket(inflight.PacketID, version)
 		return writer.WriteControlPacket(rel, onSent)
 	}

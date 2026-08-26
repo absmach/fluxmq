@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -34,7 +35,7 @@ type mockSubscribeQueueManager struct {
 
 func (m *mockSubscribeQueueManager) Start(ctx context.Context) error { return nil }
 func (m *mockSubscribeQueueManager) Stop() error                     { return nil }
-func (m *mockSubscribeQueueManager) Publish(ctx context.Context, publish qtypes.PublishRequest) error {
+func (m *mockSubscribeQueueManager) Publish(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }
 

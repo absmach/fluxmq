@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	"github.com/absmach/fluxmq/message"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/queue"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
@@ -253,10 +254,9 @@ func TestStatsReportsQueueMetrics(t *testing.T) {
 	}
 	// Resolution runs on the publishing goroutine, so this loss is counted
 	// before anything is dispatched and the endpoint can be read straight after.
-	if err := manager.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-		Topic:   "m/acme/temp",
-		Payload: []byte("payload"),
-	}); err != nil {
+	captured := message.New("m/acme/temp", []byte("payload"))
+	defer message.Release(captured)
+	if err := manager.PublishToMatchingQueues(ctx, captured); err != nil {
 		t.Fatalf("capture must not fail the publish: %v", err)
 	}
 

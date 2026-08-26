@@ -1620,10 +1620,15 @@ func (c *EtcdCluster) SetForwardPublishHandler(handler ForwardPublishHandler) {
 // RoutePublish routes a publish to interested nodes with matching subscriptions.
 // It sends one ForwardPublishRequest per remote node (topic-based fan-out).
 // The receiving node performs its own local subscription match and delivery.
-func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
+// It borrows msg for the duration of the call.
+func (c *EtcdCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	if c.transport == nil {
 		return nil
 	}
+	if msg == nil {
+		return errEmptyEnvelope
+	}
+	topic := msg.Topic
 
 	// Match cluster trie to find any remote subscribers
 	subs, err := c.GetSubscribersForTopic(ctx, topic)
@@ -1683,36 +1688,29 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, topic string, payload []
 		return nil
 	}
 
-	forwardPayload := payload
-	forwardProperties := properties
-	// Snapshot mutable payload/properties only for async QoS0 batch enqueue.
-	// In this path, RoutePublish returns before the worker flushes, so caller
-	// owned buffers/maps can be reused or released.
-	if c.forwardBatcher != nil && qos == 0 {
-		forwardPayload = append([]byte(nil), payload...)
-		forwardProperties = cloneStringMap(properties)
+	// Encoding produces a private copy of the envelope, so the async QoS0 batch
+	// path needs no separate snapshot: RoutePublish may return, and the caller
+	// release its buffer, before the worker flushes.
+	encoded, err := encodeEnvelope(msg)
+	if err != nil {
+		return err
 	}
+	qos := msg.BrokerMeta.Delivery.QoS
 
 	// Send one ForwardPublish per remote node
-	msg := &clusterv1.ForwardPublishRequest{
-		Topic:      topic,
-		Payload:    forwardPayload,
-		Qos:        uint32(qos),
-		Retain:     retain,
-		Properties: forwardProperties,
-	}
+	req := &clusterv1.ForwardPublishRequest{Envelope: encoded}
 
 	var errs []error
 	for nodeID := range remoteNodes {
 		var err error
 		if c.forwardBatcher != nil {
 			if qos == 0 {
-				err = c.forwardBatcher.EnqueueAsync(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+				err = c.forwardBatcher.EnqueueAsync(ctx, nodeID, []*clusterv1.ForwardPublishRequest{req})
 			} else {
-				err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+				err = c.forwardBatcher.Enqueue(ctx, nodeID, []*clusterv1.ForwardPublishRequest{req})
 			}
 		} else {
-			err = c.transport.SendForwardPublishBatch(ctx, nodeID, []*clusterv1.ForwardPublishRequest{msg})
+			err = c.transport.SendForwardPublishBatch(ctx, nodeID, []*clusterv1.ForwardPublishRequest{req})
 		}
 		if err != nil {
 			c.logger.Warn("failed to forward publish",
@@ -1870,12 +1868,13 @@ func (c *EtcdCluster) releaseTakeoverLock(ctx context.Context, lockKey, token st
 	}
 }
 
-// EnqueueRemote sends an enqueue request to a remote node.
-func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) error {
+// EnqueueRemote sends an enqueue request to a remote node. It borrows msg for
+// the duration of the call.
+func (c *EtcdCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, msg *message.Envelope) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
 	}
-	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, payload, properties, false, false)
+	return c.transport.SendEnqueueRemote(ctx, nodeID, queueName, msg, nil, false, false)
 }
 
 // RouteQueueMessage sends a queue message to a remote consumer.
@@ -1945,13 +1944,13 @@ func (c *EtcdCluster) GetWillMessage(ctx context.Context, clientID string) (*sto
 }
 
 // HandlePublish implements TransportHandler.HandlePublish.
-// Called when another broker routes a PUBLISH message to this node.
-func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID, topic string, payload []byte, qos byte, retain, dup bool, properties map[string]string) error {
+// Called when another broker routes a PUBLISH message to this node. It takes
+// ownership of msg on every return path.
+func (c *EtcdCluster) HandlePublish(ctx context.Context, clientID string, msg *message.Envelope) error {
 	if c.msgHandler == nil {
+		message.Release(msg)
 		return ErrNoMessageHandlerConfigured
 	}
-
-	msg := envelopeFromWire(topic, payload, qos, retain, dup, properties)
 
 	return c.msgHandler.DeliverToClient(ctx, clientID, msg)
 }
@@ -2265,15 +2264,17 @@ func (c *EtcdCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsum
 	return consumers, nil
 }
 
-// ForwardQueuePublish forwards a queue publish to a remote node.
-func (c *EtcdCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
+// ForwardQueuePublish forwards a queue publish to a remote node. It borrows msg
+// for the duration of the call. A forwarded publish routes by the envelope's
+// topic, so it names no queue.
+func (c *EtcdCluster) ForwardQueuePublish(
+	ctx context.Context, nodeID string, msg *message.Envelope, targetQueues []string, forwardToLeader bool,
+) error {
 	if c.transport == nil {
 		return ErrTransportNotConfigured
 	}
 
-	// Use SendEnqueueRemote with topic in queueName field
-	err := c.transport.SendEnqueueRemote(ctx, nodeID, topic, payload, properties, true, forwardToLeader)
-	return err
+	return c.transport.SendEnqueueRemote(ctx, nodeID, "", msg, targetQueues, true, forwardToLeader)
 }
 
 // ForwardGroupOp forwards a consumer group operation to a remote node.
@@ -2334,21 +2335,6 @@ func parseSessionOwnerKey(key string) (clientID string, ok bool) {
 		return "", false
 	}
 	return clientID, true
-}
-
-func cloneStringMap(src map[string]string) map[string]string {
-	if len(src) == 0 {
-		if src == nil {
-			return nil
-		}
-		return map[string]string{}
-	}
-
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }
 
 // loadSessionOwnerCache loads all session owners from etcd into the local cache.

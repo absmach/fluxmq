@@ -38,7 +38,7 @@ type channelQueueManager interface {
 // queue-manager interface. The local-principal listener fails closed unless
 // the concrete manager can target and durably sync one exact stream.
 type durableStreamQueuePublisher interface {
-	PublishToDurableStream(ctx context.Context, queueName string, publish qtypes.PublishRequest) error
+	PublishToDurableStream(ctx context.Context, queueName string, msg *message.Envelope) error
 }
 
 // IsAMQP091Client checks if a client ID belongs to an AMQP 0.9.1 client.
@@ -294,17 +294,17 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// A capture failure never fails the publish: see
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueManager.(corebroker.TopicQueuePublisher); ok {
-		if err := publisher.PublishToMatchingQueues(ctx, qtypes.PublishRequest{
-			Source: message.SourceMetadata{
-				ClientID:   props[message.PropertyClientID],
-				ExternalID: props[message.PropertyExternalID],
-				Protocol:   message.Protocol(props[message.PropertyProtocol]),
-			},
-			Trace:      message.TraceFromProperties(props),
-			Topic:      topic,
-			Payload:    payload,
-			Properties: message.FilterUserProperties(props),
-		}); err != nil {
+		captured := message.New(topic, payload)
+		captured.BrokerMeta.Source = message.SourceMetadata{
+			ClientID:   props[message.PropertyClientID],
+			ExternalID: props[message.PropertyExternalID],
+			Protocol:   message.Protocol(props[message.PropertyProtocol]),
+		}
+		captured.BrokerMeta.Trace = message.TraceFromProperties(props)
+		captured.PublisherMeta.Properties = message.FilterUserProperties(props)
+		err := publisher.PublishToMatchingQueues(ctx, captured)
+		message.Release(captured)
+		if err != nil {
 			b.logger.Error("queue topic capture failed", "topic", topic, "error", err)
 		}
 	}
@@ -340,7 +340,15 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 		// shutdown cancels in-flight cluster routes, but cap with a timeout.
 		routeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := cl.RoutePublish(routeCtx, topic, payload, 1, false, props); err != nil {
+		routed := message.New(topic, payload)
+		if err := message.ApplyTrustedProperties(routed, props); err != nil {
+			b.logger.Warn("AMQP 0.9.1 cluster route publish dropped malformed properties",
+				"topic", topic, "error", err)
+		}
+		routed.BrokerMeta.Delivery.QoS = 1
+		err := cl.RoutePublish(routeCtx, routed)
+		message.Release(routed)
+		if err != nil {
 			b.logger.Error("AMQP 0.9.1 cluster route publish failed", "topic", topic, "error", err)
 			return fmt.Errorf("cluster route publish: %w", err)
 		}

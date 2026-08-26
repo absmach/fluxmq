@@ -218,7 +218,7 @@ func (s *Store) Append(ctx context.Context, queueName string, msg *message.Envel
 	sl.tail++
 
 	// Set message metadata
-	msg.Broker.Queue.Offset = offset
+	msg.BrokerMeta.Queue.Offset = offset
 
 	// Append to log
 	sl.messages = append(sl.messages, msg)
@@ -260,7 +260,7 @@ func (s *Store) AppendBatch(ctx context.Context, queueName string, msgs []*messa
 		offset := sl.tail
 		sl.tail++
 
-		msg.Broker.Queue.Offset = offset
+		msg.BrokerMeta.Queue.Offset = offset
 		sl.messages = append(sl.messages, msg)
 	}
 
@@ -379,7 +379,7 @@ func (s *Store) OffsetByTime(ctx context.Context, queueName string, ts time.Time
 	}
 
 	for i, msg := range sl.messages {
-		if !msg.Broker.Queue.CreatedAt.IsZero() && !msg.Broker.Queue.CreatedAt.Before(ts) {
+		if !msg.BrokerMeta.Queue.CreatedAt.IsZero() && !msg.BrokerMeta.Queue.CreatedAt.Before(ts) {
 			return sl.head + uint64(i), nil
 		}
 	}
@@ -394,10 +394,11 @@ func messageSize(msg *message.Envelope) int64 {
 	}
 	size := int64(len(msg.PayloadBytes()))
 	size += int64(len(msg.Topic))
-	size += int64(len(msg.Broker.Queue.MessageID))
-	for k, v := range msg.User.Properties {
+	size += int64(len(msg.PublisherMeta.MessageID))
+	msg.PublisherMeta.Properties.Range(func(k, v string) bool {
 		size += int64(len(k) + len(v))
-	}
+		return true
+	})
 	const fixedOverhead = 200 // struct fields, pointers, timestamps
 	return size + fixedOverhead
 }
@@ -830,11 +831,11 @@ func (s *Store) AppendOnce(ctx context.Context, queueName, dedupeKey string, msg
 	// The key belongs in the record, not only in the index: the contract is the
 	// same for every implementation, and a caller reading the record back must
 	// find it whichever store it holds.
-	msg.Broker.Transfer.ID = dedupeKey
+	msg.BrokerMeta.Transfer.ID = dedupeKey
 
 	offset := sl.tail
 	sl.tail++
-	msg.Broker.Queue.Offset = offset
+	msg.BrokerMeta.Queue.Offset = offset
 	sl.messages = append(sl.messages, msg)
 	sl.dedupe[dedupeKey] = offset
 

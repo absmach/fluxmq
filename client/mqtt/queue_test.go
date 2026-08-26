@@ -422,3 +422,45 @@ func TestQueueMessage_AckNackReject_Integration(t *testing.T) {
 	err = qm.Reject(nil)
 	assert.Error(t, err)
 }
+
+// The broker names each delivery "<queue>:<offset>" and settles on the offset,
+// so the client has to send an offset rather than echoing the handle back.
+func TestOffsetFromMessageID(t *testing.T) {
+	tests := []struct {
+		name      string
+		messageID string
+		want      uint64
+		wantErr   bool
+	}{
+		{name: "simple", messageID: "orders:42", want: 42},
+		{name: "first record", messageID: "orders:0", want: 0},
+		{name: "colon in queue name", messageID: "tenant:orders:7", want: 7},
+		{name: "no offset", messageID: "orders", wantErr: true},
+		{name: "trailing separator", messageID: "orders:", wantErr: true},
+		{name: "not a number", messageID: "orders:latest", wantErr: true},
+		{name: "empty", messageID: "", wantErr: true},
+		{name: "negative", messageID: "orders:-1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			offset, err := offsetFromMessageID(tt.messageID)
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrQueueAckMalformedMessageID)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, offset)
+		})
+	}
+}
+
+// A settlement must travel in the inbound command namespace. The broker's own
+// delivery property names are reserved, and every protocol boundary strips them
+// from client input, so sending them back reached nothing.
+func TestSendQueueAckUsesInboundCommandNamespace(t *testing.T) {
+	assert.Equal(t, "x-group-id", propCommitGroupID)
+	assert.Equal(t, "x-offset", propCommitOffset)
+	assert.NotEqual(t, propMessageID, propCommitOffset)
+	assert.NotEqual(t, propGroupID, propCommitGroupID)
+}

@@ -13,28 +13,27 @@ import (
 )
 
 func TestBinaryEnvelopeRoundTrip(t *testing.T) {
-	payloadFormat := byte(0)
-	messageExpiry := uint32(0)
 	now := time.Date(2026, time.August, 25, 8, 15, 30, 123456789, time.UTC)
 	original := New("devices/1", []byte{0x00, 0x01, 0xfe, 0xff})
 	defer Release(original)
-	original.User = UserMetadata{
-		Key:             []byte{0x00, 0xff},
-		Headers:         map[string][]byte{"binary": {0x01, 0xfe}},
-		Properties:      map[string]string{"tenant": "acme"},
+	original.PublisherMeta = PublisherMetadata{
+		Key:             NewBinary([]byte{0x00, 0xff}),
+		Headers:         NewHeaderMap(map[string][]byte{"binary": {0x01, 0xfe}}),
+		Properties:      NewPropertyMap(map[string]string{testTenantKey: testTenant}),
 		ContentType:     "application/octet-stream",
-		ContentEncoding: "gzip",
+		ContentEncoding: testContentEncoding,
 		ResponseTopic:   "responses/1",
-		CorrelationData: []byte{0x80, 0x00},
-		PayloadFormat:   &payloadFormat,
-		MessageExpiry:   &messageExpiry,
+		CorrelationData: NewBinary([]byte{0x80, 0x00}),
+		PayloadFormat:   Some(byte(0)),
+		MessageExpiry:   Some(uint32(0)),
+		MessageID:       "publisher-1",
 	}
-	original.Broker = BrokerMetadata{
+	original.BrokerMeta = BrokerMetadata{
 		Source: SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT, Topic: "source/topic"},
 		Delivery: DeliveryMetadata{
 			PublishedAt:       now,
 			ExpiresAt:         now.Add(time.Minute),
-			SubscriptionIDs:   []uint32{1, 7},
+			SubscriptionIDs:   NewUint32List(1, 7),
 			PacketID:          42,
 			QoS:               2,
 			InflightDirection: 1,
@@ -43,7 +42,6 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 			Duplicate:         true,
 		},
 		Queue: QueueMetadata{
-			MessageID:   testMessageID,
 			Name:        testQueueName,
 			GroupID:     "group",
 			Offset:      9,
@@ -53,14 +51,14 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 			NextRetryAt: now.Add(2 * time.Second),
 			RetryCount:  3,
 			ExpiresAt:   now.Add(time.Hour),
-			Stream: &StreamMetadata{
+			Stream: Some(StreamMetadata{
 				Offset:             9,
 				Timestamp:          now.UnixMilli(),
 				CommittedOffset:    8,
 				HasCommittedOffset: true,
 				WorkAcknowledged:   true,
-				WorkGroup:          "workers",
-			},
+				WorkGroup:          testGroupID,
+			}),
 		},
 		Transfer: TransferMetadata{
 			ID:            "transfer",
@@ -73,7 +71,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 			SourceOffset:  7,
 			DeliveryCount: 4,
 		},
-		Trace: TraceMetadata{TraceParent: "parent", TraceState: "state", TraceID: "trace"},
+		Trace: TraceMetadata{TraceParent: "parent", TraceState: "state", TraceID: testTraceKey},
 	}
 
 	encoded, err := MarshalBinary(original)
@@ -92,18 +90,18 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(decoded.PayloadBytes(), original.PayloadBytes()) {
 		t.Fatalf("decoded payload = %v, want %v", decoded.PayloadBytes(), original.PayloadBytes())
 	}
-	if !reflect.DeepEqual(decoded.User, original.User) {
-		t.Fatalf("decoded user metadata = %#v, want %#v", decoded.User, original.User)
+	if !reflect.DeepEqual(decoded.PublisherMeta, original.PublisherMeta) {
+		t.Fatalf("decoded user metadata = %#v, want %#v", decoded.PublisherMeta, original.PublisherMeta)
 	}
-	if !reflect.DeepEqual(decoded.Broker, original.Broker) {
-		t.Fatalf("decoded broker metadata = %#v, want %#v", decoded.Broker, original.Broker)
+	if !reflect.DeepEqual(decoded.BrokerMeta, original.BrokerMeta) {
+		t.Fatalf("decoded broker metadata = %#v, want %#v", decoded.BrokerMeta, original.BrokerMeta)
 	}
 }
 
 func TestBinaryEnvelopeMetadataUsesExternalPayloadAndKey(t *testing.T) {
 	original := New("devices/1", []byte("embedded payload"))
 	defer Release(original)
-	original.User.Key = []byte("embedded key")
+	original.PublisherMeta.Key = NewBinary([]byte("embedded key"))
 
 	encoded, err := MarshalMetadata(original)
 	if err != nil {
@@ -119,8 +117,8 @@ func TestBinaryEnvelopeMetadataUsesExternalPayloadAndKey(t *testing.T) {
 
 	externalPayload[0] = 'X'
 	externalKey[0] = 'X'
-	if string(decoded.PayloadBytes()) != "record payload" || string(decoded.User.Key) != "record key" {
-		t.Fatalf("external record data was aliased: payload %q key %q", decoded.PayloadBytes(), decoded.User.Key)
+	if string(decoded.PayloadBytes()) != "record payload" || !decoded.PublisherMeta.Key.Equal([]byte("record key")) {
+		t.Fatalf("external record data was aliased: payload %q key %q", decoded.PayloadBytes(), decoded.PublisherMeta.Key)
 	}
 }
 

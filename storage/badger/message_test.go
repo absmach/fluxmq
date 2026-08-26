@@ -27,7 +27,7 @@ func TestMessageStore_StoreInflight(t *testing.T) {
 	defer cleanupMessageStore(t, store)
 
 	msg := message.NewDelivery(testTopic, []byte("test payload"), 1, false)
-	msg.Broker.Delivery.PacketID = 100
+	msg.BrokerMeta.Delivery.PacketID = 100
 
 	key := "client-1/inflight/100"
 	err := store.Store(key, msg)
@@ -38,8 +38,8 @@ func TestMessageStore_StoreInflight(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
 	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
-	assert.Equal(t, msg.Broker.Delivery.QoS, retrieved.Broker.Delivery.QoS)
-	assert.Equal(t, msg.Broker.Delivery.PacketID, retrieved.Broker.Delivery.PacketID)
+	assert.Equal(t, msg.BrokerMeta.Delivery.QoS, retrieved.BrokerMeta.Delivery.QoS)
+	assert.Equal(t, msg.BrokerMeta.Delivery.PacketID, retrieved.BrokerMeta.Delivery.PacketID)
 }
 
 func TestMessageStore_StoreQueue(t *testing.T) {
@@ -192,7 +192,7 @@ func TestMessageStore_QoSLevels(t *testing.T) {
 
 			retrieved, err := store.Get(key)
 			require.NoError(t, err)
-			assert.Equal(t, tt.qos, retrieved.Broker.Delivery.QoS)
+			assert.Equal(t, tt.qos, retrieved.BrokerMeta.Delivery.QoS)
 		})
 	}
 }

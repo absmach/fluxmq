@@ -22,24 +22,64 @@ import (
 // ownership of msg on every return path. Returns packet ID (>0) if the session
 // is connected and QoS>0, otherwise 0.
 func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *message.Envelope) (uint16, error) {
+	if msg == nil {
+		return 0, errors.New("deliver nil message envelope")
+	}
+	return b.deliverToSession(ctx, s, msg, deliveryOptions{
+		ownership: deliveryOwnsEnvelope,
+		qos:       msg.BrokerMeta.Delivery.QoS,
+		retain:    msg.BrokerMeta.Delivery.Retain,
+	})
+}
+
+type deliveryOwnership uint8
+
+const (
+	deliveryOwnsEnvelope deliveryOwnership = iota
+	deliveryBorrowsEnvelope
+)
+
+type deliveryOptions struct {
+	ownership deliveryOwnership
+	qos       byte
+	retain    bool
+}
+
+func (b *Broker) deliverToSession(ctx context.Context, s *session.Session, msg *message.Envelope, options deliveryOptions) (uint16, error) {
+	if msg == nil {
+		return 0, errors.New("deliver nil message envelope")
+	}
+	if options.ownership == deliveryBorrowsEnvelope && options.qos != 0 {
+		return 0, errors.New("borrowed delivery requires QoS 0")
+	}
+	releaseOwned := func() {
+		if options.ownership == deliveryOwnsEnvelope {
+			message.Release(msg)
+		}
+	}
+	if s == nil {
+		releaseOwned()
+		return 0, errors.New("deliver to nil session")
+	}
+
 	// Check if message has expired
-	if msg.User.MessageExpiry != nil && !msg.Broker.Delivery.ExpiresAt.IsZero() && time.Now().After(msg.Broker.Delivery.ExpiresAt) {
+	if msg.PublisherMeta.MessageExpiry.IsSet() && !msg.BrokerMeta.Delivery.ExpiresAt.IsZero() && time.Now().After(msg.BrokerMeta.Delivery.ExpiresAt) {
 		b.logOp("message_expired",
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic),
-			slog.Time("expiry", msg.Broker.Delivery.ExpiresAt))
-		message.Release(msg)
+			slog.Time("expiry", msg.BrokerMeta.Delivery.ExpiresAt))
+		releaseOwned()
 		return 0, nil
 	}
 
 	if !s.IsConnected() {
-		if msg.Broker.Delivery.QoS > 0 {
+		if options.qos > 0 {
 			// Offline queue copies the message internally, so we always release the original
 			err := s.OfflineQueue().Enqueue(msg)
-			message.Release(msg)
+			releaseOwned()
 			return 0, err
 		}
-		message.Release(msg)
+		releaseOwned()
 		return 0, nil
 	}
 
@@ -50,20 +90,15 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 	// write to, encode for, or consume the quota of, the replacement connection.
 	conn, version, gen := s.DeliveryLease()
 	if conn == nil {
-		return b.deliverOffline(s, msg)
+		if options.ownership == deliveryOwnsEnvelope {
+			return b.deliverOffline(s, msg)
+		}
+		return 0, nil
 	}
 
-	if msg.Broker.Delivery.QoS == 0 {
-		err := b.DeliverMessage(conn, version, msg, nil)
-		if err == nil && b.telemetry.webhooks != nil {
-			b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
-				ClientID:     s.ID,
-				MessageTopic: msg.Topic,
-				QoS:          msg.Broker.Delivery.QoS,
-				PayloadSize:  len(msg.PayloadBytes()),
-			})
-		}
-		message.Release(msg)
+	if options.qos == 0 {
+		err := b.deliverQoS0(ctx, s, conn, version, msg, options.retain)
+		releaseOwned()
 		return 0, err
 	}
 
@@ -74,21 +109,15 @@ func (b *Broker) DeliverToSession(ctx context.Context, s *session.Session, msg *
 // creating a subscriber-specific envelope. The encoded packet retains the
 // payload until the connection has serialized it.
 func (b *Broker) deliverSharedQoS0(ctx context.Context, s *session.Session, msg *message.Envelope, retain bool) error {
-	if msg.User.MessageExpiry != nil && !msg.Broker.Delivery.ExpiresAt.IsZero() && time.Now().After(msg.Broker.Delivery.ExpiresAt) {
-		b.logOp("message_expired",
-			slog.String("client_id", s.ID),
-			slog.String("topic", msg.Topic),
-			slog.Time("expiry", msg.Broker.Delivery.ExpiresAt))
-		return nil
-	}
-	if !s.IsConnected() {
-		return nil
-	}
-	conn, version, _ := s.DeliveryLease()
-	if conn == nil {
-		return nil
-	}
+	_, err := b.deliverToSession(ctx, s, msg, deliveryOptions{
+		ownership: deliveryBorrowsEnvelope,
+		qos:       0,
+		retain:    retain,
+	})
+	return err
+}
 
+func (b *Broker) deliverQoS0(ctx context.Context, s *session.Session, conn core.Connection, version byte, msg *message.Envelope, retain bool) error {
 	b.telemetry.stats.IncrementPublishSent()
 	b.telemetry.stats.AddBytesSent(uint64(len(msg.PayloadBytes())))
 	packet := session.EncodePublishDelivery(msg, 0, version, false, 0, retain)
@@ -127,7 +156,7 @@ func (b *Broker) retrySupersededLease(ctx context.Context, s *session.Session, m
 // handling that the replacement connection may never drain.
 func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *message.Envelope, conn core.Connection, version byte, gen uint64, attempt int) (uint16, error) {
 	packetID := s.NextPacketID()
-	msg.Broker.Delivery.PacketID = packetID
+	msg.BrokerMeta.Delivery.PacketID = packetID
 
 	// Acquire a send-quota (Receive Maximum) token for this outbound PUBLISH.
 	// Backpressure mode blocks until a token frees; queue mode falls back to the
@@ -192,7 +221,7 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *messag
 		b.telemetry.webhooks.Notify(context.Background(), events.MessageDelivered{ //nolint:errcheck,contextcheck // fire-and-forget webhook notification
 			ClientID:     s.ID,
 			MessageTopic: msg.Topic,
-			QoS:          msg.Broker.Delivery.QoS,
+			QoS:          msg.BrokerMeta.Delivery.QoS,
 			PayloadSize:  len(msg.PayloadBytes()),
 		})
 	}
@@ -213,7 +242,7 @@ func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *mess
 // goes to the offline queue, QoS 0 is dropped.
 func (b *Broker) deliverOffline(s *session.Session, msg *message.Envelope) (uint16, error) {
 	var err error
-	if msg.Broker.Delivery.QoS > 0 {
+	if msg.BrokerMeta.Delivery.QoS > 0 {
 		err = s.OfflineQueue().Enqueue(msg)
 	}
 	message.Release(msg)
@@ -240,12 +269,12 @@ func (b *Broker) ackQueueDelivery(msg *message.Envelope) {
 		return
 	}
 
-	queueName := msg.Broker.Queue.Name
-	groupID := msg.Broker.Queue.GroupID
+	queueName := msg.BrokerMeta.Queue.Name
+	groupID := msg.BrokerMeta.Queue.GroupID
 	if queueName == "" || groupID == "" {
 		return
 	}
-	offset := msg.Broker.Queue.Offset
+	offset := msg.BrokerMeta.Queue.Offset
 
 	if err := b.queueManager.Ack(context.Background(), queueName, groupID, offset); err != nil {
 		b.logError("queue_ack_on_delivery_ack", err,
@@ -290,7 +319,7 @@ func (b *Broker) DeliverMessage(conn core.Connection, version byte, msg *message
 
 	// First send (dup=false). EncodePublish is the single encoder shared with the
 	// retransmission path so the two cannot drift on v5 properties.
-	pub := session.EncodePublish(msg, msg.Broker.Delivery.PacketID, version, false)
+	pub := session.EncodePublish(msg, msg.BrokerMeta.Delivery.PacketID, version, false)
 
 	// TryWriteDataPacket owns pub from here on and releases it on every path,
 	// which is also what keeps the payload buffer alive until Pack() has copied

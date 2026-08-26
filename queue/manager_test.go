@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -450,7 +451,7 @@ func TestWildcardQueueSubscription(t *testing.T) {
 	payload := []byte("hello world")
 
 	t.Logf("Publishing message to %s", publishTopic)
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: publishTopic, Payload: payload}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, publishTopic, payload)); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -486,10 +487,7 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		manager, store := newManager()
-		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-			Topic:   testAuditQueueTopic,
-			Payload: []byte("{}"),
-		})
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 		if !errors.Is(err, storage.ErrQueueNotFound) {
 			t.Fatalf("error = %v, want queue not found", err)
 		}
@@ -505,10 +503,7 @@ func TestPublishToDurableStreamRejectsMissingAndClassicQueue(t *testing.T) {
 		if err := store.QueueStore.CreateQueue(ctx, queueConfig); err != nil {
 			t.Fatalf("create classic queue: %v", err)
 		}
-		err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-			Topic:   testAuditQueueTopic,
-			Payload: []byte("{}"),
-		})
+		err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 		if !errors.Is(err, ErrProtectedQueueContractDrift) {
 			t.Fatalf("error = %v, want ErrProtectedQueueContractDrift", err)
 		}
@@ -541,10 +536,7 @@ func TestProtectedQueuesRejectStoreWithoutRealDurableSync(t *testing.T) {
 	}
 	manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-	err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-		Topic:   testAuditQueueTopic,
-		Payload: []byte("{}"),
-	})
+	err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 	if !errors.Is(err, ErrDurableSyncUnsupported) {
 		t.Fatalf("error = %v, want ErrDurableSyncUnsupported", err)
 	}
@@ -587,10 +579,7 @@ func TestPublishToDurableStreamDoesNotBlockContractReload(t *testing.T) {
 
 	publishErr := make(chan error, 1)
 	go func() {
-		publishErr <- manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-			Topic:   testAuditQueueTopic,
-			Payload: []byte("{}"),
-		})
+		publishErr <- manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 	}()
 
 	select {
@@ -687,10 +676,7 @@ func TestPublishToDurableStreamRejectsUnsafeConfigurationBeforeAppend(t *testing
 			}
 			manager := NewManager(managerStore, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-				Topic:   testAuditQueueTopic,
-				Payload: []byte("{}"),
-			})
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -847,7 +833,7 @@ func TestPublishToDurableStreamRejectsPersistedContractDrift(t *testing.T) {
 			}
 			store := &recordingDurableQueueStore{QueueStore: base}
 			manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
-			err := manager.PublishToDurableStream(ctx, expected.Name, types.PublishRequest{Payload: []byte("{}")})
+			err := manager.PublishToDurableStream(ctx, expected.Name, publishEnvelope(t, "", []byte("{}")))
 			if !errors.Is(err, ErrProtectedQueueContractDrift) {
 				t.Fatalf("PublishToDurableStream() error = %v, want ErrProtectedQueueContractDrift", err)
 			}
@@ -866,7 +852,7 @@ func TestPublishToDurableStreamRejectsPersistedContractDrift(t *testing.T) {
 		}
 		store := &recordingDurableQueueStore{QueueStore: base}
 		manager := NewManager(store, newMockGroupStore(), nil, managerConfigWithProtectedQueue(expected), nil, nil)
-		if err := manager.PublishToDurableStream(ctx, expected.Name, types.PublishRequest{Payload: []byte("{}")}); err != nil {
+		if err := manager.PublishToDurableStream(ctx, expected.Name, publishEnvelope(t, "", []byte("{}"))); err != nil {
 			t.Fatalf("PublishToDurableStream() rejected MaxDepth drift: %v", err)
 		}
 	})
@@ -886,10 +872,7 @@ func TestPublishToDurableStreamTargetsOneQueueAndSyncsBeforeSuccess(t *testing.T
 		}
 	}
 
-	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-		Topic:   testAuditQueueTopic,
-		Payload: []byte("audit-event"),
-	}); err != nil {
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("audit-event"))); err != nil {
 		t.Fatalf("durable stream publish: %v", err)
 	}
 	if operations := store.Operations(); fmt.Sprint(operations) != "[append:audit.events sync:audit.events]" {
@@ -925,10 +908,7 @@ func TestPublishToDurableStreamAcknowledgesOnlyPersistedRecords(t *testing.T) {
 	}
 
 	payload := []byte(`{"id":"durability-1"}`)
-	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-		Topic:   testAuditQueueTopic,
-		Payload: payload,
-	}); err != nil {
+	if err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, payload)); err != nil {
 		t.Fatalf("PublishToDurableStream() error = %v", err)
 	}
 	if err := store.Close(); err != nil {
@@ -979,10 +959,7 @@ func TestPublishToDurableStreamPropagatesAppendAndSyncFailures(t *testing.T) {
 				t.Fatalf("create stream: %v", err)
 			}
 
-			err := manager.PublishToDurableStream(ctx, testAuditQueueName, types.PublishRequest{
-				Topic:   testAuditQueueTopic,
-				Payload: []byte("{}"),
-			})
+			err := manager.PublishToDurableStream(ctx, testAuditQueueName, publishEnvelope(t, testAuditQueueTopic, []byte("{}")))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -1003,7 +980,7 @@ func TestPublishPropagatesQueueAppendFailure(t *testing.T) {
 		t.Fatalf("create queue: %v", err)
 	}
 
-	err := manager.Publish(ctx, types.PublishRequest{Topic: "events/created", Payload: []byte("event")})
+	err := manager.Publish(ctx, publishEnvelope(t, "events/created", []byte("event")))
 	if !errors.Is(err, errTestAppend) {
 		t.Fatalf("error = %v, want append failure", err)
 	}
@@ -1035,11 +1012,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 		t.Fatalf("SubscribeWithCursor failed: %v", err)
 	}
 
-	if err := mgr.Publish(context.Background(), types.PublishRequest{
-		Topic:      "$queue/events/test",
-		Payload:    []byte("hello"),
-		Properties: nil,
-	}); err != nil {
+	if err := mgr.Publish(context.Background(), publishEnvelope(t, "$queue/events/test", []byte("hello"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -1047,8 +1020,9 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if msg.Broker.Queue.Stream == nil || msg.Broker.Queue.Stream.Offset != 0 {
-			t.Fatalf("expected stream offset 0, got %#v", msg.Broker.Queue.Stream)
+		stream, ok := msg.BrokerMeta.Queue.Stream.Value()
+		if !ok || stream.Offset != 0 {
+			t.Fatalf("expected stream offset 0, got %#v", msg.BrokerMeta.Queue.Stream)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
@@ -1087,11 +1061,9 @@ func TestPublishCarriesTypedSourceMetadata(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := mgr.Publish(ctx, types.PublishRequest{
-		Source:  message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT},
-		Topic:   "$queue/orders/process",
-		Payload: []byte("hello"),
-	}); err != nil {
+	sourced := publishEnvelope(t, "$queue/orders/process", []byte("hello"))
+	sourced.BrokerMeta.Source = message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT}
+	if err := mgr.Publish(ctx, sourced); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -1099,7 +1071,7 @@ func TestPublishCarriesTypedSourceMetadata(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if got := msg.Broker.Source.ClientID; got != "mqtt-pub-1" {
+		if got := msg.BrokerMeta.Source.ClientID; got != "mqtt-pub-1" {
 			t.Fatalf("expected client id %q, got %q", "mqtt-pub-1", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -1122,12 +1094,10 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	payload := []byte("original")
 	properties := map[string]string{"source": "device"}
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Source:     message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT},
-			Topic:      testCapturedTopic,
-			Payload:    payload,
-			Properties: properties,
-		}); err != nil {
+		captured := publishEnvelope(t, testCapturedTopic, payload)
+		captured.BrokerMeta.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
+		captured.PublisherMeta.Properties = message.NewPropertyMap(properties)
+		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	})
@@ -1157,17 +1127,14 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("captured payload = %q, want original", got)
 	}
-	if got := stored.User.Properties["source"]; got != "device" {
+	if got, _ := stored.PublisherMeta.Properties.Get("source"); got != "device" {
 		t.Fatalf("captured source = %q, want device", got)
 	}
-	if got := stored.Broker.Source.ClientID; got != testCapturePublisher {
+	if got := stored.BrokerMeta.Source.ClientID; got != testCapturePublisher {
 		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   "unmatched/topic",
-		Payload: []byte("ignored"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, "unmatched/topic", []byte("ignored"))); err != nil {
 		t.Fatalf("unmatched PublishToMatchingQueues failed: %v", err)
 	}
 	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); !errors.Is(err, storage.ErrQueueNotFound) {
@@ -1200,10 +1167,7 @@ func TestPublishToMatchingQueuesRoutesCapturedStreamToRemoteConsumerOnce(t *test
 	}
 
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	})
@@ -1251,10 +1215,7 @@ func TestPublishToExistingQueueDoesNotForwardSecondAppend(t *testing.T) {
 		t.Fatalf("CreateQueue writers failed: %v", err)
 	}
 
-	if err := mgr.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/writers/domain/c/channel/tst",
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.Publish(ctx, publishEnvelope(t, "$queue/writers/domain/c/channel/tst", []byte("payload"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 	mgr.deliverMessages()
@@ -1421,8 +1382,8 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	require.Empty(t, entries)
 	dlqMsg, err := logStore.Read(ctx, "$dlq/tasks", 0)
 	require.NoError(t, err)
-	require.Equal(t, "invalid payload", dlqMsg.Broker.Transfer.FailureReason)
-	require.NotEmpty(t, dlqMsg.Broker.Transfer.ID)
+	require.Equal(t, "invalid payload", dlqMsg.BrokerMeta.Transfer.FailureReason)
+	require.NotEmpty(t, dlqMsg.BrokerMeta.Transfer.ID)
 }
 
 func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
@@ -1459,11 +1420,7 @@ func TestRetentionOffsetMessages(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := mgr.Publish(context.Background(), types.PublishRequest{
-			Topic:      "$queue/events/test",
-			Payload:    []byte("msg"),
-			Properties: nil,
-		}); err != nil {
+		if err := mgr.Publish(context.Background(), publishEnvelope(t, "$queue/events/test", []byte("msg"))); err != nil {
 			t.Fatalf("Publish failed: %v", err)
 		}
 	}
@@ -1510,7 +1467,7 @@ func TestExactQueueSubscription(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/tasks", Payload: []byte("task1")}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "$queue/tasks", []byte("task1"))); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -1559,7 +1516,7 @@ func TestMultiLevelWildcard(t *testing.T) {
 	}
 
 	for _, topic := range topics {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte(topic)}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte(topic))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1617,13 +1574,13 @@ func TestSingleLevelWildcard(t *testing.T) {
 	}
 
 	for _, topic := range matching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("match")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("match"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
 
 	for _, topic := range nonMatching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("nomatch")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("nomatch"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1691,13 +1648,13 @@ func TestQueueNameWildcardSingleLevel(t *testing.T) {
 	}
 
 	for _, topic := range matching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("match")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("match"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
 
 	for _, topic := range nonMatching {
-		if err := manager.Publish(ctx, types.PublishRequest{Topic: topic, Payload: []byte("nomatch")}); err != nil {
+		if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("nomatch"))); err != nil {
 			t.Fatalf("Enqueue to %s failed: %v", topic, err)
 		}
 	}
@@ -1751,6 +1708,7 @@ type forwardPublishCall struct {
 	topic           string
 	payload         []byte
 	properties      map[string]string
+	targetQueues    []string
 	forwardToLeader bool
 }
 
@@ -1774,7 +1732,7 @@ func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID st
 	c.routedMessages = append(c.routedMessages, routedMessage{
 		nodeID:    nodeID,
 		clientID:  clientID,
-		queueName: msg.Broker.Queue.Name,
+		queueName: msg.BrokerMeta.Queue.Name,
 		message:   msgCopy,
 	})
 	return nil
@@ -1849,7 +1807,7 @@ func (c *mockCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 }
 func (c *mockCluster) Retained() brokerstorage.RetainedStore { return nil }
 func (c *mockCluster) Wills() brokerstorage.WillStore        { return nil }
-func (c *mockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
+func (c *mockCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }
 
@@ -1902,14 +1860,17 @@ func (c *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.Que
 	return consumers, nil
 }
 
-func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
+// The manager only lends the envelope, so record a snapshot of what crossed the
+// boundary rather than the envelope itself.
+func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID string, msg *message.Envelope, targetQueues []string, forwardToLeader bool) error {
 	c.forwardCallsMu.Lock()
 	defer c.forwardCallsMu.Unlock()
 	c.forwardCalls = append(c.forwardCalls, forwardPublishCall{
 		nodeID:          nodeID,
-		topic:           topic,
-		payload:         payload,
-		properties:      properties,
+		topic:           msg.Topic,
+		payload:         bytes.Clone(msg.PayloadBytes()),
+		properties:      msg.PublisherMeta.Properties.Map(),
+		targetQueues:    slices.Clone(targetQueues),
 		forwardToLeader: forwardToLeader,
 	})
 	return nil
@@ -2093,7 +2054,7 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 		t.Fatalf("Subscribe remote client failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/test/msg", Payload: []byte("hello")}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "$queue/test/msg", []byte("hello"))); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -2122,10 +2083,10 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 				t.Error("Expected routed message payload to be set")
 				continue
 			}
-			if rm.message.Broker.Queue.MessageID == "" {
-				t.Error("Expected routed message-id to be set")
+			if rm.message.BrokerMeta.Queue.DeliveryID() == "" {
+				t.Error("Expected routed delivery to name its queue and offset")
 			}
-			if rm.message.Broker.Queue.GroupID == "" {
+			if rm.message.BrokerMeta.Queue.GroupID == "" {
 				t.Error("Expected routed message to include group-id")
 			}
 		}
@@ -2178,7 +2139,9 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 		t.Fatalf("Subscribe failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: testQueueTasksNew, Payload: []byte("job"), Properties: map[string]string{"custom": testCustomValue}}); err != nil {
+	job := publishEnvelope(t, testQueueTasksNew, []byte("job"))
+	job.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"custom": testCustomValue})
+	if err := manager.Publish(ctx, job); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 
@@ -2193,19 +2156,19 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if msg.message == nil {
 		t.Fatal("expected routed queue message payload")
 	}
-	if msg.message.Broker.Queue.MessageID != "tasks:0" {
-		t.Fatalf("expected message-id tasks:0, got %q", msg.message.Broker.Queue.MessageID)
+	if got := msg.message.BrokerMeta.Queue.DeliveryID(); got != "tasks:0" {
+		t.Fatalf("expected delivery handle tasks:0, got %q", got)
 	}
-	if got := msg.message.Broker.Queue.GroupID; got != testGroupWorkers { //nolint:goconst // test value
+	if got := msg.message.BrokerMeta.Queue.GroupID; got != testGroupWorkers { //nolint:goconst // test value
 		t.Fatalf("expected group-id workers, got %q", got)
 	}
-	if got := msg.message.Broker.Queue.Name; got != "tasks" {
+	if got := msg.message.BrokerMeta.Queue.Name; got != "tasks" {
 		t.Fatalf("expected queue tasks, got %q", got)
 	}
-	if got := msg.message.Broker.Queue.Offset; got != 0 {
+	if got := msg.message.BrokerMeta.Queue.Offset; got != 0 {
 		t.Fatalf("expected sequence 0, got %d", got)
 	}
-	if got := msg.message.User.Properties["custom"]; got != testCustomValue {
+	if got, _ := msg.message.PublisherMeta.Properties.Get("custom"); got != testCustomValue {
 		t.Fatalf("expected user property custom=value, got %q", got)
 	}
 }
@@ -2239,7 +2202,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{Topic: "$queue/events/user.action", Payload: []byte("event-1")}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "$queue/events/user.action", []byte("event-1"))); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -2268,7 +2231,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 			if routed[0].message == nil {
 				t.Fatal("expected routed stream message payload")
 			}
-			if stream := routed[0].message.Broker.Queue.Stream; stream == nil || stream.Offset != 0 {
+			if stream, ok := routed[0].message.BrokerMeta.Queue.Stream.Value(); !ok || stream.Offset != 0 {
 				t.Fatalf("expected stream offset=0, got %#v", stream)
 			}
 			return
@@ -2396,10 +2359,7 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/test/msg",
-		Payload: []byte("hello"),
-	})
+	err := manager.Publish(ctx, publishEnvelope(t, "$queue/test/msg", []byte("hello")))
 	if err != nil {
 		t.Fatalf("Publish returned error: %v", err)
 	}
@@ -2450,10 +2410,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/hot-events/msg",
-		Payload: []byte("hello"),
-	})
+	err := manager.Publish(ctx, publishEnvelope(t, "$queue/hot-events/msg", []byte("hello")))
 	if err != nil {
 		t.Fatalf("Publish returned error: %v", err)
 	}
@@ -2549,10 +2506,7 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 		t.Fatalf("CreateQueue q2 failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "shared/topic",
-		Payload: []byte("hello"),
-	}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, "shared/topic", []byte("hello"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -2566,11 +2520,13 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 		if !call.forwardToLeader {
 			t.Fatalf("expected forward-to-leader call")
 		}
-		target := call.properties[message.PropertyForwardTargetQueues]
-		if target == "" {
-			t.Fatalf("expected target queues metadata")
+		if len(call.targetQueues) != 1 {
+			t.Fatalf("expected exactly one target queue, got %v", call.targetQueues)
 		}
-		seenTarget[target] = true
+		if _, forged := call.properties[message.PropertyForwardTargetQueues]; forged {
+			t.Fatal("forwarding intent must not travel as a user property")
+		}
+		seenTarget[call.targetQueues[0]] = true
 	}
 
 	if !seenTarget["q1"] || !seenTarget["q2"] {
@@ -2598,10 +2554,9 @@ func TestPublishForcedTargets(t *testing.T) {
 		t.Fatalf("CreateQueue q2 failed: %v", err)
 	}
 
-	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:               "shared/topic",
-		Payload:             []byte("hello"),
-		ForwardTargetQueues: []string{"q1"},
+	if err := manager.PublishCommand(ctx, QueuePublishCommand{
+		Envelope:      publishEnvelope(t, "shared/topic", []byte("hello")),
+		ForcedTargets: []string{"q1"},
 	}); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -2616,7 +2571,7 @@ func TestPublishForcedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read q1 message failed: %v", err)
 	}
-	if _, ok := msg.User.Properties[message.PropertyForwardTargetQueues]; ok {
+	if _, ok := msg.PublisherMeta.Properties.Get(message.PropertyForwardTargetQueues); ok {
 		t.Fatalf("forwarding metadata must not be persisted in message properties")
 	}
 }
@@ -2642,10 +2597,7 @@ func TestPublishReplicateModeForwardsUnknownQueues(t *testing.T) {
 	}), config, logger, mockCl)
 
 	ctx := context.Background()
-	err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/test/tpc/msg",
-		Payload: []byte("hello"),
-	})
+	err := manager.Publish(ctx, publishEnvelope(t, "$queue/test/tpc/msg", []byte("hello")))
 	if err != nil {
 		t.Fatalf("Publish returned error: %v", err)
 	}
@@ -2688,12 +2640,11 @@ func TestDeliverQueueMessage(t *testing.T) {
 	ctx := context.Background()
 
 	msg := message.New("$queue/test", []byte("routed payload"))
-	msg.User.Properties = map[string]string{"custom": "prop"}
-	msg.Broker.Queue = message.QueueMetadata{
-		MessageID: "msg-123",
-		Name:      testQueueTest,
-		GroupID:   testGroupWorkers,
-		Offset:    42,
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"custom": "prop"})
+	msg.BrokerMeta.Queue = message.QueueMetadata{
+		Name:    testQueueTest,
+		GroupID: testGroupWorkers,
+		Offset:  42,
 	}
 
 	err := manager.DeliverQueueMessage(ctx, "target-client", msg)
@@ -2720,14 +2671,14 @@ func TestDeliverQueueMessage(t *testing.T) {
 		t.Errorf("Expected payload 'routed payload', got '%s'", string(deliveredMsg.PayloadBytes()))
 	}
 
-	if deliveredMsg.Broker.Queue.MessageID != "msg-123" {
-		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Broker.Queue.MessageID)
+	if got := deliveredMsg.BrokerMeta.Queue.DeliveryID(); got != testQueueTest+":42" {
+		t.Errorf("Expected delivery handle '%s:42', got '%s'", testQueueTest, got)
 	}
-	if deliveredMsg.Broker.Queue.Name != testQueueTest {
-		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Broker.Queue.Name)
+	if deliveredMsg.BrokerMeta.Queue.Name != testQueueTest {
+		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.BrokerMeta.Queue.Name)
 	}
-	if deliveredMsg.Broker.Source.Topic != "" {
-		t.Errorf("Expected an empty broker-owned source topic, got %q", deliveredMsg.Broker.Source.Topic)
+	if deliveredMsg.BrokerMeta.Source.Topic != "" {
+		t.Errorf("Expected an empty broker-owned source topic, got %q", deliveredMsg.BrokerMeta.Source.Topic)
 	}
 }
 
@@ -2746,7 +2697,7 @@ func TestDeliverQueueMessagePreservesCanonicalTopic(t *testing.T) {
 	)
 
 	envelope := message.New("$queue/"+testCapturedTopic, []byte("payload"))
-	envelope.Broker.Queue = message.QueueMetadata{MessageID: "m:1", Name: "m", GroupID: "rules-engine", Offset: 1}
+	envelope.BrokerMeta.Queue = message.QueueMetadata{Name: "m", GroupID: "rules-engine", Offset: 1}
 	err := manager.DeliverQueueMessage(context.Background(), "target-client", envelope)
 	if err != nil {
 		t.Fatalf("DeliverQueueMessage failed: %v", err)
@@ -2844,10 +2795,7 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 	ctx := context.Background()
 	topic := "$queue/demo-events"
 
-	if err := manager.Publish(ctx, types.PublishRequest{
-		Topic:   topic,
-		Payload: []byte("hello"),
-	}); err != nil {
+	if err := manager.Publish(ctx, publishEnvelope(t, topic, []byte("hello"))); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
 
@@ -3109,12 +3057,13 @@ func TestEnqueueLocal(t *testing.T) {
 	}
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
-	err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{
-		"key":                    testCustomValue,
-		message.PropertyClientID: "mqtt:remote-client",
-		message.PropertyProtocol: string(message.ProtocolMQTT),
-		message.PropertyTraceID:  "trace-remote",
-	})
+	remote := message.New("$queue/remote", []byte("remote payload"))
+	remote.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"key": testCustomValue})
+	remote.BrokerMeta.Source.ClientID = "mqtt:remote-client"
+	remote.BrokerMeta.Source.Protocol = message.ProtocolMQTT
+	remote.BrokerMeta.Trace.TraceID = "trace-remote"
+	err := manager.EnqueueLocal(ctx, "$queue/remote", remote)
+	message.Release(remote)
 	if err != nil {
 		t.Fatalf("EnqueueLocal failed: %v", err)
 	}
@@ -3137,16 +3086,16 @@ func TestEnqueueLocal(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 	defer message.Release(stored)
-	if stored.Broker.Source.ClientID != "mqtt:remote-client" || stored.Broker.Source.Protocol != message.ProtocolMQTT {
-		t.Fatalf("typed source metadata was not preserved: %+v", stored.Broker.Source)
+	if stored.BrokerMeta.Source.ClientID != "mqtt:remote-client" || stored.BrokerMeta.Source.Protocol != message.ProtocolMQTT {
+		t.Fatalf("typed source metadata was not preserved: %+v", stored.BrokerMeta.Source)
 	}
-	if stored.Broker.Trace.TraceID != "trace-remote" {
-		t.Fatalf("typed trace metadata was not preserved: %+v", stored.Broker.Trace)
+	if stored.BrokerMeta.Trace.TraceID != "trace-remote" {
+		t.Fatalf("typed trace metadata was not preserved: %+v", stored.BrokerMeta.Trace)
 	}
-	if _, leaked := stored.User.Properties[message.PropertyClientID]; leaked {
+	if _, leaked := stored.PublisherMeta.Properties.Get(message.PropertyClientID); leaked {
 		t.Fatal("broker source metadata leaked into user properties")
 	}
-	if _, leaked := stored.User.Properties[message.PropertyTraceID]; leaked {
+	if _, leaked := stored.PublisherMeta.Properties.Get(message.PropertyTraceID); leaked {
 		t.Fatal("broker trace metadata leaked into user properties")
 	}
 }
@@ -3365,10 +3314,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 
 	// Publish more messages than MaxPELSize
 	for i := 0; i < 5; i++ {
-		if err := mgr.Publish(ctx, types.PublishRequest{
-			Topic:   "$queue/pelcap/test",
-			Payload: []byte("msg"),
-		}); err != nil {
+		if err := mgr.Publish(ctx, publishEnvelope(t, "$queue/pelcap/test", []byte("msg"))); err != nil {
 			t.Fatalf("Publish failed: %v", err)
 		}
 	}
@@ -3394,7 +3340,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 	}
 
 	// Ack one message to free PEL space.
-	if err := mgr.Ack(ctx, "pelcap", "g1", msgs[0].Broker.Queue.Offset); err != nil {
+	if err := mgr.Ack(ctx, "pelcap", "g1", msgs[0].BrokerMeta.Queue.Offset); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
 
@@ -3429,7 +3375,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	}
 
 	poisonMsg := newQueueEnvelope("bad-msg-1", "$queue/tasks/process", []byte("poison-payload"))
-	poisonMsg.User.Properties = map[string]string{"custom-key": "custom-val"}
+	poisonMsg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"custom-key": "custom-val"})
 
 	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
 
@@ -3450,41 +3396,47 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if string(msg.PayloadBytes()) != "poison-payload" {
 		t.Fatalf("expected poison-payload, got %s", string(msg.PayloadBytes()))
 	}
-	if msg.Broker.Transfer.SourceQueue != "tasks" {
-		t.Fatalf("expected original queue 'tasks', got %q", msg.Broker.Transfer.SourceQueue)
+	if msg.BrokerMeta.Transfer.SourceQueue != "tasks" {
+		t.Fatalf("expected original queue 'tasks', got %q", msg.BrokerMeta.Transfer.SourceQueue)
 	}
-	if msg.Broker.Source.Topic != "$queue/tasks/process" {
-		t.Fatalf("expected original topic, got %q", msg.Broker.Source.Topic)
+	if msg.BrokerMeta.Source.Topic != "$queue/tasks/process" {
+		t.Fatalf("expected original topic, got %q", msg.BrokerMeta.Source.Topic)
 	}
-	if msg.Broker.Transfer.SourceGroup != testGroupWorkers {
-		t.Fatalf("expected group 'workers', got %q", msg.Broker.Transfer.SourceGroup)
+	if msg.BrokerMeta.Transfer.SourceGroup != testGroupWorkers {
+		t.Fatalf("expected group 'workers', got %q", msg.BrokerMeta.Transfer.SourceGroup)
 	}
-	if msg.Broker.Transfer.DeliveryCount != 6 {
-		t.Fatalf("expected delivery count 6, got %d", msg.Broker.Transfer.DeliveryCount)
+	if msg.BrokerMeta.Transfer.DeliveryCount != 6 {
+		t.Fatalf("expected delivery count 6, got %d", msg.BrokerMeta.Transfer.DeliveryCount)
 	}
-	if msg.Broker.Transfer.SourceOffset != 42 {
-		t.Fatalf("expected original offset 42, got %d", msg.Broker.Transfer.SourceOffset)
+	if msg.BrokerMeta.Transfer.SourceOffset != 42 {
+		t.Fatalf("expected original offset 42, got %d", msg.BrokerMeta.Transfer.SourceOffset)
 	}
 	// Transfer.ID is the DLQ record's stable identity, derived from the source
 	// queue, group and offset. Queue.MessageID is a delivery-time projection and
 	// is deliberately not reused for it.
-	if msg.Broker.Transfer.ID == "" {
+	if msg.BrokerMeta.Transfer.ID == "" {
 		t.Fatal("expected a stable transfer identity")
 	}
-	if msg.Broker.Transfer.ID != dlqTransferID("tasks", testGroupWorkers, 42) {
-		t.Fatalf("transfer identity is not derived from the source coordinates: %q", msg.Broker.Transfer.ID)
+	if msg.BrokerMeta.Transfer.ID != dlqTransferID("tasks", testGroupWorkers, 42) {
+		t.Fatalf("transfer identity is not derived from the source coordinates: %q", msg.BrokerMeta.Transfer.ID)
 	}
-	if msg.Broker.Queue.MessageID != "" {
-		t.Fatalf("queue message id must be left to delivery, got %q", msg.Broker.Queue.MessageID)
+	// The publisher's own identifier is user metadata and survives the transfer.
+	// The delivery handle does not: it names a record in the source queue, and
+	// the dead-letter copy is a different record at a different offset.
+	if msg.PublisherMeta.MessageID != "bad-msg-1" {
+		t.Fatalf("the publisher message id must survive the transfer, got %q", msg.PublisherMeta.MessageID)
 	}
-	if msg.Broker.Transfer.FailureReason != "decode failed" {
-		t.Fatalf("expected reject reason, got %q", msg.Broker.Transfer.FailureReason)
+	if msg.BrokerMeta.Queue.Name == "tasks" {
+		t.Fatalf("the transfer still names the source queue: %q", msg.BrokerMeta.Queue.Name)
 	}
-	if msg.User.Properties["custom-key"] != "custom-val" {
-		t.Fatalf("expected original property preserved, got %q", msg.User.Properties["custom-key"])
+	if msg.BrokerMeta.Transfer.FailureReason != "decode failed" {
+		t.Fatalf("expected reject reason, got %q", msg.BrokerMeta.Transfer.FailureReason)
 	}
-	if msg.Broker.Queue.State != message.QueueStateDLQ {
-		t.Fatalf("expected state DLQ, got %q", msg.Broker.Queue.State)
+	if property, _ := msg.PublisherMeta.Properties.Get("custom-key"); property != "custom-val" {
+		t.Fatalf("expected original property preserved, got %q", property)
+	}
+	if msg.BrokerMeta.Queue.State != message.QueueStateDLQ {
+		t.Fatalf("expected state DLQ, got %q", msg.BrokerMeta.Queue.State)
 	}
 }
 
@@ -3593,10 +3545,7 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 	// The append now happens off the publish path, so the caller is told
 	// nothing; the counter is the report.
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("capture must not fail the publish: %v", err)
 		}
 	})
@@ -3606,10 +3555,7 @@ func TestPublishToMatchingQueuesCountsCaptureFailures(t *testing.T) {
 
 	mgr.capture = newCaptureDispatcher(0, 0, 0, mgr.metrics, mgr.logger, mgr.applyCaptureJob)
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   "h/acme/temp",
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, "h/acme/temp", []byte("payload"))); err != nil {
 			t.Fatalf("healthy queue capture failed: %v", err)
 		}
 	})
@@ -3644,14 +3590,12 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	key := []byte("key")
 	headers := map[string][]byte{"binary": {0x00, 0xff}}
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Source:     message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT},
-			Topic:      testCapturedTopic,
-			Payload:    payload,
-			Key:        key,
-			Headers:    headers,
-			Properties: properties,
-		}); err != nil {
+		captured := publishEnvelope(t, testCapturedTopic, payload)
+		captured.BrokerMeta.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
+		captured.PublisherMeta.Key = message.NewBinary(key)
+		captured.PublisherMeta.Headers = message.NewHeaderMap(headers)
+		captured.PublisherMeta.Properties = message.NewPropertyMap(properties)
+		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
 	})
@@ -3672,16 +3616,16 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("stored payload = %q, want original", got)
 	}
-	if got := string(stored.User.Key); got != "key" {
+	if got := string(stored.PublisherMeta.Key.Bytes()); got != "key" {
 		t.Fatalf("stored key = %q, want key", got)
 	}
-	if got := stored.User.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
+	if got, ok := stored.PublisherMeta.Headers.Get("binary"); !ok || !got.Equal([]byte{0x00, 0xff}) {
 		t.Fatalf("stored binary header = %v, want [0 255]", got)
 	}
-	if _, ok := stored.User.Headers["new"]; ok {
+	if _, ok := stored.PublisherMeta.Headers.Get("new"); ok {
 		t.Fatal("stored headers alias the caller's map")
 	}
-	if got := stored.Broker.Source.ClientID; got != testCapturePublisher {
+	if got := stored.BrokerMeta.Source.ClientID; got != testCapturePublisher {
 		t.Fatalf("stored client ID = %q, want mqtt-publisher", got)
 	}
 }
@@ -3720,10 +3664,7 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 	}
 
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("capture must not fail the publish: %v", err)
 		}
 	})
@@ -3768,10 +3709,7 @@ func TestPublishToMatchingQueuesCountsUnresolvedTargets(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-		Topic:   testCapturedTopic,
-		Payload: []byte("payload"),
-	}); err != nil {
+	if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 		t.Fatalf("PublishToMatchingQueues failed: %v", err)
 	}
 
@@ -3809,10 +3747,7 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 		t.Fatalf("CreateQueue local failed: %v", err)
 	}
 
-	err := mgr.Publish(ctx, types.PublishRequest{
-		Topic:   "$queue/replicated/item",
-		Payload: []byte("payload"),
-	})
+	err := mgr.Publish(ctx, publishEnvelope(t, "$queue/replicated/item", []byte("payload")))
 	if err == nil {
 		t.Fatal("expected the reject write policy to refuse the publish")
 	}
@@ -3880,7 +3815,7 @@ func TestReplicatedPublishNeverFallsBackToLocalAppend(t *testing.T) {
 	cfg.WritePolicy = WritePolicyReject
 	mgr := NewManager(store, newMockGroupStore(), nil, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
-	err := mgr.Publish(ctx, types.PublishRequest{Topic: "$queue/replicated/item", Payload: []byte("payload")})
+	err := mgr.Publish(ctx, publishEnvelope(t, "$queue/replicated/item", []byte("payload")))
 	require.ErrorIs(t, err, ErrReplicationUnavailable)
 	count, err := store.Count(ctx, testReplicatedQueue)
 	require.NoError(t, err)
@@ -3916,10 +3851,7 @@ func TestPublishToMatchingQueuesCountsEachLostTarget(t *testing.T) {
 	}
 
 	flushCapture(t, mgr, func() {
-		if err := mgr.PublishToMatchingQueues(ctx, types.PublishRequest{
-			Topic:   testCapturedTopic,
-			Payload: []byte("payload"),
-		}); err != nil {
+		if err := mgr.PublishToMatchingQueues(ctx, publishEnvelope(t, testCapturedTopic, []byte("payload"))); err != nil {
 			t.Fatalf("capture must not fail the publish: %v", err)
 		}
 	})

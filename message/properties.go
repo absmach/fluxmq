@@ -4,6 +4,8 @@
 package message
 
 import (
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -77,10 +79,10 @@ func IsReservedProperty(key string) bool {
 	}
 }
 
-// FilterUserProperties copies only publisher-owned properties.
-func FilterUserProperties(properties map[string]string) map[string]string {
+// FilterUserProperties copies publisher-owned properties into an immutable map.
+func FilterUserProperties(properties map[string]string) PropertyMap {
 	if len(properties) == 0 {
-		return nil
+		return PropertyMap{}
 	}
 	filtered := make(map[string]string, len(properties))
 	for key, value := range properties {
@@ -89,9 +91,9 @@ func FilterUserProperties(properties map[string]string) map[string]string {
 		}
 	}
 	if len(filtered) == 0 {
-		return nil
+		return PropertyMap{}
 	}
-	return filtered
+	return PropertyMap{values: filtered}
 }
 
 // SourceFromProperties decodes authenticated broker-boundary origin fields.
@@ -113,39 +115,78 @@ func TraceFromProperties(properties map[string]string) TraceMetadata {
 	}
 }
 
-// ApplyTrustedProperties decodes the cluster protobuf property projection into
-// typed namespaces. It is only for authenticated
-// broker-to-broker and trusted-service boundaries; public ingress must call
-// FilterUserProperties and set SourceMetadata from its authenticated session.
-func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) {
+// ApplyTrustedProperties decodes a flattened property projection into typed
+// namespaces. It is only for authenticated broker-to-broker and
+// trusted-service boundaries; public ingress must call FilterUserProperties and
+// set SourceMetadata from its authenticated session.
+//
+// It reports every numeric property it could not decode instead of substituting
+// a zero. A malformed offset used to be indistinguishable from offset 0, so a
+// corrupt or hostile value silently redirected an acknowledgement to the head of
+// the queue. The envelope is still filled in as far as it can be, so a caller
+// that chooses to continue sees every field that did parse.
+func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) error {
 	if envelope == nil {
-		return
+		return nil
 	}
-	envelope.User.Properties = FilterUserProperties(properties)
-	envelope.Broker.Source = SourceFromProperties(properties)
-	envelope.Broker.Source.Topic = properties[PropertySourceTopic]
+	envelope.PublisherMeta.Properties = FilterUserProperties(properties)
+	envelope.BrokerMeta.Source = SourceFromProperties(properties)
+	envelope.BrokerMeta.Source.Topic = properties[PropertySourceTopic]
 
-	queue := &envelope.Broker.Queue
-	queue.MessageID = properties[PropertyMessageID]
+	var errs []error
+	parseUint := func(name string, raw string, target *uint64) {
+		if raw == "" {
+			return
+		}
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("property %q: %w", name, err))
+			return
+		}
+		*target = value
+	}
+
+	// A message-id on the wire is the publisher's own identifier, so it lands in
+	// user metadata. The broker's handle for a durable delivery is derived from
+	// the queue and offset below, and is never taken from the peer.
+	envelope.PublisherMeta.MessageID = properties[PropertyMessageID]
+
+	queue := &envelope.BrokerMeta.Queue
 	queue.Name = properties[PropertyQueueName]
 	queue.GroupID = properties[PropertyGroupID]
-	queue.Offset, _ = strconv.ParseUint(properties[PropertyOffset], 10, 64)
+	parseUint(PropertyOffset, properties[PropertyOffset], &queue.Offset)
 	if rawOffset, ok := properties[PropertyStreamOffset]; ok {
 		stream := &StreamMetadata{}
-		stream.Offset, _ = strconv.ParseUint(rawOffset, 10, 64)
-		stream.Timestamp, _ = strconv.ParseInt(properties[PropertyStreamTimestamp], 10, 64)
+		parseUint(PropertyStreamOffset, rawOffset, &stream.Offset)
+		if raw := properties[PropertyStreamTimestamp]; raw != "" {
+			timestamp, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("property %q: %w", PropertyStreamTimestamp, err))
+			} else {
+				stream.Timestamp = timestamp
+			}
+		}
 		if rawCommitted, exists := properties[PropertyWorkCommitted]; exists {
 			stream.HasCommittedOffset = true
-			stream.CommittedOffset, _ = strconv.ParseUint(rawCommitted, 10, 64)
+			parseUint(PropertyWorkCommitted, rawCommitted, &stream.CommittedOffset)
 		}
-		stream.WorkAcknowledged, _ = strconv.ParseBool(properties[PropertyWorkAcked])
+		if raw := properties[PropertyWorkAcked]; raw != "" {
+			acknowledged, err := strconv.ParseBool(raw)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("property %q: %w", PropertyWorkAcked, err))
+			} else {
+				stream.WorkAcknowledged = acknowledged
+			}
+		}
 		stream.WorkGroup = properties[PropertyWorkGroup]
-		queue.Stream = stream
+		queue.Stream = Some(*stream)
 	}
 
-	envelope.Broker.Transfer.ID = properties[PropertyTransferID]
-	envelope.Broker.Transfer.FailureReason = properties[PropertyDLQReason]
-	envelope.Broker.Trace = TraceFromProperties(properties)
+	envelope.BrokerMeta.Transfer.ID = properties[PropertyTransferID]
+	envelope.BrokerMeta.Transfer.FailureReason = properties[PropertyDLQReason]
+	envelope.BrokerMeta.Trace = TraceFromProperties(properties)
+
+	return errors.Join(errs...)
 }
 
 // ProjectProperties returns a fresh wire property map. Broker-owned values are
@@ -154,14 +195,22 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 	if envelope == nil {
 		return nil
 	}
-	properties := FilterUserProperties(envelope.User.Properties)
+	properties := envelope.PublisherMeta.Properties.WithoutReserved().Map()
 
-	if projection.Queue && hasQueueProjection(envelope.Broker.Queue) {
+	// The publisher's own identifier travels as user metadata. A queue delivery
+	// overwrites it below with the broker's handle, which is what a consumer
+	// needs to name the record.
+	if envelope.PublisherMeta.MessageID != "" {
 		properties = ensureProperties(properties)
-		projectQueueProperties(properties, envelope.Broker.Source, envelope.Broker.Queue)
+		properties[PropertyMessageID] = envelope.PublisherMeta.MessageID
+	}
+
+	if projection.Queue && hasQueueProjection(envelope.BrokerMeta.Queue) {
+		properties = ensureProperties(properties)
+		projectQueueProperties(properties, envelope.BrokerMeta.Source, envelope.BrokerMeta.Queue)
 	}
 	if projection.Transfer {
-		if transfer := envelope.Broker.Transfer; transfer.ID != "" || transfer.FailureReason != "" {
+		if transfer := envelope.BrokerMeta.Transfer; transfer.ID != "" || transfer.FailureReason != "" {
 			properties = ensureProperties(properties)
 			if transfer.ID != "" {
 				properties[PropertyTransferID] = transfer.ID
@@ -172,7 +221,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 		}
 	}
 	if projection.Source {
-		if source := envelope.Broker.Source; source.ClientID != "" || source.ExternalID != "" || source.Protocol != "" {
+		if source := envelope.BrokerMeta.Source; source.ClientID != "" || source.ExternalID != "" || source.Protocol != "" {
 			properties = ensureProperties(properties)
 			if source.ClientID != "" {
 				properties[PropertyClientID] = source.ClientID
@@ -186,7 +235,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 		}
 	}
 	if projection.Trace {
-		if trace := envelope.Broker.Trace; trace.TraceParent != "" || trace.TraceState != "" || trace.TraceID != "" {
+		if trace := envelope.BrokerMeta.Trace; trace.TraceParent != "" || trace.TraceState != "" || trace.TraceID != "" {
 			properties = ensureProperties(properties)
 			if trace.TraceParent != "" {
 				properties[PropertyTraceParent] = trace.TraceParent
@@ -214,12 +263,15 @@ func ensureProperties(properties map[string]string) map[string]string {
 }
 
 func hasQueueProjection(queue QueueMetadata) bool {
-	return queue.MessageID != "" || queue.Name != "" || queue.GroupID != "" || queue.Stream != nil
+	return queue.Name != "" || queue.GroupID != "" || queue.Stream.IsSet()
 }
 
 func projectQueueProperties(properties map[string]string, source SourceMetadata, queue QueueMetadata) {
-	if queue.MessageID != "" {
-		properties[PropertyMessageID] = queue.MessageID
+	// The broker's delivery handle owns the message-id of a durable delivery. It
+	// is stamped after the user properties, so a publisher's own message-id
+	// cannot be mistaken for the record a consumer is looking at.
+	if handle := queue.DeliveryID(); handle != "" {
+		properties[PropertyMessageID] = handle
 	}
 	if queue.GroupID != "" {
 		properties[PropertyGroupID] = queue.GroupID
@@ -227,13 +279,20 @@ func projectQueueProperties(properties map[string]string, source SourceMetadata,
 	if queue.Name != "" {
 		properties[PropertyQueueName] = queue.Name
 	}
+	// Offset 0 is a real offset, so it is projected unconditionally: omitting it
+	// would make the first record in a queue indistinguishable from a delivery
+	// that carries no offset at all.
 	properties[PropertyOffset] = strconv.FormatUint(queue.Offset, 10)
-	properties[PropertySourceTopic] = source.Topic
+	// An empty source topic is different: there is no message published to "",
+	// so the property said only that the broker had nothing to say.
+	if source.Topic != "" {
+		properties[PropertySourceTopic] = source.Topic
+	}
 
-	if queue.Stream == nil {
+	stream, ok := queue.Stream.Value()
+	if !ok {
 		return
 	}
-	stream := queue.Stream
 	properties[PropertyStreamOffset] = strconv.FormatUint(stream.Offset, 10)
 	if stream.Timestamp != 0 {
 		properties[PropertyStreamTimestamp] = strconv.FormatInt(stream.Timestamp, 10)

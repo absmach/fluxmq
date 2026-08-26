@@ -175,23 +175,27 @@ Queue deliveries include metadata for acknowledgment:
 
 ### MQTT v5 Acknowledgments
 
-Publish to ack/nack/reject topics with required properties:
+Publish to ack/nack/reject topics naming the consumer group and the offset
+being settled. These are inbound command properties, distinct from the
+broker-owned `group-id` and `offset` on the delivery: those names are reserved,
+and client input carrying them is discarded so a publisher cannot forge broker
+state.
 
 ```bash
 # Acknowledge
 mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/$ack' -m '' \
-  -D publish user-property message-id "orders:42" \
-  -D publish user-property group-id "workers"
+  -D publish user-property x-group-id "workers" \
+  -D publish user-property x-offset "42"
 
 # Negative acknowledge (retry)
 mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/$nack' -m '' \
-  -D publish user-property message-id "orders:42" \
-  -D publish user-property group-id "workers"
+  -D publish user-property x-group-id "workers" \
+  -D publish user-property x-offset "42"
 
 # Reject (no retry, future: DLQ)
 mosquitto_pub -V mqttv5 -p 1884 -t '$queue/orders/$reject' -m '' \
-  -D publish user-property message-id "orders:42" \
-  -D publish user-property group-id "workers" \
+  -D publish user-property x-group-id "workers" \
+  -D publish user-property x-offset "42" \
   -D publish user-property reason "invalid payload"
 ```
 

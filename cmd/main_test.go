@@ -18,6 +18,7 @@ import (
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
 	"github.com/absmach/fluxmq/broker/localauth"
 	"github.com/absmach/fluxmq/config"
+	"github.com/absmach/fluxmq/message"
 	queuepkg "github.com/absmach/fluxmq/queue"
 	queueStorage "github.com/absmach/fluxmq/queue/storage"
 	memoryLog "github.com/absmach/fluxmq/queue/storage/memory/log"
@@ -565,10 +566,10 @@ func TestReloadLocalPrincipalsReplacesProtectedTargets(t *testing.T) {
 	if !localStore.AuthorizePublish(reauthenticated, "", securityQueue.Name).Allowed() {
 		t.Fatal("new publish target was not authorized")
 	}
-	if err := queueManager.PublishToDurableStream(ctx, auditQueue.Name, queueTypes.PublishRequest{Payload: []byte("{}")}); !errors.Is(err, queuepkg.ErrQueueNotProtected) {
+	if err := queueManager.PublishToDurableStream(ctx, auditQueue.Name, auditEnvelope(t)); !errors.Is(err, queuepkg.ErrQueueNotProtected) {
 		t.Fatalf("old target publish error = %v, want ErrQueueNotProtected", err)
 	}
-	if err := queueManager.PublishToDurableStream(ctx, securityQueue.Name, queueTypes.PublishRequest{Payload: []byte("{}")}); err != nil {
+	if err := queueManager.PublishToDurableStream(ctx, securityQueue.Name, auditEnvelope(t)); err != nil {
 		t.Fatalf("new target publish error = %v", err)
 	}
 }
@@ -628,4 +629,12 @@ func TestReloadLocalPrincipalsRestoresProtectionWhenSecretLoadFails(t *testing.T
 	if len(contracts) != 1 || contracts[0].Name != auditQueue.Name {
 		t.Fatalf("protected contracts after rollback = %+v, want only %q", contracts, auditQueue.Name)
 	}
+}
+
+// auditEnvelope builds the envelope a protected-stream append borrows.
+func auditEnvelope(t *testing.T) *message.Envelope {
+	t.Helper()
+	envelope := message.New("", []byte("{}"))
+	t.Cleanup(func() { message.Release(envelope) })
+	return envelope
 }

@@ -117,17 +117,17 @@ func TestMessageDispatcherForwardPublishPreservesProperties(t *testing.T) {
 	d := NewMessageDispatcher(mqtt, amqp1, amqp091)
 
 	msg := message.New(testTopicForward, nil)
-	msg.Broker.Source.ClientID = pubProp
+	msg.BrokerMeta.Source.ClientID = pubProp
 	if err := d.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}
-	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].Broker.Source.ClientID != pubProp {
+	if len(mqtt.forwardMsgs) != 1 || mqtt.forwardMsgs[0].BrokerMeta.Source.ClientID != pubProp {
 		t.Fatalf("expected mqtt forward to preserve client_id property, got %+v", mqtt.forwardMsgs)
 	}
-	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].Broker.Source.ClientID != pubProp {
+	if len(amqp1.forwardMsgs) != 1 || amqp1.forwardMsgs[0].BrokerMeta.Source.ClientID != pubProp {
 		t.Fatalf("expected amqp1 forward to preserve client_id property, got %+v", amqp1.forwardMsgs)
 	}
-	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].Broker.Source.ClientID != pubProp {
+	if len(amqp091.forwardMsgs) != 1 || amqp091.forwardMsgs[0].BrokerMeta.Source.ClientID != pubProp {
 		t.Fatalf("expected amqp091 forward to preserve client_id property, got %+v", amqp091.forwardMsgs)
 	}
 }

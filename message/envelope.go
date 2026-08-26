@@ -6,10 +6,9 @@ package message
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"strconv"
 	"time"
 
 	"github.com/absmach/fluxmq/payload"
@@ -26,6 +25,21 @@ const (
 // ErrUnsupportedVersion is returned for zero, legacy, and future envelope
 // versions. This implementation deliberately has no compatibility decoder.
 var ErrUnsupportedVersion = errors.New("unsupported message envelope version")
+
+// ErrUnsupportedProtocol and ErrUnsupportedQueueState identify enum values
+// that cannot be represented by the persisted v1 schema.
+var (
+	ErrUnsupportedProtocol   = errors.New("unsupported message protocol")
+	ErrUnsupportedQueueState = errors.New("unsupported message queue state")
+)
+
+// A metadata blob describes a log record whose value and key the record itself
+// owns. Carrying either inside the blob would leave two sources for one field,
+// with the embedded one silently losing.
+var (
+	ErrMetadataCarriesPayload = errors.New("message envelope metadata carries a payload")
+	ErrMetadataCarriesKey     = errors.New("message envelope metadata carries a publisher key")
+)
 
 // Protocol identifies the ingress protocol without leaking protocol-specific
 // types into the broker core.
@@ -50,121 +64,144 @@ const (
 	QueueStateDLQ       QueueState = "dlq"
 )
 
-// UserMetadata contains publisher-owned message metadata. Protocol adapters
+// PublisherMetadata contains publisher-owned message metadata. Protocol adapters
 // may project only fields their wire format supports.
-type UserMetadata struct {
-	Key             []byte            `json:"key,omitempty"`
-	Headers         map[string][]byte `json:"headers,omitempty"`
-	Properties      map[string]string `json:"properties,omitempty"`
-	ContentType     string            `json:"content_type,omitempty"`
-	ContentEncoding string            `json:"content_encoding,omitempty"`
-	ResponseTopic   string            `json:"response_topic,omitempty"`
-	CorrelationData []byte            `json:"correlation_data,omitempty"`
-	PayloadFormat   *byte             `json:"payload_format,omitempty"`
-	MessageExpiry   *uint32           `json:"message_expiry,omitempty"`
+type PublisherMetadata struct {
+	Key             Binary
+	Headers         HeaderMap
+	Properties      PropertyMap
+	ContentType     string
+	ContentEncoding string
+	ResponseTopic   string
+	CorrelationData Binary
+	PayloadFormat   Optional[byte]
+	MessageExpiry   Optional[uint32]
+
+	// MessageID is the publisher's own identifier, as carried by AMQP's
+	// message-id property. It is user metadata: the broker never reads it and a
+	// publisher may set it to anything. The broker's own handle for a durable
+	// delivery is QueueMetadata.DeliveryID, derived from the queue and offset.
+	MessageID string
 }
 
 // SourceMetadata identifies the authenticated origin. It is broker-owned and
 // never accepted from an untrusted peer as user metadata.
 type SourceMetadata struct {
-	ClientID   string   `json:"client_id,omitempty"`
-	ExternalID string   `json:"external_id,omitempty"`
-	Protocol   Protocol `json:"protocol,omitempty"`
-	Topic      string   `json:"topic,omitempty"`
+	ClientID   string
+	ExternalID string
+	Protocol   Protocol
+	Topic      string
 }
 
 // DeliveryMetadata contains broker delivery and MQTT transaction state.
 type DeliveryMetadata struct {
-	PublishedAt       time.Time `json:"published_at,omitempty"`
-	ExpiresAt         time.Time `json:"expires_at,omitempty"`
-	SubscriptionIDs   []uint32  `json:"subscription_ids,omitempty"`
-	PacketID          uint16    `json:"packet_id,omitempty"`
-	QoS               byte      `json:"qos,omitempty"`
-	InflightDirection byte      `json:"inflight_direction,omitempty"`
-	InflightState     byte      `json:"inflight_state,omitempty"`
-	Retain            bool      `json:"retain,omitempty"`
-	Duplicate         bool      `json:"duplicate,omitempty"`
+	PublishedAt       time.Time
+	ExpiresAt         time.Time
+	SubscriptionIDs   Uint32List
+	PacketID          uint16
+	QoS               byte
+	InflightDirection byte
+	InflightState     byte
+	Retain            bool
+	Duplicate         bool
 }
 
 // StreamMetadata records broker-owned stream projection state.
 type StreamMetadata struct {
-	Offset             uint64 `json:"offset,omitempty"`
-	Timestamp          int64  `json:"timestamp,omitempty"`
-	CommittedOffset    uint64 `json:"committed_offset,omitempty"`
-	HasCommittedOffset bool   `json:"has_committed_offset,omitempty"`
-	WorkAcknowledged   bool   `json:"work_acknowledged,omitempty"`
-	WorkGroup          string `json:"work_group,omitempty"`
+	Offset             uint64
+	Timestamp          int64
+	CommittedOffset    uint64
+	HasCommittedOffset bool
+	WorkAcknowledged   bool
+	WorkGroup          string
 }
 
 // QueueMetadata contains durable-queue identity and lifecycle state.
+//
+// It stores no message identifier. A durable record is named by its queue and
+// offset, and the string form clients see is derived from those by DeliveryID
+// at the protocol boundary. The stored field it replaces held two different
+// things at two different times — a delivery handle written at delivery, and
+// whatever a publisher had put in a message-id property — so neither could be
+// trusted to mean the other.
 type QueueMetadata struct {
-	MessageID   string          `json:"message_id,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	GroupID     string          `json:"group_id,omitempty"`
-	Offset      uint64          `json:"offset,omitempty"`
-	State       QueueState      `json:"state,omitempty"`
-	CreatedAt   time.Time       `json:"created_at,omitempty"`
-	DeliveredAt time.Time       `json:"delivered_at,omitempty"`
-	NextRetryAt time.Time       `json:"next_retry_at,omitempty"`
-	RetryCount  int             `json:"retry_count,omitempty"`
-	ExpiresAt   time.Time       `json:"expires_at,omitempty"`
-	Stream      *StreamMetadata `json:"stream,omitempty"`
+	Name        string
+	GroupID     string
+	Offset      uint64
+	State       QueueState
+	CreatedAt   time.Time
+	DeliveredAt time.Time
+	NextRetryAt time.Time
+	RetryCount  int
+	ExpiresAt   time.Time
+	Stream      Optional[StreamMetadata]
+}
+
+// DeliveryID is the broker's handle for a durable delivery, "<queue>:<offset>".
+// It is derived rather than stored: the queue and the offset are the identity,
+// and any string form is a rendering of them for a protocol that needs one.
+// A record with no queue has no delivery handle.
+func (q QueueMetadata) DeliveryID() string {
+	if q.Name == "" {
+		return ""
+	}
+	return q.Name + ":" + strconv.FormatUint(q.Offset, 10)
 }
 
 // TransferMetadata records a recoverable broker-owned message transfer such
 // as a move to a dead-letter queue.
 type TransferMetadata struct {
-	ID            string    `json:"id,omitempty"`
-	FailureReason string    `json:"failure_reason,omitempty"`
-	FirstAttempt  time.Time `json:"first_attempt,omitempty"`
-	LastAttempt   time.Time `json:"last_attempt,omitempty"`
-	CompletedAt   time.Time `json:"completed_at,omitempty"`
-	SourceQueue   string    `json:"source_queue,omitempty"`
-	SourceGroup   string    `json:"source_group,omitempty"`
-	SourceOffset  uint64    `json:"source_offset,omitempty"`
-	DeliveryCount int       `json:"delivery_count,omitempty"`
+	ID            string
+	FailureReason string
+	FirstAttempt  time.Time
+	LastAttempt   time.Time
+	CompletedAt   time.Time
+	SourceQueue   string
+	SourceGroup   string
+	SourceOffset  uint64
+	DeliveryCount int
 }
 
 // TraceMetadata is a typed broker-owned trace context. It is not a bag of
 // arbitrary user-visible properties.
 type TraceMetadata struct {
-	TraceParent string `json:"trace_parent,omitempty"`
-	TraceState  string `json:"trace_state,omitempty"`
-	TraceID     string `json:"trace_id,omitempty"`
+	TraceParent string
+	TraceState  string
+	TraceID     string
 }
 
 // BrokerMetadata contains state owned exclusively by the broker.
 type BrokerMetadata struct {
-	Source   SourceMetadata   `json:"source,omitempty"`
-	Delivery DeliveryMetadata `json:"delivery,omitempty"`
-	Queue    QueueMetadata    `json:"queue,omitempty"`
-	Transfer TransferMetadata `json:"transfer,omitempty"`
-	Trace    TraceMetadata    `json:"trace,omitempty"`
+	Source   SourceMetadata
+	Delivery DeliveryMetadata
+	Queue    QueueMetadata
+	Transfer TransferMetadata
+	Trace    TraceMetadata
 }
 
 // Envelope is the canonical in-memory and persisted broker message. Payload
 // has exactly one representation: an immutable reference-counted buffer.
 type Envelope struct {
-	Version Version         `json:"version"`
-	Topic   string          `json:"topic"`
-	Payload *payload.Buffer `json:"-"`
-	User    UserMetadata    `json:"user,omitempty"`
-	Broker  BrokerMetadata  `json:"broker,omitempty"`
+	Version       Version
+	Topic         string
+	PublisherMeta PublisherMetadata
+	BrokerMeta    BrokerMetadata
+	payload       *payload.Buffer
 }
 
 // New constructs a Version1 envelope and copies payload into the broker pool.
 func New(topic string, data []byte) *Envelope {
 	envelope := Acquire()
 	envelope.Topic = topic
-	envelope.Payload = payload.FromBytes(data)
+	envelope.payload = payload.FromBytes(data)
 	return envelope
 }
 
 // NewDelivery constructs a Version1 envelope with protocol delivery metadata.
 func NewDelivery(topic string, data []byte, qos byte, retain bool) *Envelope {
 	envelope := New(topic, data)
-	envelope.Broker.Delivery.QoS = qos
-	envelope.Broker.Delivery.Retain = retain
+	envelope.BrokerMeta.Delivery.QoS = qos
+	envelope.BrokerMeta.Delivery.Retain = retain
 	return envelope
 }
 
@@ -173,7 +210,7 @@ func NewDelivery(topic string, data []byte, qos byte, retain bool) *Envelope {
 func NewWithBuffer(topic string, buf *payload.Buffer) *Envelope {
 	envelope := Acquire()
 	envelope.Topic = topic
-	envelope.Payload = buf
+	envelope.payload = buf
 	return envelope
 }
 
@@ -182,18 +219,110 @@ func (e *Envelope) Validate() error {
 	if e == nil {
 		return errors.New("message envelope is nil")
 	}
-	if e.Version != Version1 {
-		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, e.Version)
+	if err := requireVersion1(e.Version); err != nil {
+		return err
+	}
+	if _, err := protocolNumber(e.BrokerMeta.Source.Protocol); err != nil {
+		return err
+	}
+	if _, err := queueStateNumber(e.BrokerMeta.Queue.State); err != nil {
+		return err
+	}
+	return nil
+}
+
+func protocolNumber(protocol Protocol) (uint64, error) {
+	switch protocol {
+	case "":
+		return 0, nil
+	case ProtocolMQTT:
+		return 1, nil
+	case ProtocolAMQP091:
+		return 2, nil
+	case ProtocolAMQP1:
+		return 3, nil
+	case ProtocolHTTP:
+		return 4, nil
+	case ProtocolCoAP:
+		return 5, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", ErrUnsupportedProtocol, protocol)
+	}
+}
+
+func protocolFromNumber(number uint64) (Protocol, error) {
+	switch number {
+	case 0:
+		return "", nil
+	case 1:
+		return ProtocolMQTT, nil
+	case 2:
+		return ProtocolAMQP091, nil
+	case 3:
+		return ProtocolAMQP1, nil
+	case 4:
+		return ProtocolHTTP, nil
+	case 5:
+		return ProtocolCoAP, nil
+	default:
+		return "", fmt.Errorf("%w: %d", ErrUnsupportedProtocol, number)
+	}
+}
+
+func queueStateNumber(state QueueState) (uint64, error) {
+	switch state {
+	case "":
+		return 0, nil
+	case QueueStateQueued:
+		return 1, nil
+	case QueueStateDelivered:
+		return 2, nil
+	case QueueStateAcked:
+		return 3, nil
+	case QueueStateRetry:
+		return 4, nil
+	case QueueStateDLQ:
+		return 5, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", ErrUnsupportedQueueState, state)
+	}
+}
+
+func queueStateFromNumber(number uint64) (QueueState, error) {
+	switch number {
+	case 0:
+		return "", nil
+	case 1:
+		return QueueStateQueued, nil
+	case 2:
+		return QueueStateDelivered, nil
+	case 3:
+		return QueueStateAcked, nil
+	case 4:
+		return QueueStateRetry, nil
+	case 5:
+		return QueueStateDLQ, nil
+	default:
+		return "", fmt.Errorf("%w: %d", ErrUnsupportedQueueState, number)
+	}
+}
+
+// requireVersion1 is the one place a version is checked. It was written out
+// three times, once per decoder, which is three chances for the message or the
+// comparison to drift.
+func requireVersion1(version Version) error {
+	if version != Version1 {
+		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
 	return nil
 }
 
 // PayloadBytes returns an immutable view valid while e owns its reference.
 func (e *Envelope) PayloadBytes() []byte {
-	if e == nil || e.Payload == nil {
+	if e == nil || e.payload == nil {
 		return nil
 	}
-	return e.Payload.Bytes()
+	return e.payload.Bytes()
 }
 
 // StablePayload returns a copy whose lifetime is independent of e.
@@ -203,33 +332,36 @@ func (e *Envelope) StablePayload() []byte {
 
 // SetPayload replaces the payload with a pooled copy of data.
 func (e *Envelope) SetPayload(data []byte) {
-	if e.Payload != nil {
-		e.Payload.Release()
+	if e.payload != nil {
+		e.payload.Release()
 	}
-	e.Payload = payload.FromBytes(data)
+	e.payload = payload.FromBytes(data)
 }
 
 // SetPayloadBuffer replaces the payload and takes ownership of buf's existing
 // reference.
 func (e *Envelope) SetPayloadBuffer(buf *payload.Buffer) {
-	if e.Payload != nil {
-		e.Payload.Release()
+	if e.payload != nil {
+		e.payload.Release()
 	}
-	e.Payload = buf
+	e.payload = buf
 }
 
-// RetainPayload adds one payload reference before an envelope is shared.
-func (e *Envelope) RetainPayload() {
-	if e != nil && e.Payload != nil {
-		e.Payload.Retain()
+// RetainPayload returns an owned payload reference for a packet or other
+// asynchronous holder. The caller must release the returned buffer.
+func (e *Envelope) RetainPayload() *payload.Buffer {
+	if e != nil && e.payload != nil {
+		e.payload.Retain()
+		return e.payload
 	}
+	return nil
 }
 
 // ReleasePayload drops this envelope's payload reference.
 func (e *Envelope) ReleasePayload() {
-	if e != nil && e.Payload != nil {
-		e.Payload.Release()
-		e.Payload = nil
+	if e != nil && e.payload != nil {
+		e.payload.Release()
+		e.payload = nil
 	}
 }
 
@@ -238,14 +370,15 @@ func (e *Envelope) IsExpired() bool {
 	if e == nil {
 		return false
 	}
-	expiresAt := e.Broker.Queue.ExpiresAt
+	expiresAt := e.BrokerMeta.Queue.ExpiresAt
 	if expiresAt.IsZero() {
-		expiresAt = e.Broker.Delivery.ExpiresAt
+		expiresAt = e.BrokerMeta.Delivery.ExpiresAt
 	}
 	return !expiresAt.IsZero() && time.Now().After(expiresAt)
 }
 
-// Clone returns a metadata-deep copy sharing the immutable payload.
+// Clone returns an O(1) metadata copy sharing the immutable payload and
+// immutable metadata collections. Subsequent metadata mutation is copy-on-write.
 func (e *Envelope) Clone() *Envelope {
 	if e == nil {
 		return nil
@@ -253,119 +386,11 @@ func (e *Envelope) Clone() *Envelope {
 	cp := Acquire()
 	cp.Version = e.Version
 	cp.Topic = e.Topic
-	cp.Payload = e.Payload
-	if cp.Payload != nil {
-		cp.Payload.Retain()
+	cp.payload = e.payload
+	if cp.payload != nil {
+		cp.payload.Retain()
 	}
-	if hasUserMetadata(e.User) {
-		cp.User = cloneUserMetadata(e.User)
-	}
-	if e.Broker.Source != (SourceMetadata{}) {
-		cp.Broker.Source = e.Broker.Source
-	}
-	if hasDeliveryMetadata(e.Broker.Delivery) {
-		cp.Broker.Delivery = cloneDeliveryMetadata(e.Broker.Delivery)
-	}
-	if e.Broker.Queue != (QueueMetadata{}) {
-		cp.Broker.Queue = cloneQueueMetadata(e.Broker.Queue)
-	}
-	if e.Broker.Transfer != (TransferMetadata{}) {
-		cp.Broker.Transfer = e.Broker.Transfer
-	}
-	if e.Broker.Trace != (TraceMetadata{}) {
-		cp.Broker.Trace = e.Broker.Trace
-	}
+	cp.PublisherMeta = e.PublisherMeta
+	cp.BrokerMeta = e.BrokerMeta
 	return cp
-}
-
-func hasUserMetadata(user UserMetadata) bool {
-	return len(user.Key) > 0 || len(user.Headers) > 0 || len(user.Properties) > 0 ||
-		user.ContentType != "" || user.ContentEncoding != "" || user.ResponseTopic != "" ||
-		len(user.CorrelationData) > 0 || user.PayloadFormat != nil || user.MessageExpiry != nil
-}
-
-func hasDeliveryMetadata(delivery DeliveryMetadata) bool {
-	return !delivery.PublishedAt.IsZero() || !delivery.ExpiresAt.IsZero() || len(delivery.SubscriptionIDs) > 0 ||
-		delivery.PacketID != 0 || delivery.QoS != 0 || delivery.InflightDirection != 0 ||
-		delivery.InflightState != 0 || delivery.Retain || delivery.Duplicate
-}
-
-func cloneUserMetadata(src UserMetadata) UserMetadata {
-	dst := src
-	dst.Key = bytes.Clone(src.Key)
-	dst.CorrelationData = bytes.Clone(src.CorrelationData)
-	dst.Properties = maps.Clone(src.Properties)
-	if src.Headers != nil {
-		dst.Headers = make(map[string][]byte, len(src.Headers))
-		for key, value := range src.Headers {
-			dst.Headers[key] = bytes.Clone(value)
-		}
-	}
-	if src.PayloadFormat != nil {
-		value := *src.PayloadFormat
-		dst.PayloadFormat = &value
-	}
-	if src.MessageExpiry != nil {
-		value := *src.MessageExpiry
-		dst.MessageExpiry = &value
-	}
-	return dst
-}
-
-func cloneDeliveryMetadata(src DeliveryMetadata) DeliveryMetadata {
-	dst := src
-	dst.SubscriptionIDs = append([]uint32(nil), src.SubscriptionIDs...)
-	return dst
-}
-
-func cloneQueueMetadata(src QueueMetadata) QueueMetadata {
-	dst := src
-	if src.Stream != nil {
-		stream := *src.Stream
-		dst.Stream = &stream
-	}
-	return dst
-}
-
-type persistedEnvelope struct {
-	Version Version        `json:"version"`
-	Topic   string         `json:"topic"`
-	Payload []byte         `json:"payload,omitempty"`
-	User    UserMetadata   `json:"user,omitempty"`
-	Broker  BrokerMetadata `json:"broker,omitempty"`
-}
-
-// MarshalJSON persists only Version1. The payload bytes are read synchronously
-// from their sole in-memory representation without an intermediate copy.
-func (e Envelope) MarshalJSON() ([]byte, error) {
-	if err := (&e).Validate(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(persistedEnvelope{
-		Version: e.Version,
-		Topic:   e.Topic,
-		Payload: e.PayloadBytes(),
-		User:    e.User,
-		Broker:  e.Broker,
-	})
-}
-
-// UnmarshalJSON accepts only Version1 and never attempts a legacy decode.
-func (e *Envelope) UnmarshalJSON(data []byte) error {
-	var stored persistedEnvelope
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return err
-	}
-	if stored.Version != Version1 {
-		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, stored.Version)
-	}
-	if e.Payload != nil {
-		e.Payload.Release()
-	}
-	e.Version = stored.Version
-	e.Topic = stored.Topic
-	e.Payload = payload.FromBytes(stored.Payload)
-	e.User = stored.User
-	e.Broker = stored.Broker
-	return nil
 }

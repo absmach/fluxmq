@@ -4,7 +4,6 @@
 package queue
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/absmach/fluxmq/message"
 	coremessage "github.com/absmach/fluxmq/message"
 	queuev1 "github.com/absmach/fluxmq/pkg/proto/queue/v1"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
@@ -203,14 +203,12 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 func (h *Handler) Append(ctx context.Context, req *connect.Request[queuev1.AppendRequest]) (*connect.Response[queuev1.AppendResponse], error) {
 	msg := req.Msg
 
+	envelope := appendEnvelope(msg.QueueName, msg.Value, msg.Key, msg.Headers)
+	defer message.Release(envelope)
+
 	outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 		QueueName: msg.QueueName,
-		Messages: []types.PublishRequest{{
-			Topic:   msg.QueueName,
-			Payload: msg.Value,
-			Key:     msg.Key,
-			Headers: msg.Headers,
-		}},
+		Envelopes: []*message.Envelope{envelope},
 	})
 	if err != nil {
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
@@ -231,19 +229,19 @@ func (h *Handler) AppendBatch(ctx context.Context, req *connect.Request[queuev1.
 		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errEmptyBatch)
 	}
 
-	publishes := make([]types.PublishRequest, len(msg.Messages))
+	envelopes := make([]*message.Envelope, len(msg.Messages))
 	for i, entry := range msg.Messages {
-		publishes[i] = types.PublishRequest{
-			Topic:   msg.QueueName,
-			Payload: entry.Value,
-			Key:     entry.Key,
-			Headers: entry.Headers,
-		}
+		envelopes[i] = appendEnvelope(msg.QueueName, entry.Value, entry.Key, entry.Headers)
 	}
+	defer func() {
+		for _, envelope := range envelopes {
+			message.Release(envelope)
+		}
+	}()
 
 	outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 		QueueName:   msg.QueueName,
-		Messages:    publishes,
+		Envelopes:   envelopes,
 		AtomicBatch: true,
 	})
 	if err != nil {
@@ -287,18 +285,16 @@ func (h *Handler) AppendQueue(ctx context.Context, stream *connect.ClientStream[
 			)
 		}
 
+		envelope := appendEnvelope(msg.QueueName, msg.Value, msg.Key, msg.Headers)
 		outcome, err := h.manager.StateMachine().Append(ctx, queue.AppendCommand{
 			QueueName: msg.QueueName,
-			Messages: []types.PublishRequest{{
-				Topic:   msg.QueueName,
-				Payload: msg.Value,
-				Key:     msg.Key,
-				Headers: msg.Headers,
-			}},
+			Envelopes: []*message.Envelope{envelope},
 		})
+		message.Release(envelope)
 		if err != nil {
 			return nil, newConnectErrorWithProgress(
-				queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
+				queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset),
+			)
 		}
 
 		if count == 0 {
@@ -311,7 +307,8 @@ func (h *Handler) AppendQueue(ctx context.Context, stream *connect.ClientStream[
 
 	if err := stream.Err(); err != nil {
 		return nil, newConnectErrorWithProgress(
-			queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
+			queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset),
+		)
 	}
 
 	// Same reasoning as AppendBatch: a zero-valued success is indistinguishable
@@ -485,18 +482,18 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 		}
 
 		for _, m := range batch {
-			if !m.Broker.Queue.CreatedAt.Before(target) {
+			if !m.BrokerMeta.Queue.CreatedAt.Before(target) {
 				response := &queuev1.SeekResponse{
-					Offset:     m.Broker.Queue.Offset,
-					Timestamp:  timestamppb.New(m.Broker.Queue.CreatedAt),
-					ExactMatch: m.Broker.Queue.CreatedAt.Equal(target),
+					Offset:     m.BrokerMeta.Queue.Offset,
+					Timestamp:  timestamppb.New(m.BrokerMeta.Queue.CreatedAt),
+					ExactMatch: m.BrokerMeta.Queue.CreatedAt.Equal(target),
 				}
 				releaseMessages(batch)
 				return connect.NewResponse(response), nil
 			}
 		}
 
-		offset = batch[len(batch)-1].Broker.Queue.Offset + 1
+		offset = batch[len(batch)-1].BrokerMeta.Queue.Offset + 1
 		releaseMessages(batch)
 	}
 
@@ -1116,20 +1113,22 @@ func replicationModeToProto(mode types.ReplicationMode) queuev1.ReplicationMode 
 
 func (h *Handler) messageToProto(msg *coremessage.Envelope) *queuev1.Message {
 	protoMsg := &queuev1.Message{
-		Offset:    msg.Broker.Queue.Offset,
-		Timestamp: timestamppb.New(msg.Broker.Queue.CreatedAt),
-		Key:       bytes.Clone(msg.User.Key),
+		Offset:    msg.BrokerMeta.Queue.Offset,
+		Timestamp: timestamppb.New(msg.BrokerMeta.Queue.CreatedAt),
+		Key:       msg.PublisherMeta.Key.Bytes(),
 		Value:     msg.StablePayload(),
 	}
 
-	if len(msg.User.Headers) > 0 || len(msg.User.Properties) > 0 {
-		protoMsg.Headers = make(map[string][]byte, len(msg.User.Headers)+len(msg.User.Properties))
-		for k, v := range msg.User.Properties {
+	if msg.PublisherMeta.Headers.Len() > 0 || msg.PublisherMeta.Properties.Len() > 0 {
+		protoMsg.Headers = make(map[string][]byte, msg.PublisherMeta.Headers.Len()+msg.PublisherMeta.Properties.Len())
+		msg.PublisherMeta.Properties.Range(func(k, v string) bool {
 			protoMsg.Headers[k] = []byte(v)
-		}
-		for k, v := range msg.User.Headers {
-			protoMsg.Headers[k] = bytes.Clone(v)
-		}
+			return true
+		})
+		msg.PublisherMeta.Headers.Range(func(k string, v message.Binary) bool {
+			protoMsg.Headers[k] = v.Bytes()
+			return true
+		})
 	}
 
 	return protoMsg
@@ -1178,4 +1177,13 @@ func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGrou
 		PendingCount: pendingCount,
 		CreatedAt:    timestamppb.New(group.CreatedAt),
 	}
+}
+
+// appendEnvelope builds the envelope one Connect append request names. The
+// command borrows it, so the caller releases it once the append returns.
+func appendEnvelope(queueName string, value, key []byte, headers map[string][]byte) *message.Envelope {
+	envelope := message.New(queueName, value)
+	envelope.PublisherMeta.Key = message.NewBinary(key)
+	envelope.PublisherMeta.Headers = message.NewHeaderMap(headers)
+	return envelope
 }

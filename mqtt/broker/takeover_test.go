@@ -769,14 +769,14 @@ func TestDeliverMessage_EncodesForLeaseVersion(t *testing.T) {
 	defer b.Close()
 
 	v3msg := message.NewDelivery("t", []byte("x"), 1, false)
-	v3msg.Broker.Delivery.PacketID = 1
+	v3msg.BrokerMeta.Delivery.PacketID = 1
 	v3conn := newSyncConn()
 	require.NoError(t, b.DeliverMessage(v3conn, 4, v3msg, nil))
 	require.Len(t, v3conn.writtenPackets(), 1)
 	require.IsType(t, &v3.Publish{}, v3conn.writtenPackets()[0])
 
 	v5msg := message.NewDelivery("t", []byte("x"), 1, false)
-	v5msg.Broker.Delivery.PacketID = 2
+	v5msg.BrokerMeta.Delivery.PacketID = 2
 	v5conn := newSyncConn()
 	require.NoError(t, b.DeliverMessage(v5conn, 5, v5msg, nil))
 	require.Len(t, v5conn.writtenPackets(), 1)
@@ -940,11 +940,11 @@ func TestRestoreInflightFromStorage_PreservesDirection(t *testing.T) {
 
 	const clientID = "c"
 	out := message.NewDelivery("out", nil, 2, false)
-	out.Broker.Delivery.PacketID = 5
-	out.Broker.Delivery.InflightDirection = byte(messages.Outbound)
+	out.BrokerMeta.Delivery.PacketID = 5
+	out.BrokerMeta.Delivery.InflightDirection = byte(messages.Outbound)
 	in := message.NewDelivery("in", nil, 2, false)
-	in.Broker.Delivery.PacketID = 5
-	in.Broker.Delivery.InflightDirection = byte(messages.Inbound)
+	in.BrokerMeta.Delivery.PacketID = 5
+	in.BrokerMeta.Delivery.InflightDirection = byte(messages.Inbound)
 	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Outbound, 5), out))
 	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Inbound, 5), in))
 
@@ -968,11 +968,18 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 
 	state := &clusterv1.SessionState{
 		InflightMessages: []*clusterv1.InflightMessage{
-			{
-				PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound), Payload: []byte("op"),
-				Properties: map[string]string{"x-source-topic": "sensors/temperature", "trace": "abc"},
-			},
-			{PacketId: 5, Topic: "in", Qos: 2, Direction: uint32(messages.Inbound), Payload: []byte("ip")},
+			inflightWire(t, 5, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "out"
+				msg.BrokerMeta.Delivery.QoS = 2
+				msg.SetPayload([]byte("op"))
+				msg.BrokerMeta.Source.Topic = "sensors/temperature"
+				msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"trace": "abc"})
+			}),
+			inflightWire(t, 5, uint32(messages.Inbound), func(msg *message.Envelope) {
+				msg.Topic = "in"
+				msg.BrokerMeta.Delivery.QoS = 2
+				msg.SetPayload([]byte("ip"))
+			}),
 		},
 	}
 	tracker := messages.NewInflightTracker(16)
@@ -982,12 +989,77 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "out", gotOut.Topic)
 	require.Equal(t, "op", string(gotOut.PayloadBytes()), "payload must survive cluster transfer")
-	require.Equal(t, "sensors/temperature", gotOut.Broker.Source.Topic)
-	require.Equal(t, "abc", gotOut.User.Properties["trace"])
+	require.Equal(t, "sensors/temperature", gotOut.BrokerMeta.Source.Topic)
+	trace, ok := gotOut.PublisherMeta.Properties.Get("trace")
+	require.True(t, ok)
+	require.Equal(t, "abc", trace)
 	gotIn, err := tracker.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "in", gotIn.Topic)
 	require.Equal(t, "ip", string(gotIn.PayloadBytes()))
+}
+
+// A session takeover used to flatten each inflight message into a string map,
+// which had no representation for the queue lifecycle. A durable delivery moved
+// to another node with a zero delivery count, no retry deadline and no expiry,
+// so its redelivery limit and TTL restarted from scratch on the new owner.
+func TestRestoreInflightFromTakeover_PreservesQueueLifecycle(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	state := &clusterv1.SessionState{
+		InflightMessages: []*clusterv1.InflightMessage{
+			inflightWire(t, 7, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "$queue/orders/new"
+				msg.BrokerMeta.Delivery.QoS = 1
+				msg.BrokerMeta.Queue.Name = "orders"
+				msg.BrokerMeta.Queue.GroupID = testGroupWorkers
+				msg.BrokerMeta.Queue.Offset = 42
+				msg.BrokerMeta.Queue.State = message.QueueStateDelivered
+				msg.BrokerMeta.Queue.RetryCount = 2
+				msg.BrokerMeta.Queue.NextRetryAt = now.Add(time.Minute)
+				msg.BrokerMeta.Queue.ExpiresAt = now.Add(time.Hour)
+				msg.BrokerMeta.Transfer.ID = "transfer-7"
+			}),
+		},
+	}
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromTakeover(state, tracker))
+
+	got, err := tracker.Ack(7)
+	require.NoError(t, err)
+	require.Equal(t, "orders", got.BrokerMeta.Queue.Name)
+	require.Equal(t, "workers", got.BrokerMeta.Queue.GroupID)
+	require.Equal(t, uint64(42), got.BrokerMeta.Queue.Offset)
+	require.Equal(t, message.QueueStateDelivered, got.BrokerMeta.Queue.State)
+	require.Equal(t, 2, got.BrokerMeta.Queue.RetryCount)
+	require.True(t, got.BrokerMeta.Queue.NextRetryAt.Equal(now.Add(time.Minute)))
+	require.True(t, got.BrokerMeta.Queue.ExpiresAt.Equal(now.Add(time.Hour)))
+	require.Equal(t, "transfer-7", got.BrokerMeta.Transfer.ID)
+}
+
+// A takeover must survive one undecodable entry: the caller aborts session
+// creation on an error, so failing here would lose the whole session rather
+// than one message.
+func TestRestoreInflightFromTakeover_SkipsUndecodableEnvelope(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	state := &clusterv1.SessionState{
+		InflightMessages: []*clusterv1.InflightMessage{
+			{PacketId: 1, Direction: uint32(messages.Outbound), Envelope: []byte{0xff, 0xff, 0xff}},
+			inflightWire(t, 2, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "ok"
+				msg.BrokerMeta.Delivery.QoS = 1
+			}),
+		},
+	}
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromTakeover(state, tracker))
+
+	require.False(t, tracker.Has(1), "an undecodable entry must be dropped")
+	require.True(t, tracker.Has(2), "a decodable entry after it must still be restored")
 }
 
 // TestRestoreInflightFromTakeover_SkipsInvalidDirection guards finding #2: a
@@ -998,8 +1070,14 @@ func TestRestoreInflightFromTakeover_SkipsInvalidDirection(t *testing.T) {
 
 	state := &clusterv1.SessionState{
 		InflightMessages: []*clusterv1.InflightMessage{
-			{PacketId: 1, Topic: "ok", Qos: 1, Direction: uint32(messages.Outbound)},
-			{PacketId: 2, Topic: "bad", Qos: 1, Direction: 99}, // corrupt
+			inflightWire(t, 1, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "ok"
+				msg.BrokerMeta.Delivery.QoS = 1
+			}),
+			inflightWire(t, 2, 99, func(msg *message.Envelope) { // corrupt direction
+				msg.Topic = "bad"
+				msg.BrokerMeta.Delivery.QoS = 1
+			}),
 		},
 	}
 	tracker := messages.NewInflightTracker(16)
@@ -1021,4 +1099,17 @@ func TestSession_AckInbound_UsesDirectionalAck(t *testing.T) {
 	got, err := s.AckInbound(9)
 	require.NoError(t, err)
 	require.Equal(t, "in", got.Topic)
+}
+
+// inflightWire builds the takeover wire form of one inflight entry. The wire
+// carries a whole binary envelope, so the test states what the envelope holds
+// and lets the codec decide how it travels.
+func inflightWire(t *testing.T, packetID, direction uint32, build func(*message.Envelope)) *clusterv1.InflightMessage {
+	t.Helper()
+	msg := message.Acquire()
+	defer message.Release(msg)
+	build(msg)
+	encoded, err := message.MarshalBinary(msg)
+	require.NoError(t, err)
+	return &clusterv1.InflightMessage{PacketId: packetID, Direction: direction, Envelope: encoded}
 }

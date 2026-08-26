@@ -9,18 +9,18 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/message"
-	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
 )
 
 type recordingChannelTopicQueueManager struct {
 	*mockChannelQueueManager
-	captures []qtypes.PublishRequest
+	captures []*message.Envelope
 }
 
-func (m *recordingChannelTopicQueueManager) PublishToMatchingQueues(_ context.Context, publish qtypes.PublishRequest) error {
-	publish.Payload = append([]byte(nil), publish.Payload...)
-	m.captures = append(m.captures, publish)
+// The envelope is only borrowed for the call, so the recorder takes its own
+// reference — which is what the interface asks every implementation to do.
+func (m *recordingChannelTopicQueueManager) PublishToMatchingQueues(_ context.Context, msg *message.Envelope) error {
+	m.captures = append(m.captures, msg.Clone())
 	return nil
 }
 
@@ -37,7 +37,7 @@ func TestPublishCapturesAMQP091PubSubTopic(t *testing.T) {
 	if len(qm.captures) != 1 {
 		t.Fatalf("expected one queue capture, got %d", len(qm.captures))
 	}
-	if got := qm.captures[0].Source.ClientID; got != "amqp091:publisher" {
+	if got := qm.captures[0].BrokerMeta.Source.ClientID; got != "amqp091:publisher" {
 		t.Fatalf("captured client ID = %q", got)
 	}
 }
@@ -48,7 +48,7 @@ type failingTopicQueueManager struct {
 	calls int
 }
 
-func (m *failingTopicQueueManager) PublishToMatchingQueues(_ context.Context, _ qtypes.PublishRequest) error {
+func (m *failingTopicQueueManager) PublishToMatchingQueues(_ context.Context, _ *message.Envelope) error {
 	m.calls++
 	return errors.New("append to queue \"messages\": storage unavailable")
 }

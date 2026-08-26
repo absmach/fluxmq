@@ -275,7 +275,7 @@ func BenchmarkStealSweepWithoutPoison(b *testing.B) {
 		}
 		message.Release(msg)
 		// Hand it back so the next iteration has the same work to do.
-		group.TransferPending(msg.Broker.Queue.Offset, "thief", "owner")
+		group.TransferPending(msg.BrokerMeta.Queue.Offset, "thief", "owner")
 	}
 }
 

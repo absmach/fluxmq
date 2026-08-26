@@ -6,6 +6,8 @@ package mqtt
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,9 +16,18 @@ import (
 )
 
 // Queue user property keys.
+//
+// The broker stamps propMessageID and propGroupID on a delivery; a settlement
+// names the delivery back with propCommitGroupID and propCommitOffset. The two
+// directions use different names on purpose: the outbound names are reserved,
+// and every protocol boundary strips them from client input so a publisher
+// cannot forge broker-owned state.
 const (
 	propMessageID = "message-id"
 	propGroupID   = "group-id"
+
+	propCommitGroupID = "x-group-id"
+	propCommitOffset  = "x-offset"
 )
 
 // QueuePublishOptions configures queue message publishing.
@@ -440,15 +451,35 @@ func (c *Client) sendQueueAck(ctx context.Context, queueName, messageID, groupID
 	// Build ack topic: $queue/{queueName}/{$ack|$nack|$reject}
 	ackTopic := "$queue/" + queueName + "/" + ackType
 
-	// Send with message-id user property (MQTT v5)
+	offset, err := offsetFromMessageID(messageID)
+	if err != nil {
+		return err
+	}
+
+	// Name the delivery in the inbound command namespace (MQTT v5).
 	userProps := map[string]string{
-		propMessageID: messageID,
-		propGroupID:   groupID,
+		propCommitGroupID: groupID,
+		propCommitOffset:  strconv.FormatUint(offset, 10),
 	}
 	if reason != "" && ackType == "$reject" {
 		userProps["reason"] = reason
 	}
 	return c.publishWithUserProperties(ctx, ackTopic, nil, 1, false, userProps)
+}
+
+// offsetFromMessageID recovers the queue offset from the broker's delivery
+// handle, which is "<queue>:<offset>". The queue name can itself contain a
+// colon, so the offset is the part after the last one.
+func offsetFromMessageID(messageID string) (uint64, error) {
+	sep := strings.LastIndexByte(messageID, ':')
+	if sep < 0 || sep == len(messageID)-1 {
+		return 0, fmt.Errorf("%w: %q", ErrQueueAckMalformedMessageID, messageID)
+	}
+	offset, err := strconv.ParseUint(messageID[sep+1:], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q", ErrQueueAckMalformedMessageID, messageID)
+	}
+	return offset, nil
 }
 
 func defaultGroupID(clientID string) string {

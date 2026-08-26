@@ -4,8 +4,6 @@
 package message
 
 import (
-	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/absmach/fluxmq/payload"
@@ -13,62 +11,42 @@ import (
 
 const (
 	testClientID      = "client"
-	testMessageID     = "message"
 	testQueueName     = "queue"
 	testPropertyValue = "value"
 	testSubject       = "subject"
+	testTenant        = "acme"
+	testTenantKey     = "tenant"
+	testTraceKey      = "trace"
 )
 
-func TestEnvelopeJSONRequiresVersion1(t *testing.T) {
+func TestEnvelopeCloneSharesImmutableMetadataAndCopiesOnWrite(t *testing.T) {
 	original := New("devices/1", []byte("payload"))
-	original.Broker.Source = SourceMetadata{ClientID: testClientID, Protocol: ProtocolMQTT}
-	original.User.Properties = map[string]string{"content": "json"}
-	defer Release(original)
-
-	encoded, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded Envelope
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	defer Release(&decoded)
-	if decoded.Version != Version1 || decoded.Topic != original.Topic || string(decoded.PayloadBytes()) != "payload" {
-		t.Fatalf("unexpected decoded envelope: %#v", decoded)
-	}
-
-	for _, raw := range []string{
-		`{"topic":"devices/1","payload":"cGF5bG9hZA=="}`,
-		`{"version":2,"topic":"devices/1"}`,
-	} {
-		var unsupported Envelope
-		if err := json.Unmarshal([]byte(raw), &unsupported); !errors.Is(err, ErrUnsupportedVersion) {
-			t.Fatalf("unmarshal %s error = %v", raw, err)
-		}
-	}
-}
-
-func TestEnvelopeCloneSharesOnlyImmutablePayload(t *testing.T) {
-	original := New("devices/1", []byte("payload"))
-	original.User.Headers = map[string][]byte{"trace": []byte("one")}
-	original.User.Properties = map[string]string{"key": testPropertyValue}
-	original.Broker.Queue.Stream = &StreamMetadata{Offset: 7}
+	original.PublisherMeta.Headers = NewHeaderMap(map[string][]byte{testTraceKey: []byte("one")})
+	original.PublisherMeta.Properties = NewPropertyMap(map[string]string{"key": testPropertyValue})
+	original.BrokerMeta.Queue.Stream = Some(StreamMetadata{Offset: 7})
 	clone := original.Clone()
 
-	if refs := original.Payload.RefCount(); refs != 2 {
+	if refs := original.payload.RefCount(); refs != 2 {
 		t.Fatalf("payload references = %d, want 2", refs)
 	}
-	clone.User.Headers["trace"][0] = 'X'
-	clone.User.Properties["key"] = "changed"
-	clone.Broker.Queue.Stream.Offset = 8
-	if string(original.User.Headers["trace"]) != "one" || original.User.Properties["key"] != testPropertyValue || original.Broker.Queue.Stream.Offset != 7 {
-		t.Fatal("clone aliases mutable metadata")
+	clone.PublisherMeta.Headers = clone.PublisherMeta.Headers.With(testTraceKey, []byte("Xne"))
+	clone.PublisherMeta.Properties = clone.PublisherMeta.Properties.With("key", "changed")
+	stream, ok := clone.BrokerMeta.Queue.Stream.Value()
+	if !ok {
+		t.Fatal("clone lost stream metadata")
+	}
+	stream.Offset = 8
+	clone.BrokerMeta.Queue.Stream = Some(stream)
+
+	originalHeader, _ := original.PublisherMeta.Headers.Get(testTraceKey)
+	originalProperty, _ := original.PublisherMeta.Properties.Get("key")
+	originalStream, _ := original.BrokerMeta.Queue.Stream.Value()
+	if !originalHeader.Equal([]byte("one")) || originalProperty != testPropertyValue || originalStream.Offset != 7 {
+		t.Fatal("copy-on-write mutation changed the source envelope")
 	}
 
 	Release(clone)
-	if refs := original.Payload.RefCount(); refs != 1 {
+	if refs := original.payload.RefCount(); refs != 1 {
 		t.Fatalf("payload references after clone release = %d, want 1", refs)
 	}
 	Release(original)
@@ -77,13 +55,13 @@ func TestEnvelopeCloneSharesOnlyImmutablePayload(t *testing.T) {
 func TestEnvelopePoolReset(t *testing.T) {
 	envelope := Acquire()
 	envelope.Topic = "devices/1"
-	envelope.Payload = payload.FromBytes([]byte("payload"))
-	envelope.User.Properties = map[string]string{"key": testPropertyValue}
+	envelope.payload = payload.FromBytes([]byte("payload"))
+	envelope.PublisherMeta.Properties = NewPropertyMap(map[string]string{"key": testPropertyValue})
 	Release(envelope)
 
 	reused := Acquire()
 	defer Release(reused)
-	if reused.Version != Version1 || reused.Topic != "" || reused.Payload != nil || reused.User.Properties != nil {
+	if reused.Version != Version1 || reused.Topic != "" || reused.payload != nil || reused.PublisherMeta.Properties.Len() != 0 {
 		t.Fatalf("pooled envelope was not reset: %#v", reused)
 	}
 }
@@ -91,17 +69,17 @@ func TestEnvelopePoolReset(t *testing.T) {
 func TestPropertyProjectionTrustBoundary(t *testing.T) {
 	envelope := New("devices/1", nil)
 	defer Release(envelope)
-	envelope.User.Properties = map[string]string{
+	envelope.PublisherMeta.Properties = NewPropertyMap(map[string]string{
 		"user":             "visible",
 		PropertyExternalID: "forged",
 		PropertyTraceID:    "forged",
-	}
-	envelope.Broker.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
-	envelope.Broker.Queue = QueueMetadata{MessageID: testMessageID, Name: testQueueName, Offset: 3}
-	envelope.Broker.Trace.TraceID = "trusted"
+	})
+	envelope.BrokerMeta.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
+	envelope.BrokerMeta.Queue = QueueMetadata{Name: testQueueName, Offset: 3}
+	envelope.BrokerMeta.Trace.TraceID = "trusted"
 
 	public := ProjectProperties(envelope, PublicProjection)
-	if public["user"] != "visible" || public[PropertyMessageID] != testMessageID {
+	if public["user"] != "visible" || public[PropertyMessageID] != testQueueName+":3" {
 		t.Fatalf("public projection lost delivery metadata: %#v", public)
 	}
 	if _, ok := public[PropertyExternalID]; ok {
@@ -129,8 +107,13 @@ func TestEmptyPropertyProjectionDoesNotAllocate(t *testing.T) {
 	}
 }
 
-func TestEnvelopeCloneDoesNotAllocateWithoutMutableMetadata(t *testing.T) {
+// Clone allocates nothing for metadata regardless of shape: all collection
+// storage is immutable and writers replace it through copy-on-write values.
+func TestEnvelopeCloneAllocatesNothing(t *testing.T) {
 	envelope := New("devices/1", make([]byte, 1024))
+	envelope.PublisherMeta.Headers = NewHeaderMap(map[string][]byte{testTraceKey: []byte("one")})
+	envelope.PublisherMeta.Properties = NewPropertyMap(map[string]string{testTenantKey: testTenant})
+	envelope.BrokerMeta.Delivery.SubscriptionIDs = NewUint32List(1, 2, 3)
 	defer Release(envelope)
 	if allocations := testing.AllocsPerRun(1000, func() {
 		clone := envelope.Clone()

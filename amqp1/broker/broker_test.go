@@ -44,20 +44,15 @@ func setupBrokerAndPipe(t *testing.T) (*Broker, *amqpconn.Connection) {
 }
 
 type mockAMQP1QueueLinkManager struct {
-	publishCh  chan qtypes.PublishRequest
+	publishCh  chan *coremessage.Envelope
 	publishErr error
 }
 
-func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, publish qtypes.PublishRequest) error {
+// The envelope is borrowed for the call, so the mock takes its own reference
+// before handing it to a reader on another goroutine.
+func (m *mockAMQP1QueueLinkManager) Publish(_ context.Context, msg *coremessage.Envelope) error {
 	if m.publishCh != nil {
-		cloned := publish
-		if len(publish.Properties) > 0 {
-			cloned.Properties = make(map[string]string, len(publish.Properties))
-			for k, v := range publish.Properties {
-				cloned.Properties[k] = v
-			}
-		}
-		m.publishCh <- cloned
+		m.publishCh <- msg.Clone()
 	}
 	return m.publishErr
 }
@@ -602,7 +597,7 @@ func TestDeliverToClientOmitsReservedProperties(t *testing.T) {
 	attachReceiver(t, b, c, "queue-client", "test/pubsub")
 
 	stored := coremessage.New("test/pubsub", []byte("hello queue"))
-	stored.User.Properties = map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue}
+	stored.PublisherMeta.Properties = coremessage.NewPropertyMap(map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue})
 	go b.DeliverToClient(context.Background(), corebroker.AMQP1ClientPrefix+"queue-client", stored) //nolint:errcheck // delivery error surfaces as a read timeout below
 
 	msg := readDeliveredMessage(t, c)
@@ -692,7 +687,7 @@ func readDeliveredMessage(t *testing.T, c *amqpconn.Connection) *message.Message
 }
 
 func TestQueueTransferCarriesClientID(t *testing.T) {
-	mockQM := &mockAMQP1QueueLinkManager{publishCh: make(chan qtypes.PublishRequest, 1)}
+	mockQM := &mockAMQP1QueueLinkManager{publishCh: make(chan *coremessage.Envelope, 1)}
 	b := New(nil, nil, nil)
 	b.queueLinkManager = mockQM
 	serverConn, clientConn := net.Pipe()
@@ -746,10 +741,13 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 
 	select {
 	case publish := <-mockQM.publishCh:
-		require.Equal(t, PrefixedClientID("sender-client"), publish.Source.ClientID)
-		require.Equal(t, coremessage.ProtocolAMQP1, publish.Source.Protocol)
-		require.Equal(t, testTraceValue, publish.Properties[testTraceKey])
-		require.NotContains(t, publish.Properties, coremessage.PropertyClientID)
+		require.Equal(t, PrefixedClientID("sender-client"), publish.BrokerMeta.Source.ClientID)
+		require.Equal(t, coremessage.ProtocolAMQP1, publish.BrokerMeta.Source.Protocol)
+		trace, ok := publish.PublisherMeta.Properties.Get(testTraceKey)
+		require.True(t, ok)
+		require.Equal(t, testTraceValue, trace)
+		_, leaked := publish.PublisherMeta.Properties.Get(coremessage.PropertyClientID)
+		require.False(t, leaked)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for queue publish")
 	}

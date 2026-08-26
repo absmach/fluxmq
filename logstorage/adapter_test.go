@@ -19,7 +19,7 @@ import (
 
 func queueEnvelope(id, topic string, data []byte) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.Broker.Queue.MessageID = id
+	envelope.PublisherMeta.MessageID = id
 	return envelope
 }
 
@@ -145,14 +145,14 @@ func TestAdapter_ExpiresAtRoundtrip(t *testing.T) {
 
 	expiry := time.Now().Add(5 * time.Minute).Truncate(time.Millisecond)
 	msg := queueEnvelope("1", "$queue/q1/test", []byte("data"))
-	msg.Broker.Queue.ExpiresAt = expiry
+	msg.BrokerMeta.Queue.ExpiresAt = expiry
 
 	offset, err := adapter.Append(ctx, "q1", msg)
 	require.NoError(t, err)
 
 	got, err := adapter.Read(ctx, "q1", offset)
 	require.NoError(t, err)
-	assert.True(t, expiry.Equal(got.Broker.Queue.ExpiresAt))
+	assert.True(t, expiry.Equal(got.BrokerMeta.Queue.ExpiresAt))
 }
 
 func TestAdapter_ExpiresAtZeroNotPersisted(t *testing.T) {
@@ -172,7 +172,7 @@ func TestAdapter_ExpiresAtZeroNotPersisted(t *testing.T) {
 
 	got, err := adapter.Read(ctx, "q1", offset)
 	require.NoError(t, err)
-	assert.True(t, got.Broker.Queue.ExpiresAt.IsZero())
+	assert.True(t, got.BrokerMeta.Queue.ExpiresAt.IsZero())
 }
 
 func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
@@ -187,7 +187,7 @@ func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
 
 	expiry := time.Now().Add(10 * time.Minute).Truncate(time.Millisecond)
 	first := queueEnvelope("1", "$queue/q1/a", []byte("a"))
-	first.Broker.Queue.ExpiresAt = expiry
+	first.BrokerMeta.Queue.ExpiresAt = expiry
 	msgs := []*message.Envelope{first, queueEnvelope("2", "$queue/q1/b", []byte("b"))}
 
 	_, err = adapter.AppendBatch(ctx, "q1", msgs)
@@ -195,11 +195,11 @@ func TestAdapter_ExpiresAtBatchRoundtrip(t *testing.T) {
 
 	got0, err := adapter.Read(ctx, "q1", 0)
 	require.NoError(t, err)
-	assert.True(t, expiry.Equal(got0.Broker.Queue.ExpiresAt))
+	assert.True(t, expiry.Equal(got0.BrokerMeta.Queue.ExpiresAt))
 
 	got1, err := adapter.Read(ctx, "q1", 1)
 	require.NoError(t, err)
-	assert.True(t, got1.Broker.Queue.ExpiresAt.IsZero())
+	assert.True(t, got1.BrokerMeta.Queue.ExpiresAt.IsZero())
 }
 
 func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
@@ -215,13 +215,13 @@ func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
 	firstMessage := queueEnvelope("1", "$queue/api/one", []byte("one"))
 	firstKey := []byte{0x00, 0xff}
 	firstHeaders := map[string][]byte{"binary": {0x00, 0xff}}
-	firstMessage.User.Key = firstKey
-	firstMessage.User.Headers = firstHeaders
+	firstMessage.PublisherMeta.Key = message.NewBinary(firstKey)
+	firstMessage.PublisherMeta.Headers = message.NewHeaderMap(firstHeaders)
 	secondMessage := queueEnvelope("2", "$queue/api/two", []byte("two"))
 	secondKey := []byte("key-2")
 	secondHeaders := map[string][]byte{"text": []byte("value")}
-	secondMessage.User.Key = secondKey
-	secondMessage.User.Headers = secondHeaders
+	secondMessage.PublisherMeta.Key = message.NewBinary(secondKey)
+	secondMessage.PublisherMeta.Headers = message.NewHeaderMap(secondHeaders)
 	messages := []*message.Envelope{firstMessage, secondMessage}
 
 	_, err = adapter.AppendBatch(ctx, "api", messages)
@@ -232,10 +232,10 @@ func TestAdapter_QueueAPIKeyAndBinaryHeadersRoundTrip(t *testing.T) {
 	require.Len(t, got, 2)
 	defer message.Release(got[0])
 	defer message.Release(got[1])
-	assert.Equal(t, firstKey, got[0].User.Key)
-	assert.Equal(t, firstHeaders, got[0].User.Headers)
-	assert.Equal(t, secondKey, got[1].User.Key)
-	assert.Equal(t, secondHeaders, got[1].User.Headers)
+	assert.Equal(t, firstKey, got[0].PublisherMeta.Key.Bytes())
+	assert.Equal(t, firstHeaders, got[0].PublisherMeta.Headers.Map())
+	assert.Equal(t, secondKey, got[1].PublisherMeta.Key.Bytes())
+	assert.Equal(t, secondHeaders, got[1].PublisherMeta.Headers.Map())
 }
 
 func TestAdapterAppendOwnershipContract(t *testing.T) {
@@ -248,17 +248,19 @@ func TestAdapterAppendOwnershipContract(t *testing.T) {
 	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig("owned", "$queue/owned/#")))
 
 	stored := queueEnvelope("1", "$queue/owned/one", []byte("stored"))
-	storedPayload := stored.Payload
+	storedPayload := stored.RetainPayload()
 	_, err = adapter.Append(ctx, "owned", stored)
 	require.NoError(t, err)
-	require.Equal(t, int32(0), storedPayload.RefCount(), "successful append must consume the envelope")
+	require.Equal(t, int32(1), storedPayload.RefCount(), "successful append must consume the envelope")
+	storedPayload.Release()
 
 	rejected := queueEnvelope("2", "$queue/missing/two", []byte("rejected"))
-	rejectedPayload := rejected.Payload
+	rejectedPayload := rejected.RetainPayload()
 	_, err = adapter.Append(ctx, "missing", rejected)
 	require.Error(t, err)
-	require.Equal(t, int32(1), rejectedPayload.RefCount(), "failed append must leave ownership with the caller")
+	require.Equal(t, int32(2), rejectedPayload.RefCount(), "failed append must leave ownership with the caller")
 	message.Release(rejected)
+	rejectedPayload.Release()
 }
 
 func TestAdapter_AppendAndSyncHonorsContextAndReportsDurability(t *testing.T) {

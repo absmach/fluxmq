@@ -99,7 +99,7 @@ func TestV3QoS2DuplicateReleasesUnacceptedMessage(t *testing.T) {
 	require.Zero(t, inflight.baseAddCalls)
 	require.NotNil(t, inflight.rejected)
 	require.Empty(t, inflight.rejected.Topic)
-	require.Nil(t, inflight.rejected.Payload)
+	require.Nil(t, inflight.rejected.PayloadBytes())
 	require.Len(t, conn.packets, 1)
 	require.IsType(t, &v3.PubRec{}, conn.packets[0])
 }
@@ -119,7 +119,7 @@ func TestV5QoS2DuplicateReleasesUnacceptedMessage(t *testing.T) {
 	require.Zero(t, inflight.baseAddCalls)
 	require.NotNil(t, inflight.rejected)
 	require.Empty(t, inflight.rejected.Topic)
-	require.Nil(t, inflight.rejected.Payload)
+	require.Nil(t, inflight.rejected.PayloadBytes())
 	require.Len(t, conn.packets, 1)
 	require.IsType(t, &v5.PubRec{}, conn.packets[0])
 }
@@ -139,6 +139,6 @@ func TestV5QoS2AdmissionFailureReleasesMessage(t *testing.T) {
 	require.Zero(t, inflight.baseAddCalls)
 	require.NotNil(t, inflight.rejected)
 	require.Empty(t, inflight.rejected.Topic)
-	require.Nil(t, inflight.rejected.Payload)
+	require.Nil(t, inflight.rejected.PayloadBytes())
 	require.Empty(t, conn.packets)
 }

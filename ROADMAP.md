@@ -324,7 +324,7 @@ Prioritize the next work by the cost of changing it after 1.0:
    the delivery engine use it directly. Shared behavioral contracts run against
    memory and persistent log storage and across the supported adapter seams.
 3. ~~**Version the message envelope and reserve metadata ownership.**~~
-   **✅ DONE 2026-08-25.** `message.Envelope` is the only in-memory and persisted
+   **✅ DONE 2026-08-26.** `message.Envelope` is the only in-memory and persisted
    broker message. Its strict schema accepts version 1 only—zero, legacy, and
    future versions fail instead of entering a compatibility decoder. User,
    source, delivery, queue/stream, transfer, and trace metadata have distinct
@@ -334,6 +334,11 @@ Prioritize the next work by the cost of changing it after 1.0:
    envelope and one immutable reference-counted payload representation. Explicit
    ownership contracts and tests cover cloning, asynchronous capture, storage,
    session takeover, queue delivery, and protocol metadata/expiry preservation.
+   Metadata collections and optionals are immutable copy-on-write values, so a
+   clone is O(1) without sharing a mutable map, slice, or pointee. Persisted
+   protocol and queue-state values are validated numeric enums, the protobuf
+   conformance fixture is reflection-checked for every declared field and
+   unknown field, and `api/compat/go-message-v1.txt` freezes the final Go shape.
 4. **NEXT — Create one recoverable queue-transition boundary.** DLQ movement is now
    loss-safe but source settlement and destination append are not one atomic
    storage operation. Introduce a durable transition journal/outbox with stable

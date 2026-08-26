@@ -19,7 +19,7 @@ func testEnvelope(topic string, data ...[]byte) *message.Envelope {
 		payload = data[0]
 	}
 	envelope := message.New(topic, payload)
-	envelope.Broker.Delivery.QoS = 1
+	envelope.BrokerMeta.Delivery.QoS = 1
 	return envelope
 }
 
@@ -37,23 +37,26 @@ func TestInflightAddInitialSentAtZero(t *testing.T) {
 func TestInflightReplacementRemoveAndClearReleaseOwnership(t *testing.T) {
 	tracker := NewInflightTracker(10)
 	first := testEnvelope(testTopic, []byte("first"))
-	firstPayload := first.Payload
+	firstPayload := first.RetainPayload()
 	second := testEnvelope(testTopic, []byte("second"))
-	secondPayload := second.Payload
+	secondPayload := second.RetainPayload()
 
 	require.NoError(t, tracker.Add(1, first, Outbound))
 	require.NoError(t, tracker.Add(1, second, Outbound))
-	require.Equal(t, int32(0), firstPayload.RefCount())
-	require.Equal(t, int32(1), secondPayload.RefCount())
+	require.Equal(t, int32(1), firstPayload.RefCount())
+	require.Equal(t, int32(2), secondPayload.RefCount())
 
 	tracker.Remove(1)
-	require.Equal(t, int32(0), secondPayload.RefCount())
+	require.Equal(t, int32(1), secondPayload.RefCount())
+	firstPayload.Release()
+	secondPayload.Release()
 
 	third := testEnvelope(testTopic, []byte("third"))
-	thirdPayload := third.Payload
+	thirdPayload := third.RetainPayload()
 	require.NoError(t, tracker.Add(2, third, Outbound))
 	tracker.Clear()
-	require.Equal(t, int32(0), thirdPayload.RefCount())
+	require.Equal(t, int32(1), thirdPayload.RefCount())
+	thirdPayload.Release()
 	require.Zero(t, tracker.Count())
 }
 
