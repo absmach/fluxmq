@@ -51,31 +51,43 @@ func TestFacadeDelegatesEveryTransition(t *testing.T) {
 		}
 		found[fn.Name.Name] = true
 
-		delegates := false
+		// Delegation takes two shapes: a direct call on m.stateMachine, or a
+		// call on a capability asserted from it. The second exists because
+		// CommandProcessor is frozen, so a transition added after the freeze
+		// lives on an optional interface instead.
+		callsCommand := false
+		derivesFromStateMachine := false
 		reaches := []string{}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			receiver, ok := selector.X.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			switch receiver.Sel.Name {
-			case "stateMachine":
-				if selector.Sel.Name == command {
-					delegates = true
+			switch node := n.(type) {
+			case *ast.TypeAssertExpr:
+				if mentionsStateMachine(node.X) {
+					derivesFromStateMachine = true
 				}
-			case "consumerManager", "queueStore", "groupStore", "records":
-				reaches = append(reaches, receiver.Sel.Name+"."+selector.Sel.Name)
+			case *ast.CallExpr:
+				selector, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if selector.Sel.Name == command {
+					callsCommand = true
+				}
+				receiver, ok := selector.X.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				switch receiver.Sel.Name {
+				case "stateMachine":
+					if selector.Sel.Name == command {
+						derivesFromStateMachine = true
+					}
+				case "consumerManager", "queueStore", "groupStore", "records":
+					reaches = append(reaches, receiver.Sel.Name+"."+selector.Sel.Name)
+				}
 			}
 			return true
 		})
+		delegates := callsCommand && derivesFromStateMachine
 
 		require.True(t, delegates,
 			"Manager.%s must delegate to stateMachine.%s", fn.Name.Name, command)
@@ -87,4 +99,17 @@ func TestFacadeDelegatesEveryTransition(t *testing.T) {
 	for name := range transitionFacadeMethods {
 		require.True(t, found[name], "Manager.%s not found; update transitionFacadeMethods", name)
 	}
+}
+
+// mentionsStateMachine reports whether an expression reads m.stateMachine,
+// including through a conversion such as any(m.stateMachine).
+func mentionsStateMachine(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if selector, ok := n.(*ast.SelectorExpr); ok && selector.Sel.Name == "stateMachine" {
+			found = true
+		}
+		return !found
+	})
+	return found
 }

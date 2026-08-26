@@ -14,20 +14,20 @@ import (
 	"github.com/absmach/fluxmq/queue/storage"
 )
 
-// DefaultDeduplicationWindow bounds how far back a repeated key is recognised.
+// A deduplication key lives exactly as long as the record that carries it.
 //
-// The index is rebuilt by reading records, so an unbounded window would mean
-// reading the whole queue at startup and holding a key for every record ever
-// written. The transfers this protects — a dead-letter move retried after a
-// failed settlement — repeat within seconds, so a window of recent records
-// covers the case that matters at a cost that does not grow with the log.
+// There is one rule, and truncation, deletion and recovery all enforce it: a key
+// is recognised while its record is retained, and forgotten when the record goes.
+// An earlier version bounded recovery to a fixed number of recent records, which
+// made the live index and a rebuilt one disagree — ordinary appends move the tail
+// arbitrarily far while a key stays live in memory, so the same retry was
+// deduplicated before a restart and duplicated after one. Retention already
+// bounds the population, so the window bounded nothing that was not bounded
+// anyway and cost correctness for it.
 //
-// One rule governs a key's lifetime, and append, recovery and truncation all
-// enforce it: a key is recognised while its record is retained and within this
-// many records of the tail. The live index is bounded to the window on append
-// so it cannot remember more than a restart would, and truncation drops keys
-// whose records are gone so it cannot remember a record that is not there.
-const DefaultDeduplicationWindow = 4096
+// The rebuild reads the queue from its head on first use after startup. That is
+// proportional to what the queue retains, which for a dead-letter queue is what
+// its retention policy allows.
 
 // dedupeIndex maps deduplication keys to the offsets already carrying them, for
 // one queue.
@@ -102,25 +102,6 @@ func (d *dedupeIndexes) pruneBelow(queueName string, minOffset uint64) {
 	}
 }
 
-// pruneToWindowLocked bounds the live index to the same distance a rebuild can
-// recover, so a key is recognised for as long before a restart as after one.
-// Callers hold index.mu.
-func (index *dedupeIndex) pruneToWindowLocked(tail uint64) {
-	if uint64(len(index.offsets)) <= uint64(DefaultDeduplicationWindow) {
-		return
-	}
-	if tail <= uint64(DefaultDeduplicationWindow) {
-		return
-	}
-
-	cutoff := tail - uint64(DefaultDeduplicationWindow)
-	for key, offset := range index.offsets {
-		if offset < cutoff {
-			delete(index.offsets, key)
-		}
-	}
-}
-
 // AppendOnce implements storage.DeduplicatingQueueStore.
 //
 // The check and the append are serialised per queue, so two concurrent retries
@@ -174,7 +155,6 @@ func (a *Adapter) appendOnce(
 
 	index.mu.Lock()
 	index.offsets[dedupeKey] = appended
-	index.pruneToWindowLocked(appended + 1)
 	index.mu.Unlock()
 
 	return appended, false, nil
@@ -185,8 +165,10 @@ func (a *Adapter) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey st
 	return a.appendOnce(ctx, queueName, dedupeKey, msg, a.AppendAndSync)
 }
 
-// DeduplicationWindow implements storage.DeduplicatingQueueStore.
-func (a *Adapter) DeduplicationWindow() int { return DefaultDeduplicationWindow }
+// DeduplicationWindow implements storage.DeduplicatingQueueStore. Zero: every
+// record the queue retains is covered, because a key is dropped only when its
+// record is.
+func (a *Adapter) DeduplicationWindow() int { return 0 }
 
 // ensureDedupeIndex rebuilds a queue's index from the tail of its log the first
 // time the queue is used after startup.
@@ -210,12 +192,7 @@ func (a *Adapter) ensureDedupeIndex(ctx context.Context, queueName string, index
 		return fmt.Errorf("read tail for deduplication rebuild: %w", err)
 	}
 
-	start := head
-	if window := uint64(DefaultDeduplicationWindow); tail > start+window {
-		start = tail - window
-	}
-
-	for offset := start; offset < tail; {
+	for offset := head; offset < tail; {
 		batch, err := a.ReadBatch(ctx, queueName, offset, dedupeRebuildBatch)
 		if err != nil {
 			if errors.Is(err, storage.ErrOffsetOutOfRange) {

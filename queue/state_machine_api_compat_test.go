@@ -11,7 +11,6 @@ type v1CommandProcessor interface {
 	Append(context.Context, AppendCommand) (AppendOutcome, error)
 	Consume(context.Context, ConsumeCommand) (ConsumeOutcome, error)
 	CommitConsume(context.Context, CommitConsumeCommand) error
-	CommitOffset(context.Context, CommitOffsetCommand) error
 	Ack(context.Context, AckCommand) (SettlementOutcome, error)
 	Nack(context.Context, NackCommand) (SettlementOutcome, error)
 	Reject(context.Context, RejectCommand) (SettlementOutcome, error)

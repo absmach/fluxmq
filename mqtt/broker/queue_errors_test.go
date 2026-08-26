@@ -166,3 +166,70 @@ func TestMQTTQoS2QueueFailurePreservesInboundUntilRetry(t *testing.T) {
 		})
 	}
 }
+
+// A PUBREL naming a packet identifier the session does not hold must be
+// answered with the reason code the protocol defines for it.
+//
+// Both versions send PUBCOMP — the publisher is waiting to release the packet
+// ID either way — but MQTT 5.0 §3.7.2.1 defines 0x92 for this case, and
+// answering 0x00 tells the publisher a transaction it never had was completed.
+// v3 has no reason codes, so its PUBCOMP is unchanged.
+func TestUnknownPubRelReasonCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		version byte
+		pubrel  func(*Broker, *connCtx) error
+		check   func(*testing.T, packets.ControlPacket)
+	}{
+		{
+			name:    "v3 answers a plain PUBCOMP",
+			version: packets.V311,
+			pubrel: func(b *Broker, conn *connCtx) error {
+				return newV3Handler(b).HandlePubRel(conn, &v3.PubRel{
+					FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+					ID:          42,
+				})
+			},
+			check: func(t *testing.T, packet packets.ControlPacket) {
+				comp, ok := packet.(*v3.PubComp)
+				require.True(t, ok, "expected a v3 PUBCOMP, got %T", packet)
+				require.Equal(t, uint16(42), comp.ID)
+			},
+		},
+		{
+			name:    "v5 answers packet identifier not found",
+			version: packets.V5,
+			pubrel: func(b *Broker, conn *connCtx) error {
+				return newV5Handler(b).HandlePubRel(conn, &v5.PubRel{
+					FixedHeader: packets.FixedHeader{PacketType: packets.PubRelType, QoS: 1},
+					ID:          42,
+				})
+			},
+			check: func(t *testing.T, packet packets.ControlPacket) {
+				comp, ok := packet.(*v5.PubComp)
+				require.True(t, ok, "expected a v5 PUBCOMP, got %T", packet)
+				require.NotNil(t, comp.ReasonCode)
+				require.Equal(t, v5.PubCompPacketIdentifierNotFound, *comp.ReasonCode,
+					"an unknown packet identifier must not be reported as success")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewBroker(nil, nil)
+			defer b.Close()
+
+			s, _, err := b.CreateSession("unknown-pubrel-"+tt.name, tt.version, session.Options{CleanStart: true})
+			require.NoError(t, err)
+			conn := &captureConnection{}
+			_, err = s.Connect(conn)
+			require.NoError(t, err)
+
+			// No PUBLISH preceded this PUBREL, so the session holds nothing.
+			require.NoError(t, tt.pubrel(b, bindConn(s)))
+			require.Len(t, conn.packets, 1)
+			tt.check(t, conn.packets[0])
+		})
+	}
+}

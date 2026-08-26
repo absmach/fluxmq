@@ -17,6 +17,7 @@ import (
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
+	"golang.org/x/sync/errgroup"
 )
 
 // Manager errors.
@@ -28,6 +29,8 @@ var (
 	ErrInvalidOffset                 = errors.New("invalid offset")
 	ErrGroupModeMismatch             = errors.New("consumer group mode mismatch")
 	ErrCommitOffsetOnlyForStreamMode = errors.New("commit offset only supported for stream groups")
+	ErrCommitOffsetNotMonotonic      = errors.New("commit offset cannot move behind the committed position")
+	ErrNackNotSupportedForStream     = errors.New("nack is not supported for stream groups; commit or seek instead")
 	ErrPELFull                       = errors.New("pending entry list at capacity")
 	ErrDLQHandlerUnavailable         = errors.New("dead-letter queue handler unavailable")
 	ErrTransferInProgress            = errors.New("dead-letter transfer already in progress for this entry")
@@ -752,13 +755,34 @@ func (m *Manager) SweepPoison(ctx context.Context) {
 		return
 	}
 
-	for _, ref := range m.poisonWorkList() {
-		if err := ctx.Err(); err != nil {
-			return
-		}
-		m.sweepPoisonEntry(ctx, ref)
+	refs := m.poisonWorkList()
+	if len(refs) == 0 {
+		return
 	}
+
+	// Bounded concurrency, not a serial walk. One destination that is slow or
+	// down would otherwise hold every other queue's transfers behind it for as
+	// long as it takes.
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(poisonSweepConcurrency)
+	for _, ref := range refs {
+		if groupCtx.Err() != nil {
+			break
+		}
+		group.Go(func() error {
+			m.sweepPoisonEntry(groupCtx, ref)
+			return nil
+		})
+	}
+	// The workers never return an error; this waits for them.
+	_ = group.Wait()
 }
+
+// poisonSweepConcurrency bounds how many dead-letter transfers run at once. It
+// is small deliberately: the destinations are queues on this broker, and the
+// point is to stop one slow destination blocking the others, not to saturate
+// storage with transfers of messages nobody is waiting for.
+const poisonSweepConcurrency = 8
 
 // poisonRef names one entry awaiting a dead-letter transfer.
 type poisonRef struct {
@@ -780,7 +804,7 @@ func (m *Manager) poisonWorkList() []poisonRef {
 			continue
 		}
 		for offset, state := range entries {
-			if state.noDestination || time.Now().Before(state.retryAfter) {
+			if time.Now().Before(state.retryAfter) {
 				continue
 			}
 			refs = append(refs, poisonRef{queueName: queueName, groupID: groupID, offset: offset})
@@ -1376,6 +1400,38 @@ func (m *Manager) GetCommittedOffset(ctx context.Context, queueName, groupID str
 
 // CommitOffset explicitly commits an offset for a stream consumer group.
 // This is used when AutoCommit is disabled for manual commit control.
+// AdvanceCommitted moves a stream group's committed position forward under the
+// group's lock, and only forward.
+//
+// The read and the write have to be one operation. Split, two acknowledgements
+// both read the old position and the lower one writes last, so the committed
+// offset goes backwards and the group is redelivered messages it already
+// settled. Both stores assign the value unconditionally, so nothing downstream
+// catches it.
+//
+// A commit that is already covered is not an error: acknowledging twice is
+// ordinary client behaviour, and the second one has nothing to do.
+func (m *Manager) AdvanceCommitted(ctx context.Context, queueName, groupID string, committed uint64) error {
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+
+	cursor := group.CursorView()
+	if committed > cursor.Cursor {
+		return ErrInvalidOffset
+	}
+	if committed <= cursor.Committed {
+		return nil
+	}
+
+	return m.groupStore.UpdateCommitted(ctx, queueName, groupID, committed)
+}
+
 func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error {
 	groupLock := m.groupLocks.KeyPair(queueName, groupID)
 	groupLock.Lock()
@@ -1393,6 +1449,12 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 	cursor := group.CursorView()
 	if offset > cursor.Cursor {
 		return ErrInvalidOffset
+	}
+	if offset < cursor.Committed {
+		// Rewinding is not a commit. Nothing today needs replay, and letting a
+		// commit move the safe point backwards silently redelivers settled
+		// messages; a rewind should be its own named operation if it is wanted.
+		return ErrCommitOffsetNotMonotonic
 	}
 
 	return m.groupStore.UpdateCommitted(ctx, queueName, groupID, offset)

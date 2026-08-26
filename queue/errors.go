@@ -203,6 +203,8 @@ func ClassifyError(err error) Failure {
 		errors.Is(err, ErrAtomicBatchReplicationUnsupported),
 		errors.Is(err, consumer.ErrGroupModeMismatch),
 		errors.Is(err, consumer.ErrCommitOffsetOnlyForStreamMode),
+		errors.Is(err, consumer.ErrCommitOffsetNotMonotonic),
+		errors.Is(err, consumer.ErrNackNotSupportedForStream),
 		errors.Is(err, ErrAckOnlyForAutoCommitStream),
 		errors.Is(err, consumer.ErrDLQHandlerUnavailable),
 		errors.Is(err, consumer.ErrDelayedNackUnsupported):

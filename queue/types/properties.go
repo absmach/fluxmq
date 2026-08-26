@@ -18,5 +18,11 @@ const (
 	PropCommitOffset  = "x-offset"
 
 	// Queue reject metadata.
-	PropRejectReason = "x-reject-reason"
+	//
+	// Unprefixed, unlike its siblings above. That inconsistency is deliberate
+	// now: the name is documented for clients (docs/content/docs/clients/mqtt.md)
+	// and renaming it silently drops the reason from every publisher that
+	// followed those docs. Changing it needs a documentation change and a
+	// migration note, not a tidy-up.
+	PropRejectReason = "reason"
 )

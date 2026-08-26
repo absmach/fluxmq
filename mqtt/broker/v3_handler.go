@@ -385,7 +385,9 @@ func (h *v3Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 		ID:          packetID,
 	}
 
-	if err := h.broker.completeInboundQoS2(s, packetID, "v3_pubrel"); err != nil {
+	// v3 has one PUBCOMP and no reason codes, so an unknown packet ID gets the
+	// same answer as a settled one.
+	if _, err := h.broker.completeInboundQoS2(s, packetID, "v3_pubrel"); err != nil {
 		return err
 	}
 

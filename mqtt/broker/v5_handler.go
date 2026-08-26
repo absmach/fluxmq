@@ -461,8 +461,15 @@ func (h *v5Handler) HandlePubRel(s *connCtx, pkt packets.ControlPacket) error {
 		Properties:  &v5.BasicProperties{},
 	}
 
-	if err := h.broker.completeInboundQoS2(s, packetID, "v5_pubrel"); err != nil {
+	found, err := h.broker.completeInboundQoS2(s, packetID, "v5_pubrel")
+	if err != nil {
 		return err
+	}
+	if !found {
+		// MQTT 5.0 defines 0x92 for a PUBREL naming a packet ID this session
+		// does not hold. Answering 0x00 tells the publisher a transaction it
+		// never had was completed.
+		rc = v5.PubCompPacketIdentifierNotFound
 	}
 
 	return s.WritePacket(comp)

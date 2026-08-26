@@ -4098,3 +4098,71 @@ func TestMoveToDLQReplicatedRequiresLeadership(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, coordinator.appendOnceCalls, "nothing may be replicated without leadership")
 }
+
+// blockingDeleteStore pauses inside DeleteQueue so a test can order the
+// interleave deterministically rather than hope for it.
+type blockingDeleteStore struct {
+	storage.QueueStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDeleteStore) DeleteQueue(ctx context.Context, queueName string) error {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.QueueStore.DeleteQueue(ctx, queueName)
+}
+
+// Installing a protected contract must not overtake a mutation already in
+// flight against that queue.
+//
+// ReplaceProtectedQueueContracts documents that queue mutations are "blocked for
+// the duration, so no operation can enter between persisted-state validation and
+// the registry swap". That guarantee is the lock hold spanning the whole
+// mutation. Narrowed to the contract check alone, the delete completes after
+// protection is installed, and a protected queue is gone.
+func TestProtectedContractInstallWaitsForInFlightMutation(t *testing.T) {
+	ctx := context.Background()
+	contract := protectedAuditQueueConfig()
+
+	base := memlog.New()
+	require.NoError(t, base.CreateQueue(ctx, contract))
+	store := &blockingDeleteStore{
+		QueueStore: base,
+		entered:    make(chan struct{}, 1),
+		release:    make(chan struct{}),
+	}
+
+	manager := NewManager(store, newMockGroupStore(), nil, DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- manager.DeleteQueue(ctx, contract.Name) }()
+	<-store.entered
+
+	// The delete is now past its contract check and inside storage. Installing
+	// protection must not be able to complete while it is.
+	installed := make(chan error, 1)
+	go func() { installed <- manager.ReplaceProtectedQueueContracts(ctx, []types.QueueConfig{contract}) }()
+
+	select {
+	case err := <-installed:
+		t.Fatalf("contract replacement ran to completion (err=%v) while a delete was "+
+			"in flight; it must block for the mutation's duration, or a queue can be "+
+			"validated unprotected, become protected, and be deleted anyway", err)
+	case <-time.After(200 * time.Millisecond):
+		// Correct: the install is waiting for the mutation to finish.
+	}
+
+	close(store.release)
+	<-deleted
+
+	// Whatever the mutation returned, the install ran only after it finished.
+	// That ordering is the guarantee; the two outcomes are then consistent
+	// because the install validates persisted state that the mutation has
+	// already settled.
+	<-installed
+}

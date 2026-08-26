@@ -121,9 +121,14 @@ type Manager struct {
 	distributionMode  DistributionMode
 
 	// protectedQueueContracts contains only queues that back exact internal
-	// publishers. Its lock guards the registry itself and is released before the
-	// caller's storage or replication work; see validateProtectedQueueMutation
-	// for why the check runs against a snapshot rather than under a held lock.
+	// publishers. Its lock spans both contract checks and queue mutations so a
+	// runtime contract replacement cannot race an administrative mutation.
+	//
+	// Narrowing this to the check alone looks like an easy win and is not: the
+	// hold is what makes ReplaceProtectedQueueContracts atomic. Released early,
+	// an already-validated mutation completes after protection is installed, so
+	// an unprotected queue can be validated, become protected, and then be
+	// changed or deleted anyway.
 	protectedQueuesMu       sync.RWMutex
 	protectedQueueContracts map[string]types.QueueConfig
 	protectedQueueConfigErr error
@@ -146,9 +151,15 @@ type Manager struct {
 	subscriptionsMu sync.RWMutex
 	subscriptions   map[string]map[string]*subscriptionRef // clientID -> refKey -> ref
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	stopCh chan struct{}
+
+	// backgroundCancel cancels the context the background workers run under. It
+	// is owned here rather than deferred inside a worker, so Stop can reach a
+	// worker that is blocked in a store or a Raft apply instead of waiting for
+	// it to come back to its own select.
+	backgroundCancel context.CancelFunc
+	stopOnce         sync.Once
+	wg               sync.WaitGroup
 
 	delivery *DeliveryEngine
 
@@ -280,8 +291,9 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		ackDurability = AckDurabilityBuffered
 	}
 
-	// mgr is populated below. Nothing on the record path captures it: the core
-	// is built first precisely so the dead-letter handler does not have to.
+	// mgr is populated below and captured by the record core's registry
+	// callbacks; only the dead-letter handler was freed of it, by closing over
+	// the core instead. Breaking the rest of that cycle is separate work.
 	var mgr *Manager
 
 	protectedQueueContracts, protectedQueueConfigErr := buildProtectedQueueContracts(config.ProtectedQueueContracts)
@@ -294,22 +306,14 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		raftGroupStore.SetForwarder(cl)
 	}
 
-	// The record core depends on stores and policy, not on Manager. Building it
+	// The record core takes stores and policy directly and reaches Manager's
+	// registries through the services interface assigned below. Building it
 	// first is what lets the consumer manager and the state machine each be
-	// constructed once, fully formed, instead of in a degraded mode that later
+	// constructed once, fully formed, rather than in a degraded mode that later
 	// gets overwritten.
-	records := &recordCore{
-		queueStore:        queueStore,
-		groupStore:        raftGroupStore,
-		metrics:           metrics,
-		logger:            logger,
-		config:            config,
-		ackDurability:     ackDurability,
-		storeSupportsSync: storeSupportsSync,
-		protectedContract: func(queueName string) (types.QueueConfig, bool) { return mgr.protectedQueueContract(queueName) },
-		replicationReady:  func(queueName string) error { return mgr.replicationWriteReadiness(queueName) },
-		createQueue:       func(ctx context.Context, cfg types.QueueConfig) error { return mgr.CreateQueue(ctx, cfg) },
-	}
+	records := newRecordCore(queueStore, raftGroupStore, config, metrics, logger)
+	records.ackDurability = ackDurability
+	records.storeSupportsSync = storeSupportsSync
 
 	dlqPrefix := config.DLQTopicPrefix
 	if dlqPrefix == "" {
@@ -393,14 +397,11 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		stateMachine:            machine,
 	}
 
-	// The one dependency that cannot be supplied at construction: the core
-	// schedules delivery, and the engine that performs it needs the state
-	// machine the core backs. Assigned here, before anything is started.
+	// Assigned after construction because the cycle is real: the core wakes
+	// delivery, and the engine that delivers needs the state machine the core
+	// backs. Both happen before anything is started.
 	records.delivery = engine
-
-	// The coordinator can be installed after construction, so it is read
-	// through the Manager rather than copied once.
-	records.replicator = func() queueRaftCoordinator { return mgr.raftCoordinator }
+	records.services = mgr
 
 	mgr.capture = newCaptureDispatcher(
 		config.CaptureWorkers,
@@ -467,6 +468,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Stop is what ends them.
 	m.capture.Start(context.WithoutCancel(ctx))
 
+	// Detached from the caller's context for the same reason capture is, but
+	// cancellable by Stop, which is what lets shutdown interrupt a dead-letter
+	// transfer rather than wait for its destination.
+	backgroundCtx, cancelBackground := context.WithCancel(context.WithoutCancel(ctx))
+	m.backgroundCancel = cancelBackground
+
 	// Dead-lettering must not be optional. This loop is started unconditionally
 	// even though StealEnabled once gated it: work stealing itself happens
 	// inside ClaimBatch and never consulted that flag, so all the flag ever
@@ -474,7 +481,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// mean a deployment with stealing disabled never dead-letters, and its
 	// poison entries accumulate until MaxPELSize stalls the group.
 	m.wg.Add(1)
-	go m.runPoisonSweepLoop() //nolint:contextcheck // goroutine manages its own context lifecycle
+	go m.runPoisonSweepLoop(backgroundCtx)
 
 	// Start consumer cleanup
 	m.wg.Add(1)
@@ -604,6 +611,12 @@ func (m *Manager) Stop() error {
 
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
+		if m.backgroundCancel != nil {
+			// Cancel before waiting. A worker blocked inside a dead-letter
+			// transfer never reaches its select, so closing stopCh alone leaves
+			// Stop waiting for as long as the destination takes.
+			m.backgroundCancel()
+		}
 	})
 
 	m.wg.Wait()
@@ -787,6 +800,10 @@ func (m *Manager) validateProtectedQueueContractsLocked(ctx context.Context, con
 	return nil
 }
 
+// replicationCoordinator implements managerServices. It resolves on each use
+// because a coordinator can be installed after the core is built.
+func (m *Manager) replicationCoordinator() queueRaftCoordinator { return m.raftCoordinator }
+
 // protectedQueueContract copies one registered contract out of the registry so
 // callers can do storage work without holding protectedQueuesMu.
 //
@@ -802,35 +819,6 @@ func (m *Manager) protectedQueueContract(queueName string) (types.QueueConfig, b
 		return types.QueueConfig{}, false
 	}
 	return contract, true
-}
-
-// validateProtectedQueueMutation checks a mutation against the contract registry
-// and releases the lock before returning, so the caller performs its storage and
-// replication work unlocked.
-//
-// The check is therefore against a snapshot. Holding the lock across the work
-// instead — a Raft apply for a replicated queue, bounded only by AckTimeout —
-// stalls every contract reload, and behind that reload every publish waiting on
-// the write lock. A reload landing mid-mutation sees that mutation complete
-// against the contract in force when it was validated, which is the outcome the
-// wider hold produced anyway.
-func (m *Manager) validateProtectedQueueMutation(config types.QueueConfig) error {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-
-	return m.validateProtectedQueueMutationLocked(config)
-}
-
-// protectedQueueDeletionAllowed reports whether a queue may be deleted, holding
-// the registry lock only for the lookup.
-func (m *Manager) protectedQueueDeletionAllowed(queueName string) error {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-
-	if _, protected := m.protectedQueueContracts[queueName]; protected {
-		return fmt.Errorf("%w: queue %q cannot be deleted", ErrProtectedQueueMutation, queueName)
-	}
-	return nil
 }
 
 // storeSupportsDurableSync reports whether one append can be made durable on
@@ -936,7 +924,9 @@ func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.validateQueueAckDurability(config); err != nil {
 		return err
 	}
-	if err := m.validateProtectedQueueMutation(config); err != nil {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
 		return err
 	}
 	if err := m.validateQueueReplication(ctx, config); err != nil {
@@ -980,7 +970,9 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.validateQueueAckDurability(config); err != nil {
 		return err
 	}
-	if err := m.validateProtectedQueueMutation(config); err != nil {
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
 		return err
 	}
 	if err := m.validateQueueReplication(ctx, config); err != nil {
@@ -1051,8 +1043,10 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 
 // DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
-	if err := m.protectedQueueDeletionAllowed(queueName); err != nil {
-		return err
+	m.protectedQueuesMu.RLock()
+	defer m.protectedQueuesMu.RUnlock()
+	if _, protected := m.protectedQueueContracts[queueName]; protected {
+		return fmt.Errorf("%w: queue %q cannot be deleted", ErrProtectedQueueMutation, queueName)
 	}
 
 	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)
@@ -2001,18 +1995,17 @@ func projectPublishMetadata(properties map[string]string, source message.SourceM
 // Raft round trip. Doing that inside a claim meant holding one consumer group's
 // lock for the destination's latency, once per poison entry in the batch, so it
 // runs here instead.
-func (m *Manager) runPoisonSweepLoop() {
+func (m *Manager) runPoisonSweepLoop(ctx context.Context) {
 	defer m.wg.Done()
 
 	ticker := time.NewTicker(m.config.StealInterval)
 	defer ticker.Stop()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	for {
 		select {
 		case <-m.stopCh:
+			return
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			m.consumerManager.SweepPoison(ctx)
@@ -2263,7 +2256,15 @@ func (m *Manager) GetLag(ctx context.Context, queueName, groupID string) (uint64
 // CommitOffset explicitly commits an offset for a stream consumer group.
 // Use when AutoCommit is disabled for manual commit control.
 func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, offset uint64) error {
-	return m.stateMachine.CommitOffset(ctx, CommitOffsetCommand{
+	// Through the optional capability rather than CommandProcessor, which is
+	// frozen. The concrete state machine implements it; a replacement that does
+	// not is refused rather than silently doing nothing.
+	committer, ok := any(m.stateMachine).(OffsetCommitter)
+	if !ok {
+		return fmt.Errorf("%w: command processor cannot commit offsets", ErrInvalidCommand)
+	}
+
+	return committer.CommitOffset(ctx, CommitOffsetCommand{
 		QueueName: queueName,
 		GroupID:   groupID,
 		Offset:    offset,

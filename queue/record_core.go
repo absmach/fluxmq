@@ -40,23 +40,45 @@ func (c *recordCore) appendResolved(ctx context.Context, queueName string, publi
 	return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 }
 
-// newRecordCore builds a core from stores and policy alone. Callers that have a
-// Manager supply its registries through the function fields afterwards; a core
-// without them still appends, it just cannot resolve protected contracts or
-// create a missing dead-letter queue.
+var _ managerServices = (*Manager)(nil)
+
+// unmanagedServices is the managerServices a core has before a Manager is
+// attached: no contracts, no replication, no queue creation. Used by tests and
+// by the delivery engine's own core, neither of which performs those.
+type unmanagedServices struct{}
+
+func (unmanagedServices) protectedQueueContract(string) (types.QueueConfig, bool) {
+	return types.QueueConfig{}, false
+}
+
+func (unmanagedServices) replicationWriteReadiness(string) error { return ErrReplicationUnavailable }
+
+func (unmanagedServices) CreateQueue(context.Context, types.QueueConfig) error {
+	return ErrDLQDisabled
+}
+
+func (unmanagedServices) replicationCoordinator() queueRaftCoordinator { return nil }
+
+// noScheduler drops wake-ups, for a core with no delivery engine behind it.
+type noScheduler struct{}
+
+func (noScheduler) Schedule(string) {}
+
+// newRecordCore builds a core from stores and policy alone. A caller that has a
+// Manager assigns its services afterwards; without them the core still appends,
+// it just cannot resolve protected contracts, replicate, or create a missing
+// dead-letter queue.
 func newRecordCore(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, config Config, metrics *consumer.Metrics, logger *slog.Logger) *recordCore {
 	return &recordCore{
 		queueStore:        queueStore,
 		groupStore:        groupStore,
+		delivery:          noScheduler{},
 		metrics:           metrics,
 		logger:            logger,
 		config:            config,
 		ackDurability:     NormalizeAckDurability(config.AckDurability),
 		storeSupportsSync: storeSupportsDurableSync(queueStore),
-		replicator:        func() queueRaftCoordinator { return nil },
-		protectedContract: func(string) (types.QueueConfig, bool) { return types.QueueConfig{}, false },
-		replicationReady:  func(string) error { return ErrReplicationUnavailable },
-		createQueue:       func(context.Context, types.QueueConfig) error { return ErrDLQDisabled },
+		services:          unmanagedServices{},
 	}
 }
 
@@ -85,27 +107,50 @@ func (c *recordCore) durableStore() (storage.DurableQueueStore, error) {
 // and holding them as callbacks rather than a *Manager keeps the dependency
 // pointing one way. A core that can call back into the facade is the thing this
 // separation was meant to end.
+// deliveryScheduler wakes delivery for a queue once a record has landed.
+//
+// An interface rather than *DeliveryEngine so the core states what it needs —
+// a wake-up — instead of holding the component that performs delivery.
+type deliveryScheduler interface {
+	Schedule(queueName string)
+}
+
+// managerServices are the registries and policies the record core consults but
+// does not own: they live on Manager because they are lifecycle and admin
+// concerns, not record semantics.
+//
+// Declared as an interface rather than reached through closures over the
+// Manager. The dependency is real either way — this is a genuine cycle, since
+// appending wakes delivery and delivery consumes appends — so the honest thing
+// is to name it and let a reader see its shape, not to hide it in four
+// anonymous functions and describe the core as independent.
+type managerServices interface {
+	// protectedQueueContract resolves an exact internal publisher's contract.
+	protectedQueueContract(queueName string) (types.QueueConfig, bool)
+	// replicationWriteReadiness reports whether this node may write to a
+	// replicated queue.
+	replicationWriteReadiness(queueName string) error
+	// CreateQueue creates a queue on demand, for a dead-letter destination that
+	// does not exist yet.
+	CreateQueue(ctx context.Context, config types.QueueConfig) error
+	// replicationCoordinator resolves the coordinator, which can be installed
+	// after the core is built.
+	replicationCoordinator() queueRaftCoordinator
+}
+
 type recordCore struct {
 	queueStore        storage.QueueStore
 	groupStore        storage.ConsumerGroupStore
-	delivery          *DeliveryEngine
+	delivery          deliveryScheduler
 	metrics           *consumer.Metrics
 	logger            *slog.Logger
 	config            Config
 	ackDurability     AckDurability
 	storeSupportsSync bool
 
-	// replicationReady reports whether this node may write to a replicated
-	// queue. protectedContract resolves an exact internal publisher's contract.
-	// createQueue creates a queue on demand, used when a dead-letter
-	// destination does not exist yet.
-	// replicator resolves the replication coordinator on each use, because it
-	// can be installed after the core is built.
-	replicator func() queueRaftCoordinator
-
-	replicationReady  func(queueName string) error
-	protectedContract func(queueName string) (types.QueueConfig, bool)
-	createQueue       func(ctx context.Context, config types.QueueConfig) error
+	// services is assigned once, immediately after the Manager exists and
+	// before anything is started.
+	services managerServices
 }
 
 func (c *recordCore) appendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {
@@ -122,10 +167,10 @@ func (c *recordCore) appendToQueue(ctx context.Context, queueName string, publis
 		return 0, time.Time{}, storage.ErrQueueNotFound
 	}
 	if queueConfig.Replication.Enabled {
-		if err := c.replicationReady(queueName); err != nil {
+		if err := c.services.replicationWriteReadiness(queueName); err != nil {
 			return 0, time.Time{}, err
 		}
-		if !c.replicator().IsLeaderForQueue(queueName) {
+		if !c.services.replicationCoordinator().IsLeaderForQueue(queueName) {
 			return 0, time.Time{}, WithFailure(
 				fmt.Errorf("%w: queue %q is not led by this node", ErrReplicationUnavailable, queueName),
 				Failure{
@@ -196,7 +241,7 @@ func (c *recordCore) appendBatchToQueue(ctx context.Context, queueName string, p
 }
 
 func (c *recordCore) publishToDurableStream(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {
-	expected, protected := c.protectedContract(queueName)
+	expected, protected := c.services.protectedQueueContract(queueName)
 	if !protected {
 		return 0, time.Time{}, fmt.Errorf("%w: %s", ErrQueueNotProtected, queueName)
 	}
@@ -259,14 +304,14 @@ func (c *recordCore) appendConfiguredMessage(ctx context.Context, queueName stri
 		// Raft serializes the caller's envelope and applies a decoded copy. The
 		// original is no longer needed after ApplyAppendWithOptions returns.
 		defer message.Release(msg)
-		if err := c.replicationReady(queueName); err != nil {
+		if err := c.services.replicationWriteReadiness(queueName); err != nil {
 			return 0, err
 		}
-		if !c.replicator().IsLeaderForQueue(queueName) {
+		if !c.services.replicationCoordinator().IsLeaderForQueue(queueName) {
 			return 0, fmt.Errorf("%w: queue %q is not led by this node", ErrReplicationUnavailable, queueName)
 		}
 		syncMode := queueConfig.Replication.Mode != types.ReplicationAsync
-		return c.replicator().ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
+		return c.services.replicationCoordinator().ApplyAppendWithOptions(ctx, queueName, msg, raft.ApplyOptions{
 			SyncMode:   &syncMode,
 			AckTimeout: queueConfig.Replication.AckTimeout,
 		})
@@ -415,7 +460,7 @@ func (c *recordCore) moveToDLQ(ctx context.Context, queueName, groupID string, m
 		newDLQCfg := types.DefaultQueueConfig(dlqQueueName, dlqTopic+"/#")
 		newDLQCfg.DLQConfig.Enabled = false // prevent DLQ chains
 		newDLQCfg.MessageTTL = 0            // DLQ messages don't expire
-		if createErr := c.createQueue(ctx, newDLQCfg); createErr != nil && !errors.Is(createErr, storage.ErrQueueAlreadyExists) {
+		if createErr := c.services.CreateQueue(ctx, newDLQCfg); createErr != nil && !errors.Is(createErr, storage.ErrQueueAlreadyExists) {
 			return fmt.Errorf("create DLQ queue %q: %w", dlqQueueName, createErr)
 		}
 		dlqCfg, err = c.queueStore.GetQueue(ctx, dlqQueueName)
@@ -492,12 +537,15 @@ func (c *recordCore) appendTransferOnce(ctx context.Context, queueName string, c
 
 	deduplicating, ok := c.queueStore.(storage.DeduplicatingQueueStore)
 	if !ok {
-		// A store outside the two this repository ships may not offer the
-		// capability. Refusing the transfer would strand the entry, so it moves
-		// under the weaker at-least-once guarantee instead; the caller learns
-		// this by getting deduplicated=false on every attempt.
-		_, err := c.appendConfiguredMessage(ctx, queueName, config, msg)
-		return false, err
+		// Deduplication is required, not preferred. Falling back to a plain
+		// append recreates exactly the duplicate this path exists to prevent:
+		// the transfer succeeds, the source is settled, and a retry of an
+		// earlier attempt that failed to settle appends the record twice.
+		// Refusing leaves the entry pending for a later attempt, which is
+		// loss-safe; both shipped stores provide the capability, so this is a
+		// misconfiguration rather than a routine condition.
+		message.Release(msg)
+		return false, fmt.Errorf("%w: queue %q", storage.ErrDeduplicationUnsupported, queueName)
 	}
 
 	// AppendOnce consumes the envelope unless it fails, storing it or releasing
@@ -539,17 +587,17 @@ func (c *recordCore) replicateTransferOnce(ctx context.Context, queueName string
 	defer message.Release(msg)
 	topic := msg.Topic
 
-	if c.replicator() == nil {
+	if c.services.replicationCoordinator() == nil {
 		return false, fmt.Errorf("%w: queue %q is replicated but no coordinator is configured", ErrReplicationUnavailable, queueName)
 	}
-	deduplicating, ok := c.replicator().(raft.DeduplicatingLogReplicator)
+	deduplicating, ok := c.services.replicationCoordinator().(raft.DeduplicatingLogReplicator)
 	if !ok {
 		return false, fmt.Errorf("%w: coordinator for queue %q", storage.ErrDeduplicationUnsupported, queueName)
 	}
-	if err := c.replicationReady(queueName); err != nil {
+	if err := c.services.replicationWriteReadiness(queueName); err != nil {
 		return false, err
 	}
-	if !c.replicator().IsLeaderForQueue(queueName) {
+	if !c.services.replicationCoordinator().IsLeaderForQueue(queueName) {
 		return false, fmt.Errorf("%w: queue %q is not led by this node", ErrReplicationUnavailable, queueName)
 	}
 

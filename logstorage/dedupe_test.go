@@ -210,23 +210,102 @@ func TestTruncateDropsKeysForRemovedRecords(t *testing.T) {
 	assert.True(t, duplicated, "a retained record's key must still deduplicate")
 }
 
-// The live index must not recognise a key further back than a rebuild can, or
-// the same retry is deduplicated before a restart and duplicated after one.
-func TestLiveIndexIsBoundedToTheRecoveryWindow(t *testing.T) {
+// A key is recognised for as long as its record is retained, however many
+// records arrive after it. The live index and a rebuilt one must agree: an
+// earlier version bounded the live index to a fixed window, so the same retry
+// was deduplicated before a restart and duplicated after one.
+func TestKeyIsRecognisedWhileItsRecordIsRetained(t *testing.T) {
 	ctx := context.Background()
-	adapter := newDedupeAdapter(t, t.TempDir())
+	base := t.TempDir()
+	adapter := newDedupeAdapter(t, base)
 	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
 
-	_, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("first"))
+	first, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("first"))
 	require.NoError(t, err)
 
-	for i := range DefaultDeduplicationWindow + 1 {
-		_, _, err := adapter.AppendOnce(ctx, testDedupeQueue, "filler-"+strconv.Itoa(i), dedupeEnvelope("filler"))
+	// Ordinary appends move the tail far past the key's record.
+	for range 5000 {
+		_, err := adapter.Append(ctx, testDedupeQueue, dedupeEnvelope("filler"))
 		require.NoError(t, err)
 	}
 
 	_, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
 	require.NoError(t, err)
-	assert.False(t, duplicated,
-		"a key beyond the window must be forgotten while the process runs, as it would be after a restart")
+	assert.True(t, duplicated, "a retained record's key must still be recognised")
+
+	// And a rebuild must reach the same answer.
+	require.NoError(t, adapter.Close())
+	reopened, err := NewAdapter(base, DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	recovered, duplicated, err := reopened.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("after restart"))
+	require.NoError(t, err)
+	assert.True(t, duplicated, "the live index and a rebuilt one must agree")
+	assert.Equal(t, first, recovered)
+}
+
+// Truncation and a deduplicated append must not interleave.
+//
+// Truncation removes the record; the index prune removes its key. Between those
+// two steps a retry can be told its transfer is already present at an offset
+// that no longer holds one, and the caller settles its source against nothing —
+// losing the message this mechanism exists to protect. Every earlier test here
+// was single-threaded and passed while that window was open.
+func TestTruncateDoesNotRaceDeduplicatedAppend(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	const rounds = 200
+
+	var wg sync.WaitGroup
+	failures := make(chan string, rounds)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			// Each round is a distinct transfer, retried once.
+			key := "dlq-" + strconv.Itoa(i)
+			offset, _, err := adapter.AppendOnce(ctx, testDedupeQueue, key, dedupeEnvelope("transfer"))
+			if err != nil {
+				continue
+			}
+
+			retried, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, key, dedupeEnvelope("retry"))
+			if err != nil {
+				continue
+			}
+			if !duplicated {
+				continue
+			}
+
+			// The transfer was reported already present. The caller would now
+			// settle its source, so the record it names has to exist.
+			if _, err := adapter.Read(ctx, testDedupeQueue, retried); err != nil {
+				failures <- "deduplicated against offset " + strconv.FormatUint(retried, 10) +
+					" (first landed at " + strconv.FormatUint(offset, 10) + "): " + err.Error()
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range rounds {
+			tail, err := adapter.Tail(ctx, testDedupeQueue)
+			if err != nil || tail == 0 {
+				continue
+			}
+			_ = adapter.Truncate(ctx, testDedupeQueue, tail)
+		}
+	}()
+
+	wg.Wait()
+	close(failures)
+
+	for failure := range failures {
+		t.Errorf("settled against a record that does not exist: %s", failure)
+	}
 }

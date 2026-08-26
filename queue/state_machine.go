@@ -117,26 +117,16 @@ type ClaimOutcome struct {
 
 // SeekKind selects the coordinate used by a SeekCommand.
 //
-// The values are never persisted or put on a wire — the wire carries its own
-// enum — so they are ints ordered to make the zero value the common case:
-// SeekCommand{} seeks by offset rather than failing as an unset kind.
-type SeekKind int
+// A string, not an int: SeekCommand is part of the frozen command model, and
+// changing the underlying type breaks every external caller that writes
+// SeekKind("offset"). The zero value being invalid is a wart, not a defect
+// worth a breaking change.
+type SeekKind string
 
 const (
-	SeekOffset SeekKind = iota
-	SeekTimestamp
+	SeekOffset    SeekKind = "offset"
+	SeekTimestamp SeekKind = "timestamp"
 )
-
-func (k SeekKind) String() string {
-	switch k {
-	case SeekOffset:
-		return "offset"
-	case SeekTimestamp:
-		return "timestamp"
-	default:
-		return "unknown"
-	}
-}
 
 // SeekCommand resolves an offset without changing group state.
 type SeekCommand struct {
@@ -164,13 +154,22 @@ type CommitOffsetCommand struct {
 	Offset    uint64
 }
 
+// OffsetCommitter records a stream group's processed position.
+//
+// It is a separate optional capability rather than a method on CommandProcessor
+// because that interface is frozen, and API-COMPATIBILITY.md states that adding
+// a method to a frozen Go interface breaks every external implementation. A
+// caller obtains it by asserting on the value StateMachine() returns.
+type OffsetCommitter interface {
+	CommitOffset(context.Context, CommitOffsetCommand) error
+}
+
 // CommandProcessor is the stable protocol-independent queue operation surface.
 // Protocol adapters depend on this interface rather than the concrete machine.
 type CommandProcessor interface {
 	Append(context.Context, AppendCommand) (AppendOutcome, error)
 	Consume(context.Context, ConsumeCommand) (ConsumeOutcome, error)
 	CommitConsume(context.Context, CommitConsumeCommand) error
-	CommitOffset(context.Context, CommitOffsetCommand) error
 	Ack(context.Context, AckCommand) (SettlementOutcome, error)
 	Nack(context.Context, NackCommand) (SettlementOutcome, error)
 	Reject(context.Context, RejectCommand) (SettlementOutcome, error)
@@ -332,9 +331,7 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, err))
 		}
-		if true {
-			s.records.metrics.RecordAck(0)
-		}
+		s.records.metrics.RecordAck(0)
 		settledGroup = group
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
@@ -367,14 +364,17 @@ func (s *stateMachine) Nack(ctx context.Context, command NackCommand) (Settlemen
 		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
-		if group.Mode != types.GroupModeStream {
-			if err := s.consumers.NackWithDelay(ctx, command.QueueName, group.ID, owner, offset, command.Delay); err != nil {
-				return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
-			}
+		if group.Mode == types.GroupModeStream {
+			// A stream group has no pending entry to return, so there is no
+			// transition to perform. Reporting the offset settled told the
+			// caller a redelivery had been arranged when nothing had happened.
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome,
+				fmt.Errorf("nack offset %d: %w", offset, consumer.ErrNackNotSupportedForStream))
 		}
-		if true {
-			s.records.metrics.RecordNack()
+		if err := s.consumers.NackWithDelay(ctx, command.QueueName, group.ID, owner, offset, command.Delay); err != nil {
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
 		}
+		s.records.metrics.RecordNack()
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
 	return s.finishSettlement(ctx, command.QueueName, command.GroupID, outcome)
@@ -593,15 +593,12 @@ func (s *stateMachine) ackStream(ctx context.Context, group *types.ConsumerGroup
 		// that does what they meant.
 		return ErrAckOnlyForAutoCommitStream
 	}
-	cursor := group.CursorView()
-	next := offset + 1
-	if next > cursor.Cursor {
-		return consumer.ErrInvalidOffset
-	}
-	if next <= cursor.Committed {
-		return nil
-	}
-	return s.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, next)
+	// Through the consumer manager, which owns the group lock. Reading the
+	// cursor here and writing the store directly is a read-modify-write with
+	// nothing serialising it: two acknowledgements both read the old position
+	// and the lower one lands last, moving the committed offset backwards and
+	// redelivering messages that were already settled.
+	return s.consumers.AdvanceCommitted(ctx, group.QueueName, group.ID, offset+1)
 }
 
 // partialSettlement enriches an outcome that is being returned with an error so

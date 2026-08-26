@@ -204,10 +204,15 @@ func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueC
 
 // DeleteQueue deletes a queue and all its data.
 func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
+	// Under the queue's deduplication lock for the same reason Truncate is: the
+	// records and their keys must disappear as one operation with respect to a
+	// deduplicated append, and a recreated queue must start with an empty index.
+	queueLock := a.dedupe.locks.Key(queueName)
+	queueLock.Lock()
+	defer queueLock.Unlock()
+
 	// Remove from topic index
 	a.topicIndex.RemoveQueue(queueName)
-	// The records are going; a key without its record must not report a
-	// duplicate, and a recreated queue must start with an empty index.
 	a.dedupe.forget(queueName)
 
 	if err := a.queueStore.Delete(queueName); err != nil {
@@ -421,14 +426,22 @@ func (a *Adapter) Tail(ctx context.Context, queueName string) (uint64, error) {
 }
 
 // Truncate removes all messages with offset < minOffset.
+//
+// It holds the queue's deduplication lock across both the removal and the index
+// prune, because AppendOnce holds that same lock across its check and its
+// append. Without it the two interleave: truncation removes the record, and a
+// concurrent retry still sees the key, reports the transfer already present, and
+// the caller settles its source against a record that no longer exists. Pruning
+// after truncation is not enough on its own — the two have to be one operation
+// with respect to a deduplicated append.
 func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint64) error {
+	queueLock := a.dedupe.locks.Key(queueName)
+	queueLock.Lock()
+	defer queueLock.Unlock()
+
 	if err := a.store.Truncate(queueName, minOffset); err != nil {
 		return err
 	}
-
-	// The records below minOffset are gone; their deduplication keys must go
-	// with them, or a retried transfer is told its record is already present at
-	// an offset that no longer holds one.
 	a.dedupe.pruneBelow(queueName, minOffset)
 
 	return nil

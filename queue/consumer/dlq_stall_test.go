@@ -266,3 +266,50 @@ func TestPoisonTransferDoesNotStallTheClaimPath(t *testing.T) {
 	assert.Less(t, waited, 100*time.Millisecond,
 		"a claim-path operation waited %s on an in-flight dead-letter transfer", waited)
 }
+
+// A blocked dead-letter destination must not hold shutdown open.
+//
+// The sweep runs under a context the manager owns and cancels. Deriving it from
+// context.Background() and cancelling only when the loop returns meant a worker
+// blocked inside a transfer never reached its select, so Stop waited for the
+// destination rather than for the worker.
+func TestSweepPoisonStopsWhenItsContextIsCancelled(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	blocking := func(ctx context.Context, _, _ string, _ *message.Envelope, _ uint64, _ int, _ string) error {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}
+	fixture := newPoisonFixture(t, blocking, nil, NewMetrics())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := fixture.manager.stealWork(ctx, fixture.group, testPoisonThief, nil)
+	require.ErrorIs(t, err, ErrNoMessages)
+
+	swept := make(chan struct{})
+	go func() {
+		fixture.manager.SweepPoison(ctx)
+		close(swept)
+	}()
+	<-entered
+
+	// Shutdown cancels the context; the sweep must return rather than wait for
+	// the destination.
+	cancel()
+
+	select {
+	case <-swept:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SweepPoison did not return after its context was cancelled; shutdown would hang")
+	}
+}
