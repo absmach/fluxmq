@@ -16,8 +16,12 @@ import (
 // appendOne and appendBatch express what the deleted Manager wrappers used to:
 // the vocabulary now lives on the command surface, and these keep the tests
 // readable without reinstating a facade nothing else calls.
+//
+// Neither releases: the command only borrows, and publishEnvelope already owns
+// the envelope and releases it when the test ends. Releasing here too returned
+// the same envelope to the pool twice, so two tests could be handed the same
+// one — which is exactly what the borrowed-envelope tests below detect.
 func appendOne(ctx context.Context, mgr *Manager, queueName string, envelope *message.Envelope) (uint64, error) {
-	defer message.Release(envelope)
 	outcome, err := mgr.StateMachine().Append(ctx, AppendCommand{
 		QueueName: queueName,
 		Envelopes: []*message.Envelope{envelope},
@@ -26,7 +30,6 @@ func appendOne(ctx context.Context, mgr *Manager, queueName string, envelope *me
 }
 
 func appendBatch(ctx context.Context, mgr *Manager, queueName string, envelopes []*message.Envelope) (uint64, uint32, error) {
-	defer releaseEnvelopes(envelopes)
 	outcome, err := mgr.StateMachine().Append(ctx, AppendCommand{
 		QueueName:   queueName,
 		Envelopes:   envelopes,
