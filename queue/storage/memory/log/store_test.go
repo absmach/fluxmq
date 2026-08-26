@@ -71,3 +71,35 @@ func TestStore_AppendPlainPayloadNotCopied(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, msg.Payload, got.Payload, "append must retain the envelope payload without copying")
 }
+
+// The memory store implements the same deduplication contract as the persistent
+// one, so a queue backed by it behaves the same way for a retried transfer.
+// It needs no recovery: the index is lost with the records it describes.
+func TestAppendOnceDeduplicatesAndPrunes(t *testing.T) {
+	ctx := context.Background()
+	store := New()
+	require.NoError(t, store.CreateQueue(ctx, types.DefaultQueueConfig("q", "q/#")))
+
+	first, duplicated, err := store.AppendOnce(ctx, "q", "key", message.New("q", []byte("one")))
+	require.NoError(t, err)
+	require.False(t, duplicated)
+
+	second, duplicated, err := store.AppendOnce(ctx, "q", "key", message.New("q", []byte("two")))
+	require.NoError(t, err)
+	require.True(t, duplicated, "a repeated key must be recognised")
+	require.Equal(t, first, second)
+
+	count, err := store.Count(ctx, "q")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), count)
+
+	// Once the record is truncated away the key must be forgotten: reporting a
+	// duplicate for a record the caller can no longer read would be a lie.
+	require.NoError(t, store.Truncate(ctx, "q", first+1))
+	_, duplicated, err = store.AppendOnce(ctx, "q", "key", message.New("q", []byte("three")))
+	require.NoError(t, err)
+	require.False(t, duplicated, "a key whose record was truncated must not deduplicate")
+
+	_, _, err = store.AppendOnce(ctx, "q", "", message.New("q", []byte("four")))
+	require.Error(t, err, "an append that cannot be deduplicated must be refused")
+}

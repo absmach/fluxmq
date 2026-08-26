@@ -4,6 +4,7 @@
 package badger
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/absmach/fluxmq/message"
@@ -53,7 +54,7 @@ func (m *MessageStore) Get(key string) (*message.Envelope, error) {
 	err := m.db.View(func(txn *badger.Txn) error {
 		item, err := txn.Get([]byte(key))
 		if err != nil {
-			if err == badger.ErrKeyNotFound {
+			if errors.Is(err, badger.ErrKeyNotFound) {
 				return storage.ErrNotFound
 			}
 			return err

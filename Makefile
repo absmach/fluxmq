@@ -339,6 +339,12 @@ proto-baseline-public:
 proto-baseline-internal:
 	buf build --exclude-source-info $(PROTO_INTERNAL_PATHS) -o $(PROTO_INTERNAL_BASELINE)
 
+# Rewrite the frozen Go API baseline. Run only for an intended contract change,
+# and put the resulting diff in the review, exactly as proto-baseline is.
+.PHONY: go-baseline
+go-baseline:
+	go test ./queue -run TestFrozenGoAPIMatchesBaseline -update-api-baseline
+
 # Show help
 .PHONY: help
 help:

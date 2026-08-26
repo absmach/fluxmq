@@ -5,6 +5,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,7 +54,7 @@ func startBroker(t *testing.T, dataDir string, tcpPort int) *testBrokerInstance 
 	stopped := make(chan struct{})
 
 	go func() {
-		if err := tcpServer.Listen(ctx); err != nil && err != context.Canceled {
+		if err := tcpServer.Listen(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			t.Logf("TCP server error: %v", err)
 		}
 		close(stopped)

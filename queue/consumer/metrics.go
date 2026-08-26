@@ -28,6 +28,31 @@ type Metrics struct {
 	// DLQ metrics
 	DLQCount uint64 // Messages moved to DLQ
 
+	// DLQTransferFailures counts poison messages whose dead-letter transfer was
+	// attempted and failed. The entry stays pending and the transfer is retried
+	// under backoff, so a rising count means records are stuck, not lost.
+	DLQTransferFailures uint64
+
+	// PoisonWithoutDLQ counts entries that entered the "no dead-letter
+	// destination" state. It counts transitions, not observations: such an
+	// entry is examined on every steal cycle, and counting those would measure
+	// how often consumers looked rather than how many messages are stuck.
+	PoisonWithoutDLQ uint64
+
+	// PoisonPending and PoisonPendingNoDestination are gauges: how many entries
+	// are stuck right now, and how many of those have nowhere to go.
+	//
+	// The counters above answer "has this happened"; these answer "is it
+	// happening now", which is the question worth alerting on. A counter cannot
+	// serve that purpose here because one permanently stuck message increments
+	// it forever, so its rate tracks consumer activity rather than severity.
+	//
+	// The split matters because the two resolve differently: a failing transfer
+	// clears when the destination recovers, while a queue with no destination
+	// configured stays stuck until someone changes the configuration.
+	PoisonPending              uint64
+	PoisonPendingNoDestination uint64
+
 	// Capture metrics
 	CaptureFailures uint64 // Matching queues a captured publish failed to reach
 	CaptureDropped  uint64 // Capture jobs discarded without being attempted
@@ -88,6 +113,25 @@ func (m *Metrics) RecordReject() {
 // RecordDLQ records a message moved to DLQ.
 func (m *Metrics) RecordDLQ() {
 	atomic.AddUint64(&m.DLQCount, 1)
+}
+
+// RecordDLQTransferFailure records one failed dead-letter transfer of a poison
+// message. The source entry remains pending, so this counts records that are
+// stuck rather than records that were lost.
+func (m *Metrics) RecordDLQTransferFailure() {
+	atomic.AddUint64(&m.DLQTransferFailures, 1)
+}
+
+// RecordPoisonWithoutDLQ records one poison message returned to ordinary
+// redelivery because its queue has no dead-letter destination.
+// SetPoisonPending publishes the current stuck-entry gauges.
+func (m *Metrics) SetPoisonPending(total, withoutDestination uint64) {
+	atomic.StoreUint64(&m.PoisonPending, total)
+	atomic.StoreUint64(&m.PoisonPendingNoDestination, withoutDestination)
+}
+
+func (m *Metrics) RecordPoisonWithoutDLQ() {
+	atomic.AddUint64(&m.PoisonWithoutDLQ, 1)
 }
 
 // RecordCaptureFailure records one matching queue a captured publish failed to
@@ -174,23 +218,28 @@ func (m *Metrics) GetAverageStealLatency() time.Duration {
 // Snapshot returns a copy of current metrics.
 func (m *Metrics) Snapshot() Metrics {
 	return Metrics{
-		ClaimAttempts:     atomic.LoadUint64(&m.ClaimAttempts),
-		ClaimSuccesses:    atomic.LoadUint64(&m.ClaimSuccesses),
-		ClaimFailures:     atomic.LoadUint64(&m.ClaimFailures),
-		StealAttempts:     atomic.LoadUint64(&m.StealAttempts),
-		StealSuccesses:    atomic.LoadUint64(&m.StealSuccesses),
-		StealFailures:     atomic.LoadUint64(&m.StealFailures),
-		AckCount:          atomic.LoadUint64(&m.AckCount),
-		NackCount:         atomic.LoadUint64(&m.NackCount),
-		RejectCount:       atomic.LoadUint64(&m.RejectCount),
-		DLQCount:          atomic.LoadUint64(&m.DLQCount),
-		CaptureFailures:   atomic.LoadUint64(&m.CaptureFailures),
-		CaptureDropped:    atomic.LoadUint64(&m.CaptureDropped),
-		TotalClaimLatency: atomic.LoadUint64(&m.TotalClaimLatency),
-		TotalStealLatency: atomic.LoadUint64(&m.TotalStealLatency),
-		TotalAckLatency:   atomic.LoadUint64(&m.TotalAckLatency),
-		PELSize:           atomic.LoadUint64(&m.PELSize),
-		PELHighWater:      atomic.LoadUint64(&m.PELHighWater),
+		ClaimAttempts:       atomic.LoadUint64(&m.ClaimAttempts),
+		ClaimSuccesses:      atomic.LoadUint64(&m.ClaimSuccesses),
+		ClaimFailures:       atomic.LoadUint64(&m.ClaimFailures),
+		StealAttempts:       atomic.LoadUint64(&m.StealAttempts),
+		StealSuccesses:      atomic.LoadUint64(&m.StealSuccesses),
+		StealFailures:       atomic.LoadUint64(&m.StealFailures),
+		AckCount:            atomic.LoadUint64(&m.AckCount),
+		NackCount:           atomic.LoadUint64(&m.NackCount),
+		RejectCount:         atomic.LoadUint64(&m.RejectCount),
+		DLQCount:            atomic.LoadUint64(&m.DLQCount),
+		DLQTransferFailures: atomic.LoadUint64(&m.DLQTransferFailures),
+		PoisonWithoutDLQ:    atomic.LoadUint64(&m.PoisonWithoutDLQ),
+		PoisonPending:       atomic.LoadUint64(&m.PoisonPending),
+
+		PoisonPendingNoDestination: atomic.LoadUint64(&m.PoisonPendingNoDestination),
+		CaptureFailures:            atomic.LoadUint64(&m.CaptureFailures),
+		CaptureDropped:             atomic.LoadUint64(&m.CaptureDropped),
+		TotalClaimLatency:          atomic.LoadUint64(&m.TotalClaimLatency),
+		TotalStealLatency:          atomic.LoadUint64(&m.TotalStealLatency),
+		TotalAckLatency:            atomic.LoadUint64(&m.TotalAckLatency),
+		PELSize:                    atomic.LoadUint64(&m.PELSize),
+		PELHighWater:               atomic.LoadUint64(&m.PELHighWater),
 	}
 }
 
@@ -206,10 +255,14 @@ func (m *Metrics) Reset() {
 	atomic.StoreUint64(&m.NackCount, 0)
 	atomic.StoreUint64(&m.RejectCount, 0)
 	atomic.StoreUint64(&m.DLQCount, 0)
+	atomic.StoreUint64(&m.DLQTransferFailures, 0)
+	atomic.StoreUint64(&m.PoisonWithoutDLQ, 0)
 	atomic.StoreUint64(&m.CaptureFailures, 0)
 	atomic.StoreUint64(&m.CaptureDropped, 0)
 	atomic.StoreUint64(&m.TotalClaimLatency, 0)
 	atomic.StoreUint64(&m.TotalStealLatency, 0)
 	atomic.StoreUint64(&m.TotalAckLatency, 0)
-	// Don't reset PELSize or PELHighWater
+	// Don't reset PELSize, PELHighWater or the poison gauges: a gauge
+	// describes the present, and zeroing it would report a queue as healthy
+	// while its messages are still stuck.
 }

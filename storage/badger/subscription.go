@@ -5,6 +5,7 @@ package badger
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -47,7 +48,7 @@ func (s *SubscriptionStore) Add(sub *storage.Subscription) error {
 	err = s.db.Update(func(txn *badger.Txn) error {
 		// Check if key exists (for count update)
 		_, err := txn.Get([]byte(key))
-		isNew := err == badger.ErrKeyNotFound
+		isNew := errors.Is(err, badger.ErrKeyNotFound)
 
 		if err := txn.Set([]byte(key), data); err != nil {
 			return err
@@ -70,7 +71,7 @@ func (s *SubscriptionStore) Remove(clientID, filter string) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 		// Check if key exists (for count update)
 		_, err := txn.Get([]byte(key))
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return nil // Already doesn't exist
 		}
 

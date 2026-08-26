@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	headerEnvelope = "_envelope"
+	headerEnvelope  = "_envelope"
+	headerDedupeKey = "_dedupe"
 )
 
 var (
@@ -32,6 +33,7 @@ type Adapter struct {
 	queueStore *QueueConfigStore
 	groupStore *ConsumerGroupStateStore
 	topicIndex *storage.TopicIndex
+	dedupe     *dedupeIndexes
 }
 
 // AdapterConfig holds adapter configuration.
@@ -66,11 +68,20 @@ func NewAdapter(baseDir string, config AdapterConfig) (*Adapter, error) {
 		return nil, err
 	}
 
+	dedupe, err := newDedupeIndexes(baseDir)
+	if err != nil {
+		store.Close()
+		queueStore.Close()
+		groupStore.Close()
+		return nil, err
+	}
+
 	adapter := &Adapter{
 		store:      store,
 		queueStore: queueStore,
 		groupStore: groupStore,
 		topicIndex: storage.NewTopicIndex(),
+		dedupe:     dedupe,
 	}
 
 	// Rebuild topic index from existing queues.
@@ -108,6 +119,10 @@ func reportMalformedFilter(logger func(string, ...any), queueName, filter string
 // Close closes the adapter and underlying store.
 func (a *Adapter) Close() error {
 	var lastErr error
+
+	if err := a.dedupe.state.close(); err != nil {
+		lastErr = err
+	}
 
 	if err := a.groupStore.Close(); err != nil {
 		lastErr = err
@@ -202,13 +217,23 @@ func (a *Adapter) GetQueue(ctx context.Context, queueName string) (*types.QueueC
 
 // DeleteQueue deletes a queue and all its data.
 func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
+	// Under the queue's deduplication lock for the same reason Truncate is: the
+	// records and their keys must disappear as one operation with respect to a
+	// deduplicated append, and a recreated queue must start with an empty index.
+	queueLock := a.dedupe.locks.Key(queueName)
+	queueLock.Lock()
+	defer queueLock.Unlock()
+
 	// Remove from topic index
 	a.topicIndex.RemoveQueue(queueName)
 
 	if err := a.queueStore.Delete(queueName); err != nil {
 		return err
 	}
-	return a.store.DeleteQueue(queueName)
+	if err := a.store.DeleteQueue(queueName); err != nil {
+		return err
+	}
+	return a.dedupe.state.forget(queueName)
 }
 
 // ListQueues returns all queue configurations.
@@ -223,7 +248,7 @@ func (a *Adapter) FindMatchingQueues(ctx context.Context, topic string) ([]strin
 
 func (a *Adapter) queueConfigExists(queueName string) error {
 	if _, err := a.queueStore.Get(queueName); err != nil {
-		if err == ErrQueueNotFound {
+		if errors.Is(err, ErrQueueNotFound) {
 			return storage.ErrQueueNotFound
 		}
 		return err
@@ -236,7 +261,11 @@ func encodeMessage(envelope *message.Envelope) ([]byte, []byte, map[string][]byt
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("encode queue envelope metadata: %w", err)
 	}
-	return envelope.PayloadBytes(), envelope.User.Key, map[string][]byte{headerEnvelope: metadata}, nil
+	headers := map[string][]byte{headerEnvelope: metadata}
+	if envelope.Broker.Transfer.ID != "" {
+		headers[headerDedupeKey] = []byte(envelope.Broker.Transfer.ID)
+	}
+	return envelope.PayloadBytes(), envelope.User.Key, headers, nil
 }
 
 // Append adds a message to the end of a queue's log.
@@ -324,10 +353,10 @@ func (a *Adapter) AppendBatch(ctx context.Context, queueName string, msgs []*mes
 func (a *Adapter) Read(ctx context.Context, queueName string, offset uint64) (*message.Envelope, error) {
 	msg, err := a.store.Read(queueName, offset)
 	if err != nil {
-		if err == ErrOffsetOutOfRange {
+		if errors.Is(err, ErrOffsetOutOfRange) {
 			return nil, storage.ErrOffsetOutOfRange
 		}
-		if err == ErrQueueNotFound {
+		if errors.Is(err, ErrQueueNotFound) {
 			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
@@ -344,7 +373,7 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 
 	tail, err := a.store.Tail(queueName)
 	if err != nil {
-		if err == ErrQueueNotFound {
+		if errors.Is(err, ErrQueueNotFound) {
 			return nil, storage.ErrQueueNotFound
 		}
 		return nil, err
@@ -360,10 +389,10 @@ func (a *Adapter) ReadBatch(ctx context.Context, queueName string, startOffset u
 	for current < tail && len(result) < limit {
 		batch, err := a.store.ReadBatch(queueName, current)
 		if err != nil {
-			if err == ErrOffsetOutOfRange {
+			if errors.Is(err, ErrOffsetOutOfRange) {
 				break
 			}
-			if err == ErrQueueNotFound {
+			if errors.Is(err, ErrQueueNotFound) {
 				releaseEnvelopes(result)
 				return nil, storage.ErrQueueNotFound
 			}
@@ -416,8 +445,23 @@ func (a *Adapter) Tail(ctx context.Context, queueName string) (uint64, error) {
 }
 
 // Truncate removes all messages with offset < minOffset.
+//
+// It holds the queue's deduplication lock across both the removal and the index
+// prune, because AppendOnce holds that same lock across its check and its
+// append. Without it the two interleave: truncation removes the record, and a
+// concurrent retry still sees the key, reports the transfer already present, and
+// the caller settles its source against a record that no longer exists. Pruning
+// after truncation is not enough on its own — the two have to be one operation
+// with respect to a deduplicated append.
 func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint64) error {
-	return a.store.Truncate(queueName, minOffset)
+	queueLock := a.dedupe.locks.Key(queueName)
+	queueLock.Lock()
+	defer queueLock.Unlock()
+
+	if err := a.store.Truncate(queueName, minOffset); err != nil {
+		return err
+	}
+	return a.dedupe.state.pruneBelow(queueName, minOffset)
 }
 
 // Count returns the number of messages in a queue.
@@ -506,7 +550,7 @@ func (a *Adapter) AddPendingEntry(ctx context.Context, queueName, groupID string
 // RemovePendingEntry removes an entry from a consumer's PEL.
 func (a *Adapter) RemovePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error {
 	if err := a.store.AckPending(queueName, groupID, offset); err != nil {
-		if err == ErrPELEntryNotFound {
+		if errors.Is(err, ErrPELEntryNotFound) {
 			return storage.ErrPendingEntryNotFound
 		}
 		return err
@@ -560,7 +604,7 @@ func (a *Adapter) GetAllPendingEntries(ctx context.Context, queueName, groupID s
 // TransferPendingEntry moves a pending entry from one consumer to another.
 func (a *Adapter) TransferPendingEntry(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error {
 	if err := a.store.ClaimPending(queueName, groupID, offset, toConsumer); err != nil {
-		if err == ErrPELEntryNotFound {
+		if errors.Is(err, ErrPELEntryNotFound) {
 			return storage.ErrPendingEntryNotFound
 		}
 		return err
@@ -584,8 +628,8 @@ func (a *Adapter) RequeuePendingEntry(ctx context.Context, queueName, groupID, c
 	if err != nil {
 		return err
 	}
-	entry, owner := group.FindPending(offset)
-	if entry == nil {
+	_, owner := group.FindPending(offset)
+	if owner == "" {
 		return storage.ErrPendingEntryNotFound
 	}
 	if owner != consumerID {
@@ -597,8 +641,11 @@ func (a *Adapter) RequeuePendingEntry(ctx context.Context, queueName, groupID, c
 		}
 		return err
 	}
-	entry.ClaimedAt = attemptedAt
-	entry.DeliveryCount++
+	// Through the group's lock: the entry used to be mutated here through a
+	// pointer FindPending handed out, racing every reader and the encoder.
+	if !group.RequeuePending(offset, consumerID, attemptedAt) {
+		return storage.ErrPendingEntryNotFound
+	}
 	return a.groupStore.Save(group)
 }
 
@@ -611,9 +658,7 @@ func (a *Adapter) UpdateCursor(ctx context.Context, queueName, groupID string, c
 	// Update the group state's cursor as well
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		c := group.GetCursor()
-		c.Cursor = cursor
-		group.UpdatedAt = time.Now()
+		group.SetCursorPosition(cursor)
 		if err := a.groupStore.Save(group); err != nil {
 			return err
 		}
@@ -631,12 +676,7 @@ func (a *Adapter) UpdateCommitted(ctx context.Context, queueName, groupID string
 	// the underlying PEL.
 	group, err := a.groupStore.Get(queueName, groupID)
 	if err == nil {
-		c := group.GetCursor()
-		if committed > c.Cursor {
-			c.Cursor = committed
-		}
-		c.Committed = committed
-		group.UpdatedAt = time.Now()
+		group.AdvanceCommitted(committed)
 		if err := a.groupStore.Save(group); err != nil {
 			return err
 		}
@@ -707,8 +747,7 @@ func (a *Adapter) syncCursorsFromStore(queueName, groupID string, group *types.C
 		return
 	}
 
-	c := group.GetCursor()
-	c.Cursor = cursorState.Cursor
+	group.SetCursorPosition(cursorState.Cursor)
 }
 
 // syncPELFromStore syncs PEL state from the log store to the group state.

@@ -29,3 +29,32 @@ Refresh only after the schema change has been reviewed, and commit the
 regenerated image together with the `.proto` change it corresponds to. A
 baseline refreshed in its own commit, ahead of the change it permits, defeats
 the check.
+
+## Go API baseline
+
+`go-queue-v1.txt` renders the exported Go surface that this document freezes:
+`queue.CommandProcessor`, the optional capabilities beside it, and the typed
+command and outcome values. It is generated and checked by
+`TestFrozenGoAPIMatchesBaseline` in the `queue` package.
+
+It exists because the compile-time guards cannot see what they promise to
+guard. `queue/state_machine_api_compat_test.go` duplicates the interface and
+assigns it in both directions, which pins the method set — but it names the
+live command types, so adding a field to a command, or changing an enum's
+underlying type, satisfies it unchanged. A `SeekKind` string-to-int change
+passed that guard.
+
+Record an intended change with:
+
+```
+go test ./queue -run TestFrozenGoAPIMatchesBaseline -update-api-baseline
+```
+
+and put the baseline diff in the review, exactly as a `proto-baseline` refresh
+is reviewed.
+
+Protocol property names are pinned separately, by
+`TestProtocolPropertyNamesAreFrozen` in `message` and
+`TestCommandPropertyNamesAreFrozen` in `queue/types`. They are literal tables
+rather than a rendering: a client reads and writes those strings, so the value
+is the contract, and comparing a constant to itself would pass through a rename.

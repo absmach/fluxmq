@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// Outbound delivery properties: fields the broker stamps on a message it
+// delivers. The broker owns their values and a client reads them.
+//
+// The inbound direction lives in queue/types/properties.go, which holds the
+// fields a client sets on a queue command. The two are deliberately separate
+// namespaces with different literals; see that file for why.
 const (
 	PropertyClientID   = "client_id"
 	PropertyExternalID = "external_id"

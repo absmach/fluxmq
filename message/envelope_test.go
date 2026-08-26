@@ -14,6 +14,7 @@ import (
 const (
 	testClientID      = "client"
 	testMessageID     = "message"
+	testQueueName     = "queue"
 	testPropertyValue = "value"
 	testSubject       = "subject"
 )
@@ -96,7 +97,7 @@ func TestPropertyProjectionTrustBoundary(t *testing.T) {
 		PropertyTraceID:    "forged",
 	}
 	envelope.Broker.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
-	envelope.Broker.Queue = QueueMetadata{MessageID: testMessageID, Name: "queue", Offset: 3}
+	envelope.Broker.Queue = QueueMetadata{MessageID: testMessageID, Name: testQueueName, Offset: 3}
 	envelope.Broker.Trace.TraceID = "trusted"
 
 	public := ProjectProperties(envelope, PublicProjection)

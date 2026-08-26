@@ -49,12 +49,13 @@ func (b *Broker) expireSessions() {
 	})
 
 	for _, clientID := range toDelete {
-		b.sessionLocks.Lock(clientID)
+		sessionLock := b.sessionLocks.Key(clientID)
+		sessionLock.Lock()
 		s := b.sessionsMap.Get(clientID)
 		if s != nil {
 			b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup during expired session sweep
 		}
-		b.sessionLocks.Unlock(clientID)
+		sessionLock.Unlock()
 	}
 }
 

@@ -126,6 +126,22 @@ type queueAckStats struct {
 	Nack   uint64 `json:"nack"`
 	Reject uint64 `json:"reject"`
 	DLQ    uint64 `json:"dlq"`
+
+	// DLQTransferFailures counts dead-letter transfers that could not be
+	// completed, and PoisonWithoutDLQ counts poison messages returned to
+	// ordinary redelivery because their queue has no destination at all.
+	//
+	// Both are operator-facing: a message that keeps being redelivered and
+	// never dead-lettered looks like an ordinary retry loop from the outside,
+	// and these are what distinguish it from one.
+	DLQTransferFailures uint64 `json:"dlq_transfer_failures"`
+	PoisonWithoutDLQ    uint64 `json:"poison_without_dlq"`
+
+	// PoisonPending and PoisonPendingNoDestination are gauges: how many entries
+	// are stuck now, and how many of those have nowhere to go. These are the
+	// values worth alerting on; the counters above only say it has happened.
+	PoisonPending              uint64 `json:"poison_pending"`
+	PoisonPendingNoDestination uint64 `json:"poison_pending_no_destination"`
 }
 
 // queuePendingStats describes the pending entry list, which only classic queues
@@ -266,10 +282,15 @@ func (s *Server) buildStatsResponse() statsResponse {
 				Failures:  qm.StealFailures,
 			},
 			Acknowledgments: queueAckStats{
-				Ack:    qm.AckCount,
-				Nack:   qm.NackCount,
-				Reject: qm.RejectCount,
-				DLQ:    qm.DLQCount,
+				Ack:                 qm.AckCount,
+				Nack:                qm.NackCount,
+				Reject:              qm.RejectCount,
+				DLQ:                 qm.DLQCount,
+				DLQTransferFailures: qm.DLQTransferFailures,
+				PoisonWithoutDLQ:    qm.PoisonWithoutDLQ,
+
+				PoisonPending:              qm.PoisonPending,
+				PoisonPendingNoDestination: qm.PoisonPendingNoDestination,
 			},
 			Pending: queuePendingStats{
 				Current:   qm.PELSize,

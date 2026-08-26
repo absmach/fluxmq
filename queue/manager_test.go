@@ -24,6 +24,7 @@ import (
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	brokerstorage "github.com/absmach/fluxmq/storage"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -315,15 +316,15 @@ func (s *mockGroupStore) RequeuePendingEntry(ctx context.Context, queueName, gro
 	if s.groups[queueName] == nil || s.groups[queueName][groupID] == nil {
 		return storage.ErrConsumerNotFound
 	}
-	entry, owner := s.groups[queueName][groupID].FindPending(offset)
-	if entry == nil {
+	group := s.groups[queueName][groupID]
+	_, owner := group.FindPending(offset)
+	if owner == "" {
 		return storage.ErrPendingEntryNotFound
 	}
 	if owner != consumerID {
 		return storage.ErrConsumerNotFound
 	}
-	entry.ClaimedAt = attemptedAt
-	entry.DeliveryCount++
+	group.RequeuePending(offset, consumerID, attemptedAt)
 	return nil
 }
 
@@ -335,9 +336,7 @@ func (s *mockGroupStore) UpdateCursor(ctx context.Context, queueName, groupID st
 		return storage.ErrConsumerNotFound
 	}
 
-	group := s.groups[queueName][groupID]
-	pc := group.GetCursor()
-	pc.Cursor = cursor
+	s.groups[queueName][groupID].SetCursorPosition(cursor)
 	return nil
 }
 
@@ -349,9 +348,7 @@ func (s *mockGroupStore) UpdateCommitted(ctx context.Context, queueName, groupID
 		return storage.ErrConsumerNotFound
 	}
 
-	group := s.groups[queueName][groupID]
-	pc := group.GetCursor()
-	pc.Committed = committed
+	s.groups[queueName][groupID].SetCommitted(committed)
 	return nil
 }
 
@@ -1064,7 +1061,7 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 	if count := group.PendingCount(); count != 0 {
 		t.Fatalf("expected no pending entries, got %d", count)
 	}
-	if cursor := group.GetCursor().Cursor; cursor != 1 {
+	if cursor := group.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", cursor)
 	}
 }
@@ -1173,7 +1170,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("unmatched PublishToMatchingQueues failed: %v", err)
 	}
-	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); err != storage.ErrQueueNotFound {
+	if _, err := logStore.GetQueue(ctx, "unmatched/topic"); !errors.Is(err, storage.ErrQueueNotFound) {
 		t.Fatalf("unmatched publish created a queue: %v", err)
 	}
 }
@@ -1326,7 +1323,7 @@ func TestSubscribeExistingWithCursorDoesNotChangeQueueType(t *testing.T) {
 	}
 }
 
-func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
+func TestStreamAckOnManualCommitGroupIsRefused(t *testing.T) {
 	logStore := memlog.New()
 	groupStore := newMockGroupStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -1347,18 +1344,22 @@ func TestStreamAckManualCommitPreservesCommittedOffset(t *testing.T) {
 		t.Fatalf("CreateConsumerGroup failed: %v", err)
 	}
 
-	if err := mgr.Ack(context.Background(), testQueueEvents, "streamer", 0); err != nil {
-		t.Fatalf("Ack failed: %v", err)
+	// A manual-commit stream group is not advanced by Ack. Reporting success
+	// would tell the caller the offset is durable while the group still holds
+	// the old committed position; CommitOffset is the call that advances it.
+	err := mgr.Ack(context.Background(), testQueueEvents, "streamer", 0)
+	if !errors.Is(err, ErrAckOnlyForAutoCommitStream) {
+		t.Fatalf("expected ErrAckOnlyForAutoCommitStream, got %v", err)
 	}
 
 	stored, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamer")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if cursor := stored.GetCursor().Cursor; cursor != 1 {
+	if cursor := stored.CursorView().Cursor; cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", cursor)
 	}
-	if committed := stored.GetCursor().Committed; committed != 0 {
+	if committed := stored.CursorView().Committed; committed != 0 {
 		t.Fatalf("expected committed offset 0, got %d", committed)
 	}
 }
@@ -1392,10 +1393,10 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if c := group.GetCursor().Cursor; c != 1 {
+	if c := group.CursorView().Cursor; c != 1 {
 		t.Fatalf("expected cursor 1 after reject, got %d", c)
 	}
-	if c := group.GetCursor().Committed; c != 1 {
+	if c := group.CursorView().Committed; c != 1 {
 		t.Fatalf("expected committed 1 after reject, got %d", c)
 	}
 }
@@ -1929,6 +1930,11 @@ type mockQueueCoordinator struct {
 	createCalls []string
 	cursorCalls []string
 	commitCalls []string
+
+	// appendOnceKeys stands in for a replica's store, so a repeated key is
+	// answered the way a real FSM would answer it.
+	appendOnceCalls []string
+	appendOnceKeys  map[string]uint64
 }
 
 func (m *mockQueueCoordinator) Stop() error { return nil }
@@ -1978,6 +1984,20 @@ func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) err
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
+}
+
+func (m *mockQueueCoordinator) ApplyAppendOnceWithOptions(_ context.Context, queueName, dedupeKey string, msg *message.Envelope, _ queueraft.ApplyOptions) (uint64, bool, error) {
+	m.appendOnceCalls = append(m.appendOnceCalls, queueName+"/"+dedupeKey)
+	message.Release(msg)
+	if m.appendOnceKeys == nil {
+		m.appendOnceKeys = make(map[string]uint64)
+	}
+	if offset, seen := m.appendOnceKeys[dedupeKey]; seen {
+		return offset, true, nil
+	}
+	offset := uint64(len(m.appendOnceKeys))
+	m.appendOnceKeys[dedupeKey] = offset
+	return offset, false, nil
 }
 
 func (m *mockQueueCoordinator) ApplyTruncate(_ context.Context, _ string, _ uint64) error {
@@ -2215,7 +2235,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 	ctx := context.Background()
 	queueCfg := types.DefaultQueueConfig(testQueueEvents, "$queue/events/#")
 	queueCfg.Type = types.QueueTypeStream
-	if err := manager.CreateQueue(ctx, queueCfg); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := manager.CreateQueue(ctx, queueCfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
@@ -2332,10 +2352,10 @@ func TestSubscribeWithCursorStreamDefaultResumesStoredCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	if cursor := stored.GetCursor().Cursor; cursor != 7 {
+	if cursor := stored.CursorView().Cursor; cursor != 7 {
 		t.Fatalf("expected cursor 7 to be preserved, got %d", cursor)
 	}
-	if committed := stored.GetCursor().Committed; committed != 7 {
+	if committed := stored.CursorView().Committed; committed != 7 {
 		t.Fatalf("expected committed 7 to be preserved, got %d", committed)
 	}
 }
@@ -2372,7 +2392,7 @@ func TestPublishForwardPolicySkipsRemoteForwarding(t *testing.T) {
 	ctx := context.Background()
 	replicated := types.DefaultQueueConfig(testQueueTest, "$queue/test/#")
 	replicated.Replication.Enabled = true
-	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := manager.CreateQueue(ctx, replicated); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
@@ -2426,7 +2446,7 @@ func TestPublishForwardPolicyUsesQueueCoordinatorLeader(t *testing.T) {
 	replicated := types.DefaultQueueConfig(testQueueHotEvents, "$queue/hot-events/#")
 	replicated.Replication.Enabled = true
 	replicated.Replication.Group = "hot"
-	if err := manager.CreateQueue(ctx, replicated); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := manager.CreateQueue(ctx, replicated); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
@@ -2835,7 +2855,7 @@ func TestPublishAutoCreateQueueFromQueueTopic(t *testing.T) {
 		t.Fatalf("expected queue demo-events to exist: %v", err)
 	}
 
-	if _, err := logStore.GetQueue(ctx, topic); err != storage.ErrQueueNotFound {
+	if _, err := logStore.GetQueue(ctx, topic); !errors.Is(err, storage.ErrQueueNotFound) {
 		t.Fatalf("expected queue %q to not exist, got err=%v", topic, err)
 	}
 
@@ -3054,7 +3074,7 @@ func TestCleanupEphemeralQueues(t *testing.T) {
 	manager.cleanupEphemeralQueues(ctx)
 
 	// Expired ephemeral queue should be deleted
-	if _, err := logStore.GetQueue(ctx, "expired-queue"); err != storage.ErrQueueNotFound {
+	if _, err := logStore.GetQueue(ctx, "expired-queue"); !errors.Is(err, storage.ErrQueueNotFound) {
 		t.Error("Expected expired ephemeral queue to be deleted")
 	}
 
@@ -3318,8 +3338,8 @@ func TestUpdateConsumerHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
 	}
-	updated := updatedGroup.GetConsumer(testConsumerOne)
-	if updated == nil {
+	updated, registered := updatedGroup.GetConsumer(testConsumerOne)
+	if !registered {
 		t.Fatalf("expected consumer to exist")
 	}
 	if !updated.LastHeartbeat.After(before) {
@@ -3369,7 +3389,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 
 	// Next claim should fail — PEL is full, so ClaimBatch returns ErrNoMessages
 	_, err = mgr.consumerManager.ClaimBatch(ctx, "pelcap", "g1", "c1", nil, 1)
-	if err != consumer.ErrNoMessages {
+	if !errors.Is(err, consumer.ErrNoMessages) {
 		t.Fatalf("expected ErrNoMessages (PEL full), got: %v", err)
 	}
 
@@ -3411,7 +3431,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	poisonMsg := newQueueEnvelope("bad-msg-1", "$queue/tasks/process", []byte("poison-payload"))
 	poisonMsg.User.Properties = map[string]string{"custom-key": "custom-val"}
 
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
 
 	// Verify the DLQ queue was auto-created
 	dlqCfg, err := logStore.GetQueue(ctx, "$dlq/tasks")
@@ -3488,7 +3508,7 @@ func TestMoveToDLQDisabledSkipsPublish(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	err := mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
 		newQueueEnvelope("msg-1", "$queue/tasks/test", []byte("data")), 0, 5, "", "$dlq/")
 	require.ErrorIs(t, err, ErrDLQDisabled)
 
@@ -3519,7 +3539,7 @@ func TestMoveToDLQCustomTopic(t *testing.T) {
 		t.Fatalf("CreateQueue failed: %v", err)
 	}
 
-	require.NoError(t, mgr.moveToDLQ(ctx, "tasks", testGroupWorkers,
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
 		newQueueEnvelope("msg-1", "$queue/tasks/test", []byte("data")), 0, 5, "", "$dlq/"))
 
 	// Should use custom topic as queue name
@@ -3681,7 +3701,7 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 	config := DefaultConfig()
 	config.WritePolicy = WritePolicyReject
 	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	mgr.raftCoordinator = coordinator
+	mgr.SetRaftCoordinator(coordinator)
 	ctx := context.Background()
 
 	// A replicated queue with no reachable leader, which the reject policy
@@ -3775,7 +3795,7 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 	config := DefaultConfig()
 	config.WritePolicy = WritePolicyReject
 	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	mgr.raftCoordinator = coordinator
+	mgr.SetRaftCoordinator(coordinator)
 	ctx := context.Background()
 
 	replicated := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
@@ -3947,4 +3967,202 @@ func TestCreateQueueRejectsFiltersThatCannotMatch(t *testing.T) {
 	if err := mgr.UpdateQueue(ctx, types.DefaultQueueConfig("working", "m/#/events")); err == nil {
 		t.Fatal("UpdateQueue accepted a filter that can never match")
 	}
+}
+
+// A dead-letter transfer appends to the destination before settling the source.
+// If it crashes or fails between those two steps, the retry must complete the
+// transition rather than repeat it: one destination record, not two.
+func TestMoveToDLQRetryProducesExactlyOneRecord(t *testing.T) {
+	ctx := context.Background()
+	store, err := logstorage.NewAdapter(t.TempDir(), logstorage.DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	mgr := NewManager(store, store, DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
+		DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	sourceCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	sourceCfg.DLQConfig.Enabled = true
+	require.NoError(t, mgr.CreateQueue(ctx, sourceCfg))
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+
+	// Two attempts at the same transfer: same source queue, group and offset,
+	// so both derive the same transfer identity.
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
+	retry := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"))
+
+	count, err := store.Count(ctx, "$dlq/tasks")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), count, "a retried transfer must not duplicate the destination record")
+
+	// A different source offset is a different transfer and must still land.
+	other := newQueueEnvelope("bad-msg-2", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
+	count, err = store.Count(ctx, "$dlq/tasks")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), count, "distinct transfers must not be collapsed")
+}
+
+// plainQueueCoordinator satisfies the manager's coordinator contract without
+// the deduplication capability. Embedding the interface rather than the mock
+// keeps the promoted method set narrow, which is what makes the assertion in
+// replicateTransferOnce fail the way a coordinator without it would.
+type plainQueueCoordinator struct {
+	queueraft.QueueCoordinator
+}
+
+func newReplicatedDLQManager(t *testing.T, coordinator queueraft.QueueCoordinator) (*Manager, *memlog.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	store := memlog.New()
+	config := DefaultConfig()
+	config.WritePolicy = WritePolicyReject
+	mgr := NewManager(store, newMockGroupStore(),
+		DeliveryTargetFunc(func(context.Context, string, *message.Envelope) error { return nil }),
+		config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mgr.SetRaftCoordinator(coordinator)
+
+	sourceCfg := types.DefaultQueueConfig("tasks", "$queue/tasks/#")
+	sourceCfg.DLQConfig.Enabled = true
+	require.NoError(t, mgr.CreateQueue(ctx, sourceCfg))
+
+	// The destination is created up front so it carries replication; left to
+	// moveToDLQ it would be auto-created as an ordinary local queue.
+	dlqCfg := types.DefaultQueueConfig("$dlq/tasks", "$dlq/tasks/#")
+	dlqCfg.DLQConfig.Enabled = false
+	dlqCfg.Replication.Enabled = true
+	require.NoError(t, mgr.CreateQueue(ctx, dlqCfg))
+
+	return mgr, store
+}
+
+func replicatedDLQCoordinator() *mockQueueCoordinator {
+	return &mockQueueCoordinator{
+		enabled:           true,
+		replicatedByQueue: map[string]bool{"$dlq/tasks": true},
+		leaderByQueue:     map[string]bool{"$dlq/tasks": true},
+	}
+}
+
+// A replicated destination must take the check through Raft, carrying the
+// transfer key, so every replica decides for itself whether the record exists.
+func TestMoveToDLQReplicatedDeduplicatesThroughRaft(t *testing.T) {
+	ctx := context.Background()
+	coordinator := replicatedDLQCoordinator()
+	mgr, _ := newReplicatedDLQManager(t, coordinator)
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/"))
+
+	retry := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, retry, 42, 6, "decode failed", "$dlq/"),
+		"a transfer already replicated must settle rather than fail")
+
+	transferID := dlqTransferID("tasks", testGroupWorkers, 42)
+	assert.Equal(t, []string{"$dlq/tasks/" + transferID, "$dlq/tasks/" + transferID}, coordinator.appendOnceCalls,
+		"both attempts must replicate the same key")
+	assert.Empty(t, coordinator.appendCalls,
+		"a replicated transfer must not fall back to a plain append")
+	assert.Len(t, coordinator.appendOnceKeys, 1, "the retry must not create a second record")
+
+	// A different source offset is a different transfer and must still land.
+	other := newQueueEnvelope("bad-msg-2", "$queue/tasks/process", []byte("poison"))
+	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, other, 43, 6, "decode failed", "$dlq/"))
+	assert.Len(t, coordinator.appendOnceKeys, 2, "distinct transfers must not be collapsed")
+}
+
+// A coordinator that cannot replicate the check must be reported, not silently
+// downgraded to a plain append: the downgrade is what duplicates the record.
+func TestMoveToDLQReplicatedRefusesCoordinatorWithoutCapability(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := newReplicatedDLQManager(t, plainQueueCoordinator{QueueCoordinator: replicatedDLQCoordinator()})
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
+	assert.ErrorIs(t, err, storage.ErrDeduplicationUnsupported)
+}
+
+// The transfer must not be reported as complete when this node cannot write to
+// the replicated destination: the source entry stays pending for a retry.
+func TestMoveToDLQReplicatedRequiresLeadership(t *testing.T) {
+	ctx := context.Background()
+	coordinator := replicatedDLQCoordinator()
+	mgr, _ := newReplicatedDLQManager(t, coordinator)
+	coordinator.leaderByQueue["$dlq/tasks"] = false
+
+	poison := newQueueEnvelope("bad-msg", "$queue/tasks/process", []byte("poison"))
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poison, 42, 6, "decode failed", "$dlq/")
+	require.Error(t, err)
+	assert.Empty(t, coordinator.appendOnceCalls, "nothing may be replicated without leadership")
+}
+
+// blockingDeleteStore pauses inside DeleteQueue so a test can order the
+// interleave deterministically rather than hope for it.
+type blockingDeleteStore struct {
+	storage.QueueStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDeleteStore) DeleteQueue(ctx context.Context, queueName string) error {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.QueueStore.DeleteQueue(ctx, queueName)
+}
+
+// Installing a protected contract must not overtake a mutation already in
+// flight against that queue.
+//
+// ReplaceProtectedQueueContracts documents that queue mutations are "blocked for
+// the duration, so no operation can enter between persisted-state validation and
+// the registry swap". That guarantee is the lock hold spanning the whole
+// mutation. Narrowed to the contract check alone, the delete completes after
+// protection is installed, and a protected queue is gone.
+func TestProtectedContractInstallWaitsForInFlightMutation(t *testing.T) {
+	ctx := context.Background()
+	contract := protectedAuditQueueConfig()
+
+	base := memlog.New()
+	require.NoError(t, base.CreateQueue(ctx, contract))
+	store := &blockingDeleteStore{
+		QueueStore: base,
+		entered:    make(chan struct{}, 1),
+		release:    make(chan struct{}),
+	}
+
+	manager := NewManager(store, newMockGroupStore(), nil, DefaultConfig(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- manager.DeleteQueue(ctx, contract.Name) }()
+	<-store.entered
+
+	// The delete is now past its contract check and inside storage. Installing
+	// protection must not be able to complete while it is.
+	installed := make(chan error, 1)
+	go func() { installed <- manager.ReplaceProtectedQueueContracts(ctx, []types.QueueConfig{contract}) }()
+
+	select {
+	case err := <-installed:
+		t.Fatalf("contract replacement ran to completion (err=%v) while a delete was "+
+			"in flight; it must block for the mutation's duration, or a queue can be "+
+			"validated unprotected, become protected, and be deleted anyway", err)
+	case <-time.After(200 * time.Millisecond):
+		// Correct: the install is waiting for the mutation to finish.
+	}
+
+	close(store.release)
+	<-deleted
+
+	// Whatever the mutation returned, the install ran only after it finished.
+	// That ordering is the guarantee; the two outcomes are then consistent
+	// because the install validates persisted state that the mutation has
+	// already settled.
+	<-installed
 }

@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -71,7 +72,7 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 		}
 
 		if err := mgr.Ack(ctx, "q-0", lastGroupID, lastOffset); err != nil {
-			if err == storage.ErrConsumerNotFound {
+			if errors.Is(err, storage.ErrConsumerNotFound) {
 				b.Fatalf("Ack failed with consumer not found: %v", err)
 			}
 			b.Fatalf("Ack failed: %v", err)

@@ -6,6 +6,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -24,15 +25,21 @@ import (
 // CreateSession creates a new session or returns an existing one.
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
-func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (*session.Session, bool, error) {
-	b.sessionLocks.Lock(clientID)
-	defer b.sessionLocks.Unlock(clientID)
+func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (sess *session.Session, created bool, err error) {
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	ctx := context.Background()
-	releaseOwnershipOnFailure := false
-	sessionReady := false
+
+	// ownershipAcquired records that this call took cluster ownership of the
+	// session. Failing after that point has to hand it back, or the session is
+	// stranded on a node that never finished creating it. Reading the outcome
+	// from the returned error rather than from a second flag means every early
+	// return is covered without having to remember to mark one.
+	ownershipAcquired := false
 	defer func() {
-		if !releaseOwnershipOnFailure || sessionReady || b.cluster == nil {
+		if err == nil || !ownershipAcquired || b.cluster == nil {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -69,7 +76,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 			}
 
 			b.telemetry.logger.Info("session takeover completed", slog.String("client_id", clientID))
-			releaseOwnershipOnFailure = true
+			ownershipAcquired = true
 
 			// Webhook: session takeover
 			if b.telemetry.webhooks != nil {
@@ -96,7 +103,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 				return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
 			}
 		}
-		sessionReady = true
+		ownershipAcquired = true
 		return existing, false, nil
 	}
 
@@ -194,7 +201,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 		if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
 			return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
 		}
-		releaseOwnershipOnFailure = true
+		ownershipAcquired = true
 	}
 
 	if b.stores.sessions != nil {
@@ -204,15 +211,15 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	}
 
 	b.sessionsMap.Set(clientID, s)
-	sessionReady = true
 
 	return s, true, nil
 }
 
 // DestroySession removes a session completely.
 func (b *Broker) DestroySession(clientID string) error {
-	b.sessionLocks.Lock(clientID)
-	defer b.sessionLocks.Unlock(clientID)
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {
@@ -363,9 +370,10 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	}
 
 	if s.CleanStart && s.ExpiryInterval == 0 {
-		b.sessionLocks.Lock(s.ID)
+		sessionLock := b.sessionLocks.Key(s.ID)
+		sessionLock.Lock()
 		b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
-		b.sessionLocks.Unlock(s.ID)
+		sessionLock.Unlock()
 
 		// Release ownership for clean sessions
 		if b.cluster != nil {
@@ -479,7 +487,7 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 	}
 
 	stored, err := b.stores.sessions.Get(clientID)
-	if err != nil && err != storage.ErrNotFound {
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
 	if stored != nil {
@@ -604,8 +612,9 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 // GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.
 // This is used during session takeover.
 func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
-	b.sessionLocks.Lock(clientID)
-	defer b.sessionLocks.Unlock(clientID)
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {

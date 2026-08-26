@@ -21,6 +21,7 @@ import (
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue"
+	queueconsumer "github.com/absmach/fluxmq/queue/consumer"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -703,7 +704,7 @@ func TestLocalConsumeFailureKeepsSiblingSubscription(t *testing.T) {
 			assert.Equal(t, tc.withSibling, siblingRemains, "the sibling must survive its neighbour's failure")
 
 			if tc.wantUnsubscribe {
-				defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+				defaultGroupID := queueconsumer.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
 				assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
 			} else {
 				assert.Empty(t, qm.unsubscribes, "compensating here would revoke the sibling's registration")
@@ -735,7 +736,7 @@ func TestLocalConsumeFailureKeepsCrossChannelImplicitGroupSubscription(t *testin
 	}))
 
 	qm.existingSubErr = errors.New("group store unavailable")
-	defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+	defaultGroupID := queueconsumer.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
 	require.NoError(t, failingChannel.handleMethod(&codec.BasicConsume{
 		Queue:       testServiceQueue,
 		ConsumerTag: testConsumerTag,
@@ -792,7 +793,7 @@ func TestSharedQueueRegistrationUnsubscribesOnlyAfterFinalConsumer(t *testing.T)
 		assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
 
 		require.NoError(t, second.handleMethod(&codec.BasicCancel{ConsumerTag: testSiblingTag, NoWait: true}))
-		defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+		defaultGroupID := queueconsumer.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
 		assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
 		assert.Equal(t, uint64(0), conn.broker.stats.GetConsumers())
 	})
@@ -805,7 +806,7 @@ func TestSharedQueueRegistrationUnsubscribesOnlyAfterFinalConsumer(t *testing.T)
 		assert.Equal(t, uint64(1), conn.broker.stats.GetConsumers())
 
 		second.cleanup()
-		defaultGroupID := queue.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
+		defaultGroupID := queueconsumer.DefaultConsumerGroupID(PrefixedClientID(testConnectionID))
 		assert.Equal(t, []string{provisioned + "/" + defaultGroupID}, qm.unsubscribes)
 		assert.Equal(t, uint64(0), conn.broker.stats.GetConsumers())
 	})

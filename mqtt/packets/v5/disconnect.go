@@ -5,6 +5,7 @@ package v5
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
@@ -78,7 +79,7 @@ type DisconnectProperties struct {
 func (p *DisconnectProperties) Unpack(r io.Reader) error {
 	for {
 		prop, err := codec.DecodeByte(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -182,7 +183,7 @@ func (pkt *Disconnect) Unpack(r io.Reader) error {
 	rc, err := codec.DecodeByte(r)
 	if err != nil {
 		// Empty disconnect packet is valid
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		return err

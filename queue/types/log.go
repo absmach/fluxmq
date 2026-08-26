@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -92,18 +93,94 @@ func NewConsumerGroupState(queueName, groupID, pattern string) *ConsumerGroup {
 	}
 }
 
-// GetCursor returns the queue cursor, creating if needed.
-func (g *ConsumerGroup) GetCursor() *QueueCursor {
+// CursorView returns a copy of the group's cursor positions.
+//
+// It is a copy rather than the live pointer because a pointer escaping the lock
+// is a write nobody can see coming: callers mutated it freely, racing every
+// reader of the group and every encode of it. Advancing a cursor goes through
+// SetCursor, SetCursorPosition, SetCommitted or AdvanceCommitted, each of which
+// takes the group's lock.
+func (g *ConsumerGroup) CursorView() QueueCursor {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if g.Cursor == nil {
+		return QueueCursor{}
+	}
+	return *g.Cursor
+}
+
+// SetCursor atomically updates both cursor positions.
+//
+// GetCursor hands out the live cursor pointer, so mutating it through that
+// pointer writes group state without the group's lock. Callers advancing a
+// cursor must come through here instead.
+func (g *ConsumerGroup) SetCursor(cursor, committed uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	if g.Cursor == nil {
-		g.Cursor = &QueueCursor{
-			Cursor:    0,
-			Committed: 0,
-		}
+		g.Cursor = &QueueCursor{}
 	}
-	return g.Cursor
+	g.Cursor.Cursor = cursor
+	g.Cursor.Committed = committed
+	g.UpdatedAt = time.Now()
+}
+
+// SetCursorPosition moves the cursor, leaving the committed safe point alone.
+func (g *ConsumerGroup) SetCursorPosition(cursor uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	g.Cursor.Cursor = cursor
+	g.UpdatedAt = time.Now()
+}
+
+// SetCommitted records the committed safe point, leaving the cursor alone.
+func (g *ConsumerGroup) SetCommitted(committed uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	g.Cursor.Committed = committed
+	g.UpdatedAt = time.Now()
+}
+
+// AdvanceCommitted records committed as the safe point, pulling the cursor up
+// to meet it when a caller has committed past where the group had read.
+func (g *ConsumerGroup) AdvanceCommitted(committed uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Cursor == nil {
+		g.Cursor = &QueueCursor{}
+	}
+	if committed > g.Cursor.Cursor {
+		g.Cursor.Cursor = committed
+	}
+	g.Cursor.Committed = committed
+	g.UpdatedAt = time.Now()
+}
+
+// MarshalJSON encodes the group under its own read lock.
+//
+// Encoding reads PEL, Consumers and Cursor directly, which is exactly what
+// Snapshot exists to prevent callers from doing: without the lock a group being
+// persisted races every consumer mutating it. The field set and names are the
+// default ones, so the encoding is unchanged.
+func (g *ConsumerGroup) MarshalJSON() ([]byte, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	// plain sheds the methods, so this does not recurse. The conversion is on
+	// the pointer, so the mutex is never copied.
+	type plain ConsumerGroup
+	return json.Marshal((*plain)(g))
 }
 
 // ReplacePEL atomically replaces the entire PEL map.
@@ -225,18 +302,45 @@ func (g *ConsumerGroup) DeleteConsumerPEL(consumerID string) {
 }
 
 // FindPending finds a pending entry by offset across all consumers.
-func (g *ConsumerGroup) FindPending(offset uint64) (*PendingEntry, string) {
+// FindPending returns a copy of the pending entry at offset and its owner.
+//
+// A copy, not the live entry: handing out the pointer let callers write group
+// state with no lock behind it, racing everything that reads the group and the
+// encoder that persists it. Changing an entry goes through RequeuePending.
+func (g *ConsumerGroup) FindPending(offset uint64) (PendingEntry, string) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
 	for consumerID, entries := range g.PEL {
 		for _, e := range entries {
-			if e.Offset == offset {
-				return e, consumerID
+			if e != nil && e.Offset == offset {
+				return *e, consumerID
 			}
 		}
 	}
-	return nil, ""
+	return PendingEntry{}, ""
+}
+
+// RequeuePending records a redelivery attempt for one entry: it becomes
+// stealable again at attemptedAt and its delivery count rises.
+//
+// This is the mutation FindPending used to permit by handing out a pointer.
+// Performing it here keeps it under the group's lock, where the encoder and
+// every reader can see a consistent entry.
+func (g *ConsumerGroup) RequeuePending(offset uint64, consumerID string, attemptedAt time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for _, entry := range g.PEL[consumerID] {
+		if entry == nil || entry.Offset != offset {
+			continue
+		}
+		entry.ClaimedAt = attemptedAt
+		entry.DeliveryCount++
+		g.UpdatedAt = time.Now()
+		return true
+	}
+	return false
 }
 
 // TransferPending moves a pending entry from one consumer to another.
@@ -296,7 +400,39 @@ func (g *ConsumerGroup) PendingCount() int {
 	return count
 }
 
+// PendingOffsets returns the set of offsets currently in the pending list.
+//
+// A set rather than a slice because callers use it for membership tests, and a
+// copy because the caller reads it after the lock is released.
+func (g *ConsumerGroup) PendingOffsets() map[uint64]struct{} {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	offsets := make(map[uint64]struct{})
+	for _, entries := range g.PEL {
+		for _, entry := range entries {
+			if entry != nil {
+				offsets[entry.Offset] = struct{}{}
+			}
+		}
+	}
+	return offsets
+}
+
 // StealableEntries returns entries that are older than the visibility timeout.
+// StealableEntries returns the entries whose visibility timeout has elapsed,
+// excluding one consumer's own.
+//
+// Unlike FindPending and GetConsumer this returns the live entries rather than
+// copies, and deliberately: a sweep walks the whole pending list, and copying
+// every entry to read two fields from a handful measured six times the cost on
+// the delivery path.
+//
+// The contract that makes it safe is the caller's, not this method's. The
+// entries are a read-only view valid only while the caller holds that group's
+// lock, which every mutator — RequeuePending, TransferPending, and the settle
+// paths — also holds. Writing through these pointers is what the copies
+// elsewhere exist to prevent; do it through those methods instead.
 func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, excludeConsumer string) []*PendingEntry {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -309,7 +445,7 @@ func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, exclud
 			continue
 		}
 		for _, e := range entries {
-			if e.ClaimedAt.Before(cutoff) {
+			if e != nil && e.ClaimedAt.Before(cutoff) {
 				stealable = append(stealable, e)
 			}
 		}
@@ -319,11 +455,35 @@ func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, exclud
 }
 
 // GetConsumer returns a consumer by ID, or nil if not found.
-func (g *ConsumerGroup) GetConsumer(consumerID string) *ConsumerInfo {
+// GetConsumer returns a copy of one consumer's registration and whether it is
+// present.
+//
+// A copy for the same reason FindPending returns one: the live pointer let
+// callers write group state outside the group's lock. Recording a heartbeat
+// goes through TouchConsumer.
+func (g *ConsumerGroup) GetConsumer(consumerID string) (ConsumerInfo, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	return g.Consumers[consumerID]
+	consumer, ok := g.Consumers[consumerID]
+	if !ok || consumer == nil {
+		return ConsumerInfo{}, false
+	}
+	return *consumer, true
+}
+
+// TouchConsumer records a heartbeat and returns the updated registration.
+func (g *ConsumerGroup) TouchConsumer(consumerID string, at time.Time) (ConsumerInfo, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	consumer, ok := g.Consumers[consumerID]
+	if !ok || consumer == nil {
+		return ConsumerInfo{}, false
+	}
+	consumer.LastHeartbeat = at
+	g.UpdatedAt = time.Now()
+	return *consumer, true
 }
 
 // SetConsumer adds or updates a consumer.

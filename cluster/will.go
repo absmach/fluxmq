@@ -6,6 +6,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -214,7 +215,7 @@ func (h *WillStore) Get(ctx context.Context, clientID string) (*storage.WillMess
 // Delete removes a will message.
 func (h *WillStore) Delete(ctx context.Context, clientID string) error {
 	// Delete from local store
-	if err := h.localStore.Delete(ctx, clientID); err != nil && err != storage.ErrNotFound {
+	if err := h.localStore.Delete(ctx, clientID); err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return fmt.Errorf("failed to delete from local store: %w", err)
 	}
 
@@ -252,7 +253,7 @@ func (h *WillStore) GetPending(ctx context.Context, before time.Time) ([]*storag
 	for _, clientID := range pendingClientIDs {
 		will, err := h.Get(ctx, clientID)
 		if err != nil {
-			if err != storage.ErrNotFound {
+			if !errors.Is(err, storage.ErrNotFound) {
 				fetchErrors = append(fetchErrors, fmt.Errorf("client %s: %w", clientID, err))
 			}
 			continue

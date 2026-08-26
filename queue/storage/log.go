@@ -19,6 +19,12 @@ var (
 	ErrInvalidOffset        = errors.New("invalid offset")
 	ErrConsumerGroupExists  = errors.New("consumer group already exists")
 	ErrPendingEntryNotFound = errors.New("pending entry not found")
+
+	// ErrDurabilityUnconfirmed reports that a write was accepted but its
+	// durability barrier did not complete. The returned offset identifies the
+	// accepted record; callers must retry by identity or establish a barrier
+	// over that record, never blindly append it again.
+	ErrDurabilityUnconfirmed = errors.New("write accepted but durability is unconfirmed")
 )
 
 var (
@@ -26,6 +32,25 @@ var (
 	ErrMessageNotFound    = errors.New("message not found")
 	ErrConsumerNotFound   = errors.New("consumer not found")
 	ErrQueueAlreadyExists = errors.New("queue already exists")
+)
+
+// Deduplication errors, reported by every DeduplicatingQueueStore so callers
+// can distinguish "this store will not deduplicate" from an ordinary append
+// failure without knowing which implementation they hold.
+var (
+	// ErrDeduplicationKeyRequired reports an AppendOnce with no key. Appending
+	// without one cannot be deduplicated, and silently degrading to a plain
+	// append would leave the caller believing otherwise.
+	ErrDeduplicationKeyRequired = errors.New("deduplication key is required")
+
+	// ErrDeduplicationUnsupported reports that a deduplicated append reached a
+	// store or a replication path that cannot perform the check.
+	ErrDeduplicationUnsupported = errors.New("deduplicated append is not supported")
+
+	// ErrDeduplicationStateUnconfirmed reports that the record was accepted but
+	// the durable identity index could not confirm it. Retrying the same key is
+	// safe; appending under a different key is not.
+	ErrDeduplicationStateUnconfirmed = errors.New("deduplication state is unconfirmed")
 )
 
 // QueueStore provides append-only log storage with offset-based access.
@@ -71,6 +96,56 @@ type QueueStore interface {
 
 	// Count returns the number of messages in the queue (tail - head).
 	Count(ctx context.Context, queueName string) (uint64, error)
+}
+
+// DeduplicatingQueueStore appends at most one record per deduplication key.
+//
+// It exists so a transfer that must not duplicate — a dead-letter move, which
+// appends to the destination before settling the source — can be retried after
+// a crash or a failed settlement without producing a second record.
+//
+// The key must be derivable from the source coordinates rather than generated
+// per attempt, so a retry computes the same key. It is persisted both in the
+// record and in a durable derived index. The record remains authoritative;
+// the index makes recovery bounded by the uncertain append suffix rather than
+// the queue's retained history.
+type DeduplicatingQueueStore interface {
+	// AppendOnce appends msg unless a record with the same dedupeKey is already
+	// present within the store's deduplication window, in which case it returns
+	// that record's offset and reports deduplicated.
+	//
+	// Ownership follows QueueStore.Append, with one addition: a nil error takes
+	// ownership of msg in the deduplicated case too, where the envelope is
+	// released rather than stored. An error leaves ownership with the caller.
+	AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (offset uint64, deduplicated bool, err error)
+
+	// AppendOnceAndSync is AppendOnce with the durability barrier of
+	// DurableQueueStore.AppendAndSync: it returns only once the record it
+	// appended is durable.
+	//
+	// A barrier that fails after the record is written returns
+	// ErrDurabilityUnconfirmed and must not be reported as a plain failure and
+	// forgotten: the retry would append the record twice.
+	// Nor may it be reported as success: the caller settles its source on that
+	// answer. Such an attempt returns an error, and a later attempt with the
+	// same key establishes the barrier over the record that already exists
+	// before reporting it deduplicated.
+	//
+	// A dead-letter transfer settles its source once the destination reports
+	// success, so on a queue configured for fsync the destination has to be
+	// durable before that success is reported — otherwise the settlement
+	// outlives the record it was settling against. A store that can deduplicate
+	// but cannot do so durably must not be used for such a queue, which is why
+	// this lives on the same interface rather than in a separate optional one:
+	// offering half the contract is what leaves a caller with no path that
+	// provides both.
+	AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (offset uint64, deduplicated bool, err error)
+
+	// DeduplicationWindow reports how far back AppendOnce can recognise a
+	// repeated key, in records. Beyond it a retry appends again, so callers that
+	// need a guarantee rather than a mitigation must retry within it. Zero means
+	// every record retained by the queue is covered.
+	DeduplicationWindow() int
 }
 
 // DurableQueueStore atomically appends and establishes a durability barrier for

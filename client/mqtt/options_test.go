@@ -5,6 +5,7 @@ package mqtt
 
 import (
 	"crypto/tls"
+	"errors"
 	"testing"
 	"time"
 )
@@ -180,7 +181,7 @@ func TestOptionsValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.opts.Validate()
 			if tt.wantErr != nil {
-				if err != tt.wantErr {
+				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("expected error %v, got %v", tt.wantErr, err)
 				}
 			} else if err != nil {

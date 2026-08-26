@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -100,7 +101,7 @@ func TestV5ConnectStoresExternalIDOnSession(t *testing.T) {
 	}
 
 	err := handler.HandleConnect(context.Background(), conn, connect)
-	require.True(t, err == nil || err == io.EOF, "unexpected connect error: %v", err)
+	require.True(t, err == nil || errors.Is(err, io.EOF), "unexpected connect error: %v", err)
 
 	s := b.Get("test-client")
 	require.NotNil(t, s)

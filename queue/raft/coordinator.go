@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/absmach/fluxmq/message"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
 
@@ -99,6 +100,16 @@ type GroupReplicator interface {
 	ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
 	ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error
 	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
+}
+
+// DeduplicatingLogReplicator replicates an append that must not duplicate.
+//
+// It is separate from QueueLogReplicator for the same reason
+// storage.DeduplicatingQueueStore is separate from storage.QueueStore: the
+// capability is optional, and a replicator that cannot offer it should fail the
+// type assertion rather than be forced to implement a weaker version of it.
+type DeduplicatingLogReplicator interface {
+	ApplyAppendOnceWithOptions(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope, opts ApplyOptions) (offset uint64, deduplicated bool, err error)
 }
 
 // GroupProvisioner can lazily create/register group replicators on demand.
@@ -413,6 +424,22 @@ func (c *LogicalGroupCoordinator) ApplyAppendWithOptions(ctx context.Context, qu
 		return 0, fmt.Errorf("no raft replicator configured for queue %q", queueName)
 	}
 	return replicator.ApplyAppendWithOptions(ctx, queueName, msg, opts)
+}
+
+// ApplyAppendOnceWithOptions replicates a deduplicated append in the queue's
+// group. The group's replicator must support the capability; one that does not
+// is reported rather than silently downgraded to a plain append, which would
+// duplicate the record the caller asked to write once.
+func (c *LogicalGroupCoordinator) ApplyAppendOnceWithOptions(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope, opts ApplyOptions) (uint64, bool, error) {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return 0, false, fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	deduplicating, ok := replicator.(DeduplicatingLogReplicator)
+	if !ok {
+		return 0, false, fmt.Errorf("%w: replicator for queue %q", storage.ErrDeduplicationUnsupported, queueName)
+	}
+	return deduplicating.ApplyAppendOnceWithOptions(ctx, queueName, dedupeKey, msg, opts)
 }
 
 func (c *LogicalGroupCoordinator) ApplyTruncate(ctx context.Context, queueName string, minOffset uint64) error {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp1/performatives"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +32,14 @@ func TestAMQP1QueueErrorContract(t *testing.T) {
 	require.Equal(t, string(failure.Ownership), rejected.Error.Info[amqp1OwnershipStateKey])
 	require.Equal(t, string(failure.Leader), rejected.Error.Info[amqp1LeaderStateKey])
 	require.Equal(t, string(failure.Durability), rejected.Error.Info[amqp1DurabilityStateKey])
+}
+
+func TestAMQP1DurabilityUnconfirmedProjection(t *testing.T) {
+	rejected, ok := amqp1QueueOutcome(storage.ErrDurabilityUnconfirmed).(*performatives.Rejected)
+	require.True(t, ok)
+	require.Equal(t, string(queuepkg.ErrorCodeUnavailable), rejected.Error.Info[amqp1QueueErrorCodeKey])
+	require.Equal(t, true, rejected.Error.Info[amqp1RetryableKey])
+	require.Equal(t, string(queuepkg.DurabilityUnconfirmed), rejected.Error.Info[amqp1DurabilityStateKey])
 }
 
 func TestAMQP1QueueConditions(t *testing.T) {

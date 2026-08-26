@@ -33,7 +33,14 @@ type log struct {
 	head     uint64              // First valid offset (after truncation)
 	tail     uint64              // Next offset to assign
 	deleted  bool
-	mu       sync.RWMutex
+
+	// dedupe maps a deduplication key to the offset that already carries it.
+	// Nothing is persisted here because nothing in this store is: the whole log
+	// lives in memory, so the index and the records it describes are lost
+	// together.
+	dedupe map[string]uint64
+
+	mu sync.RWMutex
 }
 
 // Config defines configuration for the memory log store.
@@ -76,6 +83,7 @@ func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error
 		messages: make([]*message.Envelope, 0, s.config.InitialCapacity),
 		head:     0,
 		tail:     0,
+		dedupe:   make(map[string]uint64),
 	}
 
 	s.logs.Store(config.Name, sl)
@@ -161,6 +169,7 @@ func (s *Store) DeleteQueue(ctx context.Context, queueName string) error {
 			message.Release(envelope)
 		}
 		sl.messages = nil
+		sl.dedupe = nil
 		sl.mu.Unlock()
 	}
 
@@ -457,6 +466,14 @@ func (s *Store) Truncate(ctx context.Context, queueName string, minOffset uint64
 	sl.messages = sl.messages[removeCount:]
 	sl.head = minOffset
 
+	// Drop deduplication keys whose record is gone. Keeping them would report a
+	// duplicate for a record the caller can no longer read.
+	for key, offset := range sl.dedupe {
+		if offset < sl.head {
+			delete(sl.dedupe, key)
+		}
+	}
+
 	return nil
 }
 
@@ -642,9 +659,7 @@ func (s *Store) UpdateCursor(ctx context.Context, queueName, groupID string, cur
 		return err
 	}
 
-	c := group.GetCursor()
-	c.Cursor = cursor
-	group.UpdatedAt = time.Now()
+	group.SetCursorPosition(cursor)
 
 	return nil
 }
@@ -656,9 +671,7 @@ func (s *Store) UpdateCommitted(ctx context.Context, queueName, groupID string, 
 		return err
 	}
 
-	c := group.GetCursor()
-	c.Committed = committed
-	group.UpdatedAt = time.Now()
+	group.SetCommitted(committed)
 
 	return nil
 }
@@ -785,3 +798,59 @@ var (
 	_ storage.QueueStore    = (*Store)(nil)
 	_ storage.ConsumerStore = (*Store)(nil)
 )
+
+// AppendOnce implements storage.DeduplicatingQueueStore.
+//
+// The whole log is in memory, so the index needs no recovery: it is lost with
+// the records it describes. Truncation prunes it, since a key whose record is
+// gone can no longer be reported as a duplicate.
+func (s *Store) AppendOnce(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	if dedupeKey == "" {
+		return 0, false, storage.ErrDeduplicationKeyRequired
+	}
+
+	sl, err := s.getQueueLog(queueName)
+	if err != nil {
+		return 0, false, err
+	}
+
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	if sl.deleted {
+		return 0, false, storage.ErrQueueNotFound
+	}
+
+	if offset, seen := sl.dedupe[dedupeKey]; seen {
+		// The caller's envelope is consumed either way; here it is released
+		// rather than stored, which is what makes the retry free of leaks.
+		message.Release(msg)
+		return offset, true, nil
+	}
+
+	// The key belongs in the record, not only in the index: the contract is the
+	// same for every implementation, and a caller reading the record back must
+	// find it whichever store it holds.
+	msg.Broker.Transfer.ID = dedupeKey
+
+	offset := sl.tail
+	sl.tail++
+	msg.Broker.Queue.Offset = offset
+	sl.messages = append(sl.messages, msg)
+	sl.dedupe[dedupeKey] = offset
+
+	return offset, false, nil
+}
+
+// AppendOnceAndSync implements storage.DeduplicatingQueueStore.
+//
+// The whole log is in memory, so there is no barrier to establish and no
+// weaker guarantee being offered: a record is exactly as durable as everything
+// else this store holds. A queue that asks for fsync is refused before it
+// reaches here, because the store reports no durable sync support.
+func (s *Store) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey string, msg *message.Envelope) (uint64, bool, error) {
+	return s.AppendOnce(ctx, queueName, dedupeKey, msg)
+}
+
+// DeduplicationWindow implements storage.DeduplicatingQueueStore. Every retained
+// record is covered: the index is pruned only by truncation.
+func (s *Store) DeduplicationWindow() int { return 0 }

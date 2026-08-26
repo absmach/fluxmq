@@ -177,6 +177,10 @@ func ClassifyError(err error) Failure {
 	case errors.Is(err, storage.ErrLogFull),
 		errors.Is(err, consumer.ErrPELFull):
 		return normalizeFailure(Failure{Code: ErrorCodeResourceExhausted, Retryable: true, Durability: DurabilityNotAttempted})
+	case errors.Is(err, storage.ErrDurabilityUnconfirmed):
+		return normalizeFailure(Failure{Code: ErrorCodeUnavailable, Retryable: true, Durability: DurabilityUnconfirmed})
+	case errors.Is(err, storage.ErrDeduplicationStateUnconfirmed):
+		return normalizeFailure(Failure{Code: ErrorCodeUnavailable, Retryable: true})
 	case errors.Is(err, ErrDurableSyncUnsupported),
 		errors.Is(err, ErrDurableReplicatedStreamUnsupported),
 		errors.Is(err, ErrFsyncReplicatedQueueUnsupported),
@@ -203,6 +207,9 @@ func ClassifyError(err error) Failure {
 		errors.Is(err, ErrAtomicBatchReplicationUnsupported),
 		errors.Is(err, consumer.ErrGroupModeMismatch),
 		errors.Is(err, consumer.ErrCommitOffsetOnlyForStreamMode),
+		errors.Is(err, consumer.ErrCommitOffsetNotMonotonic),
+		errors.Is(err, consumer.ErrNackNotSupportedForStream),
+		errors.Is(err, ErrAckOnlyForAutoCommitStream),
 		errors.Is(err, consumer.ErrDLQHandlerUnavailable),
 		errors.Is(err, consumer.ErrDelayedNackUnsupported):
 		return normalizeFailure(Failure{Code: ErrorCodeFailedPrecondition})

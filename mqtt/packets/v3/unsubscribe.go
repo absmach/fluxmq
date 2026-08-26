@@ -4,6 +4,7 @@
 package v3
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -44,7 +45,7 @@ func (u *Unsubscribe) Unpack(r io.Reader) error {
 	}
 	for {
 		t, err := codec.DecodeString(r)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

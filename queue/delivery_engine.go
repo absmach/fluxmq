@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -47,9 +48,7 @@ type DeliveryEngine struct {
 	logger            *slog.Logger
 	onConsumerRemoved func(context.Context, string, string, []string)
 
-	mu       sync.Mutex
-	enqueued map[string]struct{}
-	queue    chan string
+	schedule *deliveryQueue
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -58,6 +57,8 @@ type DeliveryEngine struct {
 // NewDeliveryEngine creates a delivery engine. remote may be nil for
 // single-node deployments.
 func NewDeliveryEngine(
+	machine *stateMachine,
+	schedule *deliveryQueue,
 	queueStore storage.QueueStore,
 	groupStore storage.ConsumerGroupStore,
 	consumerMgr *consumer.Manager,
@@ -72,21 +73,16 @@ func NewDeliveryEngine(
 		queueStore:       queueStore,
 		groupStore:       groupStore,
 		consumerManager:  consumerMgr,
-		stateMachine:     newConsumerStateMachine(queueStore, groupStore, consumerMgr),
+		stateMachine:     machine,
 		local:            local,
 		remote:           remote,
 		localNodeID:      localNodeID,
 		distributionMode: distributionMode,
 		batchSize:        batchSize,
 		logger:           logger,
-		enqueued:         make(map[string]struct{}),
-		queue:            make(chan string, 4096),
+		schedule:         schedule,
 		stopCh:           make(chan struct{}),
 	}
-}
-
-func (e *DeliveryEngine) setStateMachine(stateMachine *stateMachine) {
-	e.stateMachine = stateMachine
 }
 
 func (e *DeliveryEngine) setConsumerRemovedCallback(callback func(context.Context, string, string, []string)) {
@@ -108,25 +104,7 @@ func (e *DeliveryEngine) Stop() {
 // Schedule enqueues a queue name for delivery. Duplicate schedules for the
 // same queue are coalesced until the queue is delivered.
 func (e *DeliveryEngine) Schedule(queueName string) {
-	if queueName == "" {
-		return
-	}
-
-	e.mu.Lock()
-	if _, exists := e.enqueued[queueName]; exists {
-		e.mu.Unlock()
-		return
-	}
-	e.enqueued[queueName] = struct{}{}
-	e.mu.Unlock()
-
-	select {
-	case e.queue <- queueName:
-	default:
-		e.logger.Warn("delivery channel full, dropping trigger (will retry on next sweep)",
-			slog.String("queue", queueName))
-		e.markDelivered(queueName)
-	}
+	e.schedule.Schedule(queueName)
 }
 
 // ScheduleAll lists all queues and schedules each for delivery.
@@ -171,9 +149,7 @@ func (e *DeliveryEngine) DeliverQueue(ctx context.Context, queueName string) boo
 }
 
 func (e *DeliveryEngine) markDelivered(queueName string) {
-	e.mu.Lock()
-	delete(e.enqueued, queueName)
-	e.mu.Unlock()
+	e.schedule.markDelivered(queueName)
 }
 
 func (e *DeliveryEngine) run(ctx context.Context) {
@@ -186,7 +162,7 @@ func (e *DeliveryEngine) run(ctx context.Context) {
 		select {
 		case <-e.stopCh:
 			return
-		case queueName := <-e.queue:
+		case queueName := <-e.schedule.pending():
 			e.markDelivered(queueName)
 			if e.DeliverQueue(ctx, queueName) {
 				e.Schedule(queueName)
@@ -260,12 +236,12 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			continue
 		}
 
-		consumerInfo := freshGroup.GetConsumer(consumerID)
-		if consumerInfo == nil {
+		consumerInfo, registered := freshGroup.GetConsumer(consumerID)
+		if !registered {
 			continue
 		}
 
-		remoteTarget := e.isRemoteConsumer(consumerInfo)
+		remoteTarget := e.isRemoteConsumer(&consumerInfo)
 		if !remoteTarget {
 			if e.local == nil {
 				continue
@@ -284,7 +260,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 			Filter:     group.Pattern,
 			Limit:      e.batchSize,
 		})
-		if err == consumer.ErrNoMessages {
+		if errors.Is(err, consumer.ErrNoMessages) {
 			releaseDeliverySources(outcome.Messages)
 			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
 			continue
@@ -521,9 +497,9 @@ func (e *DeliveryEngine) unregisterConsumer(ctx context.Context, queueName, grou
 	e.logger.LogAttrs(ctx, slog.LevelWarn, "removing stale queue consumer", attrs...)
 
 	if err := e.consumerManager.UnregisterConsumer(ctx, queueName, groupID, consumerID); err != nil {
-		if err != consumer.ErrConsumerNotFound &&
-			err != storage.ErrConsumerNotFound &&
-			err != storage.ErrQueueNotFound {
+		if !errors.Is(err, consumer.ErrConsumerNotFound) &&
+			!errors.Is(err, storage.ErrConsumerNotFound) &&
+			!errors.Is(err, storage.ErrQueueNotFound) {
 			e.logger.Warn("failed to unregister stale queue consumer",
 				slog.String("queue", queueName),
 				slog.String("group", groupID),

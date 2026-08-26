@@ -160,7 +160,7 @@ func NewTransport(nodeID, bindAddr string, handler MessageHandler, tlsCfg *Trans
 func (t *Transport) Start() error {
 	go func() {
 		t.logger.Info("starting Connect transport server", slog.String("address", t.bindAddr))
-		if err := t.httpServer.Serve(t.listener); err != nil && err != http.ErrServerClosed {
+		if err := t.httpServer.Serve(t.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.logger.Error("HTTP server error", slog.String("error", err.Error()))
 		}
 	}()

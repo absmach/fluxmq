@@ -4,6 +4,7 @@
 package mqtt
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,7 +32,7 @@ func (c *Client) readLoop() {
 
 		pkt, err := c.readPacketFromConn(conn)
 		if err != nil {
-			if err == io.EOF || c.state.get() != StateConnected {
+			if errors.Is(err, io.EOF) || c.state.get() != StateConnected {
 				return
 			}
 			c.handleConnectionLost(err)

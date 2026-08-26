@@ -13,6 +13,7 @@ var (
 	ErrSegmentNotFound  = errors.New("segment not found")
 	ErrOffsetOutOfRange = errors.New("offset out of range")
 	ErrSegmentClosed    = errors.New("segment is closed")
+
 	ErrSegmentCorrupted = errors.New("segment corrupted")
 	ErrInvalidBatch     = errors.New("invalid batch")
 	ErrCRCMismatch      = errors.New("CRC mismatch")

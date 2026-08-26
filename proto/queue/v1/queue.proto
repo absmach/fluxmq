@@ -5,9 +5,9 @@ syntax = "proto3";
 
 package fluxmq.queue.v1;
 
-import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
 
 // =============================================================================
 // QueueService - Client-facing API for log-based queues
@@ -483,8 +483,8 @@ message ConsumerGroupConfig {
 
 enum InitialPosition {
   INITIAL_POSITION_UNSPECIFIED = 0;
-  INITIAL_POSITION_EARLIEST = 1;  // Start from beginning
-  INITIAL_POSITION_LATEST = 2;    // Start from end (new messages only)
+  INITIAL_POSITION_EARLIEST = 1; // Start from beginning
+  INITIAL_POSITION_LATEST = 2; // Start from end (new messages only)
 }
 
 // QueueCursor tracks consumer group position in the queue.
@@ -644,9 +644,9 @@ message TailRequest {
   // Special offset values.
   enum StartFrom {
     START_FROM_UNSPECIFIED = 0;
-    START_FROM_EARLIEST = 1;  // Start from head
-    START_FROM_LATEST = 2;    // Start from tail (new messages only)
-    START_FROM_OFFSET = 3;    // Use start_offset value
+    START_FROM_EARLIEST = 1; // Start from head
+    START_FROM_LATEST = 2; // Start from tail (new messages only)
+    START_FROM_OFFSET = 3; // Use start_offset value
   }
   StartFrom start_from = 3;
 }

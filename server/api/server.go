@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -111,7 +112,7 @@ func (s *Server) Listen(ctx context.Context) error {
 				slog.String("address", s.config.Address))
 			err = s.httpServer.ListenAndServe()
 		}
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

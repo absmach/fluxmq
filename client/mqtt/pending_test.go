@@ -4,6 +4,7 @@
 package mqtt
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func TestPendingStoreMaxInflight(t *testing.T) {
 	}
 
 	_, err = ps.add(3, pendingPublish, nil)
-	if err != ErrMaxInflight {
+	if !errors.Is(err, ErrMaxInflight) {
 		t.Errorf("expected ErrMaxInflight, got %v", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestPendingStoreClear(t *testing.T) {
 	// Operations should be completed with error
 	select {
 	case <-op1.done:
-		if op1.err != testErr {
+		if !errors.Is(op1.err, testErr) {
 			t.Errorf("op1 error should be %v, got %v", testErr, op1.err)
 		}
 	default:
@@ -177,7 +178,7 @@ func TestPendingStoreClear(t *testing.T) {
 
 	select {
 	case <-op2.done:
-		if op2.err != testErr {
+		if !errors.Is(op2.err, testErr) {
 			t.Errorf("op2 error should be %v, got %v", testErr, op2.err)
 		}
 	default:
@@ -206,7 +207,7 @@ func TestPendingOpWaitTimeout(t *testing.T) {
 	op, _ := ps.add(1, pendingPublish, nil) //nolint:errcheck // test setup
 
 	err := op.wait(10 * time.Millisecond)
-	if err != ErrTimeout {
+	if !errors.Is(err, ErrTimeout) {
 		t.Errorf("wait should timeout, got: %v", err)
 	}
 }

@@ -4,10 +4,11 @@
 package queue
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
@@ -115,6 +116,11 @@ type ClaimOutcome struct {
 }
 
 // SeekKind selects the coordinate used by a SeekCommand.
+//
+// A string, not an int: SeekCommand is part of the frozen command model, and
+// changing the underlying type breaks every external caller that writes
+// SeekKind("offset"). The zero value being invalid is a wart, not a defect
+// worth a breaking change.
 type SeekKind string
 
 const (
@@ -137,6 +143,27 @@ type SeekOutcome struct {
 	ExactMatch bool
 }
 
+// CommitOffsetCommand records how far a stream group has processed.
+//
+// Distinct from CommitConsumeCommand: that one advances the read cursor after a
+// consume, this one advances the committed safe point behind it. Collapsing
+// them would let a commit move the read position, skipping records.
+type CommitOffsetCommand struct {
+	QueueName string
+	GroupID   string
+	Offset    uint64
+}
+
+// OffsetCommitter records a stream group's processed position.
+//
+// It is a separate optional capability rather than a method on CommandProcessor
+// because that interface is frozen, and API-COMPATIBILITY.md states that adding
+// a method to a frozen Go interface breaks every external implementation. A
+// caller obtains it by asserting on the value StateMachine() returns.
+type OffsetCommitter interface {
+	CommitOffset(context.Context, CommitOffsetCommand) error
+}
+
 // CommandProcessor is the stable protocol-independent queue operation surface.
 // Protocol adapters depend on this interface rather than the concrete machine.
 type CommandProcessor interface {
@@ -151,24 +178,32 @@ type CommandProcessor interface {
 }
 
 // stateMachine owns protocol-independent queue operation semantics.
+//
+// Every dependency is required. There is no degraded construction mode, so no
+// method needs to ask whether the machine it is running on is fully built.
 type stateMachine struct {
-	manager    *Manager
+	records    *recordCore
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	consumers  *consumer.Manager
+
+	// timeIndex resolves a timestamp to a starting offset. Both shipped stores
+	// provide it; one that does not makes a timestamp seek fail rather than
+	// silently fall back to reading the log from the beginning.
+	timeIndex storage.TimeOffsetProvider
 }
 
-func newStateMachine(manager *Manager) *stateMachine {
-	return &stateMachine{
-		manager:    manager,
-		queueStore: manager.queueStore,
-		groupStore: manager.groupStore,
-		consumers:  manager.consumerManager,
+func newStateMachine(records *recordCore, queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, consumers *consumer.Manager) *stateMachine {
+	machine := &stateMachine{
+		records:    records,
+		queueStore: queueStore,
+		groupStore: groupStore,
+		consumers:  consumers,
 	}
-}
-
-func newConsumerStateMachine(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, consumers *consumer.Manager) *stateMachine {
-	return &stateMachine{queueStore: queueStore, groupStore: groupStore, consumers: consumers}
+	if provider, ok := queueStore.(storage.TimeOffsetProvider); ok {
+		machine.timeIndex = provider
+	}
+	return machine
 }
 
 // StateMachine returns the manager's canonical command processor.
@@ -176,9 +211,6 @@ func (m *Manager) StateMachine() CommandProcessor { return m.stateMachine }
 
 // Append applies an exact single-queue append command.
 func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (AppendOutcome, error) {
-	if s == nil || s.manager == nil {
-		return AppendOutcome{}, fmt.Errorf("%w: append runtime is unavailable", ErrInvalidCommand)
-	}
 	if command.QueueName == "" {
 		return AppendOutcome{}, fmt.Errorf("%w: queue name is required", ErrInvalidCommand)
 	}
@@ -192,21 +224,21 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 		if len(command.Messages) != 1 || command.AtomicBatch {
 			return AppendOutcome{}, fmt.Errorf("%w: protected durable append requires exactly one message", ErrInvalidCommand)
 		}
-		offset, createdAt, err := s.manager.publishToDurableStream(ctx, command.QueueName, command.Messages[0])
+		offset, createdAt, err := s.records.publishToDurableStream(ctx, command.QueueName, command.Messages[0])
 		if err != nil {
 			return AppendOutcome{}, err
 		}
 		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 	}
 	if len(command.Messages) == 1 && !command.AtomicBatch {
-		offset, createdAt, err := s.manager.appendToQueue(ctx, command.QueueName, command.Messages[0])
+		offset, createdAt, err := s.records.appendToQueue(ctx, command.QueueName, command.Messages[0])
 		if err != nil {
 			return AppendOutcome{}, err
 		}
 		return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 	}
 
-	first, count, lastCreatedAt, err := s.manager.appendBatchToQueue(ctx, command.QueueName, command.Messages)
+	first, count, lastCreatedAt, err := s.records.appendBatchToQueue(ctx, command.QueueName, command.Messages)
 	if err != nil {
 		return AppendOutcome{}, err
 	}
@@ -217,26 +249,19 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 	return AppendOutcome{FirstOffset: first, LastOffset: last, Count: count, Timestamp: lastCreatedAt}, nil
 }
 
-func (s *stateMachine) appendResolved(ctx context.Context, queueName string, publish types.PublishRequest, config *types.QueueConfig) (AppendOutcome, error) {
-	if config == nil {
-		return AppendOutcome{}, fmt.Errorf("append to queue %q: missing queue configuration", queueName)
+// CommitOffset records a stream group's processed position.
+func (s *stateMachine) CommitOffset(ctx context.Context, command CommitOffsetCommand) error {
+	if command.QueueName == "" || command.GroupID == "" {
+		return fmt.Errorf("%w: queue name and group id are required", ErrInvalidCommand)
 	}
-	message := newQueuedMessage(publish, config)
-	createdAt := message.Broker.Queue.CreatedAt
-	offset, err := s.manager.appendConfiguredMessage(ctx, queueName, config, message)
-	if err := s.manager.completeAppend(queueName, publish.Topic, offset, err); err != nil {
-		return AppendOutcome{}, err
-	}
-	return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
+
+	return s.consumers.CommitOffset(ctx, command.QueueName, command.GroupID, command.Offset)
 }
 
 // Consume selects and claims the next records for a consumer.
 func (s *stateMachine) Consume(ctx context.Context, command ConsumeCommand) (ConsumeOutcome, error) {
 	if err := validateConsumerCommand(command.QueueName, command.GroupID, command.ConsumerID); err != nil {
 		return ConsumeOutcome{}, err
-	}
-	if s == nil || s.consumers == nil || s.groupStore == nil {
-		return ConsumeOutcome{}, fmt.Errorf("%w: consume runtime is unavailable", ErrInvalidCommand)
 	}
 	group, err := s.groupStore.GetConsumerGroup(ctx, command.QueueName, command.GroupID)
 	if err != nil {
@@ -263,16 +288,13 @@ func (s *stateMachine) Consume(ctx context.Context, command ConsumeCommand) (Con
 		releaseEnvelopes(messages)
 		return ConsumeOutcome{}, err
 	}
-	return ConsumeOutcome{Messages: messages, Mode: types.GroupModeQueue, NextOffset: fresh.GetCursor().Cursor}, nil
+	return ConsumeOutcome{Messages: messages, Mode: types.GroupModeQueue, NextOffset: fresh.CursorView().Cursor}, nil
 }
 
 // CommitConsume advances a stream cursor after an adapter confirms delivery.
 func (s *stateMachine) CommitConsume(ctx context.Context, command CommitConsumeCommand) error {
 	if command.QueueName == "" || command.GroupID == "" {
 		return fmt.Errorf("%w: queue name and group id are required", ErrInvalidCommand)
-	}
-	if s == nil || s.consumers == nil {
-		return fmt.Errorf("%w: consume runtime is unavailable", ErrInvalidCommand)
 	}
 	return s.consumers.CommitStreamCursor(ctx, command.QueueName, command.GroupID, command.Offset)
 }
@@ -282,9 +304,19 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 	if err := validateSettlementCommand(command.QueueName, command.Offsets); err != nil {
 		return SettlementOutcome{}, err
 	}
+	resolver, err := s.newSettlementResolver(ctx, command.QueueName, command.GroupID)
+	if err != nil {
+		return SettlementOutcome{}, err
+	}
 	outcome := SettlementOutcome{Offsets: make([]uint64, 0, len(command.Offsets))}
+
+	// The pending-list gauge is reported once for the whole command. Reading it
+	// per offset cost a store lookup per settled record to publish a number
+	// that only the final value of matters.
+	var settledGroup *types.ConsumerGroup
+
 	for _, offset := range command.Offsets {
-		group, owner, err := s.resolveSettlement(ctx, command.QueueName, command.GroupID, offset)
+		group, owner, err := resolver.resolve(offset)
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, err))
 		}
@@ -299,14 +331,15 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, err))
 		}
-		if s.manager != nil {
-			s.manager.metrics.RecordAck(0)
-			if fresh, readErr := s.groupStore.GetConsumerGroup(ctx, command.QueueName, group.ID); readErr == nil {
-				s.manager.metrics.UpdatePELSize(uint64(fresh.PendingCount()))
-			}
-		}
+		s.records.metrics.RecordAck(0)
+		settledGroup = group
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
+
+	if settledGroup != nil {
+		s.records.metrics.UpdatePELSize(uint64(settledGroup.PendingCount()))
+	}
+
 	return s.finishSettlement(ctx, command.QueueName, command.GroupID, outcome)
 }
 
@@ -318,23 +351,30 @@ func (s *stateMachine) Nack(ctx context.Context, command NackCommand) (Settlemen
 	if command.Delay < 0 {
 		return SettlementOutcome{}, fmt.Errorf("%w: nack delay cannot be negative", ErrInvalidCommand)
 	}
+	resolver, err := s.newSettlementResolver(ctx, command.QueueName, command.GroupID)
+	if err != nil {
+		return SettlementOutcome{}, err
+	}
 	outcome := SettlementOutcome{Offsets: make([]uint64, 0, len(command.Offsets))}
 	for _, offset := range command.Offsets {
-		group, owner, err := s.resolveSettlement(ctx, command.QueueName, command.GroupID, offset)
+		group, owner, err := resolver.resolve(offset)
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
 		}
 		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
-		if group.Mode != types.GroupModeStream {
-			if err := s.consumers.NackWithDelay(ctx, command.QueueName, group.ID, owner, offset, command.Delay); err != nil {
-				return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
-			}
+		if group.Mode == types.GroupModeStream {
+			// A stream group has no pending entry to return, so there is no
+			// transition to perform. Reporting the offset settled told the
+			// caller a redelivery had been arranged when nothing had happened.
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome,
+				fmt.Errorf("nack offset %d: %w", offset, consumer.ErrNackNotSupportedForStream))
 		}
-		if s.manager != nil {
-			s.manager.metrics.RecordNack()
+		if err := s.consumers.NackWithDelay(ctx, command.QueueName, group.ID, owner, offset, command.Delay); err != nil {
+			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
 		}
+		s.records.metrics.RecordNack()
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
 	return s.finishSettlement(ctx, command.QueueName, command.GroupID, outcome)
@@ -345,12 +385,13 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 	if err := validateSettlementCommand(command.QueueName, command.Offsets); err != nil {
 		return SettlementOutcome{}, err
 	}
-	if s == nil || s.manager == nil {
-		return SettlementOutcome{}, fmt.Errorf("%w: reject runtime is unavailable", ErrInvalidCommand)
+	resolver, err := s.newSettlementResolver(ctx, command.QueueName, command.GroupID)
+	if err != nil {
+		return SettlementOutcome{}, err
 	}
 	outcome := SettlementOutcome{Offsets: make([]uint64, 0, len(command.Offsets))}
 	for _, offset := range command.Offsets {
-		group, owner, err := s.resolveSettlement(ctx, command.QueueName, command.GroupID, offset)
+		group, owner, err := resolver.resolve(offset)
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
@@ -358,15 +399,15 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
 		if group.Mode == types.GroupModeStream {
-			err = s.manager.rejectStream(ctx, command.QueueName, group, offset, command.Reason)
+			err = s.records.rejectStream(ctx, command.QueueName, group, offset, command.Reason)
 		} else {
 			err = s.consumers.Reject(ctx, command.QueueName, group.ID, owner, offset, command.Reason)
 		}
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
-		if s.manager != nil && group.Mode != types.GroupModeStream {
-			s.manager.metrics.RecordReject()
+		if group.Mode != types.GroupModeStream {
+			s.records.metrics.RecordReject()
 		}
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
@@ -381,9 +422,6 @@ func (s *stateMachine) Claim(ctx context.Context, command ClaimCommand) (ClaimOu
 	if command.MinIdle < 0 {
 		return ClaimOutcome{}, fmt.Errorf("%w: minimum idle time cannot be negative", ErrInvalidCommand)
 	}
-	if s == nil || s.consumers == nil {
-		return ClaimOutcome{}, fmt.Errorf("%w: claim runtime is unavailable", ErrInvalidCommand)
-	}
 	messages, err := s.consumers.ClaimPendingBatch(ctx, command.QueueName, command.GroupID, command.ConsumerID, command.MinIdle, command.Limit)
 	if err != nil {
 		return ClaimOutcome{}, err
@@ -397,9 +435,6 @@ func (s *stateMachine) Claim(ctx context.Context, command ClaimCommand) (ClaimOu
 
 // Seek resolves a bounded queue offset.
 func (s *stateMachine) Seek(ctx context.Context, command SeekCommand) (SeekOutcome, error) {
-	if s == nil || s.queueStore == nil {
-		return SeekOutcome{}, fmt.Errorf("%w: seek runtime is unavailable", ErrInvalidCommand)
-	}
 	if command.QueueName == "" {
 		return SeekOutcome{}, fmt.Errorf("%w: queue name is required", ErrInvalidCommand)
 	}
@@ -422,7 +457,21 @@ func (s *stateMachine) Seek(ctx context.Context, command SeekCommand) (SeekOutco
 		}
 		return SeekOutcome{Offset: offset}, nil
 	case SeekTimestamp:
-		offset := head
+		// Start from the time index rather than from head. Scanning from head
+		// decodes every envelope in the queue, which on the client-facing seek
+		// means a timestamp far in the future reads the whole log.
+		if s.timeIndex == nil {
+			return SeekOutcome{}, fmt.Errorf("%w: queue store provides no time index", ErrInvalidCommand)
+		}
+		offset, err := s.timeIndex.OffsetByTime(ctx, command.QueueName, command.Timestamp)
+		if err != nil {
+			return SeekOutcome{}, err
+		}
+		// The index is interval-based, so it lands at or before the first
+		// matching record; the scan below covers the remaining distance.
+		if offset < head {
+			offset = head
+		}
 		for offset < tail {
 			batch, err := s.queueStore.ReadBatch(ctx, command.QueueName, offset, 128)
 			if err != nil {
@@ -456,62 +505,100 @@ func releaseEnvelopes(envelopes []*message.Envelope) {
 	}
 }
 
-func (s *stateMachine) resolveSettlement(ctx context.Context, queueName, groupID string, offset uint64) (*types.ConsumerGroup, string, error) {
-	if s == nil || s.groupStore == nil || s.consumers == nil {
-		return nil, "", fmt.Errorf("%w: settlement runtime is unavailable", ErrInvalidCommand)
-	}
+// settlementResolver resolves the owning group for every offset in one command.
+//
+// The store lookup happens once per command rather than once per offset: with
+// an explicit group ID that is a single read, and without one — the MQTT and
+// AMQP adapter paths, which settle against whichever group holds the offset —
+// a single listing. Both stores hand back live group objects, so the cached
+// groups still reflect entries removed as the command proceeds; only the read
+// is saved, not the state.
+//
+// Offsets are still resolved and applied one at a time, in request order, and
+// the command still stops at the first failure. The outcome reports the settled
+// prefix, so grouping offsets by owner and settling each owner's set together
+// would let a later offset settle ahead of an earlier one that failed and make
+// that prefix a lie.
+type settlementResolver struct {
+	groupStore storage.ConsumerGroupStore
+
+	// group is the explicitly named group, resolved once.
+	group *types.ConsumerGroup
+
+	// candidates are every group on the queue, ordered by ID, used when no
+	// group was named. stream is the first stream-mode group among them.
+	candidates []*types.ConsumerGroup
+	stream     *types.ConsumerGroup
+}
+
+func (s *stateMachine) newSettlementResolver(ctx context.Context, queueName, groupID string) (*settlementResolver, error) {
+	resolver := &settlementResolver{groupStore: s.groupStore}
 	if groupID != "" {
 		group, err := s.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		if group.Mode == types.GroupModeStream {
-			return group, "", nil
-		}
-		_, owner := group.FindPending(offset)
-		if owner == "" {
-			return nil, "", consumer.ErrMessageNotPending
-		}
-		return group, owner, nil
+		resolver.group = group
+		return resolver, nil
 	}
 
 	groups, err := s.groupStore.ListConsumerGroups(ctx, queueName)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	sort.Slice(groups, func(i, j int) bool { return groups[i].ID < groups[j].ID })
-	var streamGroup *types.ConsumerGroup
+	slices.SortFunc(groups, func(a, b *types.ConsumerGroup) int { return cmp.Compare(a.ID, b.ID) })
+	resolver.candidates = groups
 	for _, group := range groups {
 		if group.Mode == types.GroupModeStream {
-			if streamGroup == nil {
-				streamGroup = group
-			}
+			resolver.stream = group
+			break
+		}
+	}
+	return resolver, nil
+}
+
+// resolve names the group and owning consumer for one offset. The pending
+// lookup runs per offset because settling an earlier one changes it.
+func (r *settlementResolver) resolve(offset uint64) (*types.ConsumerGroup, string, error) {
+	if r.group != nil {
+		if r.group.Mode == types.GroupModeStream {
+			return r.group, "", nil
+		}
+		_, owner := r.group.FindPending(offset)
+		if owner == "" {
+			return nil, "", consumer.ErrMessageNotPending
+		}
+		return r.group, owner, nil
+	}
+
+	for _, group := range r.candidates {
+		if group.Mode == types.GroupModeStream {
 			continue
 		}
-		_, owner := group.FindPending(offset)
-		if owner != "" {
+		if _, owner := group.FindPending(offset); owner != "" {
 			return group, owner, nil
 		}
 	}
-	if streamGroup != nil {
-		return streamGroup, "", nil
+	if r.stream != nil {
+		return r.stream, "", nil
 	}
 	return nil, "", consumer.ErrMessageNotPending
 }
 
 func (s *stateMachine) ackStream(ctx context.Context, group *types.ConsumerGroup, offset uint64) error {
 	if !group.AutoCommit {
-		return nil
+		// Acking a manual-commit stream group would move nothing. Reporting
+		// success would tell the caller its offset is durable when the group
+		// still holds the old committed position; CommitOffset is the call
+		// that does what they meant.
+		return ErrAckOnlyForAutoCommitStream
 	}
-	cursor := group.GetCursor()
-	next := offset + 1
-	if next > cursor.Cursor {
-		return consumer.ErrInvalidOffset
-	}
-	if next <= cursor.Committed {
-		return nil
-	}
-	return s.groupStore.UpdateCommitted(ctx, group.QueueName, group.ID, next)
+	// Through the consumer manager, which owns the group lock. Reading the
+	// cursor here and writing the store directly is a read-modify-write with
+	// nothing serialising it: two acknowledgements both read the old position
+	// and the lower one lands last, moving the committed offset backwards and
+	// redelivering messages that were already settled.
+	return s.consumers.AdvanceCommitted(ctx, group.QueueName, group.ID, offset+1)
 }
 
 // partialSettlement enriches an outcome that is being returned with an error so
@@ -522,7 +609,7 @@ func (s *stateMachine) partialSettlement(ctx context.Context, queueName, groupID
 		return outcome, cause
 	}
 	if group, err := s.groupStore.GetConsumerGroup(ctx, queueName, groupID); err == nil {
-		cursor := group.GetCursor()
+		cursor := group.CursorView()
 		outcome.Cursor = cursor.Cursor
 		outcome.Committed = cursor.Committed
 	}
@@ -530,8 +617,8 @@ func (s *stateMachine) partialSettlement(ctx context.Context, queueName, groupID
 }
 
 func (s *stateMachine) finishSettlement(ctx context.Context, queueName, groupID string, outcome SettlementOutcome) (SettlementOutcome, error) {
-	if s.manager != nil && len(outcome.Offsets) > 0 {
-		s.manager.delivery.Schedule(queueName)
+	if len(outcome.Offsets) > 0 {
+		s.records.delivery.Schedule(queueName)
 	}
 	if groupID == "" {
 		return outcome, nil
@@ -540,7 +627,7 @@ func (s *stateMachine) finishSettlement(ctx context.Context, queueName, groupID 
 	if err != nil {
 		return outcome, err
 	}
-	cursor := group.GetCursor()
+	cursor := group.CursorView()
 	outcome.Cursor = cursor.Cursor
 	outcome.Committed = cursor.Committed
 	return outcome, nil

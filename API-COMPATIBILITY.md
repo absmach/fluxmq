@@ -20,8 +20,13 @@ supported adapter.
 - Go: `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
   `broker.StreamQueueManager`, plus `queue.CommandProcessor` and its typed
   command/outcome values. Compile-time guards pin the interface method sets and
-  signatures in both directions. The state-machine implementation remains
-  private so internal helpers and storage dependencies do not become API.
+  signatures in both directions; `api/compat/go-queue-v1.txt` pins the typed
+  values, which those guards cannot see because they name the live types. The
+  state-machine implementation remains private so internal helpers and storage
+  dependencies do not become API.
+- Protocol property names, pinned as literal tables in `message` and
+  `queue/types`. A client writes and reads these strings, so the value is the
+  contract and a rename is a protocol change.
 - Configuration: the accepted YAML keys and strict decoding behavior pinned by
   `config/schema_test.go`. Adding a key is compatible; removing, renaming, or
   changing absent-versus-zero behavior is not.

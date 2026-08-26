@@ -6,6 +6,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -105,7 +106,7 @@ func (s *Server) Listen(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

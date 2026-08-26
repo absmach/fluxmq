@@ -4,6 +4,7 @@
 package raft
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -162,7 +163,7 @@ func TestBadgerLogStore_DeleteRange(t *testing.T) {
 
 	// Trying to get deleted logs should fail
 	retrieved := &raft.Log{}
-	if err := store.GetLog(2, retrieved); err != raft.ErrLogNotFound {
+	if err := store.GetLog(2, retrieved); !errors.Is(err, raft.ErrLogNotFound) {
 		t.Errorf("expected ErrLogNotFound, got %v", err)
 	}
 }

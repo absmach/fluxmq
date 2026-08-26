@@ -23,6 +23,7 @@ import (
 	"github.com/absmach/fluxmq/internal/bufpool"
 	"github.com/absmach/fluxmq/message"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	queueconsumer "github.com/absmach/fluxmq/queue/consumer"
 	qstorage "github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -1486,7 +1487,7 @@ func (ch *Channel) handleBasicConsume(m *codec.BasicConsume) error {
 		groupID = tag
 	}
 	if queueName != "" && groupID == "" {
-		groupID = queuepkg.DefaultConsumerGroupID(clientID)
+		groupID = queueconsumer.DefaultConsumerGroupID(clientID)
 	}
 
 	cons := &consumer{

@@ -6,6 +6,7 @@ package raft
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -60,6 +61,13 @@ type Operation struct {
 	// For OpAppend
 	Message *message.Envelope `json:"message,omitempty"`
 
+	// DedupeKey, when set on OpAppend, makes the append conditional: each
+	// replica appends only if it does not already hold a record with this key.
+	// The key is part of the replicated entry so every replica asks the same
+	// question, rather than the leader answering it alone and shipping a
+	// result the followers cannot verify.
+	DedupeKey string `json:"dedupe_key,omitempty"`
+
 	// For OpAppendBatch
 	Messages []*message.Envelope `json:"messages,omitempty"`
 
@@ -91,6 +99,11 @@ type Operation struct {
 type ApplyResult struct {
 	Offset uint64 // For append operations
 	Error  error
+
+	// Deduplicated reports that a keyed append found the record already
+	// present. The offset still points at it, so a caller settling against
+	// the record can proceed either way.
+	Deduplicated bool
 }
 
 // LogFSM implements the Raft FSM interface for all queue operations.
@@ -174,7 +187,7 @@ func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	err := f.queueStore.CreateQueue(ctx, *op.QueueConfig)
-	if err != nil && err != storage.ErrQueueAlreadyExists {
+	if err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		f.logger.Error("failed to apply create queue",
 			slog.String("queue", op.QueueConfig.Name),
 			slog.String("error", err.Error()))
@@ -204,7 +217,7 @@ func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: fmt.Errorf("empty queue name in delete queue operation")}
 	}
 
-	if err := f.queueStore.DeleteQueue(ctx, op.QueueName); err != nil && err != storage.ErrQueueNotFound {
+	if err := f.queueStore.DeleteQueue(ctx, op.QueueName); err != nil && !errors.Is(err, storage.ErrQueueNotFound) {
 		f.logger.Error("failed to apply delete queue",
 			slog.String("queue", op.QueueName),
 			slog.String("error", err.Error()))
@@ -218,10 +231,13 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	if op.Message == nil {
 		return &ApplyResult{Error: fmt.Errorf("nil message in append operation")}
 	}
+	if op.DedupeKey != "" {
+		return f.applyAppendOnce(ctx, op)
+	}
 	messageID := op.Message.Broker.Queue.MessageID
 
 	offset, err := f.queueStore.Append(ctx, op.QueueName, op.Message)
-	if err == storage.ErrQueueNotFound {
+	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
 			message.Release(op.Message)
 			op.Message = nil
@@ -251,13 +267,75 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	return &ApplyResult{Offset: offset}
 }
 
+// applyAppendOnce applies an append that must not produce a second record.
+//
+// The check runs here, on each replica against its own store, rather than once
+// on the leader. The leader's answer is not part of the replicated log, so a
+// follower has no way to verify it; what every replica does hold is the same
+// log content, and the key is written into the record itself. Asking the local
+// store therefore gives every replica the same answer for the same reason.
+func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResult {
+	deduplicating, ok := f.queueStore.(storage.DeduplicatingQueueStore)
+	if !ok {
+		// Falling back to a plain append would make this a per-node decision:
+		// a replica that can deduplicate would skip the record while one that
+		// cannot would write it, and the two would disagree about what the
+		// queue holds. Refusing keeps the replicas identical and leaves the
+		// source entry pending for a later retry.
+		message.Release(op.Message)
+		op.Message = nil
+		f.logger.Error("store cannot apply a deduplicated append",
+			slog.String("queue", op.QueueName),
+			slog.String("dedupe_key", op.DedupeKey))
+		return &ApplyResult{Error: storage.ErrDeduplicationUnsupported}
+	}
+
+	messageID := op.Message.Broker.Queue.MessageID
+
+	offset, deduplicated, err := deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, op.Message)
+	if errors.Is(err, storage.ErrQueueNotFound) {
+		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
+			message.Release(op.Message)
+			op.Message = nil
+			f.logger.Error("failed to auto-create queue for deduplicated append",
+				slog.String("queue", op.QueueName),
+				slog.String("error", createErr.Error()))
+			return &ApplyResult{Error: createErr}
+		}
+		offset, deduplicated, err = deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, op.Message)
+	}
+	if err != nil {
+		message.Release(op.Message)
+		op.Message = nil
+		f.logger.Error("failed to apply deduplicated append",
+			slog.String("queue", op.QueueName),
+			slog.String("message_id", messageID),
+			slog.String("dedupe_key", op.DedupeKey),
+			slog.String("error", err.Error()))
+		return &ApplyResult{Error: err}
+	}
+
+	// AppendOnce consumed the envelope on both success paths: it either stored
+	// it or released it.
+	op.Message = nil
+
+	f.logger.Debug("applied deduplicated append",
+		slog.String("queue", op.QueueName),
+		slog.String("message_id", messageID),
+		slog.String("dedupe_key", op.DedupeKey),
+		slog.Uint64("offset", offset),
+		slog.Bool("deduplicated", deduplicated))
+
+	return &ApplyResult{Offset: offset, Deduplicated: deduplicated}
+}
+
 func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResult {
 	if len(op.Messages) == 0 {
 		return &ApplyResult{Error: fmt.Errorf("empty messages in append batch operation")}
 	}
 
 	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, op.Messages)
-	if err == storage.ErrQueueNotFound {
+	if errors.Is(err, storage.ErrQueueNotFound) {
 		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
 			releaseMessages(op.Messages)
 			op.Messages = nil
@@ -297,7 +375,7 @@ func releaseMessages(messages []*message.Envelope) {
 
 func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {
 	cfg := types.DefaultEphemeralQueueConfig(queueName, "$queue/"+queueName+"/#")
-	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && err != storage.ErrQueueAlreadyExists {
+	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		return err
 	}
 	return nil
@@ -326,7 +404,7 @@ func (f *LogFSM) applyCreateGroup(ctx context.Context, op *Operation) *ApplyResu
 	}
 
 	err := f.groupStore.CreateConsumerGroup(ctx, op.GroupState)
-	if err != nil && err != storage.ErrConsumerGroupExists {
+	if err != nil && !errors.Is(err, storage.ErrConsumerGroupExists) {
 		f.logger.Error("failed to apply create group",
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
@@ -427,7 +505,7 @@ func (f *LogFSM) applyAddPending(ctx context.Context, op *Operation) *ApplyResul
 
 func (f *LogFSM) applyRemovePending(ctx context.Context, op *Operation) *ApplyResult {
 	err := f.groupStore.RemovePendingEntry(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset)
-	if err != nil && err != storage.ErrPendingEntryNotFound {
+	if err != nil && !errors.Is(err, storage.ErrPendingEntryNotFound) {
 		f.logger.Error("failed to apply remove pending",
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
@@ -558,7 +636,7 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 	for _, q := range snapshot.Queues {
 		if q.QueueConfig != nil {
 			if err := f.queueStore.CreateQueue(ctx, *q.QueueConfig); err != nil {
-				if err == storage.ErrQueueAlreadyExists {
+				if errors.Is(err, storage.ErrQueueAlreadyExists) {
 					if updateErr := f.queueStore.UpdateQueue(ctx, *q.QueueConfig); updateErr != nil {
 						f.logger.Error("failed to restore queue config",
 							slog.String("queue", q.QueueName),
@@ -585,7 +663,7 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 		for _, group := range q.Groups {
 			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
-				if err != storage.ErrConsumerGroupExists {
+				if !errors.Is(err, storage.ErrConsumerGroupExists) {
 					f.logger.Error("failed to restore consumer group",
 						slog.String("queue", q.QueueName),
 						slog.String("group", group.ID),

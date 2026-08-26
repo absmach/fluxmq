@@ -4,6 +4,7 @@
 package mqtt
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -168,7 +169,7 @@ func TestTokenWithError(t *testing.T) {
 	tok := newToken()
 	tok.complete(ErrTimeout)
 
-	if tok.Error() != ErrTimeout {
+	if !errors.Is(tok.Error(), ErrTimeout) {
 		t.Errorf("expected ErrTimeout, got %v", tok.Error())
 	}
 }
@@ -191,7 +192,7 @@ func TestTokenWaitTimeout(t *testing.T) {
 	tok := newToken()
 
 	err := tok.WaitTimeout(10 * time.Millisecond)
-	if err != ErrTimeout {
+	if !errors.Is(err, ErrTimeout) {
 		t.Errorf("expected ErrTimeout, got: %v", err)
 	}
 }

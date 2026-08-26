@@ -5,6 +5,7 @@ package mqtt
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"runtime"
@@ -1695,7 +1696,7 @@ func TestSoakDrainConcurrentPublishBursts(t *testing.T) {
 				default:
 				}
 				err := c.Publish(nil, "events/soak", payload, 0, false)
-				if err != nil && err != ErrDraining && err != ErrNotConnected {
+				if err != nil && !errors.Is(err, ErrDraining) && !errors.Is(err, ErrNotConnected) {
 					return
 				}
 			}

@@ -82,7 +82,7 @@ func (b *Broker) runSession(ctx context.Context, handler protocolHandler, s *ses
 			// Real error (EOF, connection closed, etc.). Only count it as a
 			// packet error on the live connection: a superseded goroutine's
 			// read fails because its own socket was closed by the takeover.
-			if err != io.EOF && err != session.ErrNotConnected && cc.current() {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, session.ErrNotConnected) && cc.current() {
 				b.telemetry.stats.IncrementPacketErrors()
 			}
 			b.telemetry.stats.DecrementConnections()
@@ -124,7 +124,7 @@ func (b *Broker) runSession(ctx context.Context, handler protocolHandler, s *ses
 		}
 
 		if dispatchErr := dispatchPacket(handler, cc, pkt); dispatchErr != nil {
-			if dispatchErr == io.EOF {
+			if errors.Is(dispatchErr, io.EOF) {
 				b.telemetry.stats.DecrementConnections()
 				return nil
 			}

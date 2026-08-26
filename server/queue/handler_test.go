@@ -519,8 +519,8 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get group: %v", err)
 	}
-	updatedConsumer := updatedGroup.GetConsumer(testConsumer1)
-	if updatedConsumer == nil {
+	updatedConsumer, registered := updatedGroup.GetConsumer(testConsumer1)
+	if !registered {
 		t.Fatalf("expected consumer to exist")
 	}
 	if !updatedConsumer.LastHeartbeat.After(before) {

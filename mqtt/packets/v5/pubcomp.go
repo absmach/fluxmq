@@ -5,11 +5,22 @@ package v5
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 
 	codec "github.com/absmach/fluxmq/mqtt/codec"
 	"github.com/absmach/fluxmq/mqtt/packets"
+)
+
+// PUBCOMP reason codes, MQTT 5.0 section 3.7.2.1.
+const (
+	PubCompSuccess byte = 0x00
+
+	// PubCompPacketIdentifierNotFound answers a PUBREL naming a packet
+	// identifier the session does not hold. Answering Success instead tells the
+	// publisher a transaction it never had was completed.
+	PubCompPacketIdentifierNotFound byte = 0x92
 )
 
 // PubComp is an internal representation of the fields of the PUBCOMP MQTT packet.
@@ -77,7 +88,7 @@ func (pkt *PubComp) Unpack(r io.Reader) error {
 	// MQTT 5.0 allows minimal packets with just packet ID (remaining length = 2).
 	// In this case, reason code defaults to 0x00 (Success) and no properties.
 	rc, err := codec.DecodeByte(r)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	if err != nil {
@@ -85,7 +96,7 @@ func (pkt *PubComp) Unpack(r io.Reader) error {
 	}
 	pkt.ReasonCode = &rc
 	length, err := codec.DecodeVBI(r)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	if err != nil {

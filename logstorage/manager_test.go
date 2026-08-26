@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,7 +132,7 @@ func TestSegmentManager_ZeroSyncIntervalSyncsEveryAppend(t *testing.T) {
 
 	_, err := mgr.AppendMessage([]byte("must sync"), nil, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "durability barrier")
+	assert.ErrorIs(t, err, storage.ErrDurabilityUnconfirmed)
 }
 
 func TestSegmentManager_RotationSyncsSegmentBeforeSealingIt(t *testing.T) {
