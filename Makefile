@@ -22,7 +22,8 @@ DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
 # Both gates are hard, but a cluster change is reviewed on its own terms instead
 # of being weighed against a client-facing promise.
 # proto/message is the format every stored message is written in, and proto/raft
-# is the command and log-entry format used by experimental queue replication.
+# is the command, log-entry, and snapshot format used by experimental queue
+# replication.
 # A broken RPC fails a call; a broken stored format can prevent restart.
 PROTO_PUBLIC_PATHS   := --path proto/queue --path proto/auth
 PROTO_INTERNAL_PATHS := --path proto/cluster
@@ -368,6 +369,13 @@ proto-baseline-raft:
 go-baseline:
 	go test ./queue -run TestFrozenGoAPIMatchesBaseline -update-api-baseline
 	go test ./message -run TestFrozenMessageGoAPIMatchesBaseline -update-message-api-baseline
+
+# Rewrite the golden stored encodings. Same rule as proto-baseline: only for an
+# intended format change, with the golden diff in the review beside the schema.
+.PHONY: golden-baseline
+golden-baseline:
+	go test ./message -run TestGoldenEnvelopeEncoding -update-envelope-golden
+	go test ./queue/raft -run TestGoldenRaftEncodings -update-raft-golden
 
 # Show help
 .PHONY: help

@@ -5,7 +5,6 @@ package raft
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -130,9 +129,15 @@ func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupSt
 func (f *LogFSM) Apply(l *raft.Log) any {
 	op, err := unmarshalOperation(l.Data)
 	if err != nil {
-		f.logger.Error("failed to unmarshal operation",
+		// The entry is already committed, so every other replica applies it.
+		// Returning an error here would leave this node quietly one mutation
+		// behind the rest of the group, with nothing to notice the gap and
+		// nothing to repair it. Stopping is the only honest response.
+		f.logger.Error("undecodable committed log entry",
+			slog.Uint64("index", l.Index),
+			slog.Uint64("term", l.Term),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		panic(fmt.Errorf("queue raft fsm: undecodable committed entry at index %d: %w", l.Index, err))
 	}
 
 	ctx := context.Background()
@@ -169,11 +174,12 @@ func (f *LogFSM) Apply(l *raft.Log) any {
 	case OpUnregisterConsumer:
 		return f.applyUnregisterConsumer(ctx, op)
 	default:
-		err := fmt.Errorf("unknown operation type: %d", op.Type)
-		f.logger.Error("unknown operation",
-			slog.String("queue", op.QueueName),
-			slog.Int("op_type", int(op.Type)))
-		return &ApplyResult{Error: err}
+		// Same divergence as an undecodable entry: the operation committed,
+		// the peers applied it, and this binary has no case for it.
+		f.logger.Error("unknown operation type in committed entry",
+			slog.Uint64("index", l.Index),
+			slog.Int("type", int(op.Type)))
+		panic(fmt.Errorf("queue raft fsm: unknown operation type %d at index %d", op.Type, l.Index))
 	}
 }
 
@@ -573,8 +579,14 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 
 	f.logger.Info("restoring from snapshot")
 
-	var snapshot GlobalSnapshotData
-	if err := json.NewDecoder(rc).Decode(&snapshot); err != nil {
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		f.logger.Error("failed to read snapshot",
+			slog.String("error", err.Error()))
+		return err
+	}
+	snapshot, err := unmarshalSnapshot(data)
+	if err != nil {
 		f.logger.Error("failed to decode snapshot",
 			slog.String("error", err.Error()))
 		return err
@@ -630,19 +642,6 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 	return nil
 }
 
-// QueueSnapshotData holds snapshot data for a single queue.
-type QueueSnapshotData struct {
-	QueueName   string                 `json:"queue_name"`
-	QueueConfig *types.QueueConfig     `json:"queue_config,omitempty"`
-	Groups      []*types.ConsumerGroup `json:"groups"`
-}
-
-// GlobalSnapshotData represents the serialized snapshot data for all queues.
-type GlobalSnapshotData struct {
-	Queues    []QueueSnapshotData `json:"queues"`
-	Timestamp time.Time           `json:"timestamp"`
-}
-
 // GlobalSnapshot implements raft.FSMSnapshot for all queues.
 type GlobalSnapshot struct {
 	queues     []QueueSnapshotData
@@ -652,14 +651,20 @@ type GlobalSnapshot struct {
 
 // Persist writes the snapshot to the given sink.
 func (s *GlobalSnapshot) Persist(sink raft.SnapshotSink) error {
-	snapshot := GlobalSnapshotData{
+	data, err := marshalSnapshot(&GlobalSnapshotData{
 		Queues:    s.queues,
 		Timestamp: time.Now(),
-	}
-
-	if err := json.NewEncoder(sink).Encode(snapshot); err != nil {
+	})
+	if err != nil {
 		sink.Cancel() //nolint:errcheck // best-effort cancellation after encode failure
 		s.logger.Error("failed to encode snapshot",
+			slog.String("error", err.Error()))
+		return err
+	}
+
+	if _, err := sink.Write(data); err != nil {
+		sink.Cancel() //nolint:errcheck // best-effort cancellation after write failure
+		s.logger.Error("failed to write snapshot",
 			slog.String("error", err.Error()))
 		return err
 	}

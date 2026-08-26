@@ -16,8 +16,8 @@ supported adapter.
   cluster-wire change is reviewed on its own terms instead of being weighed
   against a published promise.
 
-  `proto/raft/v1` separately defines the persisted operation and log-entry
-  format for experimental queue replication. It is not a public v1 promise,
+  `proto/raft/v1` separately defines the persisted operation, log-entry, and
+  snapshot format for experimental queue replication. It is not a public v1 promise,
   but `api/compat/proto-raft-v1.binpb` makes accidental on-disk breaks a hard
   failure while that implementation evolves.
 

@@ -6,17 +6,22 @@ package raft
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	raftv1 "github.com/absmach/fluxmq/pkg/proto/raft/v1"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// operationWireVersion gates the shape of the encoded operation. Unknown
+// fields are deliberately tolerated rather than rejected: a committed entry
+// that this binary refuses to decode is an entry every other replica applied
+// and this one did not, so rejecting an additive field would turn a rolling
+// upgrade into silent state divergence. A change that a peer must not apply
+// blindly bumps this version instead, which every peer checks.
 const operationWireVersion uint32 = 1
 
 var errMalformedOperation = errors.New("malformed queue raft operation")
@@ -39,11 +44,8 @@ func unmarshalOperation(data []byte) (*Operation, error) {
 	}
 
 	wire := new(raftv1.Operation)
-	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(data, wire); err != nil {
+	if err := proto.Unmarshal(data, wire); err != nil {
 		return nil, fmt.Errorf("%w: decode protobuf: %w", errMalformedOperation, err)
-	}
-	if err := rejectUnknownFields(wire.ProtoReflect()); err != nil {
-		return nil, fmt.Errorf("%w: %w", errMalformedOperation, err)
 	}
 	return decodeOperation(wire)
 }
@@ -202,7 +204,7 @@ func decodeOperation(wire *raftv1.Operation) (*Operation, error) {
 		}
 		op.Type = OpAppend
 		op.QueueName = payload.Append.QueueName
-		op.Message = append([]byte(nil), payload.Append.Envelope...)
+		op.Message = payload.Append.Envelope
 		op.DedupeKey = payload.Append.DedupeKey
 	case *raftv1.Operation_Truncate:
 		if payload.Truncate == nil {
@@ -341,7 +343,7 @@ func encodeOperationGroup(group *types.ConsumerGroup) (*raftv1.ConsumerGroupStat
 	for consumerID := range snapshot.PEL {
 		consumerIDs = append(consumerIDs, consumerID)
 	}
-	sort.Strings(consumerIDs)
+	slices.Sort(consumerIDs)
 	for _, consumerID := range consumerIDs {
 		for _, entry := range snapshot.PEL[consumerID] {
 			if entry == nil {
@@ -355,7 +357,7 @@ func encodeOperationGroup(group *types.ConsumerGroup) (*raftv1.ConsumerGroupStat
 	for consumerID := range snapshot.Consumers {
 		consumerIDs = append(consumerIDs, consumerID)
 	}
-	sort.Strings(consumerIDs)
+	slices.Sort(consumerIDs)
 	for _, consumerID := range consumerIDs {
 		if consumer := snapshot.Consumers[consumerID]; consumer != nil {
 			wire.Consumers = append(wire.Consumers, encodeOperationConsumer(consumer))
@@ -365,6 +367,9 @@ func encodeOperationGroup(group *types.ConsumerGroup) (*raftv1.ConsumerGroupStat
 }
 
 func decodeOperationGroup(wire *raftv1.ConsumerGroupState) (*types.ConsumerGroup, error) {
+	if wire == nil {
+		return nil, errors.New("group state is missing")
+	}
 	mode, err := decodeOperationGroupMode(wire.Mode)
 	if err != nil {
 		return nil, err
@@ -722,7 +727,7 @@ func decodeOperationDuration(value *durationpb.Duration, field string) (time.Dur
 		return 0, fmt.Errorf("%s: %w", field, err)
 	}
 	duration := value.AsDuration()
-	if durationpb.New(duration).Seconds != value.Seconds || durationpb.New(duration).Nanos != value.Nanos {
+	if roundTrip := durationpb.New(duration); roundTrip.Seconds != value.Seconds || roundTrip.Nanos != value.Nanos {
 		return 0, fmt.Errorf("%s exceeds Go duration range", field)
 	}
 	return duration, nil
@@ -734,41 +739,4 @@ func operationInt(value int64, field string) (int, error) {
 		return 0, fmt.Errorf("%s exceeds int range", field)
 	}
 	return converted, nil
-}
-
-func rejectUnknownFields(message protoreflect.Message) error {
-	if len(message.GetUnknown()) != 0 {
-		return fmt.Errorf("unknown fields in %s", message.Descriptor().FullName())
-	}
-	var nestedErr error
-	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		if field.IsMap() {
-			if field.MapValue().Kind() != protoreflect.MessageKind {
-				return true
-			}
-			value.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
-				nestedErr = rejectUnknownFields(item.Message())
-				return nestedErr == nil
-			})
-			return nestedErr == nil
-		}
-		if field.IsList() {
-			if field.Kind() != protoreflect.MessageKind {
-				return true
-			}
-			list := value.List()
-			for i := 0; i < list.Len(); i++ {
-				if nestedErr = rejectUnknownFields(list.Get(i).Message()); nestedErr != nil {
-					return false
-				}
-			}
-			return true
-		}
-		if field.Kind() == protoreflect.MessageKind {
-			nestedErr = rejectUnknownFields(value.Message())
-			return nestedErr == nil
-		}
-		return true
-	})
-	return nestedErr
 }

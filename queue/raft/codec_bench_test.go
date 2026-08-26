@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/queue/types"
 	hraft "github.com/hashicorp/raft"
 )
 
@@ -96,4 +97,50 @@ func benchmarkAppendOperation() *Operation {
 		Message:   payload,
 		DedupeKey: "transfer-benchmark-key",
 	}
+}
+
+var benchmarkCodecSnapshot *GlobalSnapshotData
+
+func BenchmarkSnapshotCodecMarshal(b *testing.B) {
+	snapshot := benchmarkSnapshot()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		var err error
+		benchmarkCodecBytes, err = marshalSnapshot(snapshot)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSnapshotCodecUnmarshal(b *testing.B) {
+	data, err := marshalSnapshot(benchmarkSnapshot())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	b.ResetTimer()
+	for range b.N {
+		benchmarkCodecSnapshot, err = unmarshalSnapshot(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// A snapshot is written per compaction rather than per publish, so what matters
+// here is that it stays linear in the state it carries.
+func benchmarkSnapshot() *GlobalSnapshotData {
+	queues := make([]QueueSnapshotData, 0, 16)
+	for range 16 {
+		config := conformanceQueueConfig()
+		queues = append(queues, QueueSnapshotData{
+			QueueName:   config.Name,
+			QueueConfig: &config,
+			Groups:      []*types.ConsumerGroup{conformanceConsumerGroup(conformanceTime)},
+		})
+	}
+	return &GlobalSnapshotData{Queues: queues, Timestamp: conformanceTime}
 }

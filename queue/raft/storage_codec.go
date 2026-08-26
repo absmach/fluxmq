@@ -52,11 +52,8 @@ func unmarshalLogEntry(data []byte, entry *hraft.Log) error {
 	}
 
 	wire := new(raftv1.LogEntry)
-	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(data, wire); err != nil {
+	if err := proto.Unmarshal(data, wire); err != nil {
 		return fmt.Errorf("%w: decode protobuf: %w", errMalformedLogEntry, err)
-	}
-	if err := rejectUnknownFields(wire.ProtoReflect()); err != nil {
-		return fmt.Errorf("%w: %w", errMalformedLogEntry, err)
 	}
 	if wire.Version != logEntryWireVersion {
 		return fmt.Errorf("%w: unsupported version %d", errMalformedLogEntry, wire.Version)
@@ -74,8 +71,8 @@ func unmarshalLogEntry(data []byte, entry *hraft.Log) error {
 		Index:      wire.Index,
 		Term:       wire.Term,
 		Type:       logType,
-		Data:       append([]byte(nil), wire.Data...),
-		Extensions: append([]byte(nil), wire.Extensions...),
+		Data:       wire.Data,
+		Extensions: wire.Extensions,
 		AppendedAt: appendedAt,
 	}
 	return nil

@@ -45,10 +45,10 @@ func TestLogEntryCodecRoundTripsEveryType(t *testing.T) {
 
 func TestLogEntryCodecRejectsMalformedWire(t *testing.T) {
 	tests := map[string]*raftv1.LogEntry{
-		"unsupported version":  {Version: logEntryWireVersion + 1, Type: raftv1.LogType_LOG_TYPE_COMMAND},
+		caseUnsupportedVersion: {Version: logEntryWireVersion + 1, Type: raftv1.LogType_LOG_TYPE_COMMAND},
 		"unspecified log type": {Version: logEntryWireVersion},
 		"unknown log type":     {Version: logEntryWireVersion, Type: raftv1.LogType(99)},
-		"invalid timestamp":    {Version: logEntryWireVersion, Type: raftv1.LogType_LOG_TYPE_COMMAND, AppendedAt: &timestamppb.Timestamp{Seconds: 253402300800}},
+		caseInvalidTimestamp:   {Version: logEntryWireVersion, Type: raftv1.LogType_LOG_TYPE_COMMAND, AppendedAt: &timestamppb.Timestamp{Seconds: 253402300800}},
 	}
 	for name, wire := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -70,9 +70,13 @@ func TestLogEntryCodecRejectsMalformedWire(t *testing.T) {
 	assert.ErrorIs(t, unmarshalLogEntry(legacyJSON, new(hraft.Log)), errMalformedLogEntry)
 }
 
-func TestLogEntryCodecRejectsUnknownFields(t *testing.T) {
-	data, err := proto.Marshal(&raftv1.LogEntry{Version: logEntryWireVersion, Type: raftv1.LogType_LOG_TYPE_COMMAND})
+func TestLogEntryCodecToleratesUnknownFields(t *testing.T) {
+	data, err := proto.Marshal(&raftv1.LogEntry{Version: logEntryWireVersion, Index: 9, Type: raftv1.LogType_LOG_TYPE_COMMAND})
 	require.NoError(t, err)
 	data = append(data, 0x98, 0x06, 0x01) // field 99, varint 1
-	assert.ErrorIs(t, unmarshalLogEntry(data, new(hraft.Log)), errMalformedLogEntry)
+
+	var decoded hraft.Log
+	require.NoError(t, unmarshalLogEntry(data, &decoded))
+	assert.Equal(t, uint64(9), decoded.Index)
+	assert.Equal(t, hraft.LogCommand, decoded.Type)
 }

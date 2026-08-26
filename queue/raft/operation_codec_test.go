@@ -22,46 +22,16 @@ const (
 	testOperationGroup     = "workers"
 	testOperationConsumerA = "consumer-a"
 	testOperationConsumerB = "consumer-b"
+
+	// Shared subtest names: each wire format rejects the same two shapes.
+	caseUnsupportedVersion = "unsupported version"
+	caseInvalidTimestamp   = "invalid timestamp"
 )
 
 func TestOperationCodecRoundTripsEveryCommand(t *testing.T) {
-	now := time.Date(2026, 8, 26, 10, 11, 12, 13, time.UTC)
-	group := &types.ConsumerGroup{
-		ID:         testOperationGroup,
-		QueueName:  testOperationQueue,
-		Pattern:    "jobs/#",
-		Mode:       types.GroupModeQueue,
-		AutoCommit: true,
-		Cursor:     &types.QueueCursor{Cursor: 19, Committed: 17},
-		PEL: map[string][]*types.PendingEntry{
-			testOperationConsumerB: {{Offset: 18, ConsumerID: testOperationConsumerB, ClaimedAt: now.Add(time.Second), DeliveryCount: 2}},
-			testOperationConsumerA: {{Offset: 17, ConsumerID: testOperationConsumerA, ClaimedAt: now, DeliveryCount: 1}},
-		},
-		Consumers: map[string]*types.ConsumerInfo{
-			testOperationConsumerB: {ID: testOperationConsumerB, ClientID: "client-b", ProxyNodeID: "node-2", RegisteredAt: now, LastHeartbeat: now.Add(time.Second)},
-			testOperationConsumerA: {ID: testOperationConsumerA, ClientID: "client-a", ProxyNodeID: "node-1", RegisteredAt: now, LastHeartbeat: now.Add(2 * time.Second)},
-		},
-		CreatedAt: now.Add(-time.Hour),
-		UpdatedAt: now,
-	}
-	queueConfig := types.DefaultQueueConfig(testOperationQueue, "jobs/#", "priority/#")
-	queueConfig.Reserved = true
-	queueConfig.Type = types.QueueTypeStream
-	queueConfig.PrimaryGroup = testOperationGroup
-	queueConfig.AckDurability = "fsync"
-	queueConfig.ExpiresAfter = 3 * time.Minute
-	queueConfig.LastConsumerDisconnect = now
-	queueConfig.DLQConfig.AlertWebhook = "https://example.test/alert"
-	queueConfig.Replication = types.ReplicationConfig{
-		Enabled: true, Group: testOperationQueue, ReplicationFactor: 3, Mode: types.ReplicationAsync,
-		MinInSyncReplicas: 2, AckTimeout: 4 * time.Second, HeartbeatTimeout: time.Second,
-		ElectionTimeout: 3 * time.Second, SnapshotInterval: 5 * time.Minute, SnapshotThreshold: 1000,
-	}
-	queueConfig.Retention = types.RetentionPolicy{
-		RetentionTime: time.Hour, TimeCheckInterval: time.Minute, RetentionBytes: 4096,
-		RetentionMessages: 100, SizeCheckEvery: 5, CompactionEnabled: true,
-		CompactionKey: "key", CompactionLag: time.Minute, CompactionInterval: 2 * time.Minute,
-	}
+	now := conformanceTime
+	group := conformanceConsumerGroup(now)
+	queueConfig := conformanceQueueConfig()
 
 	operations := map[string]*Operation{
 		"append":              {Type: OpAppend, Timestamp: now, QueueName: testOperationQueue, Message: []byte{0, 1, 2, 255}, DedupeKey: "transfer-1"},
@@ -108,9 +78,9 @@ func TestOperationCodecRoundTripsEveryCommand(t *testing.T) {
 
 func TestOperationCodecRejectsMalformedWire(t *testing.T) {
 	tests := map[string]*raftv1.Operation{
-		"unsupported version": {Version: operationWireVersion + 1, Command: &raftv1.Operation_DeleteQueue{DeleteQueue: &raftv1.DeleteQueueOperation{QueueName: testOperationQueue}}},
-		"missing command":     {Version: operationWireVersion},
-		"invalid timestamp": {
+		caseUnsupportedVersion: {Version: operationWireVersion + 1, Command: &raftv1.Operation_DeleteQueue{DeleteQueue: &raftv1.DeleteQueueOperation{QueueName: testOperationQueue}}},
+		"missing command":      {Version: operationWireVersion},
+		caseInvalidTimestamp: {
 			Version: operationWireVersion, Timestamp: &timestamppb.Timestamp{Seconds: 253402300800},
 			Command: &raftv1.Operation_DeleteQueue{DeleteQueue: &raftv1.DeleteQueueOperation{QueueName: testOperationQueue}},
 		},
@@ -148,7 +118,12 @@ func TestOperationCodecRejectsMalformedWire(t *testing.T) {
 	assert.ErrorIs(t, err, errMalformedOperation, "the new storage contract must not carry a legacy JSON fallback")
 }
 
-func TestOperationCodecRejectsUnknownFields(t *testing.T) {
+// A field this binary does not know is a field a newer peer added. The entry
+// carrying it is already committed, so refusing it would apply the mutation
+// everywhere except here. Tolerating it is what keeps a rolling upgrade from
+// diverging; operationWireVersion is the gate for a change that must not be
+// applied blindly.
+func TestOperationCodecToleratesUnknownFields(t *testing.T) {
 	wire := &raftv1.Operation{
 		Version: operationWireVersion,
 		Command: &raftv1.Operation_DeleteQueue{DeleteQueue: &raftv1.DeleteQueueOperation{QueueName: testOperationQueue}},
@@ -157,8 +132,10 @@ func TestOperationCodecRejectsUnknownFields(t *testing.T) {
 	require.NoError(t, err)
 	data = append(data, 0x98, 0x06, 0x01) // field 99, varint 1
 
-	_, err = unmarshalOperation(data)
-	assert.ErrorIs(t, err, errMalformedOperation)
+	decoded, err := unmarshalOperation(data)
+	require.NoError(t, err)
+	assert.Equal(t, OpDeleteQueue, decoded.Type)
+	assert.Equal(t, testOperationQueue, decoded.QueueName)
 }
 
 func TestOperationCodecRejectsIncompleteDomainOperations(t *testing.T) {
