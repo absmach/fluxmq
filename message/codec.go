@@ -19,33 +19,33 @@ import (
 
 // MarshalBinary encodes a complete Version1 envelope, including its payload.
 func MarshalBinary(envelope *Envelope) ([]byte, error) {
-	return marshalBinary(envelope, true, true)
+	return marshalBinary(envelope, encodeFull)
 }
 
 // MarshalMetadata encodes a Version1 envelope without its payload or key. Log
 // storage already owns those as the record value and key, so duplicating them
 // in metadata wastes CPU, memory, and disk bandwidth.
 func MarshalMetadata(envelope *Envelope) ([]byte, error) {
-	return marshalBinary(envelope, false, false)
+	return marshalBinary(envelope, encodeMetadata)
 }
 
-func marshalBinary(envelope *Envelope, includePayload, includeKey bool) ([]byte, error) {
+func marshalBinary(envelope *Envelope, mode codecMode) ([]byte, error) {
 	if err := envelope.Validate(); err != nil {
 		return nil, err
 	}
 
-	capacity := estimateSize(envelope, includeKey)
-	if includePayload {
+	capacity := estimateSize(envelope, mode)
+	if mode == encodeFull {
 		capacity += len(envelope.PayloadBytes())
 	}
 	encoded := make([]byte, 0, capacity)
 	encoded = appendVarint(encoded, 1, uint64(envelope.Version))
 	encoded = appendString(encoded, 2, envelope.Topic)
-	if includePayload {
+	if mode == encodeFull {
 		encoded = appendBytes(encoded, 3, envelope.PayloadBytes())
 	}
 	encoded, publisher := beginNested(encoded, 4)
-	encoded = appendPublisher(encoded, envelope.PublisherMeta, includeKey)
+	encoded = appendPublisher(encoded, envelope.PublisherMeta, mode)
 	encoded = endNested(encoded, publisher)
 
 	encoded, broker := beginNested(encoded, 5)
@@ -58,16 +58,16 @@ func marshalBinary(envelope *Envelope, includePayload, includeKey bool) ([]byte,
 // UnmarshalBinary decodes a complete strict Version1 envelope. The returned
 // envelope owns its payload and must be released by the caller.
 func UnmarshalBinary(encoded []byte) (*Envelope, error) {
-	return unmarshalBinary(encoded, nil, nil, false)
+	return unmarshalBinary(encoded, nil, nil, encodeFull)
 }
 
 // UnmarshalMetadata decodes strict Version1 log metadata and copies value and
 // key into broker-owned memory. The returned envelope must be released.
 func UnmarshalMetadata(encoded, value, key []byte) (*Envelope, error) {
-	return unmarshalBinary(encoded, value, key, true)
+	return unmarshalBinary(encoded, value, key, encodeMetadata)
 }
 
-func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly bool) (*Envelope, error) {
+func unmarshalBinary(encoded, externalPayload, externalKey []byte, mode codecMode) (*Envelope, error) {
 	envelope := Acquire()
 	// Acquire initializes new in-memory messages as Version1. Decoding must not
 	// inherit that default: a persisted record without an explicit version is
@@ -94,7 +94,7 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 			// carrying one is rejected rather than having it silently dropped
 			// in favour of the record's. MarshalMetadata omits this field, so
 			// this asserts the existing invariant rather than adding one.
-			if metadataOnly {
+			if mode == encodeMetadata {
 				return ErrMetadataCarriesPayload
 			}
 			decodedPayload = raw
@@ -102,7 +102,7 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
-			if metadataOnly {
+			if mode == encodeMetadata {
 				if err := rejectEmbeddedKey(raw); err != nil {
 					return err
 				}
@@ -120,12 +120,11 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 		Release(envelope)
 		return nil, err
 	}
-	if envelope.Version != Version1 {
-		version := envelope.Version
+	if err := requireVersion1(envelope.Version); err != nil {
 		Release(envelope)
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
+		return nil, err
 	}
-	if metadataOnly {
+	if mode == encodeMetadata {
 		decodedPayload = externalPayload
 		envelope.PublisherMeta.Key = bytes.Clone(externalKey)
 	}
@@ -133,8 +132,8 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 	return envelope, nil
 }
 
-func appendPublisher(encoded []byte, user PublisherMetadata, includeKey bool) []byte {
-	if includeKey {
+func appendPublisher(encoded []byte, user PublisherMetadata, mode codecMode) []byte {
+	if mode == encodeFull {
 		encoded = appendBytes(encoded, 1, user.Key)
 	}
 	for key, value := range user.Headers {
@@ -690,7 +689,7 @@ func requireWireType(number protowire.Number, got, want protowire.Type) error {
 // that writes — the class of drift the schema of record exists to prevent. This
 // one only sizes a buffer: too small and append grows it as before, too large
 // and a few bytes go unused.
-func estimateSize(envelope *Envelope, includeKey bool) int {
+func estimateSize(envelope *Envelope, mode codecMode) int {
 	const (
 		// Tag plus length prefix for one field, and for one map entry, which
 		// carries two fields of its own.
@@ -705,7 +704,7 @@ func estimateSize(envelope *Envelope, includeKey bool) int {
 	size += len(envelope.Topic)
 
 	user := &envelope.PublisherMeta
-	if includeKey {
+	if mode == encodeFull {
 		size += len(user.Key) + fieldOverhead
 	}
 	for key, value := range user.Headers {
@@ -732,6 +731,20 @@ func estimateSize(envelope *Envelope, includeKey bool) int {
 
 	return size
 }
+
+// codecMode selects what an encoding carries. A metadata encoding describes a
+// log record that holds the value and key itself, so both are left out; a full
+// encoding is self-contained.
+//
+// It replaces a pair of booleans that were always passed the same value at every
+// call site, where marshalBinary(envelope, false, false) said nothing about
+// which of the two forms it meant.
+type codecMode uint8
+
+const (
+	encodeFull codecMode = iota
+	encodeMetadata
+)
 
 // rejectEmbeddedKey reports a metadata blob that carries the publisher key. The
 // log record owns the key in metadata mode, so an embedded one would be dropped

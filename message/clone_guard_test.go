@@ -39,8 +39,57 @@ func TestCloneCarriesEverySingleUserField(t *testing.T) {
 	}
 }
 
+// The same guard, for the other namespace Clone gates on a hand-written helper.
+// Source, Transfer and Trace are gated on `!= (T{})` instead, which the compiler
+// keeps correct as long as they stay comparable — the two below are the ones
+// that enumerate fields and can therefore fall behind the struct.
+func TestCloneCarriesEverySingleDeliveryField(t *testing.T) {
+	typ := reflect.TypeOf(DeliveryMetadata{})
+
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		t.Run(field.Name, func(t *testing.T) {
+			envelope := Acquire()
+			defer Release(envelope)
+
+			target := reflect.ValueOf(&envelope.BrokerMeta.Delivery).Elem().FieldByName(field.Name)
+			require.True(t, target.CanSet(), "field %s is not settable", field.Name)
+			target.Set(nonZeroValue(t, field.Type))
+
+			clone := envelope.Clone()
+			defer Release(clone)
+
+			got := reflect.ValueOf(&clone.BrokerMeta.Delivery).Elem().FieldByName(field.Name)
+			require.Falsef(t, got.IsZero(),
+				"Clone dropped DeliveryMetadata.%s: hasDeliveryMetadata does not test it", field.Name)
+		})
+	}
+}
+
+// Source, Transfer and Trace are gated on a struct comparison rather than a
+// helper, which only stays correct while they stay comparable. A slice or map
+// field would make the guard fail to compile — this states that the compiler is
+// the guard, so nobody replaces it with a hand-written helper without noticing
+// what they are giving up.
+func TestComparableNamespacesGateCloneByStructEquality(t *testing.T) {
+	for name, value := range map[string]any{
+		"SourceMetadata":   SourceMetadata{},
+		"TransferMetadata": TransferMetadata{},
+		"TraceMetadata":    TraceMetadata{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, reflect.TypeOf(value).Comparable(),
+				"%s is gated by `!= (T{})` in Clone, which requires it to stay comparable", name)
+		})
+	}
+}
+
 func nonZeroValue(t *testing.T, typ reflect.Type) reflect.Value {
 	t.Helper()
+
+	if typ == reflect.TypeOf(time.Time{}) {
+		return reflect.ValueOf(time.Unix(1700000000, 0).UTC())
+	}
 
 	switch typ.Kind() {
 	case reflect.String:

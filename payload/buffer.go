@@ -4,6 +4,15 @@
 // Package payload owns the broker's immutable, reference-counted message
 // payloads. It is deliberately protocol-neutral: payload lifetime is a broker
 // concern, not an MQTT implementation detail.
+// Package payload provides the broker's reference-counted message buffer.
+//
+// A nil payload and a zero-length payload are the same state: FromBytes(nil)
+// and FromBytes([]byte{}) both return nil, so Envelope.Payload == nil covers
+// both. This is deliberate rather than an oversight — MQTT's zero-length
+// retained publish, which clears a retained message, works correctly under it,
+// and nothing in the broker needs to tell "no payload" from "empty payload".
+// A protocol that ever needs a real absent-payload state has to add one rather
+// than assume it is already there.
 package payload
 
 import (

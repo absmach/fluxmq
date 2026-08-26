@@ -213,8 +213,15 @@ func (e *Envelope) Validate() error {
 	if e == nil {
 		return errors.New("message envelope is nil")
 	}
-	if e.Version != Version1 {
-		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, e.Version)
+	return requireVersion1(e.Version)
+}
+
+// requireVersion1 is the one place a version is checked. It was written out
+// three times, once per decoder, which is three chances for the message or the
+// comparison to drift.
+func requireVersion1(version Version) error {
+	if version != Version1 {
+		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, version)
 	}
 	return nil
 }

@@ -95,7 +95,12 @@ func TestEmptyPropertyProjectionDoesNotAllocate(t *testing.T) {
 	}
 }
 
-func TestEnvelopeCloneDoesNotAllocateWithoutMutableMetadata(t *testing.T) {
+// Clone allocates nothing when there is nothing mutable to copy: it shares the
+// payload buffer by reference and every other field is a value. That is a
+// property of this shape, not of Clone — a record carrying headers and
+// properties costs a deep copy of each, which BenchmarkEnvelopeCloneRich
+// measures and BenchmarkReadFanOut in the memory log store prices per reader.
+func TestEnvelopeCloneAllocatesNothingWithoutMutableMetadata(t *testing.T) {
 	envelope := New("devices/1", make([]byte, 1024))
 	defer Release(envelope)
 	if allocations := testing.AllocsPerRun(1000, func() {
