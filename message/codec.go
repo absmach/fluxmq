@@ -5,6 +5,7 @@ package message
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -33,7 +34,7 @@ func marshalBinary(envelope *Envelope, includePayload, includeKey bool) ([]byte,
 		return nil, err
 	}
 
-	capacity := 128
+	capacity := estimateSize(envelope, includeKey)
 	if includePayload {
 		capacity += len(envelope.PayloadBytes())
 	}
@@ -43,8 +44,14 @@ func marshalBinary(envelope *Envelope, includePayload, includeKey bool) ([]byte,
 	if includePayload {
 		encoded = appendBytes(encoded, 3, envelope.PayloadBytes())
 	}
-	encoded = appendMessage(encoded, 4, encodeUser(envelope.PublisherMeta, includeKey))
-	encoded = appendMessage(encoded, 5, encodeBroker(envelope.BrokerMeta))
+	encoded, publisher := beginNested(encoded, 4)
+	encoded = appendPublisher(encoded, envelope.PublisherMeta, includeKey)
+	encoded = endNested(encoded, publisher)
+
+	encoded, broker := beginNested(encoded, 5)
+	encoded = appendBroker(encoded, envelope.BrokerMeta)
+	encoded = endNested(encoded, broker)
+
 	return encoded, nil
 }
 
@@ -114,22 +121,23 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 	return envelope, nil
 }
 
-func encodeUser(user PublisherMetadata, includeKey bool) []byte {
-	var encoded []byte
+func appendPublisher(encoded []byte, user PublisherMetadata, includeKey bool) []byte {
 	if includeKey {
 		encoded = appendBytes(encoded, 1, user.Key)
 	}
 	for key, value := range user.Headers {
-		var entry []byte
-		entry = appendString(entry, 1, key)
-		entry = appendBytes(entry, 2, value)
-		encoded = appendMessage(encoded, 2, entry)
+		var entry nested
+		encoded, entry = beginNested(encoded, 2)
+		encoded = appendString(encoded, 1, key)
+		encoded = appendBytes(encoded, 2, value)
+		encoded = endNested(encoded, entry)
 	}
 	for key, value := range user.Properties {
-		var entry []byte
-		entry = appendString(entry, 1, key)
-		entry = appendString(entry, 2, value)
-		encoded = appendMessage(encoded, 3, entry)
+		var entry nested
+		encoded, entry = beginNested(encoded, 3)
+		encoded = appendString(encoded, 1, key)
+		encoded = appendString(encoded, 2, value)
+		encoded = endNested(encoded, entry)
 	}
 	encoded = appendString(encoded, 4, user.ContentType)
 	encoded = appendString(encoded, 5, user.ContentEncoding)
@@ -225,13 +233,29 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 	})
 }
 
-func encodeBroker(broker BrokerMetadata) []byte {
-	var encoded []byte
-	encoded = appendMessage(encoded, 1, encodeSource(broker.Source))
-	encoded = appendMessage(encoded, 2, encodeDelivery(broker.Delivery))
-	encoded = appendMessage(encoded, 3, encodeQueue(broker.Queue))
-	encoded = appendMessage(encoded, 4, encodeTransfer(broker.Transfer))
-	encoded = appendMessage(encoded, 5, encodeTrace(broker.Trace))
+func appendBroker(encoded []byte, broker BrokerMetadata) []byte {
+	var at nested
+
+	encoded, at = beginNested(encoded, 1)
+	encoded = appendSource(encoded, broker.Source)
+	encoded = endNested(encoded, at)
+
+	encoded, at = beginNested(encoded, 2)
+	encoded = appendDelivery(encoded, broker.Delivery)
+	encoded = endNested(encoded, at)
+
+	encoded, at = beginNested(encoded, 3)
+	encoded = appendQueue(encoded, broker.Queue)
+	encoded = endNested(encoded, at)
+
+	encoded, at = beginNested(encoded, 4)
+	encoded = appendTransfer(encoded, broker.Transfer)
+	encoded = endNested(encoded, at)
+
+	encoded, at = beginNested(encoded, 5)
+	encoded = appendTrace(encoded, broker.Trace)
+	encoded = endNested(encoded, at)
+
 	return encoded
 }
 
@@ -268,8 +292,7 @@ func decodeBroker(encoded []byte, broker *BrokerMetadata) error {
 	})
 }
 
-func encodeSource(source SourceMetadata) []byte {
-	var encoded []byte
+func appendSource(encoded []byte, source SourceMetadata) []byte {
 	encoded = appendString(encoded, 1, source.ClientID)
 	encoded = appendString(encoded, 2, source.ExternalID)
 	encoded = appendString(encoded, 3, string(source.Protocol))
@@ -305,8 +328,7 @@ func decodeSource(encoded []byte, source *SourceMetadata) error {
 	})
 }
 
-func encodeDelivery(delivery DeliveryMetadata) []byte {
-	var encoded []byte
+func appendDelivery(encoded []byte, delivery DeliveryMetadata) []byte {
 	encoded = appendTime(encoded, 1, delivery.PublishedAt)
 	encoded = appendTime(encoded, 2, delivery.ExpiresAt)
 	for _, id := range delivery.SubscriptionIDs {
@@ -371,8 +393,7 @@ func decodeDelivery(encoded []byte, delivery *DeliveryMetadata) error {
 // Field 1 is retired: it held a message identifier that is now derived from the
 // queue and offset. Nothing writes it, and decodeQueue ignores it, so a record
 // written by an older broker still decodes.
-func encodeQueue(queue QueueMetadata) []byte {
-	var encoded []byte
+func appendQueue(encoded []byte, queue QueueMetadata) []byte {
 	encoded = appendString(encoded, 2, queue.Name)
 	encoded = appendString(encoded, 3, queue.GroupID)
 	encoded = appendNonZeroVarint(encoded, 4, queue.Offset)
@@ -383,7 +404,9 @@ func encodeQueue(queue QueueMetadata) []byte {
 	encoded = appendNonZeroVarint(encoded, 9, uint64(queue.RetryCount))
 	encoded = appendTime(encoded, 10, queue.ExpiresAt)
 	if queue.Stream != nil {
-		encoded = appendMessage(encoded, 11, encodeStream(*queue.Stream))
+		encoded, stream := beginNested(encoded, 11)
+		encoded = appendStream(encoded, *queue.Stream)
+		return endNested(encoded, stream)
 	}
 	return encoded
 }
@@ -432,8 +455,7 @@ func decodeQueue(encoded []byte, queue *QueueMetadata) error {
 	})
 }
 
-func encodeStream(stream StreamMetadata) []byte {
-	var encoded []byte
+func appendStream(encoded []byte, stream StreamMetadata) []byte {
 	encoded = appendNonZeroVarint(encoded, 1, stream.Offset)
 	if stream.Timestamp != 0 {
 		encoded = appendVarint(encoded, 2, protowire.EncodeZigZag(stream.Timestamp))
@@ -476,8 +498,7 @@ func decodeStream(encoded []byte, stream *StreamMetadata) error {
 	})
 }
 
-func encodeTransfer(transfer TransferMetadata) []byte {
-	var encoded []byte
+func appendTransfer(encoded []byte, transfer TransferMetadata) []byte {
 	encoded = appendString(encoded, 1, transfer.ID)
 	encoded = appendString(encoded, 2, transfer.FailureReason)
 	encoded = appendTime(encoded, 3, transfer.FirstAttempt)
@@ -528,8 +549,7 @@ func decodeTransfer(encoded []byte, transfer *TransferMetadata) error {
 	})
 }
 
-func encodeTrace(trace TraceMetadata) []byte {
-	var encoded []byte
+func appendTrace(encoded []byte, trace TraceMetadata) []byte {
 	encoded = appendString(encoded, 1, trace.TraceParent)
 	encoded = appendString(encoded, 2, trace.TraceState)
 	encoded = appendString(encoded, 3, trace.TraceID)
@@ -644,8 +664,105 @@ func requireWireType(number protowire.Number, got, want protowire.Type) error {
 	return nil
 }
 
-func appendMessage(encoded []byte, number protowire.Number, value []byte) []byte {
-	return appendBytes(encoded, number, value)
+// estimateSize approximates the encoded size of everything but the payload, so
+// a message carrying metadata does not grow its buffer two or three times on
+// the way out. A realistic queue record encodes to about 600 bytes of metadata,
+// against a flat 128-byte guess that grew three times to reach it.
+//
+// It is deliberately an estimate and not a size pass. An exact pass would have
+// to restate every field's encoding rule, and could then disagree with the one
+// that writes — the class of drift the schema of record exists to prevent. This
+// one only sizes a buffer: too small and append grows it as before, too large
+// and a few bytes go unused.
+func estimateSize(envelope *Envelope, includeKey bool) int {
+	const (
+		// Tag plus length prefix for one field, and for one map entry, which
+		// carries two fields of its own.
+		fieldOverhead = 2
+		entryOverhead = 8
+		// Every namespace is a varint field or two beyond its strings. Ten
+		// bytes is the widest a varint gets.
+		namespaceOverhead = 10 * 10
+	)
+
+	size := fieldOverhead * 4 // version, topic, publisher, broker
+	size += len(envelope.Topic)
+
+	user := &envelope.PublisherMeta
+	if includeKey {
+		size += len(user.Key) + fieldOverhead
+	}
+	for key, value := range user.Headers {
+		size += len(key) + len(value) + entryOverhead
+	}
+	for key, value := range user.Properties {
+		size += len(key) + len(value) + entryOverhead
+	}
+	size += len(user.ContentType) + len(user.ContentEncoding) + len(user.ResponseTopic) +
+		len(user.CorrelationData) + len(user.MessageID) + 5*fieldOverhead
+
+	broker := &envelope.BrokerMeta
+	size += len(broker.Source.ClientID) + len(broker.Source.ExternalID) +
+		len(broker.Source.Protocol) + len(broker.Source.Topic)
+	size += len(broker.Queue.Name) + len(broker.Queue.GroupID) + len(broker.Queue.State)
+	size += len(broker.Transfer.ID) + len(broker.Transfer.FailureReason) +
+		len(broker.Transfer.SourceQueue) + len(broker.Transfer.SourceGroup)
+	size += len(broker.Trace.TraceParent) + len(broker.Trace.TraceState) + len(broker.Trace.TraceID)
+	size += namespaceOverhead
+	if broker.Queue.Stream != nil {
+		size += len(broker.Queue.Stream.WorkGroup) + namespaceOverhead
+	}
+	size += len(broker.Delivery.SubscriptionIDs) * 6
+
+	return size
+}
+
+// nested marks where a length-delimited field began, so its length prefix can
+// be written after its body.
+type nested struct {
+	tagAt  int
+	bodyAt int
+}
+
+// beginNested writes a nested message's tag and reserves one byte for its
+// length. The body is then appended straight into the same buffer.
+//
+// Each nested message used to be encoded into a buffer of its own and copied in
+// once complete. With nine namespaces and one buffer per map entry, that is
+// what made a realistic envelope cost 44 allocations to marshal where the
+// generated codec costs 17.
+func beginNested(encoded []byte, number protowire.Number) ([]byte, nested) {
+	at := nested{tagAt: len(encoded)}
+	encoded = protowire.AppendTag(encoded, number, protowire.BytesType)
+	// One byte covers a body up to 127 bytes, which is every namespace on an
+	// ordinary message. A longer one widens the prefix in endNested.
+	encoded = append(encoded, 0)
+	at.bodyAt = len(encoded)
+	return encoded, at
+}
+
+// endNested writes the length of the body appended since beginNested.
+//
+// An empty body removes the field outright, which is what encoding into a
+// separate buffer did by skipping an empty byte slice — and is what keeps a
+// message with no queue metadata from carrying an empty queue submessage.
+func endNested(encoded []byte, at nested) []byte {
+	size := len(encoded) - at.bodyAt
+	if size == 0 {
+		return encoded[:at.tagAt]
+	}
+
+	var prefix [binary.MaxVarintLen64]byte
+	width := binary.PutUvarint(prefix[:], uint64(size))
+	if width > 1 {
+		// Make room for the wider prefix and shift the body down once. This is
+		// a copy inside one buffer rather than an allocation, and it happens
+		// only for a body over 127 bytes.
+		encoded = append(encoded, prefix[:width-1]...)
+		copy(encoded[at.bodyAt+width-1:], encoded[at.bodyAt:at.bodyAt+size])
+	}
+	copy(encoded[at.bodyAt-1:], prefix[:width])
+	return encoded
 }
 
 func appendString(encoded []byte, number protowire.Number, value string) []byte {
