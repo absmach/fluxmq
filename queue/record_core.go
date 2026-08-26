@@ -40,11 +40,8 @@ func (c *recordCore) appendResolved(ctx context.Context, queueName string, publi
 	return AppendOutcome{FirstOffset: offset, LastOffset: offset, Count: 1, Timestamp: createdAt}, nil
 }
 
-var _ managerServices = (*Manager)(nil)
-
-// unmanagedServices is the managerServices a core has before a Manager is
-// attached: no contracts, no replication, no queue creation. Used by tests and
-// by the delivery engine's own core, neither of which performs those.
+// unmanagedServices supplies intentionally absent optional capabilities to
+// focused core tests. Production construction uses queueControl.
 type unmanagedServices struct{}
 
 func (unmanagedServices) protectedQueueContract(string) (types.QueueConfig, bool) {
@@ -70,7 +67,7 @@ func newRecordCore(
 	metrics *consumer.Metrics,
 	logger *slog.Logger,
 	schedule deliveryScheduler,
-	services managerServices,
+	services recordServices,
 	ackDurability AckDurability,
 	storeSupportsSync bool,
 ) *recordCore {
@@ -108,10 +105,6 @@ func (c *recordCore) durableStore() (storage.DurableQueueStore, error) {
 // changed without the other. The dependencies below are what record semantics
 // actually needs; everything else Manager owns stays there.
 //
-// The three function fields are deliberate: they reach registries Manager owns,
-// and holding them as callbacks rather than a *Manager keeps the dependency
-// pointing one way. A core that can call back into the facade is the thing this
-// separation was meant to end.
 // deliveryScheduler wakes delivery for a queue once a record has landed.
 //
 // An interface rather than *DeliveryEngine so the core states what it needs —
@@ -120,16 +113,9 @@ type deliveryScheduler interface {
 	Schedule(queueName string)
 }
 
-// managerServices are the registries and policies the record core consults but
-// does not own: they live on Manager because they are lifecycle and admin
-// concerns, not record semantics.
-//
-// Declared as an interface rather than reached through closures over the
-// Manager. The dependency is real either way — this is a genuine cycle, since
-// appending wakes delivery and delivery consumes appends — so the honest thing
-// is to name it and let a reader see its shape, not to hide it in four
-// anonymous functions and describe the core as independent.
-type managerServices interface {
+// recordServices is the Manager-independent policy surface consulted by record
+// semantics. queueControl implements it in production; the facade does not.
+type recordServices interface {
 	// protectedQueueContract resolves an exact internal publisher's contract.
 	protectedQueueContract(queueName string) (types.QueueConfig, bool)
 	// replicationWriteReadiness reports whether this node may write to a
@@ -153,9 +139,7 @@ type recordCore struct {
 	ackDurability     AckDurability
 	storeSupportsSync bool
 
-	// services is assigned once, immediately after the Manager exists and
-	// before anything is started.
-	services managerServices
+	services recordServices
 }
 
 func (c *recordCore) appendToQueue(ctx context.Context, queueName string, publish types.PublishRequest) (uint64, time.Time, error) {

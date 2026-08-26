@@ -120,21 +120,12 @@ type Manager struct {
 	writePolicy       WritePolicy
 	distributionMode  DistributionMode
 
-	// protectedQueueContracts contains only queues that back exact internal
-	// publishers. Its lock spans both contract checks and queue mutations so a
-	// runtime contract replacement cannot race an administrative mutation.
-	//
-	// Narrowing this to the check alone looks like an easy win and is not: the
-	// hold is what makes ReplaceProtectedQueueContracts atomic. Released early,
-	// an already-validated mutation completes after protection is installed, so
-	// an unprotected queue can be validated, become protected, and then be
-	// changed or deleted anyway.
-	protectedQueuesMu       sync.RWMutex
-	protectedQueueContracts map[string]types.QueueConfig
-	protectedQueueConfigErr error
+	// Queue policy and mutable registries are peer components shared with the
+	// record core. The core never points back to this facade.
+	queueControl *queueControl
+	protected    *protectedQueueRegistry
+	replication  *replicationRuntime
 
-	// Raft replication coordinator (queue -> raft group routing).
-	raftCoordinator queueRaftCoordinator
 	// Group-state replicator for forwarded group operations.
 	groupReplicator raft.GroupStateReplicator
 
@@ -312,34 +303,48 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 	// The wake-up channel between appending and delivering. Owned by neither,
 	// so the core can hold it before the engine that drains it exists.
 	schedule := newDeliveryQueue(deliveryScheduleDepth, logger)
+	protected := &protectedQueueRegistry{
+		contracts: protectedQueueContracts,
+		configErr: protectedQueueConfigErr,
+	}
+	replication := &replicationRuntime{}
+	control := &queueControl{
+		queueStore:           queueStore,
+		delivery:             schedule,
+		logger:               logger,
+		protected:            protected,
+		replication:          replication,
+		writePolicy:          normalizeWritePolicy(config.WritePolicy),
+		defaultAckDurability: config.AckDurability,
+	}
 
-	// The facade is built first, empty of the components it aggregates, so the
-	// record core can be constructed complete and never mutated afterwards. A
-	// facade assembling its own fields is ordinary; a core that is half-built
-	// and later filled in is what produced the degraded modes this replaced.
+	// The facade and record core aggregate the same independent policy and
+	// scheduling peers. Neither core component needs the facade to exist while
+	// it is being constructed.
 	mgr := &Manager{
 		queueStore:     queueStore,
 		groupStore:     raftGroupStore,
 		raftGroupStore: raftGroupStore,
 		deliveryTarget: dt,
 
-		logger:                  logger,
-		config:                  config,
-		ackDurability:           ackDurability,
-		storeSupportsSync:       storeSupportsSync,
-		writePolicy:             normalizeWritePolicy(config.WritePolicy),
-		distributionMode:        distMode,
-		protectedQueueContracts: protectedQueueContracts,
-		protectedQueueConfigErr: protectedQueueConfigErr,
-		cluster:                 cl,
-		localNodeID:             localNodeID,
-		subscriptions:           make(map[string]map[string]*subscriptionRef),
-		stopCh:                  make(chan struct{}),
-		metrics:                 metrics,
+		logger:            logger,
+		config:            config,
+		ackDurability:     ackDurability,
+		storeSupportsSync: storeSupportsSync,
+		writePolicy:       control.writePolicy,
+		distributionMode:  distMode,
+		queueControl:      control,
+		protected:         protected,
+		replication:       replication,
+		cluster:           cl,
+		localNodeID:       localNodeID,
+		subscriptions:     make(map[string]map[string]*subscriptionRef),
+		stopCh:            make(chan struct{}),
+		metrics:           metrics,
 	}
 
 	records := newRecordCore(queueStore, raftGroupStore, config, metrics, logger,
-		schedule, mgr, ackDurability, storeSupportsSync)
+		schedule, control, ackDurability, storeSupportsSync)
 
 	dlqPrefix := config.DLQTopicPrefix
 	if dlqPrefix == "" {
@@ -425,7 +430,7 @@ func (m *Manager) applyCaptureJob(ctx context.Context, job captureJob) {
 
 // Start starts background workers.
 func (m *Manager) Start(ctx context.Context) error {
-	if m.distributionMode == DistributionReplicate && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
+	if m.distributionMode == DistributionReplicate && (m.coordinator() == nil || !m.coordinator().IsEnabled()) {
 		return fmt.Errorf("%w: distribution_mode=replicate requires raft", ErrReplicationUnavailable)
 	}
 
@@ -502,48 +507,11 @@ func (m *Manager) syncQueueReplicationAssignments(ctx context.Context) error {
 }
 
 func (m *Manager) validateQueueReplication(ctx context.Context, queueCfg types.QueueConfig) error {
-	if err := queueCfg.Validate(); err != nil {
-		return fmt.Errorf("queue %q configuration: %w", queueCfg.Name, err)
-	}
-	if !queueCfg.Replication.Enabled {
-		return nil
-	}
-	if m.writePolicy != WritePolicyReject && m.writePolicy != WritePolicyForward {
-		return fmt.Errorf("%w: queue %q requires reject or forward, got %q", ErrReplicationWritePolicy, queueCfg.Name, m.writePolicy)
-	}
-	if m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
-		return fmt.Errorf("%w: queue %q requires enabled raft", ErrReplicationUnavailable, queueCfg.Name)
-	}
-	if validator, ok := m.raftCoordinator.(queueReplicationValidator); ok {
-		if err := validator.ValidateQueueReplication(ctx, queueCfg); err != nil {
-			return fmt.Errorf("%w: queue %q: %v", ErrReplicationUnavailable, queueCfg.Name, err)
-		}
-	}
-	if err := m.raftCoordinator.EnsureQueue(ctx, queueCfg); err != nil {
-		return fmt.Errorf("%w: queue %q group: %v", ErrReplicationUnavailable, queueCfg.Name, err)
-	}
-	return m.replicationWriteReadiness(queueCfg.Name)
+	return m.queueControl.validateQueueReplication(ctx, queueCfg)
 }
 
 func (m *Manager) replicationWriteReadiness(queueName string) error {
-	if m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled() {
-		return fmt.Errorf("%w: queue %q has no enabled raft coordinator", ErrReplicationUnavailable, queueName)
-	}
-	if !m.raftCoordinator.IsQueueReplicated(queueName) {
-		return fmt.Errorf("%w: queue %q has no usable raft group", ErrReplicationUnavailable, queueName)
-	}
-	if m.raftCoordinator.IsLeaderForQueue(queueName) {
-		return nil
-	}
-	leaderID := m.raftCoordinator.LeaderIDForQueue(queueName)
-	leaderAddr := m.raftCoordinator.LeaderForQueue(queueName)
-	if leaderID == "" && leaderAddr == "" {
-		return fmt.Errorf("%w: queue %q has no raft leader", ErrReplicationUnavailable, queueName)
-	}
-	if m.writePolicy == WritePolicyForward && leaderID == "" {
-		return fmt.Errorf("%w: queue %q leader has no routable node ID", ErrReplicationUnavailable, queueName)
-	}
-	return nil
+	return m.queueControl.replicationWriteReadiness(queueName)
 }
 
 // ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
@@ -563,8 +531,8 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 				return err
 			}
 		}
-		if m.raftCoordinator != nil && !cfg.Replication.Enabled {
-			if err := m.raftCoordinator.EnsureQueue(ctx, cfg); err != nil {
+		if m.coordinator() != nil && !cfg.Replication.Enabled {
+			if err := m.coordinator().EnsureQueue(ctx, cfg); err != nil {
 				return err
 			}
 		}
@@ -617,8 +585,8 @@ func (m *Manager) Stop() error {
 	}
 
 	// Stop Raft manager if enabled
-	if m.raftCoordinator != nil {
-		if err := m.raftCoordinator.Stop(); err != nil {
+	if m.coordinator() != nil {
+		if err := m.coordinator().Stop(); err != nil {
 			m.logger.Error("failed to stop raft manager", slog.String("error", err.Error()))
 		}
 	}
@@ -644,7 +612,7 @@ func (m *Manager) ShutdownComplete() bool {
 // SetRaftManager sets the Raft replication manager.
 func (m *Manager) SetRaftManager(rm *raft.Manager) {
 	coordinator := raft.NewLogicalGroupCoordinator(rm, m.logger)
-	m.raftCoordinator = coordinator
+	m.replication.set(coordinator)
 	m.groupReplicator = coordinator
 	if m.raftGroupStore != nil {
 		m.raftGroupStore.SetCoordinator(coordinator)
@@ -654,7 +622,7 @@ func (m *Manager) SetRaftManager(rm *raft.Manager) {
 
 // SetRaftCoordinator sets queue-aware Raft coordinator.
 func (m *Manager) SetRaftCoordinator(rc raft.QueueCoordinator) {
-	m.raftCoordinator = rc
+	m.replication.set(rc)
 	m.groupReplicator = rc
 	if m.raftGroupStore != nil {
 		m.raftGroupStore.SetCoordinator(rc)
@@ -674,11 +642,11 @@ func (m *Manager) QueueStore() storage.QueueStore {
 // ProtectedQueueContracts returns a snapshot of the currently registered
 // immutable queue contracts.
 func (m *Manager) ProtectedQueueContracts() []types.QueueConfig {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
+	m.protected.mu.RLock()
+	defer m.protected.mu.RUnlock()
 
-	contracts := make([]types.QueueConfig, 0, len(m.protectedQueueContracts))
-	for _, contract := range m.protectedQueueContracts {
+	contracts := make([]types.QueueConfig, 0, len(m.protected.contracts))
+	for _, contract := range m.protected.contracts {
 		contracts = append(contracts, cloneQueueConfig(contract))
 	}
 	return contracts
@@ -694,13 +662,13 @@ func (m *Manager) ReplaceProtectedQueueContracts(ctx context.Context, contracts 
 		return err
 	}
 
-	m.protectedQueuesMu.Lock()
-	defer m.protectedQueuesMu.Unlock()
+	m.protected.mu.Lock()
+	defer m.protected.mu.Unlock()
 	if err := m.validateProtectedQueueContractsLocked(ctx, next); err != nil {
 		return err
 	}
-	m.protectedQueueContracts = next
-	m.protectedQueueConfigErr = nil
+	m.protected.contracts = next
+	m.protected.configErr = nil
 	return nil
 }
 
@@ -715,10 +683,10 @@ func (m *Manager) NarrowProtectedQueueContracts(contracts []types.QueueConfig) e
 		return err
 	}
 
-	m.protectedQueuesMu.Lock()
-	defer m.protectedQueuesMu.Unlock()
+	m.protected.mu.Lock()
+	defer m.protected.mu.Unlock()
 	for name, contract := range next {
-		installed, ok := m.protectedQueueContracts[name]
+		installed, ok := m.protected.contracts[name]
 		if !ok {
 			return fmt.Errorf("protected queue contract %q is not installed", name)
 		}
@@ -726,20 +694,20 @@ func (m *Manager) NarrowProtectedQueueContracts(contracts []types.QueueConfig) e
 			return fmt.Errorf("protected queue contract %q differs from installed contract: %w", name, err)
 		}
 	}
-	m.protectedQueueContracts = next
-	m.protectedQueueConfigErr = nil
+	m.protected.contracts = next
+	m.protected.configErr = nil
 	return nil
 }
 
 // ValidateProtectedQueueContracts verifies every registered contract against
 // the persisted queue configuration.
 func (m *Manager) ValidateProtectedQueueContracts(ctx context.Context) error {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-	if m.protectedQueueConfigErr != nil {
-		return m.protectedQueueConfigErr
+	m.protected.mu.RLock()
+	defer m.protected.mu.RUnlock()
+	if m.protected.configErr != nil {
+		return m.protected.configErr
 	}
-	return m.validateProtectedQueueContractsLocked(ctx, m.protectedQueueContracts)
+	return m.validateProtectedQueueContractsLocked(ctx, m.protected.contracts)
 }
 
 func buildProtectedQueueContracts(contracts []types.QueueConfig) (map[string]types.QueueConfig, error) {
@@ -787,43 +755,13 @@ func (m *Manager) validateProtectedQueueContractsLocked(ctx context.Context, con
 	return nil
 }
 
-// replicationCoordinator implements managerServices. It resolves on each use
-// because a coordinator can be installed after the core is built.
-func (m *Manager) replicationCoordinator() queueRaftCoordinator { return m.raftCoordinator }
-
-// protectedQueueContract copies one registered contract out of the registry so
-// callers can do storage work without holding protectedQueuesMu.
-//
-// The record core reads contracts through here rather than through a captured
-// map: contracts are replaced on reload, and a copy taken at construction would
-// leave the core enforcing the set the process started with.
-func (m *Manager) protectedQueueContract(queueName string) (types.QueueConfig, bool) {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-
-	contract, protected := m.protectedQueueContracts[queueName]
-	if !protected {
-		return types.QueueConfig{}, false
-	}
-	return contract, true
-}
+func (m *Manager) coordinator() queueRaftCoordinator { return m.replication.get() }
 
 // storeSupportsDurableSync reports whether one append can be made durable on
 // its own, which is the barrier the fsync acknowledgement policy depends on.
 func storeSupportsDurableSync(queueStore storage.QueueStore) bool {
 	durableStore, ok := queueStore.(storage.DurableQueueStore)
 	return ok && durableStore.SupportsDurableSync()
-}
-
-func (m *Manager) validateProtectedQueueMutationLocked(config types.QueueConfig) error {
-	expected, protected := m.protectedQueueContracts[config.Name]
-	if !protected {
-		return nil
-	}
-	if err := protectedQueueContractMismatch(expected, config); err != nil {
-		return fmt.Errorf("%w: %v", ErrProtectedQueueMutation, err)
-	}
-	return nil
 }
 
 // ValidateProtectedQueueContract compares the persisted fields that define an
@@ -902,49 +840,7 @@ func (m *Manager) GroupStore() storage.ConsumerGroupStore {
 
 // CreateQueue creates a new queue.
 func (m *Manager) CreateQueue(ctx context.Context, config types.QueueConfig) error {
-	// Checked here rather than only at configuration load, because this is the
-	// path an admin-API creation takes. A filter that can never match would bind
-	// the queue to nothing and leave it silently receiving no traffic.
-	if err := types.ValidateTopicFilters(config.Topics); err != nil {
-		return err
-	}
-	if err := m.validateQueueAckDurability(config); err != nil {
-		return err
-	}
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
-		return err
-	}
-	if err := m.validateQueueReplication(ctx, config); err != nil {
-		return err
-	}
-
-	if config.Replication.Enabled {
-		if err := m.raftCoordinator.ApplyCreateQueue(ctx, config); err != nil {
-			return err
-		}
-		// Ensure local immediate visibility even with async apply/mocks.
-		if err := m.queueStore.CreateQueue(ctx, config); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
-			return err
-		}
-	} else {
-		if err := m.queueStore.CreateQueue(ctx, config); err != nil {
-			return err
-		}
-		if m.raftCoordinator != nil {
-			if err := m.raftCoordinator.EnsureQueue(ctx, config); err != nil {
-				return err
-			}
-		}
-	}
-	m.delivery.Schedule(config.Name)
-
-	m.logger.Info("queue created",
-		slog.String("queue", config.Name),
-		slog.Any("topics", config.Topics))
-
-	return nil
+	return m.queueControl.CreateQueue(ctx, config)
 }
 
 // UpdateQueue updates an existing queue.
@@ -957,9 +853,9 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.validateQueueAckDurability(config); err != nil {
 		return err
 	}
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-	if err := m.validateProtectedQueueMutationLocked(config); err != nil {
+	m.protected.mu.RLock()
+	defer m.protected.mu.RUnlock()
+	if err := m.protected.validateMutationLocked(config); err != nil {
 		return err
 	}
 	if err := m.validateQueueReplication(ctx, config); err != nil {
@@ -974,12 +870,12 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	replicatedNow := current.Replication.Enabled
 	replicatedNext := config.Replication.Enabled
 
-	if replicatedNow && (m.raftCoordinator == nil || !m.raftCoordinator.IsEnabled()) {
+	if replicatedNow && (m.coordinator() == nil || !m.coordinator().IsEnabled()) {
 		return fmt.Errorf("%w: cannot update replicated queue %q", ErrReplicationUnavailable, config.Name)
 	}
 	shouldReplicate := replicatedNow || replicatedNext
 	if shouldReplicate {
-		if err := m.raftCoordinator.ApplyUpdateQueue(ctx, config); err != nil {
+		if err := m.coordinator().ApplyUpdateQueue(ctx, config); err != nil {
 			return err
 		}
 		// Keep local view in sync immediately.
@@ -996,8 +892,8 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	// coordinator captures the previous group before overwriting, so it can
 	// release dynamic groups that are no longer referenced by any queue
 	// (e.g. group A→B migration, or replication being disabled).
-	if m.raftCoordinator != nil {
-		if err := m.raftCoordinator.UpdateQueue(ctx, config); err != nil {
+	if m.coordinator() != nil {
+		if err := m.coordinator().UpdateQueue(ctx, config); err != nil {
 			return err
 		}
 	}
@@ -1030,9 +926,9 @@ func (m *Manager) GetOrCreateQueue(ctx context.Context, queueName string, topics
 
 // DeleteQueue deletes a queue.
 func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
-	m.protectedQueuesMu.RLock()
-	defer m.protectedQueuesMu.RUnlock()
-	if _, protected := m.protectedQueueContracts[queueName]; protected {
+	m.protected.mu.RLock()
+	defer m.protected.mu.RUnlock()
+	if _, protected := m.protected.contracts[queueName]; protected {
 		return fmt.Errorf("%w: queue %q cannot be deleted", ErrProtectedQueueMutation, queueName)
 	}
 
@@ -1045,10 +941,10 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 		if err := m.replicationWriteReadiness(queueName); err != nil {
 			return err
 		}
-		if !m.raftCoordinator.IsLeaderForQueue(queueName) {
+		if !m.coordinator().IsLeaderForQueue(queueName) {
 			return fmt.Errorf("%w: queue %q deletion must run on its raft leader", ErrReplicationUnavailable, queueName)
 		}
-		if err := m.raftCoordinator.ApplyDeleteQueue(ctx, queueName); err != nil {
+		if err := m.coordinator().ApplyDeleteQueue(ctx, queueName); err != nil {
 			return err
 		}
 		// Ensure local deletion even with async apply/mocks.
@@ -1061,8 +957,8 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 		}
 	}
 
-	if m.raftCoordinator != nil {
-		if err := m.raftCoordinator.DeleteQueue(ctx, queueName); err != nil {
+	if m.coordinator() != nil {
+		if err := m.coordinator().DeleteQueue(ctx, queueName); err != nil {
 			return err
 		}
 	}
@@ -1202,20 +1098,20 @@ func (m *Manager) writeToTargets(
 			continue
 		}
 
-		if m.raftCoordinator.IsLeaderForQueue(target.name) {
+		if m.coordinator().IsLeaderForQueue(target.name) {
 			localTargets = append(localTargets, target)
 			continue
 		}
 
 		switch m.writePolicy {
 		case WritePolicyReject:
-			if leaderAddr := m.raftCoordinator.LeaderForQueue(target.name); leaderAddr != "" {
+			if leaderAddr := m.coordinator().LeaderForQueue(target.name); leaderAddr != "" {
 				errs = append(errs, fmt.Errorf("queue %q: raft leader is at %s", target.name, leaderAddr))
 				continue
 			}
 			errs = append(errs, fmt.Errorf("queue %q: raft leader unavailable", target.name))
 		case WritePolicyForward:
-			leaderID := m.raftCoordinator.LeaderIDForQueue(target.name)
+			leaderID := m.coordinator().LeaderIDForQueue(target.name)
 			if leaderID == "" {
 				errs = append(errs, fmt.Errorf("queue %q: raft leader unavailable", target.name))
 				continue
@@ -1282,7 +1178,7 @@ func (m *Manager) publishToTargets(
 // fanout and never auto-creates a queue.
 //
 // The contract snapshot is copied out of the registry before any storage work
-// starts. Holding protectedQueuesMu across the append would let one fsync block
+// starts. Holding the protected registry lock across the append would let one fsync block
 // every contract reload, and a reload waiting for the write lock would in turn
 // stall every subsequent publish.
 // PublishToDurableStream is the facade a protocol adapter depends on for an
@@ -1431,22 +1327,7 @@ func (m *Manager) appendLocalTarget(ctx context.Context, publish types.PublishRe
 }
 
 func (m *Manager) validateQueueAckDurability(queueConfig types.QueueConfig) error {
-	configured := strings.ToLower(strings.TrimSpace(queueConfig.AckDurability))
-	switch configured {
-	case "", string(AckDurabilityFsync), string(AckDurabilityBuffered):
-	default:
-		return fmt.Errorf("queue %q ack_durability must be one of: %s, %s",
-			queueConfig.Name, AckDurabilityFsync, AckDurabilityBuffered)
-	}
-
-	effective := AckDurability(configured)
-	if configured == "" {
-		effective = NormalizeAckDurability(m.config.AckDurability)
-	}
-	if queueConfig.Durable && queueConfig.Replication.Enabled && effective == AckDurabilityFsync {
-		return fmt.Errorf("%w: %s", ErrFsyncReplicatedQueueUnsupported, queueConfig.Name)
-	}
-	return nil
+	return m.queueControl.validateQueueAckDurability(queueConfig)
 }
 
 func clonePointer[T any](src *T) *T {
@@ -1927,7 +1808,7 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		return fmt.Errorf("cluster not configured for leader forward")
 	}
 
-	if m.raftCoordinator == nil {
+	if m.coordinator() == nil {
 		return fmt.Errorf("raft coordinator unavailable")
 	}
 
@@ -2100,10 +1981,10 @@ func (m *Manager) processRetention() {
 		if queueConfig.Replication.Enabled {
 			if readyErr := m.replicationWriteReadiness(queueConfig.Name); readyErr != nil {
 				truncateErr = readyErr
-			} else if !m.raftCoordinator.IsLeaderForQueue(queueConfig.Name) {
+			} else if !m.coordinator().IsLeaderForQueue(queueConfig.Name) {
 				truncateErr = fmt.Errorf("%w: queue %q truncation must run on its raft leader", ErrReplicationUnavailable, queueConfig.Name)
 			} else {
-				truncateErr = m.raftCoordinator.ApplyTruncate(ctx, queueConfig.Name, truncateOffset)
+				truncateErr = m.coordinator().ApplyTruncate(ctx, queueConfig.Name, truncateOffset)
 			}
 		} else {
 			truncateErr = m.queueStore.Truncate(ctx, queueConfig.Name, truncateOffset)

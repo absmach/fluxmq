@@ -3701,7 +3701,7 @@ func TestPublishToMatchingQueuesAttemptsEveryTarget(t *testing.T) {
 	config := DefaultConfig()
 	config.WritePolicy = WritePolicyReject
 	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	mgr.raftCoordinator = coordinator
+	mgr.SetRaftCoordinator(coordinator)
 	ctx := context.Background()
 
 	// A replicated queue with no reachable leader, which the reject policy
@@ -3795,7 +3795,7 @@ func TestPublishRejectWritePolicyWritesNothing(t *testing.T) {
 	config := DefaultConfig()
 	config.WritePolicy = WritePolicyReject
 	mgr := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	mgr.raftCoordinator = coordinator
+	mgr.SetRaftCoordinator(coordinator)
 	ctx := context.Background()
 
 	replicated := types.DefaultQueueConfig(testReplicatedQueue, "$queue/replicated/#")
