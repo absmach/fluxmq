@@ -210,6 +210,7 @@ func resolveRaftGroupRuntime(
 		DataDir:  dataDir,
 		Peers:    peers,
 		ManagerConfig: ManagerConfig{
+			GroupID:           normalizedGroupID,
 			Enabled:           true,
 			ReplicationFactor: coalesceInt(override.ReplicationFactor, base.ReplicationFactor, 3),
 			SyncMode:          syncMode,

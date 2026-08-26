@@ -6,13 +6,13 @@ package raft
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +64,12 @@ type Manager struct {
 
 // ManagerConfig holds configuration for the Raft manager.
 type ManagerConfig struct {
+	// GroupID names the raft group this manager replicates. Every group in the
+	// process shares one queue store, so it is what tells the FSM which queues
+	// are its own to snapshot and to replace on restore. Empty means the
+	// default group.
+	GroupID string
+
 	Enabled           bool
 	ReplicationFactor int
 	SyncMode          bool
@@ -75,6 +81,15 @@ type ManagerConfig struct {
 	ElectionTimeout   time.Duration
 	SnapshotInterval  time.Duration
 	SnapshotThreshold uint64
+}
+
+// groupID reports the raft group this manager replicates, defaulting to the
+// default group when the configuration names none.
+func (m *Manager) groupID() string {
+	if group := strings.TrimSpace(m.config.GroupID); group != "" {
+		return group
+	}
+	return DefaultGroupID
 }
 
 // ApplyOptions allows per-operation overrides of Raft apply behavior.
@@ -179,7 +194,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.snapshotStore = snapStore
 
 	// Create FSM that handles all queues
-	m.fsm = NewLogFSM(m.queueStore, m.groupStore, m.logger)
+	m.fsm = NewLogFSM(m.groupID(), m.queueStore, m.groupStore, m.logger)
 
 	// Create transport
 	addr, err := net.ResolveTCPAddr("tcp", m.bindAddr)
@@ -453,7 +468,7 @@ func (m *Manager) ApplyWithOptions(ctx context.Context, op *Operation, opts Appl
 
 	op.Timestamp = time.Now()
 
-	data, err := json.Marshal(op)
+	data, err := marshalOperation(op)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal operation: %w", err)
 	}

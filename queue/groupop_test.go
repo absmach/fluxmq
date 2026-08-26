@@ -155,7 +155,7 @@ func TestGroupStateRoundTripPreservesPELAndMembership(t *testing.T) {
 // and queue config changes through Raft directly, so forwarding one is a bug
 // and must be reported rather than encoded into a nil oneof.
 func TestGroupOperationRejectsNonGroupTypes(t *testing.T) {
-	for _, opType := range []raft.OpType{raft.OpAppend, raft.OpAppendBatch, raft.OpTruncate, raft.OpCreateQueue} {
+	for _, opType := range []raft.OpType{raft.OpAppend, raft.OpTruncate, raft.OpCreateQueue} {
 		_, err := encodeGroupOperation(&raft.Operation{Type: opType, QueueName: testQueueJobs})
 		assert.ErrorIs(t, err, ErrUnsupportedGroupOp, "op type %d must not be forwardable", opType)
 	}

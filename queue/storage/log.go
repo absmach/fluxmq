@@ -98,6 +98,73 @@ type QueueStore interface {
 	Count(ctx context.Context, queueName string) (uint64, error)
 }
 
+// QueueSnapshotReader streams one queue's records in ascending offset order
+// from the view held open when it was opened. Close releases whatever the view
+// holds and must be called.
+type QueueSnapshotReader interface {
+	// Head is the offset the captured log begins at.
+	Head() uint64
+
+	// Tail is one past the last offset the captured log holds.
+	Tail() uint64
+
+	// Next reports the next record and its offset, or ok false at the end of
+	// the view. The caller takes ownership of the envelope and must release it.
+	Next(ctx context.Context) (offset uint64, msg *message.Envelope, ok bool, err error)
+
+	// Close releases the view.
+	Close() error
+}
+
+// SnapshotableQueueStore is a queue store whose logs can be captured for a
+// Raft snapshot and rebuilt from one.
+//
+// Messages are replicated state: they arrive through the Raft log like every
+// other mutation, so a snapshot that carries only queue configs and consumer
+// groups is incomplete. A follower that installs such a snapshot advances past
+// the log entries the leader compacted and never acquires the records they
+// carried, with nothing left to detect the loss.
+//
+// Reconstructing a queue needs the records and the offset its log begins at.
+// Truncation moves that offset away from zero, and offsets are what consumers
+// hold, so a queue rebuilt from zero hands every consumer the wrong record.
+//
+// Deduplication state is not carried separately: the key lives in the record
+// (BrokerMeta.Transfer.ID), so the index is rebuilt from the records restored.
+type SnapshotableQueueStore interface {
+	QueueStore
+
+	// OpenQueueSnapshot captures a stable view of a queue's log that can be
+	// read after the store has moved on.
+	//
+	// It returns a reader rather than the records themselves because a snapshot
+	// is taken on the raft goroutine, which cannot apply entries while it runs,
+	// and is serialized afterwards. Materializing every retained record here
+	// would stop writes for a whole scan of the queue and hold every payload at
+	// once. What a store captures to make the view stable is its own business;
+	// what it must not do is make that capture proportional to the log.
+	OpenQueueSnapshot(ctx context.Context, queueName string) (QueueSnapshotReader, error)
+
+	// RestoreQueue replaces any queue of this name with an empty log whose next
+	// offset is head, so restored records keep the offsets they were written at.
+	RestoreQueue(ctx context.Context, config types.QueueConfig, head uint64) error
+
+	// RestoreRecord appends one record to a queue opened by RestoreQueue and
+	// takes ownership of msg. Records must arrive in ascending offset order
+	// with no gaps; an offset that does not continue the log is an error.
+	RestoreRecord(ctx context.Context, queueName string, offset uint64, msg *message.Envelope) error
+
+	// ResetForRestore drops the named queues and their records, reserved queues
+	// included, so a snapshot can be laid down over them. A queue the snapshot
+	// does not mention is one its group no longer has; leaving it behind would
+	// keep this replica holding records nothing else does.
+	//
+	// Only the named queues are touched. One store backs every raft group in
+	// the process along with the queues no group replicates, so clearing it
+	// wholesale would delete state this caller does not own.
+	ResetForRestore(ctx context.Context, queueNames []string) error
+}
+
 // DeduplicatingQueueStore appends at most one record per deduplication key.
 //
 // It exists so a transfer that must not duplicate — a dead-letter move, which

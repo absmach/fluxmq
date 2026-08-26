@@ -5,7 +5,6 @@ package raft
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/absmach/fluxmq/message"
@@ -29,14 +28,14 @@ type plainQueueStore struct {
 func replicate(t *testing.T, op *Operation, replicas ...*LogFSM) []*ApplyResult {
 	t.Helper()
 
-	data, err := json.Marshal(op)
+	data, err := marshalOperation(op)
 	require.NoError(t, err)
 
 	results := make([]*ApplyResult, 0, len(replicas))
 	for _, fsm := range replicas {
-		var decoded Operation
-		require.NoError(t, json.Unmarshal(data, &decoded))
-		results = append(results, fsm.applyAppend(context.Background(), &decoded))
+		decoded, decodeErr := unmarshalOperation(data)
+		require.NoError(t, decodeErr)
+		results = append(results, fsm.applyAppend(context.Background(), decoded))
 	}
 	return results
 }
@@ -115,15 +114,14 @@ func TestLogFSMAppendOnceKeepsReplicasIdentical(t *testing.T) {
 	}
 }
 
-// The key travels as replicated state. A dropped struct tag would leave every
-// follower doing a plain append while the leader deduplicated, which is exactly
-// the divergence this design exists to prevent.
-func TestLogFSMAppendOnceCarriesKeyThroughJSON(t *testing.T) {
-	data, err := json.Marshal(dedupeOperation(t, "dedupe-json", testDedupeKey, "one"))
+// The key travels as typed replicated state. Omitting it from the adapter would
+// leave every follower doing a plain append while the leader deduplicated.
+func TestLogFSMAppendOnceCarriesKeyThroughProtobuf(t *testing.T) {
+	data, err := marshalOperation(dedupeOperation(t, "dedupe-protobuf", testDedupeKey, "one"))
 	require.NoError(t, err)
 
-	var decoded Operation
-	require.NoError(t, json.Unmarshal(data, &decoded))
+	decoded, err := unmarshalOperation(data)
+	require.NoError(t, err)
 	require.NotEmpty(t, decoded.Message, "the encoded envelope must survive replication")
 
 	assert.Equal(t, testDedupeKey, decoded.DedupeKey, "the key must survive replication")
@@ -137,7 +135,7 @@ func TestLogFSMAppendOnceRefusesStoreWithoutCapability(t *testing.T) {
 	queueName := "dedupe-unsupported"
 	backing := memlog.New()
 	require.NoError(t, backing.CreateQueue(ctx, types.DefaultQueueConfig(queueName, queueName+"/#")))
-	fsm := NewLogFSM(plainQueueStore{QueueStore: backing}, noopGroupStore{}, discardLogger())
+	fsm := NewLogFSM(testFSMGroup, plainQueueStore{QueueStore: backing}, noopGroupStore{}, discardLogger())
 
 	result := fsm.applyAppend(ctx, dedupeOperation(t, queueName, testDedupeKey, "one"))
 	require.ErrorIs(t, result.Error, storage.ErrDeduplicationUnsupported)

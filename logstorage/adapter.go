@@ -24,6 +24,11 @@ var (
 	_ storage.QueueStore         = (*Adapter)(nil)
 	_ storage.DurableQueueStore  = (*Adapter)(nil)
 	_ storage.ConsumerGroupStore = (*Adapter)(nil)
+
+	// The production queue store must be snapshottable: an FSM that cannot
+	// capture its records refuses to snapshot at all, which stops raft from
+	// ever compacting the log.
+	_ storage.SnapshotableQueueStore = (*Adapter)(nil)
 )
 
 // Adapter wraps the log Store and implements the storage.QueueStore and
@@ -483,7 +488,70 @@ func (a *Adapter) CreateConsumerGroup(ctx context.Context, group *types.Consumer
 		return storage.ErrConsumerGroupExists
 	}
 
-	return a.groupStore.Save(group)
+	if err := a.groupStore.Save(group); err != nil {
+		return err
+	}
+	return a.seedConsumerState(group)
+}
+
+// seedConsumerState mirrors a group's cursor and pending list into the log
+// store, which is where delivery, acknowledgement and redelivery actually read
+// them. GetConsumerGroup syncs both fields back out of the log store, so a group
+// written to the metadata store alone reads back with a cursor of zero and a
+// pending list no settlement can act on — and a restored replica would hand
+// consumers records the rest of the group considers already delivered.
+//
+// A group created in the ordinary way carries a zero cursor and an empty list,
+// so this only registers it. A group arriving from a snapshot carries the state
+// the group agreed on, and that is what gets written.
+func (a *Adapter) seedConsumerState(group *types.ConsumerGroup) error {
+	if group.Mode == types.GroupModeStream {
+		// Stream groups keep cursor state in the metadata store precisely so it
+		// is not overwritten from the log store; GetConsumerGroup skips the sync
+		// for them, so seeding here would write state nothing reads.
+		return nil
+	}
+
+	snapshot := group.Snapshot()
+	if err := a.store.CreateConsumerGroup(group.QueueName, group.ID); err != nil {
+		return fmt.Errorf("register consumer group %q of queue %q: %w", group.ID, group.QueueName, err)
+	}
+
+	for _, entries := range snapshot.PEL {
+		for _, entry := range entries {
+			if entry == nil {
+				continue
+			}
+			pending := PELEntry{
+				Offset:        entry.Offset,
+				ConsumerID:    entry.ConsumerID,
+				ClaimedAt:     entry.ClaimedAt.UnixMilli(),
+				DeliveryCount: uint16(entry.DeliveryCount),
+			}
+			if err := a.store.RestorePending(group.QueueName, group.ID, pending); err != nil {
+				return fmt.Errorf("restore pending entry %d of group %q: %w", entry.Offset, group.ID, err)
+			}
+		}
+	}
+
+	// The committed position is restored, not replayed as an acknowledgement.
+	// CommitOffset is an ack, and the committed position is the oldest offset
+	// still unacknowledged, so acking it would settle the very entry the
+	// snapshot was carrying.
+	if snapshot.Cursor.Committed > 0 {
+		if err := a.store.RestoreAckFloor(group.QueueName, group.ID, snapshot.Cursor.Committed); err != nil {
+			return fmt.Errorf("restore committed offset of group %q: %w", group.ID, err)
+		}
+	}
+	// The cursor is written last: seeding the entries must not leave it
+	// somewhere the group never was.
+	if snapshot.Cursor.Cursor > 0 {
+		if err := a.store.SetCursor(group.QueueName, group.ID, snapshot.Cursor.Cursor); err != nil {
+			return fmt.Errorf("restore cursor of group %q: %w", group.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // GetConsumerGroup retrieves a consumer group's state.

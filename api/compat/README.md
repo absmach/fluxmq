@@ -1,6 +1,6 @@
 # Protobuf compatibility baselines
 
-Three source-controlled Buf images, because the schemas they cover carry
+Four source-controlled Buf images, because the schemas they cover carry
 different promises.
 
 | Image | Covers | Promise |
@@ -8,8 +8,9 @@ different promises.
 | `proto-public-v1.binpb` | `proto/queue/v1`, `proto/auth/v1` | The client-facing contract. External clients compile against it, so a change here is a change to a published API. |
 | `proto-cluster-v1.binpb` | `proto/cluster/v1` | The inter-node wire. It is an implementation detail shared between broker nodes, not exposed to clients. |
 | `proto-message-v1.binpb` | `proto/message/v1` | The stored message format. Nothing else reads what is already on disk, so a break here is the only one that cannot be fixed by upgrading both ends. |
+| `proto-raft-v1.binpb` | `proto/raft/v1` | The persisted queue-Raft command, log-entry, and snapshot format. Queue replication remains experimental, but an accidental schema break can still make an existing node unable to restart. |
 
-CI runs `make proto-breaking`, which checks all three. **Every gate is a hard
+CI runs `make proto-breaking`, which checks all four. **Every gate is a hard
 failure.** The split exists so that a cluster-wire change is reviewed on its own
 terms rather than being weighed against a client-facing promise — not so that it
 can be waved through.
@@ -28,17 +29,21 @@ the cluster schemas and the internal gate ignores the client-facing ones.
 ## Refreshing a baseline
 
 ```sh
-make proto-baseline            # all three
+make proto-baseline            # all four
 make proto-baseline-public     # queue/v1 + auth/v1
 make proto-baseline-internal   # cluster/v1
 make proto-baseline-stored     # message/v1
+make proto-baseline-raft       # raft/v1
 ```
 
-The stored format has a second baseline of its own, the golden encoding. Refresh
-it only for an intended format change, and put both diffs in the same review:
+Both stored formats have a second baseline of their own, the golden encoding: a
+schema and a codec can move together in a way `buf breaking` never sees but that
+rewrites every record already on disk. Refresh these only for an intended format
+change, and put both diffs in the same review:
 
 ```
 go test ./message -run TestGoldenEnvelopeEncoding -update-envelope-golden
+go test ./queue/raft -run TestGoldenRaftEncodings -update-raft-golden
 ```
 
 Refresh only after the schema change has been reviewed, and commit the

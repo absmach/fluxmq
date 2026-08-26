@@ -16,7 +16,13 @@ supported adapter.
   cluster-wire change is reviewed on its own terms instead of being weighed
   against a published promise.
 
-  CI runs `make proto-breaking`, which checks both. Both are hard failures.
+  `proto/raft/v1` separately defines the persisted operation, log-entry, and
+  snapshot format for experimental queue replication. It is not a public v1 promise,
+  but `api/compat/proto-raft-v1.binpb` makes accidental on-disk breaks a hard
+  failure while that implementation evolves.
+
+  CI runs `make proto-breaking`, which checks every protobuf surface. Every
+  gate is a hard failure.
 - Go: `message.Envelope`, its typed metadata/value model and ownership methods;
   `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
   `broker.StreamQueueManager`; plus `queue.CommandProcessor` and its typed

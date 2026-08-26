@@ -1004,6 +1004,37 @@ func (s *Store) AddPending(queueName, groupID string, entry PELEntry) error {
 	return s.Deliver(queueName, groupID, entry.Offset, entry.ConsumerID)
 }
 
+// RestorePending seeds a pending entry from a snapshot, keeping its consumer,
+// claim time and attempt count.
+func (s *Store) RestorePending(queueName, groupID string, entry PELEntry) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state, err := cm.GetOrCreate(groupID)
+	if err != nil {
+		return err
+	}
+
+	return state.RestorePending(entry.Offset, entry.ConsumerID, time.UnixMilli(entry.ClaimedAt), entry.DeliveryCount)
+}
+
+// RestoreAckFloor seeds a group's committed position from a snapshot.
+func (s *Store) RestoreAckFloor(queueName, groupID string, floor uint64) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state, err := cm.GetOrCreate(groupID)
+	if err != nil {
+		return err
+	}
+
+	return state.RestoreAckFloor(floor)
+}
+
 // AckPending acknowledges a pending entry (legacy - use Ack instead).
 func (s *Store) AckPending(queueName, groupID string, offset uint64) error {
 	return s.Ack(queueName, groupID, offset)

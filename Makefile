@@ -21,15 +21,18 @@ DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
 # an implementation detail shared between broker nodes of compatible versions.
 # Both gates are hard, but a cluster change is reviewed on its own terms instead
 # of being weighed against a client-facing promise.
-# proto/message is the format every stored message is written in, so its gate is
-# the strictest of the three: a broken RPC fails a call, a broken record format
-# fails a queue that has already been written to disk.
+# proto/message is the format every stored message is written in, and proto/raft
+# is the command, log-entry, and snapshot format used by experimental queue
+# replication.
+# A broken RPC fails a call; a broken stored format can prevent restart.
 PROTO_PUBLIC_PATHS   := --path proto/queue --path proto/auth
 PROTO_INTERNAL_PATHS := --path proto/cluster
 PROTO_STORED_PATHS   := --path proto/message
+PROTO_RAFT_PATHS     := --path proto/raft
 PROTO_PUBLIC_BASELINE   := api/compat/proto-public-v1.binpb
 PROTO_INTERNAL_BASELINE := api/compat/proto-cluster-v1.binpb
 PROTO_STORED_BASELINE   := api/compat/proto-message-v1.binpb
+PROTO_RAFT_BASELINE     := api/compat/proto-raft-v1.binpb
 
 
 # Default target
@@ -320,7 +323,7 @@ proto-lint:
 	buf lint
 
 .PHONY: proto-breaking
-proto-breaking: proto-breaking-public proto-breaking-internal proto-breaking-stored
+proto-breaking: proto-breaking-public proto-breaking-internal proto-breaking-stored proto-breaking-raft
 
 # Each baseline image defines its own scope: buf reports a change only for files
 # present in both the image and the workspace, so the public gate ignores the
@@ -337,8 +340,12 @@ proto-breaking-internal:
 proto-breaking-stored:
 	buf breaking --against $(PROTO_STORED_BASELINE)
 
+.PHONY: proto-breaking-raft
+proto-breaking-raft:
+	buf breaking --against $(PROTO_RAFT_BASELINE)
+
 .PHONY: proto-baseline
-proto-baseline: proto-baseline-public proto-baseline-internal proto-baseline-stored
+proto-baseline: proto-baseline-public proto-baseline-internal proto-baseline-stored proto-baseline-raft
 
 .PHONY: proto-baseline-public
 proto-baseline-public:
@@ -352,12 +359,23 @@ proto-baseline-internal:
 proto-baseline-stored:
 	buf build --exclude-source-info $(PROTO_STORED_PATHS) -o $(PROTO_STORED_BASELINE)
 
+.PHONY: proto-baseline-raft
+proto-baseline-raft:
+	buf build --exclude-source-info $(PROTO_RAFT_PATHS) -o $(PROTO_RAFT_BASELINE)
+
 # Rewrite the frozen Go API baseline. Run only for an intended contract change,
 # and put the resulting diff in the review, exactly as proto-baseline is.
 .PHONY: go-baseline
 go-baseline:
 	go test ./queue -run TestFrozenGoAPIMatchesBaseline -update-api-baseline
 	go test ./message -run TestFrozenMessageGoAPIMatchesBaseline -update-message-api-baseline
+
+# Rewrite the golden stored encodings. Same rule as proto-baseline: only for an
+# intended format change, with the golden diff in the review beside the schema.
+.PHONY: golden-baseline
+golden-baseline:
+	go test ./message -run TestGoldenEnvelopeEncoding -update-envelope-golden
+	go test ./queue/raft -run TestGoldenRaftEncodings -update-raft-golden
 
 # Show help
 .PHONY: help

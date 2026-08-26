@@ -5,7 +5,6 @@ package raft
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -96,7 +95,7 @@ func (b *BadgerLogStore) GetLog(index uint64, log *raft.Log) error {
 		}
 
 		return item.Value(func(val []byte) error {
-			return json.Unmarshal(val, log)
+			return unmarshalLogEntry(val, log)
 		})
 	})
 }
@@ -109,9 +108,12 @@ func (b *BadgerLogStore) StoreLog(log *raft.Log) error {
 // StoreLogs stores multiple log entries in a batch.
 func (b *BadgerLogStore) StoreLogs(logs []*raft.Log) error {
 	return b.db.Update(func(txn *badger.Txn) error {
-		for _, log := range logs {
-			key := b.encodeKey(log.Index)
-			val, err := json.Marshal(log)
+		for _, entry := range logs {
+			if entry == nil {
+				return fmt.Errorf("store raft log: %w: entry is missing", errMalformedLogEntry)
+			}
+			key := b.encodeKey(entry.Index)
+			val, err := marshalLogEntry(entry)
 			if err != nil {
 				return err
 			}

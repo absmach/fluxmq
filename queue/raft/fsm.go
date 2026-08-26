@@ -5,11 +5,11 @@ package raft
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
@@ -24,11 +24,11 @@ type OpType uint8
 const (
 	// Log operations.
 	OpAppend OpType = iota
-	OpAppendBatch
 	OpTruncate
 
 	// Consumer group operations.
 	OpCreateGroup
+	OpUpdateGroup
 	OpDeleteGroup
 	OpUpdateCursor
 	OpUpdateCommitted
@@ -42,63 +42,55 @@ const (
 	OpCreateQueue
 	OpUpdateQueue
 	OpDeleteQueue
-
-	// Full consumer group state update. Appended at the end to keep existing
-	// OpType numeric values stable across upgrades.
-	OpUpdateGroup
 )
 
-// Operation represents a queue operation to be replicated via Raft.
+// Operation is the in-process form of a queue mutation replicated via Raft.
+// operation_codec.go is the only boundary between this domain type and its
+// versioned protobuf representation in the Raft log.
 type Operation struct {
-	Type      OpType    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
+	Type      OpType
+	Timestamp time.Time
 
 	// Target identifiers
-	QueueName  string `json:"queue_name,omitempty"`
-	GroupID    string `json:"group_id,omitempty"`
-	ConsumerID string `json:"consumer_id,omitempty"`
+	QueueName  string
+	GroupID    string
+	ConsumerID string
 
 	// Message is a binary-encoded envelope for OpAppend.
 	//
-	// Bytes rather than an *Envelope because the operation is JSON on the way
-	// to the Raft log, and a JSON envelope means the highest-volume path in the
-	// broker carries a base64 payload inside an object tree, and the envelope
-	// carries a second encoder that has to stay in step with the binary one for
-	// no other reason.
-	Message []byte `json:"message,omitempty"`
+	// Keeping the encoded envelope here gives the operation one canonical
+	// message representation and lets protobuf carry it as bytes without an
+	// intermediate object tree or base64 layer.
+	Message []byte
 
 	// DedupeKey, when set on OpAppend, makes the append conditional: each
 	// replica appends only if it does not already hold a record with this key.
 	// The key is part of the replicated entry so every replica asks the same
 	// question, rather than the leader answering it alone and shipping a
 	// result the followers cannot verify.
-	DedupeKey string `json:"dedupe_key,omitempty"`
-
-	// Messages are binary-encoded envelopes for OpAppendBatch.
-	Messages [][]byte `json:"messages,omitempty"`
+	DedupeKey string
 
 	// For OpTruncate
-	MinOffset uint64 `json:"min_offset,omitempty"`
+	MinOffset uint64
 
 	// For OpUpdateCursor, OpUpdateCommitted
-	Cursor    uint64 `json:"cursor,omitempty"`
-	Committed uint64 `json:"committed,omitempty"`
+	Cursor    uint64
+	Committed uint64
 
 	// For OpAddPending, OpRemovePending, OpTransferPending
-	PendingEntry *types.PendingEntry `json:"pending_entry,omitempty"`
-	Offset       uint64              `json:"offset,omitempty"`
-	FromConsumer string              `json:"from_consumer,omitempty"`
-	ToConsumer   string              `json:"to_consumer,omitempty"`
+	PendingEntry *types.PendingEntry
+	Offset       uint64
+	FromConsumer string
+	ToConsumer   string
 
 	// For OpRegisterConsumer
-	ConsumerInfo *types.ConsumerInfo `json:"consumer_info,omitempty"`
+	ConsumerInfo *types.ConsumerInfo
 
 	// For OpCreateGroup, OpUpdateGroup
-	GroupState *types.ConsumerGroup `json:"group_state,omitempty"`
-	Pattern    string               `json:"pattern,omitempty"`
+	GroupState *types.ConsumerGroup
 
 	// For OpCreateQueue, OpUpdateQueue
-	QueueConfig *types.QueueConfig `json:"queue_config,omitempty"`
+	QueueConfig *types.QueueConfig
 }
 
 // ApplyResult holds the result of an FSM apply operation.
@@ -116,74 +108,105 @@ type ApplyResult struct {
 // It applies committed operations to the underlying queue and consumer group stores.
 // This is a shared FSM that handles all queues based on operation data.
 type LogFSM struct {
+	// groupID names the raft group this FSM replicates.
+	//
+	// Every group in the process shares one queue store, so a queue belongs to
+	// exactly one of them — the group named by its replication config — and a
+	// snapshot must describe that group's queues alone. A snapshot covering
+	// every queue would, on install, overwrite the queues of the other groups
+	// and delete the ones that are not replicated at all.
+	groupID string
+
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	logger     *slog.Logger
 }
 
 // NewLogFSM creates a new FSM for queue operations.
-func NewLogFSM(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *LogFSM {
+func NewLogFSM(groupID string, queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, logger *slog.Logger) *LogFSM {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &LogFSM{
+		groupID:    groupID,
 		queueStore: queueStore,
 		groupStore: groupStore,
 		logger:     logger,
 	}
 }
 
+// owns reports whether a queue is replicated by this FSM's raft group.
+//
+// A queue with replication disabled belongs to no group and is never carried
+// by a snapshot; one with replication enabled belongs to the group it names,
+// defaulting to DefaultGroupID when it names none.
+func (f *LogFSM) owns(config types.QueueConfig) bool {
+	if !config.Replication.Enabled {
+		return false
+	}
+	group := strings.TrimSpace(config.Replication.Group)
+	if group == "" {
+		group = DefaultGroupID
+	}
+	return group == f.groupID
+}
+
 // Apply applies a Raft log entry to the FSM.
 // This is called by Raft when a log entry is committed.
 func (f *LogFSM) Apply(l *raft.Log) any {
-	var op Operation
-	if err := json.Unmarshal(l.Data, &op); err != nil {
-		f.logger.Error("failed to unmarshal operation",
+	op, err := unmarshalOperation(l.Data)
+	if err != nil {
+		// The entry is already committed, so every other replica applies it.
+		// Returning an error here would leave this node quietly one mutation
+		// behind the rest of the group, with nothing to notice the gap and
+		// nothing to repair it. Stopping is the only honest response.
+		f.logger.Error("undecodable committed log entry",
+			slog.Uint64("index", l.Index),
+			slog.Uint64("term", l.Term),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		panic(fmt.Errorf("queue raft fsm: undecodable committed entry at index %d: %w", l.Index, err))
 	}
 
 	ctx := context.Background()
 
 	switch op.Type {
 	case OpCreateQueue:
-		return f.applyCreateQueue(ctx, &op)
+		return f.applyCreateQueue(ctx, op)
 	case OpUpdateQueue:
-		return f.applyUpdateQueue(ctx, &op)
+		return f.applyUpdateQueue(ctx, op)
 	case OpDeleteQueue:
-		return f.applyDeleteQueue(ctx, &op)
+		return f.applyDeleteQueue(ctx, op)
 	case OpAppend:
-		return f.applyAppend(ctx, &op)
-	case OpAppendBatch:
-		return f.applyAppendBatch(ctx, &op)
+		return f.applyAppend(ctx, op)
 	case OpTruncate:
-		return f.applyTruncate(ctx, &op)
+		return f.applyTruncate(ctx, op)
 	case OpCreateGroup:
-		return f.applyCreateGroup(ctx, &op)
+		return f.applyCreateGroup(ctx, op)
 	case OpUpdateGroup:
-		return f.applyUpdateGroup(ctx, &op)
+		return f.applyUpdateGroup(ctx, op)
 	case OpDeleteGroup:
-		return f.applyDeleteGroup(ctx, &op)
+		return f.applyDeleteGroup(ctx, op)
 	case OpUpdateCursor:
-		return f.applyUpdateCursor(ctx, &op)
+		return f.applyUpdateCursor(ctx, op)
 	case OpUpdateCommitted:
-		return f.applyUpdateCommitted(ctx, &op)
+		return f.applyUpdateCommitted(ctx, op)
 	case OpAddPending:
-		return f.applyAddPending(ctx, &op)
+		return f.applyAddPending(ctx, op)
 	case OpRemovePending:
-		return f.applyRemovePending(ctx, &op)
+		return f.applyRemovePending(ctx, op)
 	case OpTransferPending:
-		return f.applyTransferPending(ctx, &op)
+		return f.applyTransferPending(ctx, op)
 	case OpRegisterConsumer:
-		return f.applyRegisterConsumer(ctx, &op)
+		return f.applyRegisterConsumer(ctx, op)
 	case OpUnregisterConsumer:
-		return f.applyUnregisterConsumer(ctx, &op)
+		return f.applyUnregisterConsumer(ctx, op)
 	default:
-		err := fmt.Errorf("unknown operation type: %d", op.Type)
-		f.logger.Error("unknown operation",
-			slog.String("queue", op.QueueName),
-			slog.Int("op_type", int(op.Type)))
-		return &ApplyResult{Error: err}
+		// Same divergence as an undecodable entry: the operation committed,
+		// the peers applied it, and this binary has no case for it.
+		f.logger.Error("unknown operation type in committed entry",
+			slog.Uint64("index", l.Index),
+			slog.Int("type", int(op.Type)))
+		panic(fmt.Errorf("queue raft fsm: unknown operation type %d at index %d", op.Type, l.Index))
 	}
 }
 
@@ -197,7 +220,7 @@ func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResu
 		f.logger.Error("failed to apply create queue",
 			slog.String("queue", op.QueueConfig.Name),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("create queue", op, err)
 	}
 
 	return &ApplyResult{}
@@ -212,7 +235,7 @@ func (f *LogFSM) applyUpdateQueue(ctx context.Context, op *Operation) *ApplyResu
 		f.logger.Error("failed to apply update queue",
 			slog.String("queue", op.QueueConfig.Name),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("update queue", op, err)
 	}
 
 	return &ApplyResult{}
@@ -227,7 +250,7 @@ func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResu
 		f.logger.Error("failed to apply delete queue",
 			slog.String("queue", op.QueueName),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("delete queue", op, err)
 	}
 
 	return &ApplyResult{}
@@ -259,7 +282,7 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 			f.logger.Error("failed to auto-create queue for append",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
-			return &ApplyResult{Error: createErr}
+			return stopLocalFailure("queue auto-create", op, createErr)
 		}
 		offset, err = f.queueStore.Append(ctx, op.QueueName, envelope)
 	}
@@ -268,7 +291,7 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 		f.logger.Error("failed to apply append",
 			slog.String("queue", op.QueueName),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("append", op, err)
 	}
 
 	f.logger.Debug("applied append",
@@ -311,7 +334,7 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 			f.logger.Error("failed to auto-create queue for deduplicated append",
 				slog.String("queue", op.QueueName),
 				slog.String("error", createErr.Error()))
-			return &ApplyResult{Error: createErr}
+			return stopLocalFailure("queue auto-create", op, createErr)
 		}
 		offset, deduplicated, err = deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, envelope)
 	}
@@ -321,7 +344,7 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 			slog.String("queue", op.QueueName),
 			slog.String("dedupe_key", op.DedupeKey),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("deduplicated append", op, err)
 	}
 
 	f.logger.Debug("applied deduplicated append",
@@ -333,58 +356,29 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 	return &ApplyResult{Offset: offset, Deduplicated: deduplicated}
 }
 
-func (f *LogFSM) applyAppendBatch(ctx context.Context, op *Operation) *ApplyResult {
-	if len(op.Messages) == 0 {
-		return &ApplyResult{Error: fmt.Errorf("empty messages in append batch operation")}
-	}
-
-	envelopes := make([]*message.Envelope, 0, len(op.Messages))
-	for _, encoded := range op.Messages {
-		envelope, err := decodeOperationMessage(encoded)
-		if err != nil {
-			releaseMessages(envelopes)
-			return &ApplyResult{Error: err}
-		}
-		envelopes = append(envelopes, envelope)
-	}
-	count := len(envelopes)
-
-	offset, err := f.queueStore.AppendBatch(ctx, op.QueueName, envelopes)
-	if errors.Is(err, storage.ErrQueueNotFound) {
-		if createErr := f.ensureQueueExists(ctx, op.QueueName); createErr != nil {
-			releaseMessages(envelopes)
-			f.logger.Error("failed to auto-create queue for append batch",
-				slog.String("queue", op.QueueName),
-				slog.String("error", createErr.Error()))
-			return &ApplyResult{Error: createErr}
-		}
-		offset, err = f.queueStore.AppendBatch(ctx, op.QueueName, envelopes)
-	}
-	if err != nil {
-		releaseMessages(envelopes)
-		f.logger.Error("failed to apply append batch",
-			slog.String("queue", op.QueueName),
-			slog.Int("count", count),
-			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
-	}
-
-	f.logger.Debug("applied append batch",
-		slog.String("queue", op.QueueName),
-		slog.Int("count", count),
-		slog.Uint64("first_offset", offset))
-
-	return &ApplyResult{Offset: offset}
-}
-
-func releaseMessages(messages []*message.Envelope) {
-	for _, msg := range messages {
-		message.Release(msg)
-	}
-}
-
+// ensureQueueExists creates the queue an append names when it is not here yet.
+//
+// The queue is tagged as replicated by this group because that is what it is:
+// it came into being through this group's log, on every replica, and the
+// records about to land in it are replicated the same way. Left untagged it
+// would belong to no group, so no snapshot would carry it and its records
+// would be lost the first time the log was compacted.
 func (f *LogFSM) ensureQueueExists(ctx context.Context, queueName string) error {
 	cfg := types.DefaultEphemeralQueueConfig(queueName, "$queue/"+queueName+"/#")
+	cfg.Replication.Enabled = true
+	cfg.Replication.Group = f.groupID
+	if cfg.Replication.ReplicationFactor < 1 {
+		cfg.Replication.ReplicationFactor = 1
+	}
+	if cfg.Replication.MinInSyncReplicas < 1 {
+		cfg.Replication.MinInSyncReplicas = 1
+	}
+	if cfg.Replication.Mode == "" {
+		cfg.Replication.Mode = types.ReplicationSync
+	}
+	if cfg.Replication.AckTimeout <= 0 {
+		cfg.Replication.AckTimeout = 5 * time.Second
+	}
 	if err := f.queueStore.CreateQueue(ctx, cfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 		return err
 	}
@@ -398,7 +392,7 @@ func (f *LogFSM) applyTruncate(ctx context.Context, op *Operation) *ApplyResult 
 			slog.String("queue", op.QueueName),
 			slog.Uint64("min_offset", op.MinOffset),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("truncate", op, err)
 	}
 
 	f.logger.Debug("applied truncate",
@@ -419,7 +413,7 @@ func (f *LogFSM) applyCreateGroup(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("create group", op, err)
 	}
 
 	f.logger.Debug("applied create group",
@@ -436,7 +430,7 @@ func (f *LogFSM) applyDeleteGroup(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("delete group", op, err)
 	}
 
 	f.logger.Debug("applied delete group",
@@ -457,7 +451,7 @@ func (f *LogFSM) applyUpdateGroup(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("queue", op.QueueName),
 			slog.String("group", op.GroupID),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("update group", op, err)
 	}
 
 	f.logger.Debug("applied update group",
@@ -475,7 +469,7 @@ func (f *LogFSM) applyUpdateCursor(ctx context.Context, op *Operation) *ApplyRes
 			slog.String("group", op.GroupID),
 			slog.Uint64("cursor", op.Cursor),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("update cursor", op, err)
 	}
 
 	return &ApplyResult{}
@@ -489,7 +483,7 @@ func (f *LogFSM) applyUpdateCommitted(ctx context.Context, op *Operation) *Apply
 			slog.String("group", op.GroupID),
 			slog.Uint64("committed", op.Committed),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("update committed", op, err)
 	}
 
 	return &ApplyResult{}
@@ -507,7 +501,7 @@ func (f *LogFSM) applyAddPending(ctx context.Context, op *Operation) *ApplyResul
 			slog.String("group", op.GroupID),
 			slog.Uint64("offset", op.PendingEntry.Offset),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("add pending", op, err)
 	}
 
 	return &ApplyResult{}
@@ -522,7 +516,7 @@ func (f *LogFSM) applyRemovePending(ctx context.Context, op *Operation) *ApplyRe
 			slog.String("consumer", op.ConsumerID),
 			slog.Uint64("offset", op.Offset),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("remove pending", op, err)
 	}
 
 	return &ApplyResult{}
@@ -538,7 +532,7 @@ func (f *LogFSM) applyTransferPending(ctx context.Context, op *Operation) *Apply
 			slog.String("from", op.FromConsumer),
 			slog.String("to", op.ToConsumer),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("transfer pending", op, err)
 	}
 
 	return &ApplyResult{}
@@ -556,7 +550,7 @@ func (f *LogFSM) applyRegisterConsumer(ctx context.Context, op *Operation) *Appl
 			slog.String("group", op.GroupID),
 			slog.String("consumer", op.ConsumerInfo.ID),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("register consumer", op, err)
 	}
 
 	f.logger.Debug("applied register consumer",
@@ -575,7 +569,7 @@ func (f *LogFSM) applyUnregisterConsumer(ctx context.Context, op *Operation) *Ap
 			slog.String("group", op.GroupID),
 			slog.String("consumer", op.ConsumerID),
 			slog.String("error", err.Error()))
-		return &ApplyResult{Error: err}
+		return stopLocalFailure("unregister consumer", op, err)
 	}
 
 	f.logger.Debug("applied unregister consumer",
@@ -593,133 +587,270 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 
 	ctx := context.Background()
 
-	// List all queues
+	snapshotable, ok := f.queueStore.(storage.SnapshotableQueueStore)
+	if !ok {
+		// A snapshot that cannot carry the records is not a snapshot: raft
+		// compacts the log once one exists, and a follower that installed it
+		// would advance past entries whose records it never received. Refusing
+		// keeps the log intact instead.
+		return nil, fmt.Errorf("queue store cannot be snapshotted: %T", f.queueStore)
+	}
+
 	queues, err := f.queueStore.ListQueues(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list queues: %w", err)
 	}
 
-	// Collect all queue data including configs
-	var queueSnapshots []QueueSnapshotData
+	snapshot := &GlobalSnapshot{logger: f.logger}
 	for _, queueCfg := range queues {
+		if !f.owns(queueCfg) {
+			continue
+		}
 		queueName := queueCfg.Name
 		cfgCopy := queueCfg
 
+		// A queue whose groups cannot be listed cannot be described. Omitting
+		// it and reporting success would hand raft a snapshot it then compacts
+		// the log against, so the records behind the missing entry would be
+		// unreachable from either side.
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueName)
 		if err != nil {
-			f.logger.Warn("failed to list consumer groups for queue",
-				slog.String("queue", queueName),
-				slog.String("error", err.Error()))
-			continue
+			snapshot.Release()
+			return nil, fmt.Errorf("failed to list consumer groups of queue %q: %w", queueName, err)
 		}
 
-		queueSnapshots = append(queueSnapshots, QueueSnapshotData{
-			QueueName:   queueName,
-			QueueConfig: &cfgCopy,
-			Groups:      groups,
+		reader, err := snapshotable.OpenQueueSnapshot(ctx, queueName)
+		if err != nil {
+			snapshot.Release()
+			return nil, fmt.Errorf("failed to capture queue %q: %w", queueName, err)
+		}
+
+		// The groups are detached here rather than during Persist: the FSM goes
+		// on applying entries while the snapshot is serialized, and a live
+		// pointer would carry mutations from entries after the index this
+		// snapshot claims to describe.
+		captured := make([]*types.ConsumerGroup, 0, len(groups))
+		for _, group := range groups {
+			if group == nil {
+				continue
+			}
+			captured = append(captured, consumerGroupFromSnapshot(group.Snapshot()))
+		}
+
+		snapshot.queues = append(snapshot.queues, capturedQueue{
+			QueueSnapshotData: QueueSnapshotData{
+				QueueName:   queueName,
+				QueueConfig: &cfgCopy,
+				Groups:      captured,
+				Head:        reader.Head(),
+				Tail:        reader.Tail(),
+			},
+			reader: reader,
 		})
 	}
 
-	return &GlobalSnapshot{
-		queues:     queueSnapshots,
-		queueStore: f.queueStore,
-		logger:     f.logger,
-	}, nil
+	return snapshot, nil
 }
 
-// Restore restores the FSM state from a snapshot.
+// Restore rebuilds the FSM from a snapshot.
+//
+// A snapshot is the authoritative state of the group at the index it was taken,
+// not a set of changes to merge: raft installs one precisely when this node is
+// too far behind for the log to catch it up. Anything already here describes a
+// past the group has compacted away, so it is discarded first.
 func (f *LogFSM) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
 
 	f.logger.Info("restoring from snapshot")
 
-	var snapshot GlobalSnapshotData
-	if err := json.NewDecoder(rc).Decode(&snapshot); err != nil {
-		f.logger.Error("failed to decode snapshot",
-			slog.String("error", err.Error()))
-		return err
+	snapshotable, ok := f.queueStore.(storage.SnapshotableQueueStore)
+	if !ok {
+		return fmt.Errorf("queue store cannot be restored: %T", f.queueStore)
 	}
 
 	ctx := context.Background()
+	reader := newSnapshotReader(rc)
+	if err := reader.ReadHeader(); err != nil {
+		f.logger.Error("failed to decode snapshot header",
+			slog.String("error", err.Error()))
+		return err
+	}
+	if err := f.resetState(ctx, snapshotable); err != nil {
+		return err
+	}
 
-	// Restore queue configs and consumer groups
-	for _, q := range snapshot.Queues {
-		if q.QueueConfig != nil {
-			if err := f.queueStore.CreateQueue(ctx, *q.QueueConfig); err != nil {
-				if errors.Is(err, storage.ErrQueueAlreadyExists) {
-					if updateErr := f.queueStore.UpdateQueue(ctx, *q.QueueConfig); updateErr != nil {
-						f.logger.Error("failed to restore queue config",
-							slog.String("queue", q.QueueName),
-							slog.String("error", updateErr.Error()))
-						return updateErr
-					}
-				} else {
-					f.logger.Error("failed to restore queue config",
-						slog.String("queue", q.QueueName),
-						slog.String("error", err.Error()))
-					return err
-				}
+	var (
+		current    string
+		expected   uint64
+		next       uint64
+		queueCount int
+		records    uint64
+	)
+	// Each queue frame states the tail its records reach. Checking it as the
+	// next queue opens, and again at the end, is what separates a snapshot that
+	// carried everything from one that was cut short: both decode cleanly, and
+	// raft compacts the log against either.
+	closeQueue := func() error {
+		if current == "" {
+			return nil
+		}
+		if next != expected {
+			return fmt.Errorf("%w: queue %q declared tail %d but carried records to %d",
+				errMalformedSnapshot, current, expected, next)
+		}
+		return nil
+	}
+
+	for {
+		entry, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			f.logger.Error("failed to decode snapshot",
+				slog.String("error", err.Error()))
+			return err
+		}
+
+		switch {
+		case entry.Queue != nil:
+			if err := closeQueue(); err != nil {
+				return err
 			}
-		} else if q.QueueName != "" {
-			// Pre-upgrade snapshot without QueueConfig — ensure the queue
-			// exists so consumer groups below don't become orphaned.
-			if err := f.ensureQueueExists(ctx, q.QueueName); err != nil {
-				f.logger.Error("failed to ensure queue for legacy snapshot entry",
-					slog.String("queue", q.QueueName),
+			if err := f.restoreQueue(ctx, snapshotable, entry.Queue); err != nil {
+				return err
+			}
+			current, expected, next = entry.Queue.QueueName, entry.Queue.Tail, entry.Queue.Head
+			queueCount++
+		case entry.Record != nil:
+			if current == "" {
+				return fmt.Errorf("%w: record before any queue", errMalformedSnapshot)
+			}
+			envelope, err := decodeOperationMessage(entry.Record.Envelope)
+			if err != nil {
+				return fmt.Errorf("%w: queue %q record %d: %w", errMalformedSnapshot, current, entry.Record.Offset, err)
+			}
+			if err := snapshotable.RestoreRecord(ctx, current, entry.Record.Offset, envelope); err != nil {
+				f.logger.Error("failed to restore record",
+					slog.String("queue", current),
+					slog.Uint64("offset", entry.Record.Offset),
 					slog.String("error", err.Error()))
 				return err
 			}
-		}
-
-		for _, group := range q.Groups {
-			if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil {
-				if !errors.Is(err, storage.ErrConsumerGroupExists) {
-					f.logger.Error("failed to restore consumer group",
-						slog.String("queue", q.QueueName),
-						slog.String("group", group.ID),
-						slog.String("error", err.Error()))
-					return err
-				}
-			}
+			next = entry.Record.Offset + 1
+			records++
 		}
 	}
 
+	if err := closeQueue(); err != nil {
+		return err
+	}
+
 	f.logger.Info("restored snapshot",
-		slog.Int("queue_count", len(snapshot.Queues)))
+		slog.Int("queue_count", queueCount),
+		slog.Uint64("record_count", records))
 
 	return nil
 }
 
-// QueueSnapshotData holds snapshot data for a single queue.
-type QueueSnapshotData struct {
-	QueueName   string                 `json:"queue_name"`
-	QueueConfig *types.QueueConfig     `json:"queue_config,omitempty"`
-	Groups      []*types.ConsumerGroup `json:"groups"`
+func (f *LogFSM) restoreQueue(ctx context.Context, store storage.SnapshotableQueueStore, queue *QueueSnapshotData) error {
+	config := queue.QueueConfig
+	if config != nil && !f.owns(*config) {
+		// The snapshot came from this group's leader, so every queue in it
+		// should be this group's. One that is not would overwrite a queue
+		// another group owns, which is the failure the scoping exists to stop.
+		return fmt.Errorf("%w: queue %q is not replicated by group %q", errMalformedSnapshot, queue.QueueName, f.groupID)
+	}
+	if config == nil {
+		// A queue frame without a config predates nothing this build writes,
+		// but a snapshot is still expected to name what it restores. Fall back
+		// to the ephemeral default so its groups do not become orphaned.
+		fallback := types.DefaultEphemeralQueueConfig(queue.QueueName, "$queue/"+queue.QueueName+"/#")
+		config = &fallback
+	}
+	if err := store.RestoreQueue(ctx, *config, queue.Head); err != nil {
+		f.logger.Error("failed to restore queue config",
+			slog.String("queue", queue.QueueName),
+			slog.String("error", err.Error()))
+		return err
+	}
+
+	for _, group := range queue.Groups {
+		if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil && !errors.Is(err, storage.ErrConsumerGroupExists) {
+			f.logger.Error("failed to restore consumer group",
+				slog.String("queue", queue.QueueName),
+				slog.String("group", group.ID),
+				slog.String("error", err.Error()))
+			return err
+		}
+	}
+	return nil
 }
 
-// GlobalSnapshotData represents the serialized snapshot data for all queues.
-type GlobalSnapshotData struct {
-	Queues    []QueueSnapshotData `json:"queues"`
-	Timestamp time.Time           `json:"timestamp"`
+// resetState drops what this node holds before a snapshot is laid down over it.
+//
+// Groups go first, while the queues that name them are still listable, and the
+// queue store clears itself after. Both halves are needed: the group store may
+// be a different object from the queue store, and a queue the snapshot never
+// mentions has to go too.
+func (f *LogFSM) resetState(ctx context.Context, store storage.SnapshotableQueueStore) error {
+	queues, err := f.queueStore.ListQueues(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list queues for restore: %w", err)
+	}
+
+	owned := make([]string, 0, len(queues))
+	for _, queueCfg := range queues {
+		if !f.owns(queueCfg) {
+			continue
+		}
+		owned = append(owned, queueCfg.Name)
+
+		// A group left behind because its listing or its deletion failed is
+		// state from before the snapshot surviving underneath it. Reporting the
+		// restore as successful would leave this replica holding a group the
+		// rest of the cluster does not have.
+		groups, err := f.groupStore.ListConsumerGroups(ctx, queueCfg.Name)
+		if err != nil {
+			return fmt.Errorf("failed to list consumer groups of queue %q for restore: %w", queueCfg.Name, err)
+		}
+		for _, group := range groups {
+			if err := f.groupStore.DeleteConsumerGroup(ctx, queueCfg.Name, group.ID); err != nil {
+				return fmt.Errorf("failed to drop consumer group %q of queue %q for restore: %w", group.ID, queueCfg.Name, err)
+			}
+		}
+	}
+
+	if err := store.ResetForRestore(ctx, owned); err != nil {
+		return fmt.Errorf("failed to clear queues for restore: %w", err)
+	}
+	return nil
+}
+
+// capturedQueue is a queue's metadata plus the open view its records are read
+// from. Holding a reader rather than the records is what keeps taking a
+// snapshot independent of how much the queue holds.
+type capturedQueue struct {
+	QueueSnapshotData
+	reader storage.QueueSnapshotReader
 }
 
 // GlobalSnapshot implements raft.FSMSnapshot for all queues.
 type GlobalSnapshot struct {
-	queues     []QueueSnapshotData
-	queueStore storage.QueueStore
-	logger     *slog.Logger
+	queues []capturedQueue
+	logger *slog.Logger
 }
 
-// Persist writes the snapshot to the given sink.
+// Persist streams the snapshot to the sink.
+//
+// Records are read from the captured views and encoded one frame at a time, so
+// neither the read nor the write side holds more than a record and whatever
+// batch the store reads under it.
 func (s *GlobalSnapshot) Persist(sink raft.SnapshotSink) error {
-	snapshot := GlobalSnapshotData{
-		Queues:    s.queues,
-		Timestamp: time.Now(),
-	}
-
-	if err := json.NewEncoder(sink).Encode(snapshot); err != nil {
-		sink.Cancel() //nolint:errcheck // best-effort cancellation after encode failure
-		s.logger.Error("failed to encode snapshot",
+	writer := newSnapshotWriter(sink)
+	if err := s.write(writer); err != nil {
+		sink.Cancel() //nolint:errcheck // best-effort cancellation after a write failure
+		s.logger.Error("failed to write snapshot",
 			slog.String("error", err.Error()))
 		return err
 	}
@@ -731,12 +862,76 @@ func (s *GlobalSnapshot) Persist(sink raft.SnapshotSink) error {
 	}
 
 	s.logger.Info("persisted snapshot",
-		slog.Int("queue_count", len(s.queues)))
+		slog.Int("queue_count", len(s.queues)),
+		slog.Int64("bytes", writer.written))
 
 	return nil
 }
 
-// Release releases resources held by the snapshot.
+func (s *GlobalSnapshot) write(writer *snapshotWriter) error {
+	if err := writer.WriteHeader(time.Now()); err != nil {
+		return err
+	}
+	for _, queue := range s.queues {
+		if err := writer.WriteQueue(queue.QueueSnapshotData); err != nil {
+			return err
+		}
+		if err := writeQueueRecords(writer, queue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeQueueRecords(writer *snapshotWriter, queue capturedQueue) error {
+	ctx := context.Background()
+	for {
+		offset, record, ok, err := queue.reader.Next(ctx)
+		if err != nil {
+			return fmt.Errorf("read record of queue %q: %w", queue.QueueName, err)
+		}
+		if !ok {
+			return nil
+		}
+
+		encoded, err := message.MarshalBinary(record)
+		message.Release(record)
+		if err != nil {
+			return fmt.Errorf("encode record %d of queue %q: %w", offset, queue.QueueName, err)
+		}
+		if err := writer.WriteRecord(offset, encoded); err != nil {
+			return err
+		}
+	}
+}
+
+// Release closes the views this snapshot was captured from.
 func (s *GlobalSnapshot) Release() {
-	// Nothing to release
+	for _, queue := range s.queues {
+		if queue.reader != nil {
+			_ = queue.reader.Close()
+		}
+	}
+	s.queues = nil
+}
+
+// stopLocalFailure ends the process on a committed mutation this node could not
+// apply locally. It never returns.
+//
+// The entry is in the log on every peer, and hashicorp/raft advances the applied
+// index as soon as Apply returns, whatever it returns — on a follower nothing
+// reads the result at all. A store error that is logged and stepped over is
+// therefore a replica that has quietly stopped matching its peers, with nothing
+// left to detect the gap or repair it.
+//
+// Crashing is the conservative choice precisely because it is recoverable: the
+// node restarts and rejoins from a snapshot and the leader's log. A silent gap
+// is the one outcome nothing recovers from.
+//
+// Deterministic refusals do not come here. An entry whose payload every replica
+// decodes the same way, or that every replica declines for the same reason, is
+// skipped identically everywhere and leaves the group consistent; those still
+// return an error.
+func stopLocalFailure(what string, op *Operation, err error) *ApplyResult {
+	panic(fmt.Errorf("queue raft fsm: %s failed locally for queue %q: %w", what, op.QueueName, err))
 }
