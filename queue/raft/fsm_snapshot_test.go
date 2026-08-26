@@ -56,6 +56,12 @@ func (s *recordingGroupStore) ListConsumerGroups(_ context.Context, queueName st
 	return groups, nil
 }
 
+// Record payloads shared by the snapshot tests.
+const (
+	payloadFirst  = "first"
+	payloadSecond = "second"
+)
+
 // memSink collects what Persist writes so the bytes can be handed straight to
 // Restore, which is the trip a restoring node actually makes.
 type memSink struct {
@@ -83,7 +89,7 @@ func TestLogFSMSnapshotRestoresQueuesGroupsAndRecords(t *testing.T) {
 	require.NoError(t, source.CreateQueue(ctx, config))
 	require.NoError(t, sourceGroups.CreateConsumerGroup(ctx, conformanceConsumerGroup(conformanceTime)))
 
-	payloads := []string{"first", "second", "third"}
+	payloads := []string{payloadFirst, payloadSecond, "third"}
 	for i, payload := range payloads {
 		envelope := newQueuedEnvelope(payload, "$queue/"+config.Name, []byte(payload))
 		offset, err := source.Append(ctx, config.Name, envelope)
@@ -118,7 +124,7 @@ func TestLogFSMSnapshotRestoresQueuesGroupsAndRecords(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(3), tail)
 
-	for offset, want := range map[uint64]string{1: "second", 2: "third"} {
+	for offset, want := range map[uint64]string{1: payloadSecond, 2: "third"} {
 		got, readErr := restored.Read(ctx, config.Name, offset)
 		require.NoError(t, readErr, "offset %d must survive the snapshot", offset)
 		assert.Equal(t, want, string(got.PayloadBytes()), "offset %d", offset)

@@ -24,6 +24,11 @@ var (
 	_ storage.QueueStore         = (*Adapter)(nil)
 	_ storage.DurableQueueStore  = (*Adapter)(nil)
 	_ storage.ConsumerGroupStore = (*Adapter)(nil)
+
+	// The production queue store must be snapshottable: an FSM that cannot
+	// capture its records refuses to snapshot at all, which stops raft from
+	// ever compacting the log.
+	_ storage.SnapshotableQueueStore = (*Adapter)(nil)
 )
 
 // Adapter wraps the log Store and implements the storage.QueueStore and
