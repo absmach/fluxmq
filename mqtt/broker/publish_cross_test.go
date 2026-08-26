@@ -36,7 +36,7 @@ func TestPublishCrossDeliverToAMQP091(t *testing.T) {
 
 	msg := message.NewDelivery(testTelemetryRoom, []byte("hello"), 1, false)
 	msg.BrokerMeta.Source.ClientID = "mqtt-pub-1"
-	msg.PublisherMeta.Properties = map[string]string{"source": testSource}
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"source": testSource})
 
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
@@ -77,7 +77,7 @@ func TestForwardPublishDoesNotCrossDeliverToAMQP091(t *testing.T) {
 	})
 
 	msg := message.NewDelivery(testTelemetryRoom, []byte("hello"), 1, false)
-	msg.PublisherMeta.Properties = map[string]string{"source": testSource}
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"source": testSource})
 	if err := b.ForwardPublish(context.Background(), msg); err != nil {
 		t.Fatalf("ForwardPublish failed: %v", err)
 	}

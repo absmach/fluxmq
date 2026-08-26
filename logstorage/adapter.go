@@ -265,7 +265,7 @@ func encodeMessage(envelope *message.Envelope) ([]byte, []byte, map[string][]byt
 	if envelope.BrokerMeta.Transfer.ID != "" {
 		headers[headerDedupeKey] = []byte(envelope.BrokerMeta.Transfer.ID)
 	}
-	return envelope.PayloadBytes(), envelope.PublisherMeta.Key, headers, nil
+	return envelope.PayloadBytes(), envelope.PublisherMeta.Key.Bytes(), headers, nil
 }
 
 // Append adds a message to the end of a queue's log.

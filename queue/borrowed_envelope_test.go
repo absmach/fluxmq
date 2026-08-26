@@ -28,8 +28,8 @@ func TestPublishedRecordSurvivesTheCallersRelease(t *testing.T) {
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("orders", "orders/#")))
 
 	published := message.New("orders/new", []byte("the-payload"))
-	published.PublisherMeta.Properties = map[string]string{"tenant": "acme"}
-	published.PublisherMeta.Headers = map[string][]byte{"unit": []byte("celsius")}
+	published.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"tenant": "acme"})
+	published.PublisherMeta.Headers = message.NewHeaderMap(map[string][]byte{"unit": []byte("celsius")})
 
 	require.NoError(t, mgr.Publish(ctx, published))
 
@@ -41,8 +41,12 @@ func TestPublishedRecordSurvivesTheCallersRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "the-payload", string(stored.PayloadBytes()))
 	require.Equal(t, "orders/new", stored.Topic)
-	require.Equal(t, "acme", stored.PublisherMeta.Properties["tenant"])
-	require.Equal(t, "celsius", string(stored.PublisherMeta.Headers["unit"]))
+	tenant, ok := stored.PublisherMeta.Properties.Get("tenant")
+	require.True(t, ok)
+	require.Equal(t, "acme", tenant)
+	unit, ok := stored.PublisherMeta.Headers.Get("unit")
+	require.True(t, ok)
+	require.Equal(t, "celsius", string(unit.Bytes()))
 }
 
 // The same contract on the capture path, which is harder: the dispatcher runs
@@ -56,7 +60,7 @@ func TestCapturedRecordSurvivesTheCallersRelease(t *testing.T) {
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("captured", "sensors/#")))
 
 	published := message.New("sensors/temperature", []byte("21.5"))
-	published.PublisherMeta.Properties = map[string]string{"tenant": "acme"}
+	published.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"tenant": "acme"})
 
 	require.NoError(t, mgr.PublishToMatchingQueues(ctx, published))
 	message.Release(published)
@@ -70,7 +74,9 @@ func TestCapturedRecordSurvivesTheCallersRelease(t *testing.T) {
 	stored, err := store.Read(ctx, "captured", 0)
 	require.NoError(t, err)
 	require.Equal(t, "21.5", string(stored.PayloadBytes()))
-	require.Equal(t, "acme", stored.PublisherMeta.Properties["tenant"])
+	tenant, ok := stored.PublisherMeta.Properties.Get("tenant")
+	require.True(t, ok)
+	require.Equal(t, "acme", tenant)
 }
 
 // churnThePool hands out and returns buffers of the same size class, so a

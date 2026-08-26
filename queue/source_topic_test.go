@@ -4,7 +4,6 @@
 package queue
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
@@ -82,7 +81,7 @@ func TestPublisherCannotForgeTheSourceTopic(t *testing.T) {
 	if got := delivery.BrokerMeta.Source.Topic; got != testSourceTopic {
 		t.Fatalf("source topic = %q, want the broker's value to win", got)
 	}
-	if got := delivery.PublisherMeta.Properties["user"]; got != "kept" {
+	if got, _ := delivery.PublisherMeta.Properties.Get("user"); got != "kept" {
 		t.Fatalf("an ordinary publisher property was dropped: %q", got)
 	}
 }
@@ -126,9 +125,9 @@ func TestQueueRoundTripPreservesProtocolMetadataAndExpiry(t *testing.T) {
 	published.PublisherMeta.ContentType = "application/json"
 	published.PublisherMeta.ContentEncoding = "gzip"
 	published.PublisherMeta.ResponseTopic = "responses/42"
-	published.PublisherMeta.CorrelationData = correlationData
-	published.PublisherMeta.PayloadFormat = &payloadFormat
-	published.PublisherMeta.MessageExpiry = &messageExpiry
+	published.PublisherMeta.CorrelationData = message.NewBinary(correlationData)
+	published.PublisherMeta.PayloadFormat = message.Some(payloadFormat)
+	published.PublisherMeta.MessageExpiry = message.Some(messageExpiry)
 	published.BrokerMeta.Delivery.PublishedAt = publishedAt
 	published.BrokerMeta.Delivery.ExpiresAt = expiresAt
 
@@ -136,8 +135,6 @@ func TestQueueRoundTripPreservesProtocolMetadataAndExpiry(t *testing.T) {
 	defer message.Release(queued)
 
 	correlationData[0] = 0xff
-	payloadFormat = 0
-	messageExpiry = 1
 
 	if queued.PublisherMeta.ContentType != "application/json" || queued.PublisherMeta.ContentEncoding != "gzip" {
 		t.Fatalf("content metadata was not preserved: %+v", queued.PublisherMeta)
@@ -145,13 +142,13 @@ func TestQueueRoundTripPreservesProtocolMetadataAndExpiry(t *testing.T) {
 	if queued.PublisherMeta.ResponseTopic != "responses/42" {
 		t.Fatalf("response topic = %q, want responses/42", queued.PublisherMeta.ResponseTopic)
 	}
-	if !bytes.Equal(queued.PublisherMeta.CorrelationData, []byte{0x00, 0x01, 0xfe, 0xff}) {
+	if !queued.PublisherMeta.CorrelationData.Equal([]byte{0x00, 0x01, 0xfe, 0xff}) {
 		t.Fatalf("correlation data was aliased: %v", queued.PublisherMeta.CorrelationData)
 	}
-	if queued.PublisherMeta.PayloadFormat == nil || *queued.PublisherMeta.PayloadFormat != 1 {
+	if value, ok := queued.PublisherMeta.PayloadFormat.Value(); !ok || value != 1 {
 		t.Fatalf("payload format was not copied: %v", queued.PublisherMeta.PayloadFormat)
 	}
-	if queued.PublisherMeta.MessageExpiry == nil || *queued.PublisherMeta.MessageExpiry != 90 {
+	if value, ok := queued.PublisherMeta.MessageExpiry.Value(); !ok || value != 90 {
 		t.Fatalf("message expiry was not copied: %v", queued.PublisherMeta.MessageExpiry)
 	}
 	if !queued.BrokerMeta.Delivery.PublishedAt.Equal(publishedAt) || !queued.BrokerMeta.Delivery.ExpiresAt.Equal(expiresAt) {

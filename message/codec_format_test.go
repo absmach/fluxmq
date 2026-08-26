@@ -4,12 +4,49 @@
 package message
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 )
+
+func TestPersistedEnumsRejectUnknownValues(t *testing.T) {
+	t.Run("marshal protocol", func(t *testing.T) {
+		envelope := New("devices/1", nil)
+		defer Release(envelope)
+		envelope.BrokerMeta.Source.Protocol = Protocol("smtp")
+		_, err := MarshalBinary(envelope)
+		require.ErrorIs(t, err, ErrUnsupportedProtocol)
+	})
+
+	t.Run("marshal queue state", func(t *testing.T) {
+		envelope := New("devices/1", nil)
+		defer Release(envelope)
+		envelope.BrokerMeta.Queue.State = QueueState("lost")
+		_, err := MarshalBinary(envelope)
+		require.ErrorIs(t, err, ErrUnsupportedQueueState)
+	})
+
+	t.Run("decode protocol", func(t *testing.T) {
+		source := protowire.AppendTag(nil, 3, protowire.VarintType)
+		source = protowire.AppendVarint(source, 99)
+		broker := protowire.AppendTag(nil, 1, protowire.BytesType)
+		broker = protowire.AppendBytes(broker, source)
+		_, err := UnmarshalBinary(envelopeWithBroker(broker))
+		require.True(t, errors.Is(err, ErrUnsupportedProtocol), "decode error = %v", err)
+	})
+
+	t.Run("decode queue state", func(t *testing.T) {
+		queue := protowire.AppendTag(nil, 5, protowire.VarintType)
+		queue = protowire.AppendVarint(queue, 99)
+		broker := protowire.AppendTag(nil, 3, protowire.BytesType)
+		broker = protowire.AppendBytes(broker, queue)
+		_, err := UnmarshalBinary(envelopeWithBroker(broker))
+		require.True(t, errors.Is(err, ErrUnsupportedQueueState), "decode error = %v", err)
+	})
+}
 
 // Subscription IDs are written packed, and records written before that carry one
 // varint-tagged entry each. Proto3 requires a decoder to accept both, and the
@@ -20,7 +57,7 @@ func TestSubscriptionIDsDecodeFromBothWireForms(t *testing.T) {
 	t.Run("packed, as written now", func(t *testing.T) {
 		envelope := NewDelivery("devices/1", []byte("payload"), 1, false)
 		defer Release(envelope)
-		envelope.BrokerMeta.Delivery.SubscriptionIDs = want
+		envelope.BrokerMeta.Delivery.SubscriptionIDs = NewUint32List(want...)
 
 		encoded, err := MarshalBinary(envelope)
 		require.NoError(t, err)
@@ -28,7 +65,7 @@ func TestSubscriptionIDsDecodeFromBothWireForms(t *testing.T) {
 		decoded, err := UnmarshalBinary(encoded)
 		require.NoError(t, err)
 		defer Release(decoded)
-		assert.Equal(t, want, decoded.BrokerMeta.Delivery.SubscriptionIDs)
+		assert.Equal(t, want, decoded.BrokerMeta.Delivery.SubscriptionIDs.Slice())
 	})
 
 	t.Run("unpacked, as written before", func(t *testing.T) {
@@ -41,7 +78,7 @@ func TestSubscriptionIDsDecodeFromBothWireForms(t *testing.T) {
 		decoded, err := UnmarshalBinary(legacyEnvelope(delivery))
 		require.NoError(t, err)
 		defer Release(decoded)
-		assert.Equal(t, want, decoded.BrokerMeta.Delivery.SubscriptionIDs)
+		assert.Equal(t, want, decoded.BrokerMeta.Delivery.SubscriptionIDs.Slice())
 	})
 }
 
@@ -73,7 +110,7 @@ func TestSubscriptionIDOverflowIsRejectedInBothForms(t *testing.T) {
 func TestMetadataRejectsTheRecordsOwnValueAndKey(t *testing.T) {
 	envelope := NewDelivery("devices/1", []byte("payload"), 1, false)
 	defer Release(envelope)
-	envelope.PublisherMeta.Key = []byte("partition-key")
+	envelope.PublisherMeta.Key = NewBinary([]byte("partition-key"))
 
 	// A full encoding carries both, which is exactly what must not be read back
 	// as metadata.
@@ -100,7 +137,7 @@ func TestMetadataRejectsTheRecordsOwnValueAndKey(t *testing.T) {
 func TestMetadataWithoutValueOrKeyDecodes(t *testing.T) {
 	envelope := NewDelivery("devices/1", []byte("payload"), 1, false)
 	defer Release(envelope)
-	envelope.PublisherMeta.Key = []byte("partition-key")
+	envelope.PublisherMeta.Key = NewBinary([]byte("partition-key"))
 	envelope.BrokerMeta.Queue.Name = "telemetry"
 
 	metadata, err := MarshalMetadata(envelope)
@@ -111,7 +148,7 @@ func TestMetadataWithoutValueOrKeyDecodes(t *testing.T) {
 	defer Release(decoded)
 
 	assert.Equal(t, "record-value", string(decoded.PayloadBytes()))
-	assert.Equal(t, "record-key", string(decoded.PublisherMeta.Key))
+	assert.True(t, decoded.PublisherMeta.Key.Equal([]byte("record-key")))
 	assert.Equal(t, "telemetry", decoded.BrokerMeta.Queue.Name)
 }
 
@@ -124,6 +161,13 @@ func legacyEnvelope(delivery []byte) []byte {
 	encoded = protowire.AppendVarint(encoded, uint64(Version1))
 	encoded = protowire.AppendTag(encoded, 2, protowire.BytesType)
 	encoded = protowire.AppendBytes(encoded, []byte("devices/1"))
+	encoded = protowire.AppendTag(encoded, 5, protowire.BytesType)
+	return protowire.AppendBytes(encoded, broker)
+}
+
+func envelopeWithBroker(broker []byte) []byte {
+	encoded := protowire.AppendTag(nil, 1, protowire.VarintType)
+	encoded = protowire.AppendVarint(encoded, uint64(Version1))
 	encoded = protowire.AppendTag(encoded, 5, protowire.BytesType)
 	return protowire.AppendBytes(encoded, broker)
 }

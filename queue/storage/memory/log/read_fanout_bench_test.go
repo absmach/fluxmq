@@ -12,16 +12,10 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-// C14 asks whether returning a clone from every Read costs more than the
-// write-once copy it replaced. A record read by N consumer groups pays the
-// clone N times, so the cost is a function of how much mutable metadata a
-// record carries — nothing for a bare one, a deep copy of every map for a
-// realistic one. These measure both against a fan-out.
-//
-// The clone is what makes the returned envelope safe to mutate and release,
-// which is why the answer is not simply to stop cloning: a shared map behind a
-// read-only comment is unenforceable, and one mutating reader would corrupt
-// every other reader of that record.
+// A record read by N consumer groups still needs N independently releasable
+// envelopes, but their payload and metadata storage are immutable and shared.
+// These benchmarks keep both a bare and realistic record in the fan-out matrix
+// so a future mutable field cannot quietly restore per-reader deep copies.
 func BenchmarkReadFanOut(b *testing.B) {
 	for _, shape := range []struct {
 		name  string
@@ -62,21 +56,21 @@ func benchBareRecord() *message.Envelope {
 
 func benchRealisticRecord() *message.Envelope {
 	envelope := benchBareRecord()
-	envelope.PublisherMeta.Key = []byte("partition-key")
-	envelope.PublisherMeta.Headers = map[string][]byte{
+	envelope.PublisherMeta.Key = message.NewBinary([]byte("partition-key"))
+	envelope.PublisherMeta.Headers = message.NewHeaderMap(map[string][]byte{
 		"x-tenant": []byte("acme"),
 		"x-region": []byte("eu-central-1"),
-	}
-	envelope.PublisherMeta.Properties = map[string]string{
+	})
+	envelope.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{
 		"schema":          "telemetry.v2",
 		"content-version": "3",
-	}
-	envelope.PublisherMeta.CorrelationData = []byte("correlation-0123456789")
+	})
+	envelope.PublisherMeta.CorrelationData = message.NewBinary([]byte("correlation-0123456789"))
 	envelope.BrokerMeta.Source.ClientID = "sensor-1"
 	envelope.BrokerMeta.Queue.Name = "fanout"
 	envelope.BrokerMeta.Queue.State = message.QueueStateQueued
 	envelope.BrokerMeta.Queue.CreatedAt = time.Now()
-	envelope.BrokerMeta.Queue.Stream = &message.StreamMetadata{Offset: 1, WorkGroup: "workers"}
+	envelope.BrokerMeta.Queue.Stream = message.Some(message.StreamMetadata{Offset: 1, WorkGroup: "workers"})
 	return envelope
 }
 

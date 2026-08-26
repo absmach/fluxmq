@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var updateGolden = flag.Bool("update-envelope-golden", false,
@@ -36,6 +37,7 @@ func TestHandCodecMatchesTheSchema(t *testing.T) {
 	var schema messagev1.Envelope
 	require.NoError(t, proto.Unmarshal(encoded, &schema),
 		"the hand codec wrote bytes the schema cannot parse")
+	assertSchemaFixtureIsExhaustive(t, schema.ProtoReflect())
 
 	assert.Equal(t, uint32(Version1), schema.Version)
 	assert.Equal(t, envelope.Topic, schema.Topic)
@@ -43,17 +45,21 @@ func TestHandCodecMatchesTheSchema(t *testing.T) {
 
 	publisher := schema.Publisher
 	require.NotNil(t, publisher)
-	assert.Equal(t, envelope.PublisherMeta.Key, publisher.Key)
-	assert.Equal(t, envelope.PublisherMeta.Headers, publisher.Headers)
-	assert.Equal(t, envelope.PublisherMeta.Properties, publisher.Properties)
+	assert.Equal(t, envelope.PublisherMeta.Key.Bytes(), publisher.Key)
+	assert.Equal(t, envelope.PublisherMeta.Headers.Map(), publisher.Headers)
+	assert.Equal(t, envelope.PublisherMeta.Properties.Map(), publisher.Properties)
 	assert.Equal(t, envelope.PublisherMeta.ContentType, publisher.ContentType)
 	assert.Equal(t, envelope.PublisherMeta.ContentEncoding, publisher.ContentEncoding)
 	assert.Equal(t, envelope.PublisherMeta.ResponseTopic, publisher.ResponseTopic)
-	assert.Equal(t, envelope.PublisherMeta.CorrelationData, publisher.CorrelationData)
+	assert.Equal(t, envelope.PublisherMeta.CorrelationData.Bytes(), publisher.CorrelationData)
 	require.NotNil(t, publisher.PayloadFormat)
-	assert.Equal(t, uint32(*envelope.PublisherMeta.PayloadFormat), *publisher.PayloadFormat)
+	payloadFormat, ok := envelope.PublisherMeta.PayloadFormat.Value()
+	require.True(t, ok)
+	assert.Equal(t, uint32(payloadFormat), *publisher.PayloadFormat)
 	require.NotNil(t, publisher.MessageExpiry)
-	assert.Equal(t, *envelope.PublisherMeta.MessageExpiry, *publisher.MessageExpiry)
+	messageExpiry, ok := envelope.PublisherMeta.MessageExpiry.Value()
+	require.True(t, ok)
+	assert.Equal(t, messageExpiry, *publisher.MessageExpiry)
 	assert.Equal(t, envelope.PublisherMeta.MessageID, publisher.MessageId)
 
 	broker := schema.Broker
@@ -63,14 +69,16 @@ func TestHandCodecMatchesTheSchema(t *testing.T) {
 	require.NotNil(t, broker.Source)
 	assert.Equal(t, source.ClientID, broker.Source.ClientId)
 	assert.Equal(t, source.ExternalID, broker.Source.ExternalId)
-	assert.Equal(t, string(source.Protocol), broker.Source.Protocol)
+	protocol, err := protocolNumber(source.Protocol)
+	require.NoError(t, err)
+	assert.Equal(t, protoreflect.EnumNumber(protocol), broker.Source.Protocol.Number())
 	assert.Equal(t, source.Topic, broker.Source.Topic)
 
 	delivery := envelope.BrokerMeta.Delivery
 	require.NotNil(t, broker.Delivery)
 	assertTime(t, "published_at", delivery.PublishedAt, broker.Delivery.PublishedAt)
 	assertTime(t, "expires_at", delivery.ExpiresAt, broker.Delivery.ExpiresAt)
-	assert.Equal(t, delivery.SubscriptionIDs, broker.Delivery.SubscriptionIds)
+	assert.Equal(t, delivery.SubscriptionIDs.Slice(), broker.Delivery.SubscriptionIds)
 	assert.Equal(t, uint32(delivery.PacketID), broker.Delivery.PacketId)
 	assert.Equal(t, uint32(delivery.QoS), broker.Delivery.Qos)
 	assert.Equal(t, uint32(delivery.InflightDirection), broker.Delivery.InflightDirection)
@@ -83,21 +91,24 @@ func TestHandCodecMatchesTheSchema(t *testing.T) {
 	assert.Equal(t, queue.Name, broker.Queue.Name)
 	assert.Equal(t, queue.GroupID, broker.Queue.GroupId)
 	assert.Equal(t, queue.Offset, broker.Queue.Offset)
-	assert.Equal(t, string(queue.State), broker.Queue.State)
+	state, err := queueStateNumber(queue.State)
+	require.NoError(t, err)
+	assert.Equal(t, protoreflect.EnumNumber(state), broker.Queue.State.Number())
 	assertTime(t, "created_at", queue.CreatedAt, broker.Queue.CreatedAt)
 	assertTime(t, "delivered_at", queue.DeliveredAt, broker.Queue.DeliveredAt)
 	assertTime(t, "next_retry_at", queue.NextRetryAt, broker.Queue.NextRetryAt)
 	assert.Equal(t, uint32(queue.RetryCount), broker.Queue.RetryCount)
 	assertTime(t, "queue expires_at", queue.ExpiresAt, broker.Queue.ExpiresAt)
 
-	require.NotNil(t, queue.Stream)
+	stream, ok := queue.Stream.Value()
+	require.True(t, ok)
 	require.NotNil(t, broker.Queue.Stream)
-	assert.Equal(t, queue.Stream.Offset, broker.Queue.Stream.Offset)
-	assert.Equal(t, queue.Stream.Timestamp, broker.Queue.Stream.Timestamp)
-	assert.Equal(t, queue.Stream.CommittedOffset, broker.Queue.Stream.CommittedOffset)
-	assert.Equal(t, queue.Stream.HasCommittedOffset, broker.Queue.Stream.HasCommittedOffset)
-	assert.Equal(t, queue.Stream.WorkAcknowledged, broker.Queue.Stream.WorkAcknowledged)
-	assert.Equal(t, queue.Stream.WorkGroup, broker.Queue.Stream.WorkGroup)
+	assert.Equal(t, stream.Offset, broker.Queue.Stream.Offset)
+	assert.Equal(t, stream.Timestamp, broker.Queue.Stream.Timestamp)
+	assert.Equal(t, stream.CommittedOffset, broker.Queue.Stream.CommittedOffset)
+	assert.Equal(t, stream.HasCommittedOffset, broker.Queue.Stream.HasCommittedOffset)
+	assert.Equal(t, stream.WorkAcknowledged, broker.Queue.Stream.WorkAcknowledged)
+	assert.Equal(t, stream.WorkGroup, broker.Queue.Stream.WorkGroup)
 
 	transfer := envelope.BrokerMeta.Transfer
 	require.NotNil(t, broker.Transfer)
@@ -116,6 +127,48 @@ func TestHandCodecMatchesTheSchema(t *testing.T) {
 	assert.Equal(t, trace.TraceParent, broker.Trace.TraceParent)
 	assert.Equal(t, trace.TraceState, broker.Trace.TraceState)
 	assert.Equal(t, trace.TraceID, broker.Trace.TraceId)
+}
+
+// assertSchemaFixtureIsExhaustive makes the field-by-field claim executable.
+// A newly added schema field is absent/default until the fixture and codec are
+// updated, while a hand-codec-only field appears as unknown protobuf bytes.
+func assertSchemaFixtureIsExhaustive(t *testing.T, msg protoreflect.Message) {
+	t.Helper()
+	require.Empty(t, msg.GetUnknown(), "%s contains a field the schema does not declare", msg.Descriptor().FullName())
+
+	fields := msg.Descriptor().Fields()
+	for i := range fields.Len() {
+		field := fields.Get(i)
+		name := string(field.FullName())
+		value := msg.Get(field)
+
+		switch {
+		case field.IsMap():
+			entries := value.Map()
+			require.Positive(t, entries.Len(), "%s is not populated by the conformance fixture", name)
+			if field.MapValue().Message() != nil {
+				entries.Range(func(_ protoreflect.MapKey, value protoreflect.Value) bool {
+					assertSchemaFixtureIsExhaustive(t, value.Message())
+					return true
+				})
+			}
+		case field.IsList():
+			items := value.List()
+			require.Positive(t, items.Len(), "%s is not populated by the conformance fixture", name)
+			if field.Message() != nil {
+				for index := range items.Len() {
+					assertSchemaFixtureIsExhaustive(t, items.Get(index).Message())
+				}
+			}
+		case field.Message() != nil:
+			require.True(t, msg.Has(field), "%s is not populated by the conformance fixture", name)
+			assertSchemaFixtureIsExhaustive(t, value.Message())
+		case field.HasPresence():
+			require.True(t, msg.Has(field), "%s is not populated by the conformance fixture", name)
+		default:
+			require.False(t, value.Equal(field.Default()), "%s is left at its protobuf default", name)
+		}
+	}
 }
 
 // The other direction: bytes written from the schema have to decode into the
@@ -176,12 +229,10 @@ func TestGoldenEnvelopeEncoding(t *testing.T) {
 // are reproducible. It carries every field the schema declares, which is what
 // makes the comparisons above exhaustive.
 func conformanceEnvelope() *Envelope {
-	format := byte(1)
-	expiry := uint32(3600)
 	base := time.Unix(1700000000, 123456789).UTC()
 
 	envelope := NewDelivery("devices/sensor-1/telemetry", []byte("conformance-payload"), 1, true)
-	envelope.BrokerMeta.Delivery.SubscriptionIDs = []uint32{7, 9}
+	envelope.BrokerMeta.Delivery.SubscriptionIDs = NewUint32List(7, 9)
 	envelope.BrokerMeta.Delivery.PacketID = 42
 	envelope.BrokerMeta.Delivery.InflightDirection = 1
 	envelope.BrokerMeta.Delivery.InflightState = 1
@@ -189,15 +240,15 @@ func conformanceEnvelope() *Envelope {
 	envelope.BrokerMeta.Delivery.PublishedAt = base
 	envelope.BrokerMeta.Delivery.ExpiresAt = base.Add(time.Hour)
 
-	envelope.PublisherMeta.Key = []byte("partition-key")
-	envelope.PublisherMeta.Headers = map[string][]byte{"x-tenant": []byte("acme")}
-	envelope.PublisherMeta.Properties = map[string]string{"schema": "telemetry.v2"}
+	envelope.PublisherMeta.Key = NewBinary([]byte("partition-key"))
+	envelope.PublisherMeta.Headers = NewHeaderMap(map[string][]byte{"x-tenant": []byte(testTenant)})
+	envelope.PublisherMeta.Properties = NewPropertyMap(map[string]string{"schema": "telemetry.v2"})
 	envelope.PublisherMeta.ContentType = "application/json"
 	envelope.PublisherMeta.ContentEncoding = testContentEncoding
 	envelope.PublisherMeta.ResponseTopic = "devices/sensor-1/reply"
-	envelope.PublisherMeta.CorrelationData = []byte("correlation-0123456789")
-	envelope.PublisherMeta.PayloadFormat = &format
-	envelope.PublisherMeta.MessageExpiry = &expiry
+	envelope.PublisherMeta.CorrelationData = NewBinary([]byte("correlation-0123456789"))
+	envelope.PublisherMeta.PayloadFormat = Some(byte(1))
+	envelope.PublisherMeta.MessageExpiry = Some(uint32(3600))
 	envelope.PublisherMeta.MessageID = "publisher-message-1"
 
 	envelope.BrokerMeta.Source = SourceMetadata{
@@ -216,14 +267,14 @@ func conformanceEnvelope() *Envelope {
 		NextRetryAt: base.Add(time.Minute),
 		RetryCount:  2,
 		ExpiresAt:   base.Add(time.Hour),
-		Stream: &StreamMetadata{
+		Stream: Some(StreamMetadata{
 			Offset:             4096,
 			Timestamp:          base.UnixNano(),
 			CommittedOffset:    4000,
 			HasCommittedOffset: true,
 			WorkAcknowledged:   true,
 			WorkGroup:          testGroupID,
-		},
+		}),
 	}
 	envelope.BrokerMeta.Transfer = TransferMetadata{
 		ID:            "dlq-0f1e2d3c4b5a69788796a5b4c3d2e1f0",

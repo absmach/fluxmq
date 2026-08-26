@@ -973,7 +973,7 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 				msg.BrokerMeta.Delivery.QoS = 2
 				msg.SetPayload([]byte("op"))
 				msg.BrokerMeta.Source.Topic = "sensors/temperature"
-				msg.PublisherMeta.Properties = map[string]string{"trace": "abc"}
+				msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"trace": "abc"})
 			}),
 			inflightWire(t, 5, uint32(messages.Inbound), func(msg *message.Envelope) {
 				msg.Topic = "in"
@@ -990,7 +990,9 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	require.Equal(t, "out", gotOut.Topic)
 	require.Equal(t, "op", string(gotOut.PayloadBytes()), "payload must survive cluster transfer")
 	require.Equal(t, "sensors/temperature", gotOut.BrokerMeta.Source.Topic)
-	require.Equal(t, "abc", gotOut.PublisherMeta.Properties["trace"])
+	trace, ok := gotOut.PublisherMeta.Properties.Get("trace")
+	require.True(t, ok)
+	require.Equal(t, "abc", trace)
 	gotIn, err := tracker.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "in", gotIn.Topic)

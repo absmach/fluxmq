@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"maps"
 	"strconv"
 	"time"
 
@@ -26,6 +25,13 @@ const (
 // ErrUnsupportedVersion is returned for zero, legacy, and future envelope
 // versions. This implementation deliberately has no compatibility decoder.
 var ErrUnsupportedVersion = errors.New("unsupported message envelope version")
+
+// ErrUnsupportedProtocol and ErrUnsupportedQueueState identify enum values
+// that cannot be represented by the persisted v1 schema.
+var (
+	ErrUnsupportedProtocol   = errors.New("unsupported message protocol")
+	ErrUnsupportedQueueState = errors.New("unsupported message queue state")
+)
 
 // A metadata blob describes a log record whose value and key the record itself
 // owns. Carrying either inside the blob would leave two sources for one field,
@@ -61,15 +67,15 @@ const (
 // PublisherMetadata contains publisher-owned message metadata. Protocol adapters
 // may project only fields their wire format supports.
 type PublisherMetadata struct {
-	Key             []byte
-	Headers         map[string][]byte
-	Properties      map[string]string
+	Key             Binary
+	Headers         HeaderMap
+	Properties      PropertyMap
 	ContentType     string
 	ContentEncoding string
 	ResponseTopic   string
-	CorrelationData []byte
-	PayloadFormat   *byte
-	MessageExpiry   *uint32
+	CorrelationData Binary
+	PayloadFormat   Optional[byte]
+	MessageExpiry   Optional[uint32]
 
 	// MessageID is the publisher's own identifier, as carried by AMQP's
 	// message-id property. It is user metadata: the broker never reads it and a
@@ -91,7 +97,7 @@ type SourceMetadata struct {
 type DeliveryMetadata struct {
 	PublishedAt       time.Time
 	ExpiresAt         time.Time
-	SubscriptionIDs   []uint32
+	SubscriptionIDs   Uint32List
 	PacketID          uint16
 	QoS               byte
 	InflightDirection byte
@@ -128,7 +134,7 @@ type QueueMetadata struct {
 	NextRetryAt time.Time
 	RetryCount  int
 	ExpiresAt   time.Time
-	Stream      *StreamMetadata
+	Stream      Optional[StreamMetadata]
 }
 
 // DeliveryID is the broker's handle for a durable delivery, "<queue>:<offset>".
@@ -178,16 +184,16 @@ type BrokerMetadata struct {
 type Envelope struct {
 	Version       Version
 	Topic         string
-	Payload       *payload.Buffer
 	PublisherMeta PublisherMetadata
 	BrokerMeta    BrokerMetadata
+	payload       *payload.Buffer
 }
 
 // New constructs a Version1 envelope and copies payload into the broker pool.
 func New(topic string, data []byte) *Envelope {
 	envelope := Acquire()
 	envelope.Topic = topic
-	envelope.Payload = payload.FromBytes(data)
+	envelope.payload = payload.FromBytes(data)
 	return envelope
 }
 
@@ -204,7 +210,7 @@ func NewDelivery(topic string, data []byte, qos byte, retain bool) *Envelope {
 func NewWithBuffer(topic string, buf *payload.Buffer) *Envelope {
 	envelope := Acquire()
 	envelope.Topic = topic
-	envelope.Payload = buf
+	envelope.payload = buf
 	return envelope
 }
 
@@ -213,7 +219,92 @@ func (e *Envelope) Validate() error {
 	if e == nil {
 		return errors.New("message envelope is nil")
 	}
-	return requireVersion1(e.Version)
+	if err := requireVersion1(e.Version); err != nil {
+		return err
+	}
+	if _, err := protocolNumber(e.BrokerMeta.Source.Protocol); err != nil {
+		return err
+	}
+	if _, err := queueStateNumber(e.BrokerMeta.Queue.State); err != nil {
+		return err
+	}
+	return nil
+}
+
+func protocolNumber(protocol Protocol) (uint64, error) {
+	switch protocol {
+	case "":
+		return 0, nil
+	case ProtocolMQTT:
+		return 1, nil
+	case ProtocolAMQP091:
+		return 2, nil
+	case ProtocolAMQP1:
+		return 3, nil
+	case ProtocolHTTP:
+		return 4, nil
+	case ProtocolCoAP:
+		return 5, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", ErrUnsupportedProtocol, protocol)
+	}
+}
+
+func protocolFromNumber(number uint64) (Protocol, error) {
+	switch number {
+	case 0:
+		return "", nil
+	case 1:
+		return ProtocolMQTT, nil
+	case 2:
+		return ProtocolAMQP091, nil
+	case 3:
+		return ProtocolAMQP1, nil
+	case 4:
+		return ProtocolHTTP, nil
+	case 5:
+		return ProtocolCoAP, nil
+	default:
+		return "", fmt.Errorf("%w: %d", ErrUnsupportedProtocol, number)
+	}
+}
+
+func queueStateNumber(state QueueState) (uint64, error) {
+	switch state {
+	case "":
+		return 0, nil
+	case QueueStateQueued:
+		return 1, nil
+	case QueueStateDelivered:
+		return 2, nil
+	case QueueStateAcked:
+		return 3, nil
+	case QueueStateRetry:
+		return 4, nil
+	case QueueStateDLQ:
+		return 5, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", ErrUnsupportedQueueState, state)
+	}
+}
+
+func queueStateFromNumber(number uint64) (QueueState, error) {
+	switch number {
+	case 0:
+		return "", nil
+	case 1:
+		return QueueStateQueued, nil
+	case 2:
+		return QueueStateDelivered, nil
+	case 3:
+		return QueueStateAcked, nil
+	case 4:
+		return QueueStateRetry, nil
+	case 5:
+		return QueueStateDLQ, nil
+	default:
+		return "", fmt.Errorf("%w: %d", ErrUnsupportedQueueState, number)
+	}
 }
 
 // requireVersion1 is the one place a version is checked. It was written out
@@ -228,10 +319,10 @@ func requireVersion1(version Version) error {
 
 // PayloadBytes returns an immutable view valid while e owns its reference.
 func (e *Envelope) PayloadBytes() []byte {
-	if e == nil || e.Payload == nil {
+	if e == nil || e.payload == nil {
 		return nil
 	}
-	return e.Payload.Bytes()
+	return e.payload.Bytes()
 }
 
 // StablePayload returns a copy whose lifetime is independent of e.
@@ -241,33 +332,36 @@ func (e *Envelope) StablePayload() []byte {
 
 // SetPayload replaces the payload with a pooled copy of data.
 func (e *Envelope) SetPayload(data []byte) {
-	if e.Payload != nil {
-		e.Payload.Release()
+	if e.payload != nil {
+		e.payload.Release()
 	}
-	e.Payload = payload.FromBytes(data)
+	e.payload = payload.FromBytes(data)
 }
 
 // SetPayloadBuffer replaces the payload and takes ownership of buf's existing
 // reference.
 func (e *Envelope) SetPayloadBuffer(buf *payload.Buffer) {
-	if e.Payload != nil {
-		e.Payload.Release()
+	if e.payload != nil {
+		e.payload.Release()
 	}
-	e.Payload = buf
+	e.payload = buf
 }
 
-// RetainPayload adds one payload reference before an envelope is shared.
-func (e *Envelope) RetainPayload() {
-	if e != nil && e.Payload != nil {
-		e.Payload.Retain()
+// RetainPayload returns an owned payload reference for a packet or other
+// asynchronous holder. The caller must release the returned buffer.
+func (e *Envelope) RetainPayload() *payload.Buffer {
+	if e != nil && e.payload != nil {
+		e.payload.Retain()
+		return e.payload
 	}
+	return nil
 }
 
 // ReleasePayload drops this envelope's payload reference.
 func (e *Envelope) ReleasePayload() {
-	if e != nil && e.Payload != nil {
-		e.Payload.Release()
-		e.Payload = nil
+	if e != nil && e.payload != nil {
+		e.payload.Release()
+		e.payload = nil
 	}
 }
 
@@ -283,7 +377,8 @@ func (e *Envelope) IsExpired() bool {
 	return !expiresAt.IsZero() && time.Now().After(expiresAt)
 }
 
-// Clone returns a metadata-deep copy sharing the immutable payload.
+// Clone returns an O(1) metadata copy sharing the immutable payload and
+// immutable metadata collections. Subsequent metadata mutation is copy-on-write.
 func (e *Envelope) Clone() *Envelope {
 	if e == nil {
 		return nil
@@ -291,77 +386,11 @@ func (e *Envelope) Clone() *Envelope {
 	cp := Acquire()
 	cp.Version = e.Version
 	cp.Topic = e.Topic
-	cp.Payload = e.Payload
-	if cp.Payload != nil {
-		cp.Payload.Retain()
+	cp.payload = e.payload
+	if cp.payload != nil {
+		cp.payload.Retain()
 	}
-	if hasUserMetadata(e.PublisherMeta) {
-		cp.PublisherMeta = cloneUserMetadata(e.PublisherMeta)
-	}
-	if e.BrokerMeta.Source != (SourceMetadata{}) {
-		cp.BrokerMeta.Source = e.BrokerMeta.Source
-	}
-	if hasDeliveryMetadata(e.BrokerMeta.Delivery) {
-		cp.BrokerMeta.Delivery = cloneDeliveryMetadata(e.BrokerMeta.Delivery)
-	}
-	if e.BrokerMeta.Queue != (QueueMetadata{}) {
-		cp.BrokerMeta.Queue = cloneQueueMetadata(e.BrokerMeta.Queue)
-	}
-	if e.BrokerMeta.Transfer != (TransferMetadata{}) {
-		cp.BrokerMeta.Transfer = e.BrokerMeta.Transfer
-	}
-	if e.BrokerMeta.Trace != (TraceMetadata{}) {
-		cp.BrokerMeta.Trace = e.BrokerMeta.Trace
-	}
+	cp.PublisherMeta = e.PublisherMeta
+	cp.BrokerMeta = e.BrokerMeta
 	return cp
-}
-
-func hasUserMetadata(user PublisherMetadata) bool {
-	return len(user.Key) > 0 || len(user.Headers) > 0 || len(user.Properties) > 0 ||
-		user.ContentType != "" || user.ContentEncoding != "" || user.ResponseTopic != "" ||
-		len(user.CorrelationData) > 0 || user.PayloadFormat != nil || user.MessageExpiry != nil ||
-		user.MessageID != ""
-}
-
-func hasDeliveryMetadata(delivery DeliveryMetadata) bool {
-	return !delivery.PublishedAt.IsZero() || !delivery.ExpiresAt.IsZero() || len(delivery.SubscriptionIDs) > 0 ||
-		delivery.PacketID != 0 || delivery.QoS != 0 || delivery.InflightDirection != 0 ||
-		delivery.InflightState != 0 || delivery.Retain || delivery.Duplicate
-}
-
-func cloneUserMetadata(src PublisherMetadata) PublisherMetadata {
-	dst := src
-	dst.Key = bytes.Clone(src.Key)
-	dst.CorrelationData = bytes.Clone(src.CorrelationData)
-	dst.Properties = maps.Clone(src.Properties)
-	if src.Headers != nil {
-		dst.Headers = make(map[string][]byte, len(src.Headers))
-		for key, value := range src.Headers {
-			dst.Headers[key] = bytes.Clone(value)
-		}
-	}
-	if src.PayloadFormat != nil {
-		value := *src.PayloadFormat
-		dst.PayloadFormat = &value
-	}
-	if src.MessageExpiry != nil {
-		value := *src.MessageExpiry
-		dst.MessageExpiry = &value
-	}
-	return dst
-}
-
-func cloneDeliveryMetadata(src DeliveryMetadata) DeliveryMetadata {
-	dst := src
-	dst.SubscriptionIDs = append([]uint32(nil), src.SubscriptionIDs...)
-	return dst
-}
-
-func cloneQueueMetadata(src QueueMetadata) QueueMetadata {
-	dst := src
-	if src.Stream != nil {
-		stream := *src.Stream
-		dst.Stream = &stream
-	}
-	return dst
 }

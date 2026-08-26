@@ -65,14 +65,22 @@ message BrokerMetadata {
   TraceMetadata trace = 5;
 }
 
+// Protocol is the stable persisted identity of an ingress protocol. Explicit
+// numbers keep the stored form compact without coupling it to Go string values.
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_MQTT = 1;
+  PROTOCOL_AMQP091 = 2;
+  PROTOCOL_AMQP1 = 3;
+  PROTOCOL_HTTP = 4;
+  PROTOCOL_COAP = 5;
+}
+
 // SourceMetadata identifies the authenticated origin of a message.
 message SourceMetadata {
   string client_id = 1;
   string external_id = 2;
-  // protocol is a string rather than an enum because that is what the codec
-  // writes today. An enum would cost less per record and reject an unknown
-  // value at the boundary.
-  string protocol = 3;
+  Protocol protocol = 3;
   // topic is the topic the message was published to, before any queue
   // delivery address was derived from it.
   string topic = 4;
@@ -99,6 +107,16 @@ message DeliveryMetadata {
   bool duplicate = 9;
 }
 
+// QueueState is the stable persisted lifecycle of a durable record.
+enum QueueState {
+  QUEUE_STATE_UNSPECIFIED = 0;
+  QUEUE_STATE_QUEUED = 1;
+  QUEUE_STATE_DELIVERED = 2;
+  QUEUE_STATE_ACKED = 3;
+  QUEUE_STATE_RETRY = 4;
+  QUEUE_STATE_DLQ = 5;
+}
+
 // QueueMetadata is the durable-queue lifecycle of a record.
 message QueueMetadata {
   // Field 1 held a message identifier that is now derived from name and offset.
@@ -109,8 +127,7 @@ message QueueMetadata {
   string name = 2;
   string group_id = 3;
   uint64 offset = 4;
-  // state is a string rather than an enum, as protocol is; see SourceMetadata.
-  string state = 5;
+  QueueState state = 5;
   sint64 created_at = 6;
   sint64 delivered_at = 7;
   sint64 next_retry_at = 8;

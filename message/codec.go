@@ -126,24 +126,24 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, mode codecMod
 	}
 	if mode == encodeMetadata {
 		decodedPayload = externalPayload
-		envelope.PublisherMeta.Key = bytes.Clone(externalKey)
+		envelope.PublisherMeta.Key = NewBinary(externalKey)
 	}
-	envelope.Payload = payload.FromBytes(decodedPayload)
+	envelope.payload = payload.FromBytes(decodedPayload)
 	return envelope, nil
 }
 
 func appendPublisher(encoded []byte, user PublisherMetadata, mode codecMode) []byte {
 	if mode == encodeFull {
-		encoded = appendBytes(encoded, 1, user.Key)
+		encoded = appendBytes(encoded, 1, user.Key.value)
 	}
-	for key, value := range user.Headers {
+	for key, value := range user.Headers.values {
 		var entry nested
 		encoded, entry = beginNested(encoded, 2)
 		encoded = appendString(encoded, 1, key)
-		encoded = appendBytes(encoded, 2, value)
+		encoded = appendBytes(encoded, 2, value.value)
 		encoded = endNested(encoded, entry)
 	}
-	for key, value := range user.Properties {
+	for key, value := range user.Properties.values {
 		var entry nested
 		encoded, entry = beginNested(encoded, 3)
 		encoded = appendString(encoded, 1, key)
@@ -153,12 +153,12 @@ func appendPublisher(encoded []byte, user PublisherMetadata, mode codecMode) []b
 	encoded = appendString(encoded, 4, user.ContentType)
 	encoded = appendString(encoded, 5, user.ContentEncoding)
 	encoded = appendString(encoded, 6, user.ResponseTopic)
-	encoded = appendBytes(encoded, 7, user.CorrelationData)
-	if user.PayloadFormat != nil {
-		encoded = appendVarint(encoded, 8, uint64(*user.PayloadFormat))
+	encoded = appendBytes(encoded, 7, user.CorrelationData.value)
+	if value, ok := user.PayloadFormat.Value(); ok {
+		encoded = appendVarint(encoded, 8, uint64(value))
 	}
-	if user.MessageExpiry != nil {
-		encoded = appendVarint(encoded, 9, uint64(*user.MessageExpiry))
+	if value, ok := user.MessageExpiry.Value(); ok {
+		encoded = appendVarint(encoded, 9, uint64(value))
 	}
 	encoded = appendString(encoded, 10, user.MessageID)
 	return encoded
@@ -171,7 +171,7 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
-			user.Key = bytes.Clone(raw)
+			user.Key = NewBinary(raw)
 		case 2:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
@@ -180,10 +180,10 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 			if err != nil {
 				return err
 			}
-			if user.Headers == nil {
-				user.Headers = make(map[string][]byte)
+			if user.Headers.values == nil {
+				user.Headers.values = make(map[string]Binary)
 			}
-			user.Headers[key] = value
+			user.Headers.values[key] = Binary{value: value}
 		case 3:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
@@ -192,10 +192,10 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 			if err != nil {
 				return err
 			}
-			if user.Properties == nil {
-				user.Properties = make(map[string]string)
+			if user.Properties.values == nil {
+				user.Properties.values = make(map[string]string)
 			}
-			user.Properties[key] = value
+			user.Properties.values[key] = value
 		case 4:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
@@ -215,7 +215,7 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
-			user.CorrelationData = bytes.Clone(raw)
+			user.CorrelationData = NewBinary(raw)
 		case 8:
 			if err := requireWireType(number, wireType, protowire.VarintType); err != nil {
 				return err
@@ -223,8 +223,7 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 			if scalar > 255 {
 				return fmt.Errorf("message envelope payload format overflows byte: %d", scalar)
 			}
-			value := byte(scalar)
-			user.PayloadFormat = &value
+			user.PayloadFormat = Some(byte(scalar))
 		case 9:
 			if err := requireWireType(number, wireType, protowire.VarintType); err != nil {
 				return err
@@ -232,8 +231,7 @@ func decodeUser(encoded []byte, user *PublisherMetadata) error {
 			if scalar > uint64(^uint32(0)) {
 				return fmt.Errorf("message envelope expiry overflows uint32: %d", scalar)
 			}
-			value := uint32(scalar)
-			user.MessageExpiry = &value
+			user.MessageExpiry = Some(uint32(scalar))
 		case 10:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
@@ -306,13 +304,14 @@ func decodeBroker(encoded []byte, broker *BrokerMetadata) error {
 func appendSource(encoded []byte, source SourceMetadata) []byte {
 	encoded = appendString(encoded, 1, source.ClientID)
 	encoded = appendString(encoded, 2, source.ExternalID)
-	encoded = appendString(encoded, 3, string(source.Protocol))
+	protocol, _ := protocolNumber(source.Protocol) // validated by marshalBinary
+	encoded = appendNonZeroVarint(encoded, 3, protocol)
 	encoded = appendString(encoded, 4, source.Topic)
 	return encoded
 }
 
 func decodeSource(encoded []byte, source *SourceMetadata) error {
-	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, raw []byte, _ uint64) error {
+	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, raw []byte, scalar uint64) error {
 		switch number {
 		case 1:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
@@ -325,10 +324,14 @@ func decodeSource(encoded []byte, source *SourceMetadata) error {
 			}
 			source.ExternalID = string(raw)
 		case 3:
-			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
+			if err := requireWireType(number, wireType, protowire.VarintType); err != nil {
 				return err
 			}
-			source.Protocol = Protocol(raw)
+			protocol, err := protocolFromNumber(scalar)
+			if err != nil {
+				return err
+			}
+			source.Protocol = protocol
 		case 4:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
@@ -342,7 +345,7 @@ func decodeSource(encoded []byte, source *SourceMetadata) error {
 func appendDelivery(encoded []byte, delivery DeliveryMetadata) []byte {
 	encoded = appendTime(encoded, 1, delivery.PublishedAt)
 	encoded = appendTime(encoded, 2, delivery.ExpiresAt)
-	encoded = appendPackedVarints(encoded, 3, delivery.SubscriptionIDs)
+	encoded = appendPackedVarints(encoded, 3, delivery.SubscriptionIDs.values)
 	encoded = appendNonZeroVarint(encoded, 4, uint64(delivery.PacketID))
 	encoded = appendNonZeroVarint(encoded, 5, uint64(delivery.QoS))
 	encoded = appendNonZeroVarint(encoded, 6, uint64(delivery.InflightDirection))
@@ -375,7 +378,7 @@ func decodeDelivery(encoded []byte, delivery *DeliveryMetadata) error {
 			if scalar > uint64(^uint32(0)) {
 				return fmt.Errorf("message envelope subscription ID overflows uint32: %d", scalar)
 			}
-			delivery.SubscriptionIDs = append(delivery.SubscriptionIDs, uint32(scalar))
+			delivery.SubscriptionIDs.values = append(delivery.SubscriptionIDs.values, uint32(scalar))
 		case 4:
 			if scalar > uint64(^uint16(0)) {
 				return fmt.Errorf("message envelope packet ID overflows uint16: %d", scalar)
@@ -412,15 +415,16 @@ func appendQueue(encoded []byte, queue QueueMetadata) []byte {
 	encoded = appendString(encoded, 2, queue.Name)
 	encoded = appendString(encoded, 3, queue.GroupID)
 	encoded = appendNonZeroVarint(encoded, 4, queue.Offset)
-	encoded = appendString(encoded, 5, string(queue.State))
+	state, _ := queueStateNumber(queue.State) // validated by marshalBinary
+	encoded = appendNonZeroVarint(encoded, 5, state)
 	encoded = appendTime(encoded, 6, queue.CreatedAt)
 	encoded = appendTime(encoded, 7, queue.DeliveredAt)
 	encoded = appendTime(encoded, 8, queue.NextRetryAt)
 	encoded = appendNonZeroVarint(encoded, 9, uint64(queue.RetryCount))
 	encoded = appendTime(encoded, 10, queue.ExpiresAt)
-	if queue.Stream != nil {
+	if streamValue, ok := queue.Stream.Value(); ok {
 		encoded, stream := beginNested(encoded, 11)
-		encoded = appendStream(encoded, *queue.Stream)
+		encoded = appendStream(encoded, streamValue)
 		return endNested(encoded, stream)
 	}
 	return encoded
@@ -429,11 +433,11 @@ func appendQueue(encoded []byte, queue QueueMetadata) []byte {
 func decodeQueue(encoded []byte, queue *QueueMetadata) error {
 	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, raw []byte, scalar uint64) error {
 		switch number {
-		case 2, 3, 5, 11:
+		case 2, 3, 11:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
-		case 4, 6, 7, 8, 9, 10:
+		case 4, 5, 6, 7, 8, 9, 10:
 			if err := requireWireType(number, wireType, protowire.VarintType); err != nil {
 				return err
 			}
@@ -448,7 +452,11 @@ func decodeQueue(encoded []byte, queue *QueueMetadata) error {
 		case 4:
 			queue.Offset = scalar
 		case 5:
-			queue.State = QueueState(raw)
+			state, err := queueStateFromNumber(scalar)
+			if err != nil {
+				return err
+			}
+			queue.State = state
 		case 6:
 			queue.CreatedAt = decodeTime(scalar)
 		case 7:
@@ -460,11 +468,11 @@ func decodeQueue(encoded []byte, queue *QueueMetadata) error {
 		case 10:
 			queue.ExpiresAt = decodeTime(scalar)
 		case 11:
-			stream := &StreamMetadata{}
-			if err := decodeStream(raw, stream); err != nil {
+			var stream StreamMetadata
+			if err := decodeStream(raw, &stream); err != nil {
 				return err
 			}
-			queue.Stream = stream
+			queue.Stream = Some(stream)
 		}
 		return nil
 	})
@@ -705,16 +713,16 @@ func estimateSize(envelope *Envelope, mode codecMode) int {
 
 	user := &envelope.PublisherMeta
 	if mode == encodeFull {
-		size += len(user.Key) + fieldOverhead
+		size += user.Key.Len() + fieldOverhead
 	}
-	for key, value := range user.Headers {
-		size += len(key) + len(value) + entryOverhead
+	for key, value := range user.Headers.values {
+		size += len(key) + value.Len() + entryOverhead
 	}
-	for key, value := range user.Properties {
+	for key, value := range user.Properties.values {
 		size += len(key) + len(value) + entryOverhead
 	}
 	size += len(user.ContentType) + len(user.ContentEncoding) + len(user.ResponseTopic) +
-		len(user.CorrelationData) + len(user.MessageID) + 5*fieldOverhead
+		user.CorrelationData.Len() + len(user.MessageID) + 5*fieldOverhead
 
 	broker := &envelope.BrokerMeta
 	size += len(broker.Source.ClientID) + len(broker.Source.ExternalID) +
@@ -724,10 +732,10 @@ func estimateSize(envelope *Envelope, mode codecMode) int {
 		len(broker.Transfer.SourceQueue) + len(broker.Transfer.SourceGroup)
 	size += len(broker.Trace.TraceParent) + len(broker.Trace.TraceState) + len(broker.Trace.TraceID)
 	size += namespaceOverhead
-	if broker.Queue.Stream != nil {
-		size += len(broker.Queue.Stream.WorkGroup) + namespaceOverhead
+	if stream, ok := broker.Queue.Stream.Value(); ok {
+		size += len(stream.WorkGroup) + namespaceOverhead
 	}
-	size += len(broker.Delivery.SubscriptionIDs) * 6
+	size += broker.Delivery.SubscriptionIDs.Len() * 6
 
 	return size
 }
@@ -785,7 +793,7 @@ func decodePackedSubscriptionIDs(raw []byte, delivery *DeliveryMetadata) error {
 		if value > uint64(^uint32(0)) {
 			return fmt.Errorf("message envelope subscription ID overflows uint32: %d", value)
 		}
-		delivery.SubscriptionIDs = append(delivery.SubscriptionIDs, uint32(value))
+		delivery.SubscriptionIDs.values = append(delivery.SubscriptionIDs.values, uint32(value))
 		raw = raw[n:]
 	}
 	return nil

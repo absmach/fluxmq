@@ -240,6 +240,14 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 	if len(command.Envelopes) == 0 {
 		return AppendOutcome{}, fmt.Errorf("%w: at least one message is required", ErrInvalidCommand)
 	}
+	// Validate the whole borrowed batch before any append runs. Besides keeping
+	// invalid schema versions out of every backend, this prevents a later bad
+	// entry from turning an atomic command into a partially applied one.
+	for i, envelope := range command.Envelopes {
+		if err := validateEnvelope(envelope); err != nil {
+			return AppendOutcome{}, fmt.Errorf("envelope %d: %w", i, err)
+		}
+	}
 	if command.RequireProtectedDurable {
 		if len(command.Envelopes) != 1 || command.AtomicBatch {
 			return AppendOutcome{}, fmt.Errorf("%w: protected durable append requires exactly one message", ErrInvalidCommand)
@@ -267,6 +275,16 @@ func (s *stateMachine) Append(ctx context.Context, command AppendCommand) (Appen
 		last += uint64(count - 1)
 	}
 	return AppendOutcome{FirstOffset: first, LastOffset: last, Count: count, Timestamp: lastCreatedAt}, nil
+}
+
+func validateEnvelope(envelope *message.Envelope) error {
+	if envelope == nil {
+		return fmt.Errorf("%w: an envelope is required", ErrInvalidCommand)
+	}
+	if err := envelope.Validate(); err != nil {
+		return fmt.Errorf("%w: envelope: %w", ErrInvalidCommand, err)
+	}
+	return nil
 }
 
 // CommitOffset records a stream group's processed position.

@@ -469,7 +469,7 @@ func TestIntegrationDeliverToClient(t *testing.T) {
 
 	// Deliver via DeliverToClient
 	msg := coremessage.New("test/deliver", []byte("deliver-payload"))
-	msg.PublisherMeta.Properties = map[string]string{"key": "val"}
+	msg.PublisherMeta.Properties = coremessage.NewPropertyMap(map[string]string{"key": "val"})
 	err = b.DeliverToClient(context.Background(), "amqp:deliver-client", msg)
 	require.NoError(t, err)
 

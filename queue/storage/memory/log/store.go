@@ -395,9 +395,10 @@ func messageSize(msg *message.Envelope) int64 {
 	size := int64(len(msg.PayloadBytes()))
 	size += int64(len(msg.Topic))
 	size += int64(len(msg.PublisherMeta.MessageID))
-	for k, v := range msg.PublisherMeta.Properties {
+	msg.PublisherMeta.Properties.Range(func(k, v string) bool {
 		size += int64(len(k) + len(v))
-	}
+		return true
+	})
 	const fixedOverhead = 200 // struct fields, pointers, timestamps
 	return size + fixedOverhead
 }

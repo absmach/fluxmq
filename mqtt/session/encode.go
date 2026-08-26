@@ -63,7 +63,7 @@ func encodePublish(msg *message.Envelope, packetID uint16, version byte, dup boo
 		p.ID = packetID
 
 		// Send the remaining message-expiry interval, not the original.
-		if msg.PublisherMeta.MessageExpiry != nil && !msg.BrokerMeta.Delivery.ExpiresAt.IsZero() {
+		if msg.PublisherMeta.MessageExpiry.IsSet() && !msg.BrokerMeta.Delivery.ExpiresAt.IsZero() {
 			if remaining := time.Until(msg.BrokerMeta.Delivery.ExpiresAt); remaining > 0 {
 				remainingSec := uint32(remaining.Seconds())
 				p.Properties.MessageExpiry = &remainingSec
@@ -90,11 +90,7 @@ func encodePublish(msg *message.Envelope, packetID uint16, version byte, dup boo
 // retainPayload takes a reference to the message's payload buffer on behalf of
 // an outbound packet.
 func retainPayload(msg *message.Envelope) packets.PayloadRef {
-	if msg.Payload == nil {
-		return nil
-	}
-	msg.Payload.Retain()
-	return msg.Payload
+	return msg.RetainPayload()
 }
 
 func applyPublishProperties(props *v5.PublishProperties, msg *message.Envelope) {
@@ -104,8 +100,10 @@ func applyPublishProperties(props *v5.PublishProperties, msg *message.Envelope) 
 
 	props.ContentType = msg.PublisherMeta.ContentType
 	props.ResponseTopic = msg.PublisherMeta.ResponseTopic
-	props.CorrelationData = msg.PublisherMeta.CorrelationData
-	props.PayloadFormat = msg.PublisherMeta.PayloadFormat
+	props.CorrelationData = msg.PublisherMeta.CorrelationData.Bytes()
+	if payloadFormat, ok := msg.PublisherMeta.PayloadFormat.Value(); ok {
+		props.PayloadFormat = &payloadFormat
+	}
 
 	projected := message.ProjectProperties(msg, message.PublicProjection)
 	if len(projected) > 0 {

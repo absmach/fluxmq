@@ -39,23 +39,21 @@ func benchEmptyEnvelope() *Envelope {
 func benchRichEnvelope() *Envelope {
 	envelope := NewDelivery("devices/sensor-1/telemetry", make([]byte, benchPayloadSize), 1, false)
 
-	format := byte(1)
-	expiry := uint32(3600)
-	envelope.PublisherMeta.Key = []byte("partition-key")
-	envelope.PublisherMeta.Headers = map[string][]byte{
-		"x-tenant": []byte("acme"),
+	envelope.PublisherMeta.Key = NewBinary([]byte("partition-key"))
+	envelope.PublisherMeta.Headers = NewHeaderMap(map[string][]byte{
+		"x-tenant": []byte(testTenant),
 		"x-region": []byte("eu-central-1"),
-	}
-	envelope.PublisherMeta.Properties = map[string]string{
+	})
+	envelope.PublisherMeta.Properties = NewPropertyMap(map[string]string{
 		"content-version": "3",
 		"schema":          "telemetry.v2",
-	}
+	})
 	envelope.PublisherMeta.ContentType = "application/json"
 	envelope.PublisherMeta.ContentEncoding = testContentEncoding
 	envelope.PublisherMeta.ResponseTopic = "devices/sensor-1/reply"
-	envelope.PublisherMeta.CorrelationData = []byte("correlation-0123456789")
-	envelope.PublisherMeta.PayloadFormat = &format
-	envelope.PublisherMeta.MessageExpiry = &expiry
+	envelope.PublisherMeta.CorrelationData = NewBinary([]byte("correlation-0123456789"))
+	envelope.PublisherMeta.PayloadFormat = Some(byte(1))
+	envelope.PublisherMeta.MessageExpiry = Some(uint32(3600))
 
 	now := time.Now().UTC()
 	envelope.BrokerMeta.Source = SourceMetadata{
@@ -74,14 +72,14 @@ func benchRichEnvelope() *Envelope {
 		NextRetryAt: now.Add(time.Minute),
 		RetryCount:  2,
 		ExpiresAt:   now.Add(time.Hour),
-		Stream: &StreamMetadata{
+		Stream: Some(StreamMetadata{
 			Offset:             4096,
 			Timestamp:          now.UnixNano(),
 			CommittedOffset:    4000,
 			HasCommittedOffset: true,
 			WorkAcknowledged:   true,
 			WorkGroup:          testGroupID,
-		},
+		}),
 	}
 	envelope.BrokerMeta.Transfer = TransferMetadata{
 		ID:            "dlq-0f1e2d3c4b5a69788796a5b4c3d2e1f0",
@@ -155,9 +153,8 @@ func BenchmarkMarshalMetadataRich(b *testing.B) {
 	}
 }
 
-// Clone shares the payload buffer, so its cost is the metadata it must copy.
-// The existing BenchmarkEnvelopeClone measures the empty case, where that is
-// nothing.
+// Clone shares both the payload buffer and immutable metadata. This rich shape
+// guards the O(1) clone cost that queue fan-out depends on.
 func BenchmarkEnvelopeCloneRich(b *testing.B) {
 	envelope := benchRichEnvelope()
 	defer Release(envelope)

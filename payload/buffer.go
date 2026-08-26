@@ -36,8 +36,9 @@ type Buffer struct {
 	pool *Pool
 }
 
-// NewBuffer takes ownership of data. Callers must not modify data afterwards.
-func NewBuffer(data []byte, pool *Pool) *Buffer {
+// newBuffer takes ownership of data. Keeping it package-private prevents an
+// arbitrary-capacity slice from being attached to a size-class pool.
+func newBuffer(data []byte, pool *Pool) *Buffer {
 	buf := &Buffer{data: data, pool: pool}
 	buf.refs.Store(1)
 	return buf
@@ -158,15 +159,15 @@ func NewPool() *Pool {
 	p := &Pool{}
 	p.small.New = func() any {
 		p.stats.smallMisses.Add(1)
-		return NewBuffer(make([]byte, 0, smallClass), p)
+		return newBuffer(make([]byte, 0, smallClass), p)
 	}
 	p.medium.New = func() any {
 		p.stats.mediumMisses.Add(1)
-		return NewBuffer(make([]byte, 0, mediumClass), p)
+		return newBuffer(make([]byte, 0, mediumClass), p)
 	}
 	p.large.New = func() any {
 		p.stats.largeMisses.Add(1)
-		return NewBuffer(make([]byte, 0, largeClass), p)
+		return newBuffer(make([]byte, 0, largeClass), p)
 	}
 	return p
 }
@@ -205,7 +206,7 @@ func (p *Pool) get(size int) *Buffer {
 		// capacity every later caller inherits.
 		p.stats.largeGets.Add(1)
 		p.stats.largeMisses.Add(1)
-		return NewBuffer(make([]byte, size), nil)
+		return newBuffer(make([]byte, size), nil)
 	}
 
 	gets.Add(1)
@@ -230,12 +231,12 @@ func (p *Pool) put(buf *Buffer) {
 		return
 	}
 
-	switch capacity := cap(buf.data); {
-	case capacity <= smallClass:
+	switch cap(buf.data) {
+	case smallClass:
 		p.small.Put(buf)
-	case capacity <= mediumClass:
+	case mediumClass:
 		p.medium.Put(buf)
-	case capacity <= largeClass:
+	case largeClass:
 		p.large.Put(buf)
 	}
 }

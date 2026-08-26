@@ -82,3 +82,16 @@ func TestOversizedBufferIsNeverPooled(t *testing.T) {
 	defer next.Release()
 	require.NotSame(t, buf, next, "an oversized buffer must not be retained")
 }
+
+func TestPoolRejectsBuffersOutsideExactSizeClasses(t *testing.T) {
+	pool := NewPool()
+	invalid := newBuffer(make([]byte, 1, 1), pool)
+	invalid.Release()
+
+	before := pool.Stats().SmallMisses
+	buf := pool.get(512)
+	defer buf.Release()
+	require.Equal(t, smallClass, cap(buf.data))
+	require.Greater(t, pool.Stats().SmallMisses, before,
+		"an arbitrary-capacity buffer must not enter a size-class pool")
+}

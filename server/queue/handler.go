@@ -4,7 +4,6 @@
 package queue
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1116,18 +1115,20 @@ func (h *Handler) messageToProto(msg *coremessage.Envelope) *queuev1.Message {
 	protoMsg := &queuev1.Message{
 		Offset:    msg.BrokerMeta.Queue.Offset,
 		Timestamp: timestamppb.New(msg.BrokerMeta.Queue.CreatedAt),
-		Key:       bytes.Clone(msg.PublisherMeta.Key),
+		Key:       msg.PublisherMeta.Key.Bytes(),
 		Value:     msg.StablePayload(),
 	}
 
-	if len(msg.PublisherMeta.Headers) > 0 || len(msg.PublisherMeta.Properties) > 0 {
-		protoMsg.Headers = make(map[string][]byte, len(msg.PublisherMeta.Headers)+len(msg.PublisherMeta.Properties))
-		for k, v := range msg.PublisherMeta.Properties {
+	if msg.PublisherMeta.Headers.Len() > 0 || msg.PublisherMeta.Properties.Len() > 0 {
+		protoMsg.Headers = make(map[string][]byte, msg.PublisherMeta.Headers.Len()+msg.PublisherMeta.Properties.Len())
+		msg.PublisherMeta.Properties.Range(func(k, v string) bool {
 			protoMsg.Headers[k] = []byte(v)
-		}
-		for k, v := range msg.PublisherMeta.Headers {
-			protoMsg.Headers[k] = bytes.Clone(v)
-		}
+			return true
+		})
+		msg.PublisherMeta.Headers.Range(func(k string, v message.Binary) bool {
+			protoMsg.Headers[k] = v.Bytes()
+			return true
+		})
 	}
 
 	return protoMsg
@@ -1182,7 +1183,7 @@ func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGrou
 // command borrows it, so the caller releases it once the append returns.
 func appendEnvelope(queueName string, value, key []byte, headers map[string][]byte) *message.Envelope {
 	envelope := message.New(queueName, value)
-	envelope.PublisherMeta.Key = key
-	envelope.PublisherMeta.Headers = headers
+	envelope.PublisherMeta.Key = message.NewBinary(key)
+	envelope.PublisherMeta.Headers = message.NewHeaderMap(headers)
 	return envelope
 }

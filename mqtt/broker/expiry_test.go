@@ -142,14 +142,14 @@ func TestMessageExpiry_QoS1WithExpiry(t *testing.T) {
 	msg := expiryTestEnvelope(testTopic, []byte("qos1 data"), 1, false, &expiry, now, now.Add(30*time.Second))
 
 	// Test that message with expiry can be stored and delivered
-	if msg.PublisherMeta.MessageExpiry == nil {
+	if !msg.PublisherMeta.MessageExpiry.IsSet() {
 		t.Error("Message should have expiry set")
 	}
 	if msg.BrokerMeta.Delivery.ExpiresAt.IsZero() {
 		t.Error("Message expiry time should be set")
 	}
-	if *msg.PublisherMeta.MessageExpiry != 30 {
-		t.Errorf("Expected expiry of 30 seconds, got %d", *msg.PublisherMeta.MessageExpiry)
+	if value, _ := msg.PublisherMeta.MessageExpiry.Value(); value != 30 {
+		t.Errorf("Expected expiry of 30 seconds, got %d", value)
 	}
 }
 
@@ -178,14 +178,16 @@ func TestMessageExpiry_RetainedMessage(t *testing.T) {
 	if len(retained) != 1 {
 		t.Fatalf("Expected 1 retained message, got %d", len(retained))
 	}
-	if retained[0].PublisherMeta.MessageExpiry == nil {
+	if !retained[0].PublisherMeta.MessageExpiry.IsSet() {
 		t.Error("Retained message should have expiry set")
 	}
 }
 
 func expiryTestEnvelope(topic string, payload []byte, qos byte, retain bool, expiry *uint32, publishedAt, expiresAt time.Time) *message.Envelope {
 	msg := message.NewDelivery(topic, payload, qos, retain)
-	msg.PublisherMeta.MessageExpiry = expiry
+	if expiry != nil {
+		msg.PublisherMeta.MessageExpiry = message.Some(*expiry)
+	}
 	msg.BrokerMeta.Delivery.PublishedAt = publishedAt
 	msg.BrokerMeta.Delivery.ExpiresAt = expiresAt
 	return msg

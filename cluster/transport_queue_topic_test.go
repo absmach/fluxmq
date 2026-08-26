@@ -36,7 +36,7 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 
 	envelope := queueTestEnvelope("$queue/m/domain/c/channel/tst", sourceTopic)
 	defer message.Release(envelope)
-	envelope.PublisherMeta.Properties = map[string]string{"user": testUserPropertyVal}
+	envelope.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"user": testUserPropertyVal})
 
 	decoded := roundTripQueueMessage(t, envelope)
 	defer message.Release(decoded)
@@ -45,10 +45,10 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 	}
 	// Queue-owned metadata must not leak into the user properties a consumer
 	// sees as its own.
-	if _, leaked := decoded.PublisherMeta.Properties[message.PropertySourceTopic]; leaked {
+	if _, leaked := decoded.PublisherMeta.Properties.Get(message.PropertySourceTopic); leaked {
 		t.Fatal("the source topic leaked into user properties")
 	}
-	if decoded.PublisherMeta.Properties["user"] != testUserPropertyVal {
+	if user, _ := decoded.PublisherMeta.Properties.Get("user"); user != testUserPropertyVal {
 		t.Fatalf("an ordinary user property was dropped: %v", decoded.PublisherMeta.Properties)
 	}
 }
@@ -60,17 +60,17 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 func TestRouteQueueMessageWireIgnoresForgedSourceTopic(t *testing.T) {
 	envelope := queueTestEnvelope("$queue/m", "")
 	defer message.Release(envelope)
-	envelope.PublisherMeta.Properties = map[string]string{
+	envelope.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{
 		message.PropertySourceTopic: "forged/topic",
 		"user":                      testUserPropertyVal,
-	}
+	})
 
 	decoded := roundTripQueueMessage(t, envelope)
 	defer message.Release(decoded)
 	if decoded.BrokerMeta.Source.Topic != "" {
 		t.Fatalf("decoded source topic = %q, want the real empty source topic", decoded.BrokerMeta.Source.Topic)
 	}
-	if decoded.PublisherMeta.Properties["user"] != testUserPropertyVal {
+	if user, _ := decoded.PublisherMeta.Properties.Get("user"); user != testUserPropertyVal {
 		t.Fatalf("an ordinary user property was dropped: %v", decoded.PublisherMeta.Properties)
 	}
 }
@@ -94,8 +94,8 @@ func TestRouteQueueMessageWirePreservesBrokerNamespaces(t *testing.T) {
 	envelope.BrokerMeta.Transfer.FailureReason = "poison"
 	envelope.BrokerMeta.Delivery.PublishedAt = now
 	envelope.PublisherMeta.ContentType = "application/json"
-	envelope.PublisherMeta.Key = []byte("partition-key")
-	envelope.PublisherMeta.Headers = map[string][]byte{"h": []byte("v")}
+	envelope.PublisherMeta.Key = message.NewBinary([]byte("partition-key"))
+	envelope.PublisherMeta.Headers = message.NewHeaderMap(map[string][]byte{"h": []byte("v")})
 
 	decoded := roundTripQueueMessage(t, envelope)
 	defer message.Release(decoded)
@@ -119,10 +119,11 @@ func TestRouteQueueMessageWirePreservesBrokerNamespaces(t *testing.T) {
 	if decoded.PublisherMeta.ContentType != "application/json" {
 		t.Errorf("content type = %q", decoded.PublisherMeta.ContentType)
 	}
-	if string(decoded.PublisherMeta.Key) != "partition-key" {
+	if !decoded.PublisherMeta.Key.Equal([]byte("partition-key")) {
 		t.Errorf("key = %q", decoded.PublisherMeta.Key)
 	}
-	if string(decoded.PublisherMeta.Headers["h"]) != "v" {
+	header, ok := decoded.PublisherMeta.Headers.Get("h")
+	if !ok || !header.Equal([]byte("v")) {
 		t.Errorf("headers = %v", decoded.PublisherMeta.Headers)
 	}
 }
@@ -166,6 +167,6 @@ func queueTestEnvelope(topic, sourceTopic string) *message.Envelope {
 	envelope.BrokerMeta.Queue.Name = "m"
 	envelope.BrokerMeta.Queue.GroupID = "rules-engine"
 	envelope.BrokerMeta.Queue.Offset = 1
-	envelope.BrokerMeta.Queue.Stream = &message.StreamMetadata{}
+	envelope.BrokerMeta.Queue.Stream = message.Some(message.StreamMetadata{})
 	return envelope
 }

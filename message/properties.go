@@ -79,10 +79,10 @@ func IsReservedProperty(key string) bool {
 	}
 }
 
-// FilterUserProperties copies only publisher-owned properties.
-func FilterUserProperties(properties map[string]string) map[string]string {
+// FilterUserProperties copies publisher-owned properties into an immutable map.
+func FilterUserProperties(properties map[string]string) PropertyMap {
 	if len(properties) == 0 {
-		return nil
+		return PropertyMap{}
 	}
 	filtered := make(map[string]string, len(properties))
 	for key, value := range properties {
@@ -91,9 +91,9 @@ func FilterUserProperties(properties map[string]string) map[string]string {
 		}
 	}
 	if len(filtered) == 0 {
-		return nil
+		return PropertyMap{}
 	}
-	return filtered
+	return PropertyMap{values: filtered}
 }
 
 // SourceFromProperties decodes authenticated broker-boundary origin fields.
@@ -179,7 +179,7 @@ func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) er
 			}
 		}
 		stream.WorkGroup = properties[PropertyWorkGroup]
-		queue.Stream = stream
+		queue.Stream = Some(*stream)
 	}
 
 	envelope.BrokerMeta.Transfer.ID = properties[PropertyTransferID]
@@ -195,7 +195,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 	if envelope == nil {
 		return nil
 	}
-	properties := FilterUserProperties(envelope.PublisherMeta.Properties)
+	properties := envelope.PublisherMeta.Properties.WithoutReserved().Map()
 
 	// The publisher's own identifier travels as user metadata. A queue delivery
 	// overwrites it below with the broker's handle, which is what a consumer
@@ -263,7 +263,7 @@ func ensureProperties(properties map[string]string) map[string]string {
 }
 
 func hasQueueProjection(queue QueueMetadata) bool {
-	return queue.Name != "" || queue.GroupID != "" || queue.Stream != nil
+	return queue.Name != "" || queue.GroupID != "" || queue.Stream.IsSet()
 }
 
 func projectQueueProperties(properties map[string]string, source SourceMetadata, queue QueueMetadata) {
@@ -289,10 +289,10 @@ func projectQueueProperties(properties map[string]string, source SourceMetadata,
 		properties[PropertySourceTopic] = source.Topic
 	}
 
-	if queue.Stream == nil {
+	stream, ok := queue.Stream.Value()
+	if !ok {
 		return
 	}
-	stream := queue.Stream
 	properties[PropertyStreamOffset] = strconv.FormatUint(stream.Offset, 10)
 	if stream.Timestamp != 0 {
 		properties[PropertyStreamTimestamp] = strconv.FormatInt(stream.Timestamp, 10)

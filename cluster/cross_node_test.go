@@ -206,8 +206,8 @@ func TestCrossNode_StreamReplayFromFirstOffsetAfterLateConsumer(t *testing.T) {
 		if d.Message.BrokerMeta.Queue.Name != queueName {
 			continue
 		}
-		if d.Message.BrokerMeta.Queue.Stream != nil {
-			offsets = append(offsets, d.Message.BrokerMeta.Queue.Stream.Offset)
+		if stream, ok := d.Message.BrokerMeta.Queue.Stream.Value(); ok {
+			offsets = append(offsets, stream.Offset)
 		}
 	}
 	require.GreaterOrEqual(t, len(offsets), messageCount)

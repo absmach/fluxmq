@@ -745,12 +745,15 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 
 func TestCreateRoutedQueueMessageSharesImmutablePayload(t *testing.T) {
 	msg := newQueueEnvelope("routed-msg-1", testEventsTopic, []byte("remote-payload"))
+	defer message.Release(msg)
+	payload := msg.RetainPayload()
+	defer payload.Release()
 	msg.BrokerMeta.Queue.Offset = 7
 
 	routeMsg := createRoutedQueueMessage(msg, "readers", testQueueEvents, false, 0, false, "")
 	defer message.Release(routeMsg)
-	if routeMsg.Payload != msg.Payload {
-		t.Fatal("routed message copied the immutable payload")
+	if refs := payload.RefCount(); refs != 3 {
+		t.Fatalf("payload references = %d, want source + routed clone + test reference", refs)
 	}
 	if got := string(routeMsg.PayloadBytes()); got != "remote-payload" {
 		t.Fatalf("expected routed payload, got %q", got)

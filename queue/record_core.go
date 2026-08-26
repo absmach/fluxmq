@@ -353,7 +353,7 @@ func newQueuedRecord(msg *message.Envelope, queueName string, queueConfig *types
 	// Properties are re-filtered on the record itself: an ingress may hand over
 	// an envelope whose property map still holds reserved names, and the stored
 	// record is what every later reader sees.
-	record.PublisherMeta.Properties = message.FilterUserProperties(record.PublisherMeta.Properties)
+	record.PublisherMeta.Properties = record.PublisherMeta.Properties.WithoutReserved()
 	// A stored record keeps only the publication timestamps from the delivery
 	// namespace. The rest of it — packet id, QoS, retain, inflight state — is
 	// the ingress connection's transaction state, not the record's.

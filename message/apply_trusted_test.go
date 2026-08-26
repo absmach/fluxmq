@@ -78,7 +78,7 @@ func TestApplyTrustedPropertiesAppliesWhatParses(t *testing.T) {
 		PropertyStreamTimestamp: "1700000000",
 		PropertyWorkAcked:       "true",
 		PropertyWorkGroup:       "stream-workers",
-		"tenant":                "acme",
+		testTenantKey:           testTenant,
 	})
 	require.Error(t, err)
 
@@ -86,11 +86,14 @@ func TestApplyTrustedPropertiesAppliesWhatParses(t *testing.T) {
 	assert.Equal(t, "stream-workers", envelope.BrokerMeta.Queue.GroupID)
 	assert.Equal(t, "sensors/temperature", envelope.BrokerMeta.Source.Topic)
 	assert.Equal(t, uint64(0), envelope.BrokerMeta.Queue.Offset, "the corrupt offset stays unset")
-	require.NotNil(t, envelope.BrokerMeta.Queue.Stream)
-	assert.Equal(t, uint64(9), envelope.BrokerMeta.Queue.Stream.Offset)
-	assert.Equal(t, int64(1700000000), envelope.BrokerMeta.Queue.Stream.Timestamp)
-	assert.True(t, envelope.BrokerMeta.Queue.Stream.WorkAcknowledged)
-	assert.Equal(t, "acme", envelope.PublisherMeta.Properties["tenant"])
+	stream, ok := envelope.BrokerMeta.Queue.Stream.Value()
+	require.True(t, ok)
+	assert.Equal(t, uint64(9), stream.Offset)
+	assert.Equal(t, int64(1700000000), stream.Timestamp)
+	assert.True(t, stream.WorkAcknowledged)
+	tenant, ok := envelope.PublisherMeta.Properties.Get(testTenantKey)
+	require.True(t, ok)
+	assert.Equal(t, testTenant, tenant)
 }
 
 func TestApplyTrustedPropertiesAcceptsWellFormedValues(t *testing.T) {
@@ -104,8 +107,9 @@ func TestApplyTrustedPropertiesAcceptsWellFormedValues(t *testing.T) {
 		PropertyWorkAcked:     "false",
 	}))
 	assert.Equal(t, uint64(0), envelope.BrokerMeta.Queue.Offset)
-	require.NotNil(t, envelope.BrokerMeta.Queue.Stream)
-	assert.True(t, envelope.BrokerMeta.Queue.Stream.HasCommittedOffset)
+	stream, ok := envelope.BrokerMeta.Queue.Stream.Value()
+	require.True(t, ok)
+	assert.True(t, stream.HasCommittedOffset)
 }
 
 func TestApplyTrustedPropertiesIgnoresNilEnvelope(t *testing.T) {

@@ -17,8 +17,9 @@ supported adapter.
   against a published promise.
 
   CI runs `make proto-breaking`, which checks both. Both are hard failures.
-- Go: `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
-  `broker.StreamQueueManager`, plus `queue.CommandProcessor` and its typed
+- Go: `message.Envelope`, its typed metadata/value model and ownership methods;
+  `broker.Authenticator`, `broker.Authorizer`, `broker.QueueManager`, and
+  `broker.StreamQueueManager`; plus `queue.CommandProcessor` and its typed
   command/outcome values.
 
   Before v1.0 these carried a second message shape, `queue/types.PublishRequest`,
@@ -28,9 +29,11 @@ supported adapter.
   name `*message.Envelope` directly. That is a breaking change to these
   interfaces, taken deliberately while the freeze still permits it. Compile-time guards pin the interface method sets and
   signatures in both directions; `api/compat/go-queue-v1.txt` pins the typed
-  values, which those guards cannot see because they name the live types. The
-  state-machine implementation remains private so internal helpers and storage
-  dependencies do not become API.
+  values, which those guards cannot see because they name the live types.
+  `api/compat/go-message-v1.txt` independently pins the envelope's exported
+  fields, immutable metadata collections, methods, and constructors. The
+  state-machine implementation and the envelope/payload pool internals remain
+  private so storage and reuse details do not become API.
 - Protocol property names, pinned as literal tables in `message` and
   `queue/types`. A client writes and reads these strings, so the value is the
   contract and a rename is a protocol change.
@@ -59,7 +62,9 @@ For protobuf APIs:
 
 For Go interfaces, adding a method is breaking for external implementations as
 well as removing or changing one. Add a new optional capability interface
-instead. Concrete implementation types are not frozen interfaces.
+instead. The concrete message values are frozen separately: changing an
+exported field or method, or exposing mutable map/slice/pointer metadata, is a
+reviewed contract change even though they are not interfaces.
 
 For YAML, new optional keys with backward-compatible defaults are additive.
 Existing keys and absent-versus-zero semantics remain stable.

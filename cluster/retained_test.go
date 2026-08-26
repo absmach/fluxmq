@@ -74,7 +74,7 @@ func TestRetainedStore_SmallMessageReplication(t *testing.T) {
 
 	// Create a small message (<1KB)
 	msg := message.NewDelivery("test/small", []byte("small payload"), 1, true)
-	msg.PublisherMeta.Properties = map[string]string{"test": testValue}
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"test": testValue})
 	msg.BrokerMeta.Delivery.PublishedAt = time.Now()
 	defer msg.ReleasePayload()
 

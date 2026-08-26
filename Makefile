@@ -357,6 +357,7 @@ proto-baseline-stored:
 .PHONY: go-baseline
 go-baseline:
 	go test ./queue -run TestFrozenGoAPIMatchesBaseline -update-api-baseline
+	go test ./message -run TestFrozenMessageGoAPIMatchesBaseline -update-message-api-baseline
 
 # Show help
 .PHONY: help
@@ -428,6 +429,6 @@ help:
 	@echo "  deps               Download and tidy dependencies"
 	@echo "  proto              Generate protobuf code"
 	@echo "  proto-lint         Lint protobuf definitions"
-	@echo "  proto-breaking     Check both protobuf descriptor baselines"
-	@echo "  proto-baseline     Refresh both reviewed descriptor baselines"
+	@echo "  proto-breaking     Check all protobuf descriptor baselines"
+	@echo "  proto-baseline     Refresh all reviewed descriptor baselines"
 	@echo "  help               Show this help message"

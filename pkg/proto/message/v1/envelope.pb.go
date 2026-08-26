@@ -24,6 +24,125 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Protocol is the stable persisted identity of an ingress protocol. Explicit
+// numbers keep the stored form compact without coupling it to Go string values.
+type Protocol int32
+
+const (
+	Protocol_PROTOCOL_UNSPECIFIED Protocol = 0
+	Protocol_PROTOCOL_MQTT        Protocol = 1
+	Protocol_PROTOCOL_AMQP091     Protocol = 2
+	Protocol_PROTOCOL_AMQP1       Protocol = 3
+	Protocol_PROTOCOL_HTTP        Protocol = 4
+	Protocol_PROTOCOL_COAP        Protocol = 5
+)
+
+// Enum value maps for Protocol.
+var (
+	Protocol_name = map[int32]string{
+		0: "PROTOCOL_UNSPECIFIED",
+		1: "PROTOCOL_MQTT",
+		2: "PROTOCOL_AMQP091",
+		3: "PROTOCOL_AMQP1",
+		4: "PROTOCOL_HTTP",
+		5: "PROTOCOL_COAP",
+	}
+	Protocol_value = map[string]int32{
+		"PROTOCOL_UNSPECIFIED": 0,
+		"PROTOCOL_MQTT":        1,
+		"PROTOCOL_AMQP091":     2,
+		"PROTOCOL_AMQP1":       3,
+		"PROTOCOL_HTTP":        4,
+		"PROTOCOL_COAP":        5,
+	}
+)
+
+func (x Protocol) Enum() *Protocol {
+	p := new(Protocol)
+	*p = x
+	return p
+}
+
+func (x Protocol) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Protocol) Descriptor() protoreflect.EnumDescriptor {
+	return file_message_v1_envelope_proto_enumTypes[0].Descriptor()
+}
+
+func (Protocol) Type() protoreflect.EnumType {
+	return &file_message_v1_envelope_proto_enumTypes[0]
+}
+
+func (x Protocol) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Protocol.Descriptor instead.
+func (Protocol) EnumDescriptor() ([]byte, []int) {
+	return file_message_v1_envelope_proto_rawDescGZIP(), []int{0}
+}
+
+// QueueState is the stable persisted lifecycle of a durable record.
+type QueueState int32
+
+const (
+	QueueState_QUEUE_STATE_UNSPECIFIED QueueState = 0
+	QueueState_QUEUE_STATE_QUEUED      QueueState = 1
+	QueueState_QUEUE_STATE_DELIVERED   QueueState = 2
+	QueueState_QUEUE_STATE_ACKED       QueueState = 3
+	QueueState_QUEUE_STATE_RETRY       QueueState = 4
+	QueueState_QUEUE_STATE_DLQ         QueueState = 5
+)
+
+// Enum value maps for QueueState.
+var (
+	QueueState_name = map[int32]string{
+		0: "QUEUE_STATE_UNSPECIFIED",
+		1: "QUEUE_STATE_QUEUED",
+		2: "QUEUE_STATE_DELIVERED",
+		3: "QUEUE_STATE_ACKED",
+		4: "QUEUE_STATE_RETRY",
+		5: "QUEUE_STATE_DLQ",
+	}
+	QueueState_value = map[string]int32{
+		"QUEUE_STATE_UNSPECIFIED": 0,
+		"QUEUE_STATE_QUEUED":      1,
+		"QUEUE_STATE_DELIVERED":   2,
+		"QUEUE_STATE_ACKED":       3,
+		"QUEUE_STATE_RETRY":       4,
+		"QUEUE_STATE_DLQ":         5,
+	}
+)
+
+func (x QueueState) Enum() *QueueState {
+	p := new(QueueState)
+	*p = x
+	return p
+}
+
+func (x QueueState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QueueState) Descriptor() protoreflect.EnumDescriptor {
+	return file_message_v1_envelope_proto_enumTypes[1].Descriptor()
+}
+
+func (QueueState) Type() protoreflect.EnumType {
+	return &file_message_v1_envelope_proto_enumTypes[1]
+}
+
+func (x QueueState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QueueState.Descriptor instead.
+func (QueueState) EnumDescriptor() ([]byte, []int) {
+	return file_message_v1_envelope_proto_rawDescGZIP(), []int{1}
+}
+
 // Envelope is the format every stored broker message is written in.
 //
 // This file is the schema of record. The implementation is the hand-written
@@ -328,10 +447,7 @@ type SourceMetadata struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	ClientId   string                 `protobuf:"bytes,1,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
 	ExternalId string                 `protobuf:"bytes,2,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
-	// protocol is a string rather than an enum because that is what the codec
-	// writes today. An enum would cost less per record and reject an unknown
-	// value at the boundary.
-	Protocol string `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Protocol   Protocol               `protobuf:"varint,3,opt,name=protocol,proto3,enum=message.v1.Protocol" json:"protocol,omitempty"`
 	// topic is the topic the message was published to, before any queue
 	// delivery address was derived from it.
 	Topic         string `protobuf:"bytes,4,opt,name=topic,proto3" json:"topic,omitempty"`
@@ -383,11 +499,11 @@ func (x *SourceMetadata) GetExternalId() string {
 	return ""
 }
 
-func (x *SourceMetadata) GetProtocol() string {
+func (x *SourceMetadata) GetProtocol() Protocol {
 	if x != nil {
 		return x.Protocol
 	}
-	return ""
+	return Protocol_PROTOCOL_UNSPECIFIED
 }
 
 func (x *SourceMetadata) GetTopic() string {
@@ -516,17 +632,16 @@ func (x *DeliveryMetadata) GetDuplicate() bool {
 
 // QueueMetadata is the durable-queue lifecycle of a record.
 type QueueMetadata struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Name    string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	GroupId string                 `protobuf:"bytes,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
-	Offset  uint64                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
-	// state is a string rather than an enum, as protocol is; see SourceMetadata.
-	State       string `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
-	CreatedAt   int64  `protobuf:"zigzag64,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	DeliveredAt int64  `protobuf:"zigzag64,7,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
-	NextRetryAt int64  `protobuf:"zigzag64,8,opt,name=next_retry_at,json=nextRetryAt,proto3" json:"next_retry_at,omitempty"`
-	RetryCount  uint32 `protobuf:"varint,9,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
-	ExpiresAt   int64  `protobuf:"zigzag64,10,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	GroupId     string                 `protobuf:"bytes,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	Offset      uint64                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
+	State       QueueState             `protobuf:"varint,5,opt,name=state,proto3,enum=message.v1.QueueState" json:"state,omitempty"`
+	CreatedAt   int64                  `protobuf:"zigzag64,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	DeliveredAt int64                  `protobuf:"zigzag64,7,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
+	NextRetryAt int64                  `protobuf:"zigzag64,8,opt,name=next_retry_at,json=nextRetryAt,proto3" json:"next_retry_at,omitempty"`
+	RetryCount  uint32                 `protobuf:"varint,9,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
+	ExpiresAt   int64                  `protobuf:"zigzag64,10,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// stream is present only for a record in a stream-mode consumer group, which
 	// is why it is a message rather than inline fields: absent and zeroed are
 	// different states.
@@ -586,11 +701,11 @@ func (x *QueueMetadata) GetOffset() uint64 {
 	return 0
 }
 
-func (x *QueueMetadata) GetState() string {
+func (x *QueueMetadata) GetState() QueueState {
 	if x != nil {
 		return x.State
 	}
-	return ""
+	return QueueState_QUEUE_STATE_UNSPECIFIED
 }
 
 func (x *QueueMetadata) GetCreatedAt() int64 {
@@ -934,12 +1049,12 @@ const file_message_v1_envelope_proto_rawDesc = "" +
 	"\bdelivery\x18\x02 \x01(\v2\x1c.message.v1.DeliveryMetadataR\bdelivery\x12/\n" +
 	"\x05queue\x18\x03 \x01(\v2\x19.message.v1.QueueMetadataR\x05queue\x128\n" +
 	"\btransfer\x18\x04 \x01(\v2\x1c.message.v1.TransferMetadataR\btransfer\x12/\n" +
-	"\x05trace\x18\x05 \x01(\v2\x19.message.v1.TraceMetadataR\x05trace\"\x80\x01\n" +
+	"\x05trace\x18\x05 \x01(\v2\x19.message.v1.TraceMetadataR\x05trace\"\x96\x01\n" +
 	"\x0eSourceMetadata\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1f\n" +
 	"\vexternal_id\x18\x02 \x01(\tR\n" +
-	"externalId\x12\x1a\n" +
-	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12\x14\n" +
+	"externalId\x120\n" +
+	"\bprotocol\x18\x03 \x01(\x0e2\x14.message.v1.ProtocolR\bprotocol\x12\x14\n" +
 	"\x05topic\x18\x04 \x01(\tR\x05topic\"\xba\x02\n" +
 	"\x10DeliveryMetadata\x12!\n" +
 	"\fpublished_at\x18\x01 \x01(\x12R\vpublishedAt\x12\x1d\n" +
@@ -951,12 +1066,12 @@ const file_message_v1_envelope_proto_rawDesc = "" +
 	"\x12inflight_direction\x18\x06 \x01(\rR\x11inflightDirection\x12%\n" +
 	"\x0einflight_state\x18\a \x01(\rR\rinflightState\x12\x16\n" +
 	"\x06retain\x18\b \x01(\bR\x06retain\x12\x1c\n" +
-	"\tduplicate\x18\t \x01(\bR\tduplicate\"\xd8\x02\n" +
+	"\tduplicate\x18\t \x01(\bR\tduplicate\"\xf0\x02\n" +
 	"\rQueueMetadata\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x19\n" +
 	"\bgroup_id\x18\x03 \x01(\tR\agroupId\x12\x16\n" +
-	"\x06offset\x18\x04 \x01(\x04R\x06offset\x12\x14\n" +
-	"\x05state\x18\x05 \x01(\tR\x05state\x12\x1d\n" +
+	"\x06offset\x18\x04 \x01(\x04R\x06offset\x12,\n" +
+	"\x05state\x18\x05 \x01(\x0e2\x16.message.v1.QueueStateR\x05state\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\x12R\tcreatedAt\x12!\n" +
 	"\fdelivered_at\x18\a \x01(\x12R\vdeliveredAt\x12\"\n" +
@@ -990,7 +1105,22 @@ const file_message_v1_envelope_proto_rawDesc = "" +
 	"\ftrace_parent\x18\x01 \x01(\tR\vtraceParent\x12\x1f\n" +
 	"\vtrace_state\x18\x02 \x01(\tR\n" +
 	"traceState\x12\x19\n" +
-	"\btrace_id\x18\x03 \x01(\tR\atraceIdB\xa2\x01\n" +
+	"\btrace_id\x18\x03 \x01(\tR\atraceId*\x87\x01\n" +
+	"\bProtocol\x12\x18\n" +
+	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rPROTOCOL_MQTT\x10\x01\x12\x14\n" +
+	"\x10PROTOCOL_AMQP091\x10\x02\x12\x12\n" +
+	"\x0ePROTOCOL_AMQP1\x10\x03\x12\x11\n" +
+	"\rPROTOCOL_HTTP\x10\x04\x12\x11\n" +
+	"\rPROTOCOL_COAP\x10\x05*\x9f\x01\n" +
+	"\n" +
+	"QueueState\x12\x1b\n" +
+	"\x17QUEUE_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12QUEUE_STATE_QUEUED\x10\x01\x12\x19\n" +
+	"\x15QUEUE_STATE_DELIVERED\x10\x02\x12\x15\n" +
+	"\x11QUEUE_STATE_ACKED\x10\x03\x12\x15\n" +
+	"\x11QUEUE_STATE_RETRY\x10\x04\x12\x13\n" +
+	"\x0fQUEUE_STATE_DLQ\x10\x05B\xa2\x01\n" +
 	"\x0ecom.message.v1B\rEnvelopeProtoP\x01Z8github.com/absmach/fluxmq/pkg/proto/message/v1;messagev1\xa2\x02\x03MXX\xaa\x02\n" +
 	"Message.V1\xca\x02\n" +
 	"Message\\V1\xe2\x02\x16Message\\V1\\GPBMetadata\xea\x02\vMessage::V1b\x06proto3"
@@ -1007,36 +1137,41 @@ func file_message_v1_envelope_proto_rawDescGZIP() []byte {
 	return file_message_v1_envelope_proto_rawDescData
 }
 
+var file_message_v1_envelope_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_message_v1_envelope_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_message_v1_envelope_proto_goTypes = []any{
-	(*Envelope)(nil),          // 0: message.v1.Envelope
-	(*PublisherMetadata)(nil), // 1: message.v1.PublisherMetadata
-	(*BrokerMetadata)(nil),    // 2: message.v1.BrokerMetadata
-	(*SourceMetadata)(nil),    // 3: message.v1.SourceMetadata
-	(*DeliveryMetadata)(nil),  // 4: message.v1.DeliveryMetadata
-	(*QueueMetadata)(nil),     // 5: message.v1.QueueMetadata
-	(*StreamMetadata)(nil),    // 6: message.v1.StreamMetadata
-	(*TransferMetadata)(nil),  // 7: message.v1.TransferMetadata
-	(*TraceMetadata)(nil),     // 8: message.v1.TraceMetadata
-	nil,                       // 9: message.v1.PublisherMetadata.HeadersEntry
-	nil,                       // 10: message.v1.PublisherMetadata.PropertiesEntry
+	(Protocol)(0),             // 0: message.v1.Protocol
+	(QueueState)(0),           // 1: message.v1.QueueState
+	(*Envelope)(nil),          // 2: message.v1.Envelope
+	(*PublisherMetadata)(nil), // 3: message.v1.PublisherMetadata
+	(*BrokerMetadata)(nil),    // 4: message.v1.BrokerMetadata
+	(*SourceMetadata)(nil),    // 5: message.v1.SourceMetadata
+	(*DeliveryMetadata)(nil),  // 6: message.v1.DeliveryMetadata
+	(*QueueMetadata)(nil),     // 7: message.v1.QueueMetadata
+	(*StreamMetadata)(nil),    // 8: message.v1.StreamMetadata
+	(*TransferMetadata)(nil),  // 9: message.v1.TransferMetadata
+	(*TraceMetadata)(nil),     // 10: message.v1.TraceMetadata
+	nil,                       // 11: message.v1.PublisherMetadata.HeadersEntry
+	nil,                       // 12: message.v1.PublisherMetadata.PropertiesEntry
 }
 var file_message_v1_envelope_proto_depIdxs = []int32{
-	1,  // 0: message.v1.Envelope.publisher:type_name -> message.v1.PublisherMetadata
-	2,  // 1: message.v1.Envelope.broker:type_name -> message.v1.BrokerMetadata
-	9,  // 2: message.v1.PublisherMetadata.headers:type_name -> message.v1.PublisherMetadata.HeadersEntry
-	10, // 3: message.v1.PublisherMetadata.properties:type_name -> message.v1.PublisherMetadata.PropertiesEntry
-	3,  // 4: message.v1.BrokerMetadata.source:type_name -> message.v1.SourceMetadata
-	4,  // 5: message.v1.BrokerMetadata.delivery:type_name -> message.v1.DeliveryMetadata
-	5,  // 6: message.v1.BrokerMetadata.queue:type_name -> message.v1.QueueMetadata
-	7,  // 7: message.v1.BrokerMetadata.transfer:type_name -> message.v1.TransferMetadata
-	8,  // 8: message.v1.BrokerMetadata.trace:type_name -> message.v1.TraceMetadata
-	6,  // 9: message.v1.QueueMetadata.stream:type_name -> message.v1.StreamMetadata
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	3,  // 0: message.v1.Envelope.publisher:type_name -> message.v1.PublisherMetadata
+	4,  // 1: message.v1.Envelope.broker:type_name -> message.v1.BrokerMetadata
+	11, // 2: message.v1.PublisherMetadata.headers:type_name -> message.v1.PublisherMetadata.HeadersEntry
+	12, // 3: message.v1.PublisherMetadata.properties:type_name -> message.v1.PublisherMetadata.PropertiesEntry
+	5,  // 4: message.v1.BrokerMetadata.source:type_name -> message.v1.SourceMetadata
+	6,  // 5: message.v1.BrokerMetadata.delivery:type_name -> message.v1.DeliveryMetadata
+	7,  // 6: message.v1.BrokerMetadata.queue:type_name -> message.v1.QueueMetadata
+	9,  // 7: message.v1.BrokerMetadata.transfer:type_name -> message.v1.TransferMetadata
+	10, // 8: message.v1.BrokerMetadata.trace:type_name -> message.v1.TraceMetadata
+	0,  // 9: message.v1.SourceMetadata.protocol:type_name -> message.v1.Protocol
+	1,  // 10: message.v1.QueueMetadata.state:type_name -> message.v1.QueueState
+	8,  // 11: message.v1.QueueMetadata.stream:type_name -> message.v1.StreamMetadata
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_message_v1_envelope_proto_init() }
@@ -1050,13 +1185,14 @@ func file_message_v1_envelope_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_message_v1_envelope_proto_rawDesc), len(file_message_v1_envelope_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      2,
 			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_message_v1_envelope_proto_goTypes,
 		DependencyIndexes: file_message_v1_envelope_proto_depIdxs,
+		EnumInfos:         file_message_v1_envelope_proto_enumTypes,
 		MessageInfos:      file_message_v1_envelope_proto_msgTypes,
 	}.Build()
 	File_message_v1_envelope_proto = out.File

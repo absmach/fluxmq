@@ -604,16 +604,17 @@ func decorateStreamDelivery(delivery *message.Envelope, msg *message.Envelope, w
 	if delivery == nil || msg == nil {
 		return
 	}
-	delivery.BrokerMeta.Queue.Stream = &message.StreamMetadata{
+	stream := message.StreamMetadata{
 		Offset:    msg.BrokerMeta.Queue.Offset,
 		Timestamp: msg.BrokerMeta.Queue.CreatedAt.UnixMilli(),
 	}
 	if hasWorkCommitted {
-		delivery.BrokerMeta.Queue.Stream.HasCommittedOffset = true
-		delivery.BrokerMeta.Queue.Stream.CommittedOffset = workCommitted
-		delivery.BrokerMeta.Queue.Stream.WorkAcknowledged = msg.BrokerMeta.Queue.Offset < workCommitted
-		delivery.BrokerMeta.Queue.Stream.WorkGroup = primaryGroup
+		stream.HasCommittedOffset = true
+		stream.CommittedOffset = workCommitted
+		stream.WorkAcknowledged = msg.BrokerMeta.Queue.Offset < workCommitted
+		stream.WorkGroup = primaryGroup
 	}
+	delivery.BrokerMeta.Queue.Stream = message.Some(stream)
 }
 
 func createRoutedQueueMessage(msg *message.Envelope, groupID, queueName string, stream bool, workCommitted uint64, hasWorkCommitted bool, primaryGroup string) *message.Envelope {

@@ -279,10 +279,10 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 		if string(decoded.PayloadBytes()) != "first-message" {
 			t.Fatalf("expected payload %q, got %q", "first-message", string(decoded.PayloadBytes()))
 		}
-		if decoded.PublisherMeta.Properties["trace"] != "one" {
-			t.Fatalf("expected trace property %q, got %q", "one", decoded.PublisherMeta.Properties["trace"])
+		if trace, _ := decoded.PublisherMeta.Properties.Get("trace"); trace != "one" {
+			t.Fatalf("expected trace property %q, got %q", "one", trace)
 		}
-		if _, ok := decoded.PublisherMeta.Properties["new"]; ok {
+		if _, ok := decoded.PublisherMeta.Properties.Get("new"); ok {
 			t.Fatalf("unexpected property propagated from caller mutation: %v", decoded.PublisherMeta.Properties)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -294,6 +294,6 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 func routedEnvelope(topic string, payload []byte, qos byte, properties map[string]string) *message.Envelope {
 	msg := message.New(topic, payload)
 	msg.BrokerMeta.Delivery.QoS = qos
-	msg.PublisherMeta.Properties = properties
+	msg.PublisherMeta.Properties = message.NewPropertyMap(properties)
 	return msg
 }

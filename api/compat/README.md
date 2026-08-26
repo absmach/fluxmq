@@ -46,12 +46,12 @@ regenerated image together with the `.proto` change it corresponds to. A
 baseline refreshed in its own commit, ahead of the change it permits, defeats
 the check.
 
-## Go API baseline
+## Go API baselines
 
-`go-queue-v1.txt` renders the exported Go surface that this document freezes:
-`queue.CommandProcessor`, the optional capabilities beside it, and the typed
-command and outcome values. It is generated and checked by
-`TestFrozenGoAPIMatchesBaseline` in the `queue` package.
+`go-queue-v1.txt` renders `queue.CommandProcessor`, the optional capabilities
+beside it, and the typed command/outcome values. `go-message-v1.txt` renders the
+canonical envelope, its immutable metadata values, and their constructors and
+methods. They are checked by their package tests.
 
 It exists because the compile-time guards cannot see what they promise to
 guard. `queue/state_machine_api_compat_test.go` duplicates the interface and
@@ -63,7 +63,7 @@ passed that guard.
 Record an intended change with:
 
 ```
-go test ./queue -run TestFrozenGoAPIMatchesBaseline -update-api-baseline
+make go-baseline
 ```
 
 and put the baseline diff in the review, exactly as a `proto-baseline` refresh

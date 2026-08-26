@@ -47,16 +47,18 @@ func TestAppendToQueueReturnsAssignedOffsetAndTargetsExactlyOneQueue(t *testing.
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("secondary", "shared/#")))
 
 	appended := publishEnvelope(t, "shared/value", []byte("payload"))
-	appended.PublisherMeta.Key = []byte{0x00, 0xff}
-	appended.PublisherMeta.Headers = map[string][]byte{"binary": {0x00, 0xff}}
+	appended.PublisherMeta.Key = message.NewBinary([]byte{0x00, 0xff})
+	appended.PublisherMeta.Headers = message.NewHeaderMap(map[string][]byte{"binary": {0x00, 0xff}})
 	offset, err := appendOne(ctx, mgr, "primary", appended)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), offset)
 
 	msg, err := store.Read(ctx, "primary", offset)
 	require.NoError(t, err)
-	require.Equal(t, []byte{0x00, 0xff}, msg.PublisherMeta.Key)
-	require.Equal(t, []byte{0x00, 0xff}, msg.PublisherMeta.Headers["binary"])
+	require.Equal(t, []byte{0x00, 0xff}, msg.PublisherMeta.Key.Bytes())
+	header, ok := msg.PublisherMeta.Headers.Get("binary")
+	require.True(t, ok)
+	require.Equal(t, []byte{0x00, 0xff}, header.Bytes())
 
 	count, err := store.Count(ctx, "secondary")
 	require.NoError(t, err)
@@ -70,9 +72,9 @@ func TestAppendBatchToQueueReturnsContiguousOffsets(t *testing.T) {
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("batch", "batch/#")))
 
 	firstEnvelope := publishEnvelope(t, "batch/1", []byte("one"))
-	firstEnvelope.PublisherMeta.Key = []byte("k1")
+	firstEnvelope.PublisherMeta.Key = message.NewBinary([]byte("k1"))
 	secondEnvelope := publishEnvelope(t, "batch/2", []byte("two"))
-	secondEnvelope.PublisherMeta.Key = []byte("k2")
+	secondEnvelope.PublisherMeta.Key = message.NewBinary([]byte("k2"))
 	first, count, err := appendBatch(ctx, mgr, "batch", []*message.Envelope{firstEnvelope, secondEnvelope})
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), first)
@@ -82,8 +84,8 @@ func TestAppendBatchToQueueReturnsContiguousOffsets(t *testing.T) {
 	require.NoError(t, err)
 	lastMessage, err := store.Read(ctx, "batch", first+uint64(count)-1)
 	require.NoError(t, err)
-	require.Equal(t, []byte("k1"), firstMessage.PublisherMeta.Key)
-	require.Equal(t, []byte("k2"), lastMessage.PublisherMeta.Key)
+	require.Equal(t, []byte("k1"), firstMessage.PublisherMeta.Key.Bytes())
+	require.Equal(t, []byte("k2"), lastMessage.PublisherMeta.Key.Bytes())
 }
 
 func TestAppendBatchToQueueRejectsUnsupportedAtomicContracts(t *testing.T) {

@@ -21,15 +21,13 @@ import (
 // UserProperties, PayloadFormat, and a positive remaining MessageExpiry as the
 // first send.
 func TestEncodePublish_V5RetransmitCarriesProperties(t *testing.T) {
-	pf := byte(1)
-	expiry := uint32(120)
 	msg := message.NewDelivery(testTopic, []byte("payload"), 1, true)
 	msg.PublisherMeta.ContentType = "application/json"
 	msg.PublisherMeta.ResponseTopic = "responses/123"
-	msg.PublisherMeta.CorrelationData = []byte("corr-1")
-	msg.PublisherMeta.PayloadFormat = &pf
-	msg.PublisherMeta.MessageExpiry = &expiry
-	msg.PublisherMeta.Properties = map[string]string{testTraceKey: testTraceVal}
+	msg.PublisherMeta.CorrelationData = message.NewBinary([]byte("corr-1"))
+	msg.PublisherMeta.PayloadFormat = message.Some(byte(1))
+	msg.PublisherMeta.MessageExpiry = message.Some(uint32(120))
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{testTraceKey: testTraceVal})
 	msg.BrokerMeta.Delivery.ExpiresAt = time.Now().Add(60 * time.Second)
 
 	pkt := EncodePublish(msg, 42, packets.V5, true)
@@ -123,13 +121,14 @@ func TestEncodePublish_V5OmitsReservedProperties(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			msg := message.NewDelivery(testTopic, []byte("payload"), 1, false)
-			msg.PublisherMeta.Properties = make(map[string]string, len(tc.properties)+len(tc.userProperties))
+			properties := make(map[string]string, len(tc.properties)+len(tc.userProperties))
 			for key, value := range tc.properties {
-				msg.PublisherMeta.Properties[key] = value
+				properties[key] = value
 			}
 			for key, value := range tc.userProperties {
-				msg.PublisherMeta.Properties[key] = value
+				properties[key] = value
 			}
+			msg.PublisherMeta.Properties = message.NewPropertyMap(properties)
 
 			pkt := EncodePublish(msg, 1, packets.V5, false)
 			pub, ok := pkt.(*v5.Publish)

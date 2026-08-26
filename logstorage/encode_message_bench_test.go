@@ -39,8 +39,8 @@ func BenchmarkEncodeMessage(b *testing.B) {
 
 func benchAppendEnvelope() *message.Envelope {
 	envelope := message.NewDelivery("$queue/telemetry/readings", make([]byte, 256), 1, false)
-	envelope.PublisherMeta.Key = []byte("partition-key")
-	envelope.PublisherMeta.Properties = map[string]string{"schema": "telemetry.v2"}
+	envelope.PublisherMeta.Key = message.NewBinary([]byte("partition-key"))
+	envelope.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"schema": "telemetry.v2"})
 	envelope.BrokerMeta.Source.ClientID = "sensor-1"
 	envelope.BrokerMeta.Queue.Name = "telemetry"
 	envelope.BrokerMeta.Queue.State = message.QueueStateQueued

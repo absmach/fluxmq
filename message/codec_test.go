@@ -13,21 +13,19 @@ import (
 )
 
 func TestBinaryEnvelopeRoundTrip(t *testing.T) {
-	payloadFormat := byte(0)
-	messageExpiry := uint32(0)
 	now := time.Date(2026, time.August, 25, 8, 15, 30, 123456789, time.UTC)
 	original := New("devices/1", []byte{0x00, 0x01, 0xfe, 0xff})
 	defer Release(original)
 	original.PublisherMeta = PublisherMetadata{
-		Key:             []byte{0x00, 0xff},
-		Headers:         map[string][]byte{"binary": {0x01, 0xfe}},
-		Properties:      map[string]string{"tenant": "acme"},
+		Key:             NewBinary([]byte{0x00, 0xff}),
+		Headers:         NewHeaderMap(map[string][]byte{"binary": {0x01, 0xfe}}),
+		Properties:      NewPropertyMap(map[string]string{testTenantKey: testTenant}),
 		ContentType:     "application/octet-stream",
 		ContentEncoding: testContentEncoding,
 		ResponseTopic:   "responses/1",
-		CorrelationData: []byte{0x80, 0x00},
-		PayloadFormat:   &payloadFormat,
-		MessageExpiry:   &messageExpiry,
+		CorrelationData: NewBinary([]byte{0x80, 0x00}),
+		PayloadFormat:   Some(byte(0)),
+		MessageExpiry:   Some(uint32(0)),
 		MessageID:       "publisher-1",
 	}
 	original.BrokerMeta = BrokerMetadata{
@@ -35,7 +33,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 		Delivery: DeliveryMetadata{
 			PublishedAt:       now,
 			ExpiresAt:         now.Add(time.Minute),
-			SubscriptionIDs:   []uint32{1, 7},
+			SubscriptionIDs:   NewUint32List(1, 7),
 			PacketID:          42,
 			QoS:               2,
 			InflightDirection: 1,
@@ -53,14 +51,14 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 			NextRetryAt: now.Add(2 * time.Second),
 			RetryCount:  3,
 			ExpiresAt:   now.Add(time.Hour),
-			Stream: &StreamMetadata{
+			Stream: Some(StreamMetadata{
 				Offset:             9,
 				Timestamp:          now.UnixMilli(),
 				CommittedOffset:    8,
 				HasCommittedOffset: true,
 				WorkAcknowledged:   true,
 				WorkGroup:          testGroupID,
-			},
+			}),
 		},
 		Transfer: TransferMetadata{
 			ID:            "transfer",
@@ -73,7 +71,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 			SourceOffset:  7,
 			DeliveryCount: 4,
 		},
-		Trace: TraceMetadata{TraceParent: "parent", TraceState: "state", TraceID: "trace"},
+		Trace: TraceMetadata{TraceParent: "parent", TraceState: "state", TraceID: testTraceKey},
 	}
 
 	encoded, err := MarshalBinary(original)
@@ -103,7 +101,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 func TestBinaryEnvelopeMetadataUsesExternalPayloadAndKey(t *testing.T) {
 	original := New("devices/1", []byte("embedded payload"))
 	defer Release(original)
-	original.PublisherMeta.Key = []byte("embedded key")
+	original.PublisherMeta.Key = NewBinary([]byte("embedded key"))
 
 	encoded, err := MarshalMetadata(original)
 	if err != nil {
@@ -119,7 +117,7 @@ func TestBinaryEnvelopeMetadataUsesExternalPayloadAndKey(t *testing.T) {
 
 	externalPayload[0] = 'X'
 	externalKey[0] = 'X'
-	if string(decoded.PayloadBytes()) != "record payload" || string(decoded.PublisherMeta.Key) != "record key" {
+	if string(decoded.PayloadBytes()) != "record payload" || !decoded.PublisherMeta.Key.Equal([]byte("record key")) {
 		t.Fatalf("external record data was aliased: payload %q key %q", decoded.PayloadBytes(), decoded.PublisherMeta.Key)
 	}
 }

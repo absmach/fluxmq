@@ -4,7 +4,6 @@
 package broker
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
@@ -26,16 +25,14 @@ func newMQTTEnvelope(topic string, data []byte, clientID, externalID string, qos
 
 func setMQTT5Metadata(envelope *message.Envelope, expiry *uint32, expiresAt, publishedAt time.Time, payloadFormat *byte, contentType, responseTopic string, correlationData []byte) {
 	if expiry != nil {
-		value := *expiry
-		envelope.PublisherMeta.MessageExpiry = &value
+		envelope.PublisherMeta.MessageExpiry = message.Some(*expiry)
 	}
 	if payloadFormat != nil {
-		value := *payloadFormat
-		envelope.PublisherMeta.PayloadFormat = &value
+		envelope.PublisherMeta.PayloadFormat = message.Some(*payloadFormat)
 	}
 	envelope.PublisherMeta.ContentType = contentType
 	envelope.PublisherMeta.ResponseTopic = responseTopic
-	envelope.PublisherMeta.CorrelationData = bytes.Clone(correlationData)
+	envelope.PublisherMeta.CorrelationData = message.NewBinary(correlationData)
 	envelope.BrokerMeta.Delivery.ExpiresAt = expiresAt
 	envelope.BrokerMeta.Delivery.PublishedAt = publishedAt
 }

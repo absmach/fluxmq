@@ -34,7 +34,8 @@ func TestStore_AppendTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 
 	got, err := store.Read(ctx, "buffered", 0)
 	require.NoError(t, err)
-	require.Same(t, buf, got.Payload)
+	defer message.Release(got)
+	require.Equal(t, int32(2), buf.RefCount(), "read must retain the stored payload instead of copying it")
 	require.Equal(t, "remote-payload", string(got.PayloadBytes()))
 }
 
@@ -52,7 +53,8 @@ func TestStore_AppendBatchTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 
 	got, err := store.Read(ctx, "buffered-batch", 0)
 	require.NoError(t, err)
-	require.Same(t, buf, got.Payload)
+	defer message.Release(got)
+	require.Equal(t, int32(2), buf.RefCount(), "batch read must retain the stored payload instead of copying it")
 	require.Equal(t, "remote-payload", string(got.PayloadBytes()))
 }
 
@@ -62,6 +64,8 @@ func TestStore_AppendPlainPayloadNotCopied(t *testing.T) {
 
 	data := []byte("plain-payload")
 	msg := message.New("$queue/plain", data)
+	buf := msg.RetainPayload()
+	defer buf.Release()
 	msg.PublisherMeta.MessageID = "plain-1"
 
 	_, err := store.Append(ctx, "plain", msg)
@@ -69,7 +73,8 @@ func TestStore_AppendPlainPayloadNotCopied(t *testing.T) {
 
 	got, err := store.Read(ctx, "plain", 0)
 	require.NoError(t, err)
-	require.Same(t, msg.Payload, got.Payload, "append must retain the envelope payload without copying")
+	defer message.Release(got)
+	require.Equal(t, int32(3), buf.RefCount(), "append and read must share the immutable payload")
 }
 
 // The memory store implements the same deduplication contract as the persistent

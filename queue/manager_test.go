@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"slices"
 	"sync"
 	"testing"
@@ -1021,7 +1020,8 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if msg.BrokerMeta.Queue.Stream == nil || msg.BrokerMeta.Queue.Stream.Offset != 0 {
+		stream, ok := msg.BrokerMeta.Queue.Stream.Value()
+		if !ok || stream.Offset != 0 {
 			t.Fatalf("expected stream offset 0, got %#v", msg.BrokerMeta.Queue.Stream)
 		}
 	case <-time.After(2 * time.Second):
@@ -1096,7 +1096,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	flushCapture(t, mgr, func() {
 		captured := publishEnvelope(t, testCapturedTopic, payload)
 		captured.BrokerMeta.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
-		captured.PublisherMeta.Properties = properties
+		captured.PublisherMeta.Properties = message.NewPropertyMap(properties)
 		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
@@ -1127,7 +1127,7 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("captured payload = %q, want original", got)
 	}
-	if got := stored.PublisherMeta.Properties["source"]; got != "device" {
+	if got, _ := stored.PublisherMeta.Properties.Get("source"); got != "device" {
 		t.Fatalf("captured source = %q, want device", got)
 	}
 	if got := stored.BrokerMeta.Source.ClientID; got != testCapturePublisher {
@@ -1869,7 +1869,7 @@ func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID string, ms
 		nodeID:          nodeID,
 		topic:           msg.Topic,
 		payload:         bytes.Clone(msg.PayloadBytes()),
-		properties:      maps.Clone(msg.PublisherMeta.Properties),
+		properties:      msg.PublisherMeta.Properties.Map(),
 		targetQueues:    slices.Clone(targetQueues),
 		forwardToLeader: forwardToLeader,
 	})
@@ -2140,7 +2140,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	}
 
 	job := publishEnvelope(t, testQueueTasksNew, []byte("job"))
-	job.PublisherMeta.Properties = map[string]string{"custom": testCustomValue}
+	job.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"custom": testCustomValue})
 	if err := manager.Publish(ctx, job); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
@@ -2168,7 +2168,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if got := msg.message.BrokerMeta.Queue.Offset; got != 0 {
 		t.Fatalf("expected sequence 0, got %d", got)
 	}
-	if got := msg.message.PublisherMeta.Properties["custom"]; got != testCustomValue {
+	if got, _ := msg.message.PublisherMeta.Properties.Get("custom"); got != testCustomValue {
 		t.Fatalf("expected user property custom=value, got %q", got)
 	}
 }
@@ -2231,7 +2231,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 			if routed[0].message == nil {
 				t.Fatal("expected routed stream message payload")
 			}
-			if stream := routed[0].message.BrokerMeta.Queue.Stream; stream == nil || stream.Offset != 0 {
+			if stream, ok := routed[0].message.BrokerMeta.Queue.Stream.Value(); !ok || stream.Offset != 0 {
 				t.Fatalf("expected stream offset=0, got %#v", stream)
 			}
 			return
@@ -2571,7 +2571,7 @@ func TestPublishForcedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read q1 message failed: %v", err)
 	}
-	if _, ok := msg.PublisherMeta.Properties[message.PropertyForwardTargetQueues]; ok {
+	if _, ok := msg.PublisherMeta.Properties.Get(message.PropertyForwardTargetQueues); ok {
 		t.Fatalf("forwarding metadata must not be persisted in message properties")
 	}
 }
@@ -2640,7 +2640,7 @@ func TestDeliverQueueMessage(t *testing.T) {
 	ctx := context.Background()
 
 	msg := message.New("$queue/test", []byte("routed payload"))
-	msg.PublisherMeta.Properties = map[string]string{"custom": "prop"}
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"custom": "prop"})
 	msg.BrokerMeta.Queue = message.QueueMetadata{
 		Name:    testQueueTest,
 		GroupID: testGroupWorkers,
@@ -3058,7 +3058,7 @@ func TestEnqueueLocal(t *testing.T) {
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	remote := message.New("$queue/remote", []byte("remote payload"))
-	remote.PublisherMeta.Properties = map[string]string{"key": testCustomValue}
+	remote.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"key": testCustomValue})
 	remote.BrokerMeta.Source.ClientID = "mqtt:remote-client"
 	remote.BrokerMeta.Source.Protocol = message.ProtocolMQTT
 	remote.BrokerMeta.Trace.TraceID = "trace-remote"
@@ -3092,10 +3092,10 @@ func TestEnqueueLocal(t *testing.T) {
 	if stored.BrokerMeta.Trace.TraceID != "trace-remote" {
 		t.Fatalf("typed trace metadata was not preserved: %+v", stored.BrokerMeta.Trace)
 	}
-	if _, leaked := stored.PublisherMeta.Properties[message.PropertyClientID]; leaked {
+	if _, leaked := stored.PublisherMeta.Properties.Get(message.PropertyClientID); leaked {
 		t.Fatal("broker source metadata leaked into user properties")
 	}
-	if _, leaked := stored.PublisherMeta.Properties[message.PropertyTraceID]; leaked {
+	if _, leaked := stored.PublisherMeta.Properties.Get(message.PropertyTraceID); leaked {
 		t.Fatal("broker trace metadata leaked into user properties")
 	}
 }
@@ -3375,7 +3375,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	}
 
 	poisonMsg := newQueueEnvelope("bad-msg-1", "$queue/tasks/process", []byte("poison-payload"))
-	poisonMsg.PublisherMeta.Properties = map[string]string{"custom-key": "custom-val"}
+	poisonMsg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{"custom-key": "custom-val"})
 
 	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
 
@@ -3432,8 +3432,8 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if msg.BrokerMeta.Transfer.FailureReason != "decode failed" {
 		t.Fatalf("expected reject reason, got %q", msg.BrokerMeta.Transfer.FailureReason)
 	}
-	if msg.PublisherMeta.Properties["custom-key"] != "custom-val" {
-		t.Fatalf("expected original property preserved, got %q", msg.PublisherMeta.Properties["custom-key"])
+	if property, _ := msg.PublisherMeta.Properties.Get("custom-key"); property != "custom-val" {
+		t.Fatalf("expected original property preserved, got %q", property)
 	}
 	if msg.BrokerMeta.Queue.State != message.QueueStateDLQ {
 		t.Fatalf("expected state DLQ, got %q", msg.BrokerMeta.Queue.State)
@@ -3592,9 +3592,9 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	flushCapture(t, mgr, func() {
 		captured := publishEnvelope(t, testCapturedTopic, payload)
 		captured.BrokerMeta.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
-		captured.PublisherMeta.Key = key
-		captured.PublisherMeta.Headers = headers
-		captured.PublisherMeta.Properties = properties
+		captured.PublisherMeta.Key = message.NewBinary(key)
+		captured.PublisherMeta.Headers = message.NewHeaderMap(headers)
+		captured.PublisherMeta.Properties = message.NewPropertyMap(properties)
 		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
@@ -3616,13 +3616,13 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("stored payload = %q, want original", got)
 	}
-	if got := string(stored.PublisherMeta.Key); got != "key" {
+	if got := string(stored.PublisherMeta.Key.Bytes()); got != "key" {
 		t.Fatalf("stored key = %q, want key", got)
 	}
-	if got := stored.PublisherMeta.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
+	if got, ok := stored.PublisherMeta.Headers.Get("binary"); !ok || !got.Equal([]byte{0x00, 0xff}) {
 		t.Fatalf("stored binary header = %v, want [0 255]", got)
 	}
-	if _, ok := stored.PublisherMeta.Headers["new"]; ok {
+	if _, ok := stored.PublisherMeta.Headers.Get("new"); ok {
 		t.Fatal("stored headers alias the caller's map")
 	}
 	if got := stored.BrokerMeta.Source.ClientID; got != testCapturePublisher {

@@ -144,7 +144,7 @@ func (b *Broker) publishWillMessage(ctx context.Context, will *storage.WillMessa
 	msg.BrokerMeta.Source.ClientID = will.ClientID
 	msg.BrokerMeta.Delivery.QoS = will.QoS
 	msg.BrokerMeta.Delivery.Retain = will.Retain
-	msg.PublisherMeta.Properties = will.Properties
+	msg.PublisherMeta.Properties = message.NewPropertyMap(will.Properties)
 
 	err := b.distribute(ctx, msg)
 	message.Release(msg)
@@ -198,7 +198,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 	msg := message.New(topic, payload)
 	msg.BrokerMeta.Delivery.QoS = qos
 	msg.BrokerMeta.Delivery.Retain = retain
-	msg.PublisherMeta.Properties = props
+	msg.PublisherMeta.Properties = message.NewPropertyMap(props)
 
 	err := b.distribute(context.Background(), msg)
 
@@ -399,7 +399,7 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *message.Envelope, rout
 	// namespace. It cannot be read from Broker.Queue: those are broker-owned
 	// outbound fields, and the protocol boundary strips their reserved property
 	// names from client input, so nothing a consumer sends ever reaches them.
-	settlement, err := types.SettlementFromProperties(msg.PublisherMeta.Properties)
+	settlement, err := types.SettlementFromProperties(msg.PublisherMeta.Properties.Map())
 	if err != nil {
 		b.logError("queue_ack_invalid_settlement", err, slog.String("topic", msg.Topic))
 		return err
@@ -416,8 +416,8 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *message.Envelope, rout
 		return b.queueManager.Nack(ctx, queueName, groupID, offset)
 	case broker.AckReject:
 		reason := "rejected by consumer"
-		if msg.PublisherMeta.Properties != nil && msg.PublisherMeta.Properties[types.PropRejectReason] != "" {
-			reason = msg.PublisherMeta.Properties[types.PropRejectReason]
+		if rejectReason, ok := msg.PublisherMeta.Properties.Get(types.PropRejectReason); ok && rejectReason != "" {
+			reason = rejectReason
 		}
 		b.logOp("queue_reject", slog.String("queue", queueName), slog.Uint64("offset", offset), slog.String("group_id", groupID), slog.String("reason", reason))
 		return b.queueManager.Reject(ctx, queueName, groupID, offset, reason)
@@ -461,7 +461,7 @@ func (b *Broker) triggerWills() {
 		msg.BrokerMeta.Source.ClientID = will.ClientID
 		msg.BrokerMeta.Delivery.QoS = will.QoS
 		msg.BrokerMeta.Delivery.Retain = will.Retain
-		msg.PublisherMeta.Properties = will.Properties
+		msg.PublisherMeta.Properties = message.NewPropertyMap(will.Properties)
 
 		b.distribute(ctx, msg) //nolint:errcheck // fire-and-forget will message distribution
 

@@ -141,10 +141,10 @@ func TestHandleQueueAck_InvalidQueueTopic(t *testing.T) {
 // broker-owned namespace, because ingress cannot put anything there.
 func settlementEnvelope(topic, groupID string, offset uint64) *message.Envelope {
 	msg := message.New(topic, nil)
-	msg.PublisherMeta.Properties = map[string]string{
+	msg.PublisherMeta.Properties = message.NewPropertyMap(map[string]string{
 		qtypes.PropCommitGroupID: groupID,
 		qtypes.PropCommitOffset:  strconv.FormatUint(offset, 10),
-	}
+	})
 	return msg
 }
 
@@ -165,7 +165,7 @@ func TestHandleQueueAck_ReadsTheClientSettlementProperties(t *testing.T) {
 	// Exactly what survives extractUserProperties for a client that sends the
 	// broker's outbound names back: nothing.
 	msg := message.New("$queue/orders/$ack", nil)
-	msg.PublisherMeta.Properties = map[string]string{}
+	msg.PublisherMeta.Properties = message.PropertyMap{}
 	route := resolver.Resolve(msg.Topic)
 	require.Error(t, b.handleQueueAck(context.Background(), msg, route))
 	require.Empty(t, qm.ackCalls)
@@ -212,7 +212,7 @@ func TestHandleQueueAck_RejectsMissingOrMalformedOffset(t *testing.T) {
 			}
 
 			msg := message.New("$queue/orders/$ack", nil)
-			msg.PublisherMeta.Properties = properties
+			msg.PublisherMeta.Properties = message.NewPropertyMap(properties)
 			require.Error(t, b.handleQueueAck(context.Background(), msg, resolver.Resolve(msg.Topic)))
 			require.Empty(t, qm.ackCalls)
 		})

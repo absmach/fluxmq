@@ -10,6 +10,7 @@ import (
 	"github.com/absmach/fluxmq/message"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetMQTT5MetadataPreservesCorrelationData(t *testing.T) {
@@ -44,7 +45,7 @@ func TestSetMQTT5MetadataPreservesCorrelationData(t *testing.T) {
 			if len(input) > 0 {
 				input[0] ^= 0xff
 			}
-			assert.Equal(t, tt.correlationData, envelope.PublisherMeta.CorrelationData)
+			assert.Equal(t, tt.correlationData, envelope.PublisherMeta.CorrelationData.Bytes())
 		})
 	}
 }
@@ -59,8 +60,12 @@ func TestSetMQTT5MetadataCopiesScalarPointers(t *testing.T) {
 	expiry = 1
 	payloadFormat = 0
 
-	assert.Equal(t, uint32(30), *envelope.PublisherMeta.MessageExpiry)
-	assert.Equal(t, byte(1), *envelope.PublisherMeta.PayloadFormat)
+	expiryValue, ok := envelope.PublisherMeta.MessageExpiry.Value()
+	require.True(t, ok)
+	payloadFormatValue, ok := envelope.PublisherMeta.PayloadFormat.Value()
+	require.True(t, ok)
+	assert.Equal(t, uint32(30), expiryValue)
+	assert.Equal(t, byte(1), payloadFormatValue)
 }
 
 func TestExtractUserPropertiesNil(t *testing.T) {

@@ -422,7 +422,7 @@ func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 	if got := qm.exactPublish.BrokerMeta.Source.Protocol; got != message.ProtocolAMQP091 {
 		t.Fatalf("protocol = %q, want %q", got, message.ProtocolAMQP091)
 	}
-	if _, ok := qm.exactPublish.PublisherMeta.Properties[message.PropertyExternalID]; ok {
+	if _, ok := qm.exactPublish.PublisherMeta.Properties.Get(message.PropertyExternalID); ok {
 		t.Fatal("broker source identity leaked into user properties")
 	}
 }

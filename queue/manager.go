@@ -993,8 +993,8 @@ func (m *Manager) Publish(ctx context.Context, msg *message.Envelope) error {
 // PublishCommand is Publish with the routing controls a peer supplies. It
 // borrows cmd.Envelope.
 func (m *Manager) PublishCommand(ctx context.Context, cmd QueuePublishCommand) error {
-	if cmd.Envelope == nil {
-		return fmt.Errorf("%w: an envelope is required", ErrInvalidCommand)
+	if err := validateEnvelope(cmd.Envelope); err != nil {
+		return err
 	}
 
 	switch cmd.Mode {
@@ -1029,8 +1029,8 @@ func (m *Manager) PublishCommand(ctx context.Context, cmd QueuePublishCommand) e
 // fails or is dropped afterwards is reported through queues.capture_failures
 // and queues.capture_dropped, which is the only signal capture has.
 func (m *Manager) PublishToMatchingQueues(ctx context.Context, msg *message.Envelope) error {
-	if msg == nil {
-		return fmt.Errorf("%w: an envelope is required", ErrInvalidCommand)
+	if err := validateEnvelope(msg); err != nil {
+		return err
 	}
 	// A target dropped during resolution loses a message as surely as a failed
 	// append, and each lost queue counts. A resolution error is the one coarse

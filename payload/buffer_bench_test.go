@@ -62,7 +62,7 @@ func BenchmarkPoolUnpooled(b *testing.B) {
 		b.Run(size.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				NewBuffer(make([]byte, size.size), nil).Release()
+				newBuffer(make([]byte, size.size), nil).Release()
 			}
 		})
 	}
