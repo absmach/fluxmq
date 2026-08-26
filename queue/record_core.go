@@ -547,6 +547,17 @@ func (c *recordCore) appendTransferOnce(ctx context.Context, queueName string, c
 		message.Release(msg)
 		return false, fmt.Errorf("%w: queue %q", storage.ErrDeduplicationUnsupported, queueName)
 	}
+	if window := deduplicating.DeduplicationWindow(); window != 0 {
+		// The interface permits a finite window, and a transfer retried after a
+		// failed settlement has no bounded lifetime: nothing stops more than
+		// `window` records arriving before the retry, after which the key is
+		// forgotten and the record is appended twice. A window is a mitigation;
+		// this path needs the guarantee, so a store offering only the former is
+		// refused rather than trusted to be wide enough.
+		message.Release(msg)
+		return false, fmt.Errorf("%w: queue %q deduplicates only within %d records",
+			storage.ErrDeduplicationUnsupported, queueName, window)
+	}
 
 	// AppendOnce consumes the envelope unless it fails, storing it or releasing
 	// it, so anything needed afterwards is read first.

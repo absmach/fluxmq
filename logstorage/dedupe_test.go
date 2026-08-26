@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -308,4 +309,41 @@ func TestTruncateDoesNotRaceDeduplicatedAppend(t *testing.T) {
 	for failure := range failures {
 		t.Errorf("settled against a record that does not exist: %s", failure)
 	}
+}
+
+// A durability barrier that fails after the record is written must not let the
+// retry append a second copy.
+//
+// appendDurable writes the record and then runs the barrier, returning the real
+// offset alongside a barrier error. Discarding both leaves the key unrecorded,
+// so the retry sees nothing and appends again. The failure that triggers it is
+// the ordinary one — a sync that fails and then works — because the manager
+// retries the barrier on the next append and proceeds once it succeeds.
+func TestFailedDurabilityBarrierDoesNotDuplicate(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	// The record lands; the barrier over it does not.
+	barrierFailed := func(ctx context.Context, queueName string, msg *message.Envelope) (uint64, error) {
+		offset, err := adapter.Append(ctx, queueName, msg)
+		if err != nil {
+			return offset, err
+		}
+		return offset, fmt.Errorf("%w: injected", ErrDurabilityBarrier)
+	}
+
+	first, _, err := adapter.appendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("transfer"), barrierFailed)
+	require.ErrorIs(t, err, ErrDurabilityBarrier, "the caller must learn the record is not durable")
+
+	// The retry runs against a working barrier, as it would once the transient
+	// failure clears.
+	retried, duplicated, err := adapter.AppendOnceAndSync(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.True(t, duplicated, "the record written before the barrier failed must be recognised")
+	assert.Equal(t, first, retried, "the retry must resolve to the record that already exists")
+
+	count, err := adapter.Count(ctx, testDedupeQueue)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), count, "a failed barrier must not produce a second record")
 }

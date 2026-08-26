@@ -111,6 +111,13 @@ type DeduplicatingQueueStore interface {
 	// DurableQueueStore.AppendAndSync: it returns only once the record it
 	// appended is durable.
 	//
+	// A barrier that fails after the record is written must not be reported as
+	// a plain failure and forgotten: the retry would append the record twice.
+	// Nor may it be reported as success: the caller settles its source on that
+	// answer. Such an attempt returns an error, and a later attempt with the
+	// same key establishes the barrier over the record that already exists
+	// before reporting it deduplicated.
+	//
 	// A dead-letter transfer settles its source once the destination reports
 	// success, so on a queue configured for fsync the destination has to be
 	// durable before that success is reported — otherwise the settlement

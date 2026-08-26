@@ -286,3 +286,39 @@ func TestNormalizeAckDurability(t *testing.T) {
 		})
 	}
 }
+
+// windowedStore deduplicates, but only within a bounded window.
+type windowedStore struct {
+	*memlog.Store
+	window int
+}
+
+func (s *windowedStore) DeduplicationWindow() int { return s.window }
+
+// A store that deduplicates only within a window must not back a dead-letter
+// queue. A transfer retried after a failed settlement has no bounded lifetime,
+// so nothing stops enough records arriving to push its key out of the window,
+// after which the retry appends the record a second time.
+//
+// The capability check alone accepted such a store: both shipped stores return
+// zero, so the contract held by coincidence rather than by construction.
+func TestDLQTransferRefusesBoundedDeduplication(t *testing.T) {
+	ctx := context.Background()
+	store := &windowedStore{Store: memlog.New(), window: 4096}
+	mgr := newDurabilityManager(t, store, AckDurabilityBuffered)
+
+	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
+
+	err := mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
+		newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")),
+		7, 5, "decode failed", "$dlq/")
+	require.ErrorIs(t, err, storage.ErrDeduplicationUnsupported)
+
+	// A store that covers every retained record is accepted.
+	unbounded := &windowedStore{Store: memlog.New(), window: 0}
+	accepting := newDurabilityManager(t, unbounded, AckDurabilityBuffered)
+	require.NoError(t, accepting.CreateQueue(ctx, types.DefaultQueueConfig("tasks", "$queue/tasks/#")))
+	require.NoError(t, accepting.records.moveToDLQ(ctx, "tasks", testGroupWorkers,
+		newQueueEnvelope(testPoison, testQueueTasksJob, []byte("bad")),
+		7, 5, "decode failed", "$dlq/"))
+}

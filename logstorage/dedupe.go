@@ -39,7 +39,20 @@ import (
 type dedupeIndex struct {
 	mu      sync.Mutex
 	built   bool
-	offsets map[string]uint64
+	offsets map[string]dedupeEntry
+}
+
+// dedupeEntry is where a key's record landed and whether that record is known
+// durable.
+//
+// The distinction exists because a durability barrier can fail after the record
+// is written. Forgetting such a key duplicates the record on retry; treating it
+// as durable settles the caller's source against a record that may not have
+// survived. Neither is acceptable, so the entry is remembered as unconfirmed
+// and the next attempt establishes the barrier before reporting success.
+type dedupeEntry struct {
+	offset    uint64
+	confirmed bool
 }
 
 // dedupeIndexes holds one index per queue, guarded per queue so a rebuild on
@@ -67,7 +80,7 @@ func (d *dedupeIndexes) forQueue(queueName string) *dedupeIndex {
 	if index, ok := d.byQueue[queueName]; ok {
 		return index
 	}
-	index = &dedupeIndex{offsets: make(map[string]uint64)}
+	index = &dedupeIndex{offsets: make(map[string]dedupeEntry)}
 	d.byQueue[queueName] = index
 	return index
 }
@@ -95,8 +108,8 @@ func (d *dedupeIndexes) pruneBelow(queueName string, minOffset uint64) {
 
 	index.mu.Lock()
 	defer index.mu.Unlock()
-	for key, offset := range index.offsets {
-		if offset < minOffset {
+	for key, entry := range index.offsets {
+		if entry.offset < minOffset {
 			delete(index.offsets, key)
 		}
 	}
@@ -136,13 +149,33 @@ func (a *Adapter) appendOnce(
 	}
 
 	index.mu.Lock()
-	offset, seen := index.offsets[dedupeKey]
+	entry, seen := index.offsets[dedupeKey]
 	index.mu.Unlock()
 	if seen {
-		// The envelope is consumed either way. Releasing it here is what lets a
-		// caller retry without tracking whether its previous attempt landed.
+		if !entry.confirmed {
+			// The record exists but its barrier failed. Establish it before
+			// reporting success: the caller settles its source on that answer,
+			// and a record that is not durable cannot carry a settlement.
+			//
+			// The envelope is not released on this path. An error leaves
+			// ownership with the caller, as everywhere else in this contract,
+			// and releasing first would double-release when it retries.
+			if err := a.SyncQueue(ctx, queueName); err != nil {
+				return 0, false, fmt.Errorf("%w: confirming deduplicated record at offset %d: %w",
+					ErrDurabilityBarrier, entry.offset, err)
+			}
+			index.mu.Lock()
+			entry.confirmed = true
+			index.offsets[dedupeKey] = entry
+			index.mu.Unlock()
+		}
+
+		// Consumed only now that the answer is success. Releasing here is what
+		// lets a caller retry without tracking whether its previous attempt
+		// landed.
 		message.Release(msg)
-		return offset, true, nil
+
+		return entry.offset, true, nil
 	}
 
 	// The key must reach the record, or a rebuild after a crash cannot see it.
@@ -150,11 +183,19 @@ func (a *Adapter) appendOnce(
 
 	appended, err := append(ctx, queueName, msg)
 	if err != nil {
+		if errors.Is(err, ErrDurabilityBarrier) {
+			// The record is on the log; only the barrier over it failed. Losing
+			// the key here is what let the retry append a second copy, so it is
+			// remembered as unconfirmed and a later attempt confirms it instead.
+			index.mu.Lock()
+			index.offsets[dedupeKey] = dedupeEntry{offset: appended}
+			index.mu.Unlock()
+		}
 		return 0, false, err
 	}
 
 	index.mu.Lock()
-	index.offsets[dedupeKey] = appended
+	index.offsets[dedupeKey] = dedupeEntry{offset: appended, confirmed: true}
 	index.mu.Unlock()
 
 	return appended, false, nil
@@ -205,7 +246,9 @@ func (a *Adapter) ensureDedupeIndex(ctx context.Context, queueName string, index
 		}
 		for _, envelope := range batch {
 			if key := envelope.Broker.Transfer.ID; key != "" {
-				index.offsets[key] = envelope.Broker.Queue.Offset
+				// Read back from the log, so the record survived: confirmed by
+				// the fact that it is here to be read.
+				index.offsets[key] = dedupeEntry{offset: envelope.Broker.Queue.Offset, confirmed: true}
 			}
 		}
 		offset = batch[len(batch)-1].Broker.Queue.Offset + 1

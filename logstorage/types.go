@@ -13,20 +13,27 @@ var (
 	ErrSegmentNotFound  = errors.New("segment not found")
 	ErrOffsetOutOfRange = errors.New("offset out of range")
 	ErrSegmentClosed    = errors.New("segment is closed")
-	ErrSegmentCorrupted = errors.New("segment corrupted")
-	ErrInvalidBatch     = errors.New("invalid batch")
-	ErrCRCMismatch      = errors.New("CRC mismatch")
-	ErrInvalidMagic     = errors.New("invalid magic number")
-	ErrBatchTooLarge    = errors.New("batch exceeds maximum size")
-	ErrEmptyBatch       = errors.New("batch contains no records")
-	ErrConsumerNotFound = errors.New("consumer not found")
-	ErrGroupNotFound    = errors.New("consumer group not found")
-	ErrQueueNotFound    = errors.New("queue not found")
-	ErrAlreadyExists    = errors.New("already exists")
-	ErrInvalidOffset    = errors.New("invalid offset")
-	ErrPELEntryNotFound = errors.New("PEL entry not found")
-	ErrIndexCorrupted   = errors.New("index corrupted")
-	ErrRecoveryFailed   = errors.New("recovery failed")
+
+	// ErrDurabilityBarrier reports that a record was written but the fsync over
+	// it did not complete. The record exists at the returned offset; it is not
+	// yet durable. A caller that must write it exactly once needs this
+	// distinction, because "not accepted" and "accepted but unconfirmed" call
+	// for opposite responses: append again, or confirm what is already there.
+	ErrDurabilityBarrier = errors.New("durability barrier failed")
+	ErrSegmentCorrupted  = errors.New("segment corrupted")
+	ErrInvalidBatch      = errors.New("invalid batch")
+	ErrCRCMismatch       = errors.New("CRC mismatch")
+	ErrInvalidMagic      = errors.New("invalid magic number")
+	ErrBatchTooLarge     = errors.New("batch exceeds maximum size")
+	ErrEmptyBatch        = errors.New("batch contains no records")
+	ErrConsumerNotFound  = errors.New("consumer not found")
+	ErrGroupNotFound     = errors.New("consumer group not found")
+	ErrQueueNotFound     = errors.New("queue not found")
+	ErrAlreadyExists     = errors.New("already exists")
+	ErrInvalidOffset     = errors.New("invalid offset")
+	ErrPELEntryNotFound  = errors.New("PEL entry not found")
+	ErrIndexCorrupted    = errors.New("index corrupted")
+	ErrRecoveryFailed    = errors.New("recovery failed")
 )
 
 // Magic number for segment files (FLUX in ASCII).

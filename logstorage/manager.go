@@ -256,7 +256,10 @@ func (m *SegmentManager) appendDurable(batch *Batch) (uint64, error) {
 	// that follows a broken fsync is refused by the retry above rather than
 	// racing this return.
 	if err := target.SyncThrough(through, m.recordSyncFailure); err != nil {
-		return offset, fmt.Errorf("durability barrier for offset %d: %w", offset, err)
+		// The record is written; only the barrier over it failed. The offset is
+		// returned with the error so a caller that must not write it twice can
+		// tell "not accepted" from "accepted but not yet durable".
+		return offset, fmt.Errorf("%w for offset %d: %w", ErrDurabilityBarrier, offset, err)
 	}
 	return offset, nil
 }
