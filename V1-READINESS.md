@@ -41,12 +41,36 @@ The tag is still blocked by work that the short-term plan explicitly deferred:
   have not received the required second audit pass.
 
 The public queue API/error model, protocol-independent queue state machine, and
-strict v1 message envelope are now complete. There is no legacy envelope
-decoder or dual payload/message representation: every broker path uses one
-versioned envelope with typed ownership namespaces and an immutable
-reference-counted payload. The next broker-core work is a recoverable
-transition boundary, followed by a capability interface that keeps
-experimental Raft outside the stable API. See
+strict v1 message envelope are now complete.
+
+**Corrected 2026-08-26.** This paragraph previously claimed there was "no legacy
+envelope decoder or dual payload/message representation". That was not true when
+it was written. A JSON envelope encoder existed for Raft operations, and
+`queue/types.PublishRequest` restated the envelope's publisher namespace field
+for field, so the durable publish path copied every payload twice and the
+cluster boundary flattened typed broker metadata into a `map[string]string` that
+could not carry most of it. Each hop silently dropped the queue state, its
+timestamps and retry count, most of the transfer metadata, and every publisher
+field except properties.
+
+It is true now, and of the current tree rather than of the assessed tag:
+
+- One representation. The JSON encoder is gone, `PublishRequest` is deleted, and
+  the publish and append commands name `*message.Envelope` directly. They borrow
+  it — the queue clones what it stores, and a successful storage append owns
+  that clone, never the caller's envelope.
+- One wire. Peer RPCs carry a complete binary envelope rather than a payload
+  beside a flattened property map, so a delivery crossing a node keeps its
+  redelivery count and its TTL.
+- One schema of record. `proto/message/v1/envelope.proto` states the stored
+  format, and the format is pinned three ways: a conformance pair holding the
+  hand-written codec and the schema against each other field for field, a golden
+  encoding that fails on any byte change, and its own breaking-change baseline
+  beside the public and cluster ones. Until that existed the persisted format
+  was defined only by two Go switch statements kept aligned by hand.
+
+The next broker-core work is a recoverable transition boundary, followed by a
+capability interface that keeps experimental Raft outside the stable API. See
 [`ROADMAP.md`](./ROADMAP.md#next).
 
 This assessment distinguishes **stable-core readiness** from **release
@@ -77,7 +101,15 @@ and publish-path hooks.
 - MQTT codec DoS surface (attacker-controlled length prefixes)
 - MQTT v5 topic-alias and property round-trip correctness
 - Queue consumer-group rebalance and retention/compaction races beyond the
-  focused ownership, settlement, and DLQ transition tests
+  focused ownership, settlement, and DLQ transition tests. Those focused tests
+  are narrower than they read: the MQTT settlement tests built their envelopes
+  by hand and wrote the broker-owned namespace directly, so none of them crossed
+  the ingress boundary that strips reserved properties from client input. Every
+  explicit MQTT v5 ack, nack and reject therefore failed on the wire — the
+  documented client recipe could not work — and no test noticed, because only
+  the implicit PUBACK path was exercised end to end. Fixed 2026-08-26; a
+  settlement now travels in the inbound command namespace. Read the rest of this
+  list as "untested", not "tested at the seam".
 - WebSocket / HTTP / CoAP transport DoS surface, CoAP UDP amplification
 - `pkg/tls` CRL/OCSP fail-open behavior (the code is untested, see P0-8)
 - `ratelimit/` per-IP map growth and `X-Forwarded-For` handling
