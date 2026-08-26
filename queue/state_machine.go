@@ -448,7 +448,7 @@ func (s *stateMachine) Claim(ctx context.Context, command ClaimCommand) (ClaimOu
 	}
 	outcome := ClaimOutcome{Messages: messages, Offsets: make([]uint64, len(messages))}
 	for i, message := range messages {
-		outcome.Offsets[i] = message.Broker.Queue.Offset
+		outcome.Offsets[i] = message.BrokerMeta.Queue.Offset
 	}
 	return outcome, nil
 }
@@ -504,13 +504,13 @@ func (s *stateMachine) Seek(ctx context.Context, command SeekCommand) (SeekOutco
 				break
 			}
 			for _, envelope := range batch {
-				if !envelope.Broker.Queue.CreatedAt.Before(command.Timestamp) {
-					outcome := SeekOutcome{Offset: envelope.Broker.Queue.Offset, Timestamp: envelope.Broker.Queue.CreatedAt, ExactMatch: envelope.Broker.Queue.CreatedAt.Equal(command.Timestamp)}
+				if !envelope.BrokerMeta.Queue.CreatedAt.Before(command.Timestamp) {
+					outcome := SeekOutcome{Offset: envelope.BrokerMeta.Queue.Offset, Timestamp: envelope.BrokerMeta.Queue.CreatedAt, ExactMatch: envelope.BrokerMeta.Queue.CreatedAt.Equal(command.Timestamp)}
 					releaseEnvelopes(batch)
 					return outcome, nil
 				}
 			}
-			offset = batch[len(batch)-1].Broker.Queue.Offset + 1
+			offset = batch[len(batch)-1].BrokerMeta.Queue.Offset + 1
 			releaseEnvelopes(batch)
 		}
 		return SeekOutcome{Offset: tail, Timestamp: command.Timestamp}, nil

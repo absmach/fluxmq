@@ -279,11 +279,11 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 		if string(decoded.PayloadBytes()) != "first-message" {
 			t.Fatalf("expected payload %q, got %q", "first-message", string(decoded.PayloadBytes()))
 		}
-		if decoded.User.Properties["trace"] != "one" {
-			t.Fatalf("expected trace property %q, got %q", "one", decoded.User.Properties["trace"])
+		if decoded.PublisherMeta.Properties["trace"] != "one" {
+			t.Fatalf("expected trace property %q, got %q", "one", decoded.PublisherMeta.Properties["trace"])
 		}
-		if _, ok := decoded.User.Properties["new"]; ok {
-			t.Fatalf("unexpected property propagated from caller mutation: %v", decoded.User.Properties)
+		if _, ok := decoded.PublisherMeta.Properties["new"]; ok {
+			t.Fatalf("unexpected property propagated from caller mutation: %v", decoded.PublisherMeta.Properties)
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for forwarded publish")
@@ -293,7 +293,7 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 // routedEnvelope builds the envelope a caller lends to RoutePublish.
 func routedEnvelope(topic string, payload []byte, qos byte, properties map[string]string) *message.Envelope {
 	msg := message.New(topic, payload)
-	msg.Broker.Delivery.QoS = qos
-	msg.User.Properties = properties
+	msg.BrokerMeta.Delivery.QoS = qos
+	msg.PublisherMeta.Properties = properties
 	return msg
 }

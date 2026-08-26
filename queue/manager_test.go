@@ -1021,8 +1021,8 @@ func TestStreamGroupDeliversWithoutPEL(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if msg.Broker.Queue.Stream == nil || msg.Broker.Queue.Stream.Offset != 0 {
-			t.Fatalf("expected stream offset 0, got %#v", msg.Broker.Queue.Stream)
+		if msg.BrokerMeta.Queue.Stream == nil || msg.BrokerMeta.Queue.Stream.Offset != 0 {
+			t.Fatalf("expected stream offset 0, got %#v", msg.BrokerMeta.Queue.Stream)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for delivery")
@@ -1062,7 +1062,7 @@ func TestPublishCarriesTypedSourceMetadata(t *testing.T) {
 	}
 
 	sourced := publishEnvelope(t, "$queue/orders/process", []byte("hello"))
-	sourced.Broker.Source = message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT}
+	sourced.BrokerMeta.Source = message.SourceMetadata{ClientID: "mqtt-pub-1", Protocol: message.ProtocolMQTT}
 	if err := mgr.Publish(ctx, sourced); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -1071,7 +1071,7 @@ func TestPublishCarriesTypedSourceMetadata(t *testing.T) {
 
 	select {
 	case msg := <-delivered:
-		if got := msg.Broker.Source.ClientID; got != "mqtt-pub-1" {
+		if got := msg.BrokerMeta.Source.ClientID; got != "mqtt-pub-1" {
 			t.Fatalf("expected client id %q, got %q", "mqtt-pub-1", got)
 		}
 	case <-time.After(2 * time.Second):
@@ -1095,8 +1095,8 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	properties := map[string]string{"source": "device"}
 	flushCapture(t, mgr, func() {
 		captured := publishEnvelope(t, testCapturedTopic, payload)
-		captured.Broker.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
-		captured.User.Properties = properties
+		captured.BrokerMeta.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
+		captured.PublisherMeta.Properties = properties
 		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
@@ -1127,10 +1127,10 @@ func TestPublishToMatchingQueuesCapturesOnlyExistingQueues(t *testing.T) {
 	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("captured payload = %q, want original", got)
 	}
-	if got := stored.User.Properties["source"]; got != "device" {
+	if got := stored.PublisherMeta.Properties["source"]; got != "device" {
 		t.Fatalf("captured source = %q, want device", got)
 	}
-	if got := stored.Broker.Source.ClientID; got != testCapturePublisher {
+	if got := stored.BrokerMeta.Source.ClientID; got != testCapturePublisher {
 		t.Fatalf("captured client ID = %q, want mqtt-publisher", got)
 	}
 
@@ -1382,8 +1382,8 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	require.Empty(t, entries)
 	dlqMsg, err := logStore.Read(ctx, "$dlq/tasks", 0)
 	require.NoError(t, err)
-	require.Equal(t, "invalid payload", dlqMsg.Broker.Transfer.FailureReason)
-	require.NotEmpty(t, dlqMsg.Broker.Transfer.ID)
+	require.Equal(t, "invalid payload", dlqMsg.BrokerMeta.Transfer.FailureReason)
+	require.NotEmpty(t, dlqMsg.BrokerMeta.Transfer.ID)
 }
 
 func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
@@ -1732,7 +1732,7 @@ func (c *mockCluster) RouteQueueMessage(ctx context.Context, nodeID, clientID st
 	c.routedMessages = append(c.routedMessages, routedMessage{
 		nodeID:    nodeID,
 		clientID:  clientID,
-		queueName: msg.Broker.Queue.Name,
+		queueName: msg.BrokerMeta.Queue.Name,
 		message:   msgCopy,
 	})
 	return nil
@@ -1869,7 +1869,7 @@ func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID string, ms
 		nodeID:          nodeID,
 		topic:           msg.Topic,
 		payload:         bytes.Clone(msg.PayloadBytes()),
-		properties:      maps.Clone(msg.User.Properties),
+		properties:      maps.Clone(msg.PublisherMeta.Properties),
 		targetQueues:    slices.Clone(targetQueues),
 		forwardToLeader: forwardToLeader,
 	})
@@ -2083,10 +2083,10 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 				t.Error("Expected routed message payload to be set")
 				continue
 			}
-			if rm.message.Broker.Queue.DeliveryID() == "" {
+			if rm.message.BrokerMeta.Queue.DeliveryID() == "" {
 				t.Error("Expected routed delivery to name its queue and offset")
 			}
-			if rm.message.Broker.Queue.GroupID == "" {
+			if rm.message.BrokerMeta.Queue.GroupID == "" {
 				t.Error("Expected routed message to include group-id")
 			}
 		}
@@ -2140,7 +2140,7 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	}
 
 	job := publishEnvelope(t, testQueueTasksNew, []byte("job"))
-	job.User.Properties = map[string]string{"custom": testCustomValue}
+	job.PublisherMeta.Properties = map[string]string{"custom": testCustomValue}
 	if err := manager.Publish(ctx, job); err != nil {
 		t.Fatalf("Enqueue failed: %v", err)
 	}
@@ -2156,19 +2156,19 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if msg.message == nil {
 		t.Fatal("expected routed queue message payload")
 	}
-	if got := msg.message.Broker.Queue.DeliveryID(); got != "tasks:0" {
+	if got := msg.message.BrokerMeta.Queue.DeliveryID(); got != "tasks:0" {
 		t.Fatalf("expected delivery handle tasks:0, got %q", got)
 	}
-	if got := msg.message.Broker.Queue.GroupID; got != testGroupWorkers { //nolint:goconst // test value
+	if got := msg.message.BrokerMeta.Queue.GroupID; got != testGroupWorkers { //nolint:goconst // test value
 		t.Fatalf("expected group-id workers, got %q", got)
 	}
-	if got := msg.message.Broker.Queue.Name; got != "tasks" {
+	if got := msg.message.BrokerMeta.Queue.Name; got != "tasks" {
 		t.Fatalf("expected queue tasks, got %q", got)
 	}
-	if got := msg.message.Broker.Queue.Offset; got != 0 {
+	if got := msg.message.BrokerMeta.Queue.Offset; got != 0 {
 		t.Fatalf("expected sequence 0, got %d", got)
 	}
-	if got := msg.message.User.Properties["custom"]; got != testCustomValue {
+	if got := msg.message.PublisherMeta.Properties["custom"]; got != testCustomValue {
 		t.Fatalf("expected user property custom=value, got %q", got)
 	}
 }
@@ -2231,7 +2231,7 @@ func TestRemoteStreamBacklogDeliveredByFallbackSweep(t *testing.T) {
 			if routed[0].message == nil {
 				t.Fatal("expected routed stream message payload")
 			}
-			if stream := routed[0].message.Broker.Queue.Stream; stream == nil || stream.Offset != 0 {
+			if stream := routed[0].message.BrokerMeta.Queue.Stream; stream == nil || stream.Offset != 0 {
 				t.Fatalf("expected stream offset=0, got %#v", stream)
 			}
 			return
@@ -2571,7 +2571,7 @@ func TestPublishForcedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read q1 message failed: %v", err)
 	}
-	if _, ok := msg.User.Properties[message.PropertyForwardTargetQueues]; ok {
+	if _, ok := msg.PublisherMeta.Properties[message.PropertyForwardTargetQueues]; ok {
 		t.Fatalf("forwarding metadata must not be persisted in message properties")
 	}
 }
@@ -2640,8 +2640,8 @@ func TestDeliverQueueMessage(t *testing.T) {
 	ctx := context.Background()
 
 	msg := message.New("$queue/test", []byte("routed payload"))
-	msg.User.Properties = map[string]string{"custom": "prop"}
-	msg.Broker.Queue = message.QueueMetadata{
+	msg.PublisherMeta.Properties = map[string]string{"custom": "prop"}
+	msg.BrokerMeta.Queue = message.QueueMetadata{
 		Name:    testQueueTest,
 		GroupID: testGroupWorkers,
 		Offset:  42,
@@ -2671,14 +2671,14 @@ func TestDeliverQueueMessage(t *testing.T) {
 		t.Errorf("Expected payload 'routed payload', got '%s'", string(deliveredMsg.PayloadBytes()))
 	}
 
-	if got := deliveredMsg.Broker.Queue.DeliveryID(); got != testQueueTest+":42" {
+	if got := deliveredMsg.BrokerMeta.Queue.DeliveryID(); got != testQueueTest+":42" {
 		t.Errorf("Expected delivery handle '%s:42', got '%s'", testQueueTest, got)
 	}
-	if deliveredMsg.Broker.Queue.Name != testQueueTest {
-		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Broker.Queue.Name)
+	if deliveredMsg.BrokerMeta.Queue.Name != testQueueTest {
+		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.BrokerMeta.Queue.Name)
 	}
-	if deliveredMsg.Broker.Source.Topic != "" {
-		t.Errorf("Expected an empty broker-owned source topic, got %q", deliveredMsg.Broker.Source.Topic)
+	if deliveredMsg.BrokerMeta.Source.Topic != "" {
+		t.Errorf("Expected an empty broker-owned source topic, got %q", deliveredMsg.BrokerMeta.Source.Topic)
 	}
 }
 
@@ -2697,7 +2697,7 @@ func TestDeliverQueueMessagePreservesCanonicalTopic(t *testing.T) {
 	)
 
 	envelope := message.New("$queue/"+testCapturedTopic, []byte("payload"))
-	envelope.Broker.Queue = message.QueueMetadata{Name: "m", GroupID: "rules-engine", Offset: 1}
+	envelope.BrokerMeta.Queue = message.QueueMetadata{Name: "m", GroupID: "rules-engine", Offset: 1}
 	err := manager.DeliverQueueMessage(context.Background(), "target-client", envelope)
 	if err != nil {
 		t.Fatalf("DeliverQueueMessage failed: %v", err)
@@ -3058,10 +3058,10 @@ func TestEnqueueLocal(t *testing.T) {
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
 	remote := message.New("$queue/remote", []byte("remote payload"))
-	remote.User.Properties = map[string]string{"key": testCustomValue}
-	remote.Broker.Source.ClientID = "mqtt:remote-client"
-	remote.Broker.Source.Protocol = message.ProtocolMQTT
-	remote.Broker.Trace.TraceID = "trace-remote"
+	remote.PublisherMeta.Properties = map[string]string{"key": testCustomValue}
+	remote.BrokerMeta.Source.ClientID = "mqtt:remote-client"
+	remote.BrokerMeta.Source.Protocol = message.ProtocolMQTT
+	remote.BrokerMeta.Trace.TraceID = "trace-remote"
 	err := manager.EnqueueLocal(ctx, "$queue/remote", remote)
 	message.Release(remote)
 	if err != nil {
@@ -3086,16 +3086,16 @@ func TestEnqueueLocal(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 	defer message.Release(stored)
-	if stored.Broker.Source.ClientID != "mqtt:remote-client" || stored.Broker.Source.Protocol != message.ProtocolMQTT {
-		t.Fatalf("typed source metadata was not preserved: %+v", stored.Broker.Source)
+	if stored.BrokerMeta.Source.ClientID != "mqtt:remote-client" || stored.BrokerMeta.Source.Protocol != message.ProtocolMQTT {
+		t.Fatalf("typed source metadata was not preserved: %+v", stored.BrokerMeta.Source)
 	}
-	if stored.Broker.Trace.TraceID != "trace-remote" {
-		t.Fatalf("typed trace metadata was not preserved: %+v", stored.Broker.Trace)
+	if stored.BrokerMeta.Trace.TraceID != "trace-remote" {
+		t.Fatalf("typed trace metadata was not preserved: %+v", stored.BrokerMeta.Trace)
 	}
-	if _, leaked := stored.User.Properties[message.PropertyClientID]; leaked {
+	if _, leaked := stored.PublisherMeta.Properties[message.PropertyClientID]; leaked {
 		t.Fatal("broker source metadata leaked into user properties")
 	}
-	if _, leaked := stored.User.Properties[message.PropertyTraceID]; leaked {
+	if _, leaked := stored.PublisherMeta.Properties[message.PropertyTraceID]; leaked {
 		t.Fatal("broker trace metadata leaked into user properties")
 	}
 }
@@ -3340,7 +3340,7 @@ func TestPELCapRejectsClaim(t *testing.T) {
 	}
 
 	// Ack one message to free PEL space.
-	if err := mgr.Ack(ctx, "pelcap", "g1", msgs[0].Broker.Queue.Offset); err != nil {
+	if err := mgr.Ack(ctx, "pelcap", "g1", msgs[0].BrokerMeta.Queue.Offset); err != nil {
 		t.Fatalf("Ack failed: %v", err)
 	}
 
@@ -3375,7 +3375,7 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	}
 
 	poisonMsg := newQueueEnvelope("bad-msg-1", "$queue/tasks/process", []byte("poison-payload"))
-	poisonMsg.User.Properties = map[string]string{"custom-key": "custom-val"}
+	poisonMsg.PublisherMeta.Properties = map[string]string{"custom-key": "custom-val"}
 
 	require.NoError(t, mgr.records.moveToDLQ(ctx, "tasks", testGroupWorkers, poisonMsg, 42, 6, "decode failed", "$dlq/"))
 
@@ -3396,47 +3396,47 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if string(msg.PayloadBytes()) != "poison-payload" {
 		t.Fatalf("expected poison-payload, got %s", string(msg.PayloadBytes()))
 	}
-	if msg.Broker.Transfer.SourceQueue != "tasks" {
-		t.Fatalf("expected original queue 'tasks', got %q", msg.Broker.Transfer.SourceQueue)
+	if msg.BrokerMeta.Transfer.SourceQueue != "tasks" {
+		t.Fatalf("expected original queue 'tasks', got %q", msg.BrokerMeta.Transfer.SourceQueue)
 	}
-	if msg.Broker.Source.Topic != "$queue/tasks/process" {
-		t.Fatalf("expected original topic, got %q", msg.Broker.Source.Topic)
+	if msg.BrokerMeta.Source.Topic != "$queue/tasks/process" {
+		t.Fatalf("expected original topic, got %q", msg.BrokerMeta.Source.Topic)
 	}
-	if msg.Broker.Transfer.SourceGroup != testGroupWorkers {
-		t.Fatalf("expected group 'workers', got %q", msg.Broker.Transfer.SourceGroup)
+	if msg.BrokerMeta.Transfer.SourceGroup != testGroupWorkers {
+		t.Fatalf("expected group 'workers', got %q", msg.BrokerMeta.Transfer.SourceGroup)
 	}
-	if msg.Broker.Transfer.DeliveryCount != 6 {
-		t.Fatalf("expected delivery count 6, got %d", msg.Broker.Transfer.DeliveryCount)
+	if msg.BrokerMeta.Transfer.DeliveryCount != 6 {
+		t.Fatalf("expected delivery count 6, got %d", msg.BrokerMeta.Transfer.DeliveryCount)
 	}
-	if msg.Broker.Transfer.SourceOffset != 42 {
-		t.Fatalf("expected original offset 42, got %d", msg.Broker.Transfer.SourceOffset)
+	if msg.BrokerMeta.Transfer.SourceOffset != 42 {
+		t.Fatalf("expected original offset 42, got %d", msg.BrokerMeta.Transfer.SourceOffset)
 	}
 	// Transfer.ID is the DLQ record's stable identity, derived from the source
 	// queue, group and offset. Queue.MessageID is a delivery-time projection and
 	// is deliberately not reused for it.
-	if msg.Broker.Transfer.ID == "" {
+	if msg.BrokerMeta.Transfer.ID == "" {
 		t.Fatal("expected a stable transfer identity")
 	}
-	if msg.Broker.Transfer.ID != dlqTransferID("tasks", testGroupWorkers, 42) {
-		t.Fatalf("transfer identity is not derived from the source coordinates: %q", msg.Broker.Transfer.ID)
+	if msg.BrokerMeta.Transfer.ID != dlqTransferID("tasks", testGroupWorkers, 42) {
+		t.Fatalf("transfer identity is not derived from the source coordinates: %q", msg.BrokerMeta.Transfer.ID)
 	}
 	// The publisher's own identifier is user metadata and survives the transfer.
 	// The delivery handle does not: it names a record in the source queue, and
 	// the dead-letter copy is a different record at a different offset.
-	if msg.User.MessageID != "bad-msg-1" {
-		t.Fatalf("the publisher message id must survive the transfer, got %q", msg.User.MessageID)
+	if msg.PublisherMeta.MessageID != "bad-msg-1" {
+		t.Fatalf("the publisher message id must survive the transfer, got %q", msg.PublisherMeta.MessageID)
 	}
-	if msg.Broker.Queue.Name == "tasks" {
-		t.Fatalf("the transfer still names the source queue: %q", msg.Broker.Queue.Name)
+	if msg.BrokerMeta.Queue.Name == "tasks" {
+		t.Fatalf("the transfer still names the source queue: %q", msg.BrokerMeta.Queue.Name)
 	}
-	if msg.Broker.Transfer.FailureReason != "decode failed" {
-		t.Fatalf("expected reject reason, got %q", msg.Broker.Transfer.FailureReason)
+	if msg.BrokerMeta.Transfer.FailureReason != "decode failed" {
+		t.Fatalf("expected reject reason, got %q", msg.BrokerMeta.Transfer.FailureReason)
 	}
-	if msg.User.Properties["custom-key"] != "custom-val" {
-		t.Fatalf("expected original property preserved, got %q", msg.User.Properties["custom-key"])
+	if msg.PublisherMeta.Properties["custom-key"] != "custom-val" {
+		t.Fatalf("expected original property preserved, got %q", msg.PublisherMeta.Properties["custom-key"])
 	}
-	if msg.Broker.Queue.State != message.QueueStateDLQ {
-		t.Fatalf("expected state DLQ, got %q", msg.Broker.Queue.State)
+	if msg.BrokerMeta.Queue.State != message.QueueStateDLQ {
+		t.Fatalf("expected state DLQ, got %q", msg.BrokerMeta.Queue.State)
 	}
 }
 
@@ -3591,10 +3591,10 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	headers := map[string][]byte{"binary": {0x00, 0xff}}
 	flushCapture(t, mgr, func() {
 		captured := publishEnvelope(t, testCapturedTopic, payload)
-		captured.Broker.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
-		captured.User.Key = key
-		captured.User.Headers = headers
-		captured.User.Properties = properties
+		captured.BrokerMeta.Source = message.SourceMetadata{ClientID: testCapturePublisher, Protocol: message.ProtocolMQTT}
+		captured.PublisherMeta.Key = key
+		captured.PublisherMeta.Headers = headers
+		captured.PublisherMeta.Properties = properties
 		if err := mgr.PublishToMatchingQueues(ctx, captured); err != nil {
 			t.Fatalf("PublishToMatchingQueues failed: %v", err)
 		}
@@ -3616,16 +3616,16 @@ func TestPublishToMatchingQueuesDoesNotAliasCallerState(t *testing.T) {
 	if got := string(stored.PayloadBytes()); got != "original" {
 		t.Fatalf("stored payload = %q, want original", got)
 	}
-	if got := string(stored.User.Key); got != "key" {
+	if got := string(stored.PublisherMeta.Key); got != "key" {
 		t.Fatalf("stored key = %q, want key", got)
 	}
-	if got := stored.User.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
+	if got := stored.PublisherMeta.Headers["binary"]; !bytes.Equal(got, []byte{0x00, 0xff}) {
 		t.Fatalf("stored binary header = %v, want [0 255]", got)
 	}
-	if _, ok := stored.User.Headers["new"]; ok {
+	if _, ok := stored.PublisherMeta.Headers["new"]; ok {
 		t.Fatal("stored headers alias the caller's map")
 	}
-	if got := stored.Broker.Source.ClientID; got != testCapturePublisher {
+	if got := stored.BrokerMeta.Source.ClientID; got != testCapturePublisher {
 		t.Fatalf("stored client ID = %q, want mqtt-publisher", got)
 	}
 }

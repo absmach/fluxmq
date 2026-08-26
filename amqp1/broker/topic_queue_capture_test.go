@@ -35,7 +35,7 @@ func TestPublishCapturesAMQP1PubSubTopic(t *testing.T) {
 	if len(qm.captures) != 1 {
 		t.Fatalf("expected one queue capture, got %d", len(qm.captures))
 	}
-	if got := qm.captures[0].Broker.Source.ClientID; got != "amqp:publisher" {
+	if got := qm.captures[0].BrokerMeta.Source.ClientID; got != "amqp:publisher" {
 		t.Fatalf("captured client ID = %q", got)
 	}
 }

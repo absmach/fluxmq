@@ -19,7 +19,7 @@ func testEnvelope(topic string, data ...[]byte) *message.Envelope {
 		payload = data[0]
 	}
 	envelope := message.New(topic, payload)
-	envelope.Broker.Delivery.QoS = 1
+	envelope.BrokerMeta.Delivery.QoS = 1
 	return envelope
 }
 

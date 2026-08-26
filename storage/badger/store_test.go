@@ -92,7 +92,7 @@ func TestStore_IntegrationSaveAndRetrieve(t *testing.T) {
 
 	// Save message
 	msg := message.NewDelivery("integration/topic", []byte("integration test"), 1, false)
-	msg.Broker.Delivery.PacketID = 123
+	msg.BrokerMeta.Delivery.PacketID = 123
 	err = store.Messages().Store("integration-client/inflight/123", msg)
 	require.NoError(t, err)
 

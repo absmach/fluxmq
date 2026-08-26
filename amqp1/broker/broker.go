@@ -158,7 +158,7 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 			b.logger.Warn("AMQP cluster route publish dropped malformed properties",
 				"topic", topic, "error", err)
 		}
-		routed.Broker.Delivery.QoS = 1
+		routed.BrokerMeta.Delivery.QoS = 1
 		err := cl.RoutePublish(routeCtx, routed)
 		coremessage.Release(routed)
 		if err != nil {
@@ -230,13 +230,13 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core
 	}
 	// A durable delivery is named by the broker's handle; anything else carries
 	// whatever identifier the publisher set.
-	if handle := msg.Broker.Queue.DeliveryID(); handle != "" {
+	if handle := msg.BrokerMeta.Queue.DeliveryID(); handle != "" {
 		amqpMsg.Properties.MessageID = handle
-	} else if msg.User.MessageID != "" {
-		amqpMsg.Properties.MessageID = msg.User.MessageID
+	} else if msg.PublisherMeta.MessageID != "" {
+		amqpMsg.Properties.MessageID = msg.PublisherMeta.MessageID
 	}
 
-	c.deliverAMQPMessage(msg.Topic, amqpMsg, msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+	c.deliverAMQPMessage(msg.Topic, amqpMsg, msg.BrokerMeta.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	return nil
 }
 
@@ -258,7 +258,7 @@ func (b *Broker) DeliverToClusterMessage(ctx context.Context, clientID string, m
 		return fmt.Errorf("%w: AMQP client not found: %s", corebroker.ErrClientNotConnected, containerID)
 	}
 	c := val.(*Connection)
-	c.deliverMessage(msg.Topic, msg.PayloadBytes(), coremessage.ProjectProperties(msg, coremessage.PublicProjection), msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
+	c.deliverMessage(msg.Topic, msg.PayloadBytes(), coremessage.ProjectProperties(msg, coremessage.PublicProjection), msg.BrokerMeta.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context
 	return nil
 }
 
@@ -349,8 +349,8 @@ func queuePublishEnvelope(
 	topic string, payload []byte, props map[string]string, source coremessage.SourceMetadata,
 ) *coremessage.Envelope {
 	envelope := coremessage.New(topic, payload)
-	envelope.Broker.Source = source
-	envelope.Broker.Trace = coremessage.TraceFromProperties(props)
-	envelope.User.Properties = coremessage.FilterUserProperties(props)
+	envelope.BrokerMeta.Source = source
+	envelope.BrokerMeta.Trace = coremessage.TraceFromProperties(props)
+	envelope.PublisherMeta.Properties = coremessage.FilterUserProperties(props)
 	return envelope
 }

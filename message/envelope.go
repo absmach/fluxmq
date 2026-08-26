@@ -50,9 +50,9 @@ const (
 	QueueStateDLQ       QueueState = "dlq"
 )
 
-// UserMetadata contains publisher-owned message metadata. Protocol adapters
+// PublisherMetadata contains publisher-owned message metadata. Protocol adapters
 // may project only fields their wire format supports.
-type UserMetadata struct {
+type PublisherMetadata struct {
 	Key             []byte
 	Headers         map[string][]byte
 	Properties      map[string]string
@@ -168,11 +168,11 @@ type BrokerMetadata struct {
 // Envelope is the canonical in-memory and persisted broker message. Payload
 // has exactly one representation: an immutable reference-counted buffer.
 type Envelope struct {
-	Version Version
-	Topic   string
-	Payload *payload.Buffer
-	User    UserMetadata
-	Broker  BrokerMetadata
+	Version       Version
+	Topic         string
+	Payload       *payload.Buffer
+	PublisherMeta PublisherMetadata
+	BrokerMeta    BrokerMetadata
 }
 
 // New constructs a Version1 envelope and copies payload into the broker pool.
@@ -186,8 +186,8 @@ func New(topic string, data []byte) *Envelope {
 // NewDelivery constructs a Version1 envelope with protocol delivery metadata.
 func NewDelivery(topic string, data []byte, qos byte, retain bool) *Envelope {
 	envelope := New(topic, data)
-	envelope.Broker.Delivery.QoS = qos
-	envelope.Broker.Delivery.Retain = retain
+	envelope.BrokerMeta.Delivery.QoS = qos
+	envelope.BrokerMeta.Delivery.Retain = retain
 	return envelope
 }
 
@@ -261,9 +261,9 @@ func (e *Envelope) IsExpired() bool {
 	if e == nil {
 		return false
 	}
-	expiresAt := e.Broker.Queue.ExpiresAt
+	expiresAt := e.BrokerMeta.Queue.ExpiresAt
 	if expiresAt.IsZero() {
-		expiresAt = e.Broker.Delivery.ExpiresAt
+		expiresAt = e.BrokerMeta.Delivery.ExpiresAt
 	}
 	return !expiresAt.IsZero() && time.Now().After(expiresAt)
 }
@@ -280,28 +280,28 @@ func (e *Envelope) Clone() *Envelope {
 	if cp.Payload != nil {
 		cp.Payload.Retain()
 	}
-	if hasUserMetadata(e.User) {
-		cp.User = cloneUserMetadata(e.User)
+	if hasUserMetadata(e.PublisherMeta) {
+		cp.PublisherMeta = cloneUserMetadata(e.PublisherMeta)
 	}
-	if e.Broker.Source != (SourceMetadata{}) {
-		cp.Broker.Source = e.Broker.Source
+	if e.BrokerMeta.Source != (SourceMetadata{}) {
+		cp.BrokerMeta.Source = e.BrokerMeta.Source
 	}
-	if hasDeliveryMetadata(e.Broker.Delivery) {
-		cp.Broker.Delivery = cloneDeliveryMetadata(e.Broker.Delivery)
+	if hasDeliveryMetadata(e.BrokerMeta.Delivery) {
+		cp.BrokerMeta.Delivery = cloneDeliveryMetadata(e.BrokerMeta.Delivery)
 	}
-	if e.Broker.Queue != (QueueMetadata{}) {
-		cp.Broker.Queue = cloneQueueMetadata(e.Broker.Queue)
+	if e.BrokerMeta.Queue != (QueueMetadata{}) {
+		cp.BrokerMeta.Queue = cloneQueueMetadata(e.BrokerMeta.Queue)
 	}
-	if e.Broker.Transfer != (TransferMetadata{}) {
-		cp.Broker.Transfer = e.Broker.Transfer
+	if e.BrokerMeta.Transfer != (TransferMetadata{}) {
+		cp.BrokerMeta.Transfer = e.BrokerMeta.Transfer
 	}
-	if e.Broker.Trace != (TraceMetadata{}) {
-		cp.Broker.Trace = e.Broker.Trace
+	if e.BrokerMeta.Trace != (TraceMetadata{}) {
+		cp.BrokerMeta.Trace = e.BrokerMeta.Trace
 	}
 	return cp
 }
 
-func hasUserMetadata(user UserMetadata) bool {
+func hasUserMetadata(user PublisherMetadata) bool {
 	return len(user.Key) > 0 || len(user.Headers) > 0 || len(user.Properties) > 0 ||
 		user.ContentType != "" || user.ContentEncoding != "" || user.ResponseTopic != "" ||
 		len(user.CorrelationData) > 0 || user.PayloadFormat != nil || user.MessageExpiry != nil ||
@@ -314,7 +314,7 @@ func hasDeliveryMetadata(delivery DeliveryMetadata) bool {
 		delivery.InflightState != 0 || delivery.Retain || delivery.Duplicate
 }
 
-func cloneUserMetadata(src UserMetadata) UserMetadata {
+func cloneUserMetadata(src PublisherMetadata) PublisherMetadata {
 	dst := src
 	dst.Key = bytes.Clone(src.Key)
 	dst.CorrelationData = bytes.Clone(src.CorrelationData)

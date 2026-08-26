@@ -597,7 +597,7 @@ func TestDeliverToClientOmitsReservedProperties(t *testing.T) {
 	attachReceiver(t, b, c, "queue-client", "test/pubsub")
 
 	stored := coremessage.New("test/pubsub", []byte("hello queue"))
-	stored.User.Properties = map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue}
+	stored.PublisherMeta.Properties = map[string]string{reserved: testRuleTrace, testTraceKey: testTraceValue}
 	go b.DeliverToClient(context.Background(), corebroker.AMQP1ClientPrefix+"queue-client", stored) //nolint:errcheck // delivery error surfaces as a read timeout below
 
 	msg := readDeliveredMessage(t, c)
@@ -741,10 +741,10 @@ func TestQueueTransferCarriesClientID(t *testing.T) {
 
 	select {
 	case publish := <-mockQM.publishCh:
-		require.Equal(t, PrefixedClientID("sender-client"), publish.Broker.Source.ClientID)
-		require.Equal(t, coremessage.ProtocolAMQP1, publish.Broker.Source.Protocol)
-		require.Equal(t, testTraceValue, publish.User.Properties[testTraceKey])
-		require.NotContains(t, publish.User.Properties, coremessage.PropertyClientID)
+		require.Equal(t, PrefixedClientID("sender-client"), publish.BrokerMeta.Source.ClientID)
+		require.Equal(t, coremessage.ProtocolAMQP1, publish.BrokerMeta.Source.Protocol)
+		require.Equal(t, testTraceValue, publish.PublisherMeta.Properties[testTraceKey])
+		require.NotContains(t, publish.PublisherMeta.Properties, coremessage.PropertyClientID)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for queue publish")
 	}

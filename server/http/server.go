@@ -23,10 +23,10 @@ import (
 
 func buildPublishMessage(topic string, data []byte, qos byte, retain bool, clientID, externalID, contentType string) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.User.ContentType = contentType
-	envelope.Broker.Source = message.SourceMetadata{ClientID: clientID, ExternalID: externalID, Protocol: message.ProtocolHTTP}
-	envelope.Broker.Delivery.QoS = qos
-	envelope.Broker.Delivery.Retain = retain
+	envelope.PublisherMeta.ContentType = contentType
+	envelope.BrokerMeta.Source = message.SourceMetadata{ClientID: clientID, ExternalID: externalID, Protocol: message.ProtocolHTTP}
+	envelope.BrokerMeta.Delivery.QoS = qos
+	envelope.BrokerMeta.Delivery.Retain = retain
 	return envelope
 }
 
@@ -360,7 +360,7 @@ func (s *Server) publish(w http.ResponseWriter, r *http.Request, topic string, p
 	}
 
 	msg := buildPublishMessage(topic, payload, qos, retain, clientID, externalID, r.Header.Get("Content-Type"))
-	msg.User.Properties = message.FilterUserProperties(props)
+	msg.PublisherMeta.Properties = message.FilterUserProperties(props)
 
 	s.logger.Debug("http_publish",
 		slog.String("topic", topic),

@@ -262,10 +262,10 @@ func encodeMessage(envelope *message.Envelope) ([]byte, []byte, map[string][]byt
 		return nil, nil, nil, fmt.Errorf("encode queue envelope metadata: %w", err)
 	}
 	headers := map[string][]byte{headerEnvelope: metadata}
-	if envelope.Broker.Transfer.ID != "" {
-		headers[headerDedupeKey] = []byte(envelope.Broker.Transfer.ID)
+	if envelope.BrokerMeta.Transfer.ID != "" {
+		headers[headerDedupeKey] = []byte(envelope.BrokerMeta.Transfer.ID)
 	}
-	return envelope.PayloadBytes(), envelope.User.Key, headers, nil
+	return envelope.PayloadBytes(), envelope.PublisherMeta.Key, headers, nil
 }
 
 // Append adds a message to the end of a queue's log.
@@ -773,9 +773,9 @@ func logMessageToEnvelope(msg *Message) (*message.Envelope, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode queue envelope metadata at offset %d: %w", msg.Offset, err)
 	}
-	envelope.Broker.Queue.Offset = msg.Offset
-	if envelope.Broker.Queue.CreatedAt.IsZero() {
-		envelope.Broker.Queue.CreatedAt = msg.Timestamp
+	envelope.BrokerMeta.Queue.Offset = msg.Offset
+	if envelope.BrokerMeta.Queue.CreatedAt.IsZero() {
+		envelope.BrokerMeta.Queue.CreatedAt = msg.Timestamp
 	}
 	return envelope, nil
 }

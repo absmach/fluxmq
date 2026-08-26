@@ -55,8 +55,8 @@ func newTestTransport(nodeID string, mock *mockBrokerClient) *Transport {
 
 func newQueueDelivery(clientID, queueName, messageID, body string) QueueDelivery {
 	envelope := message.New("", []byte(body))
-	envelope.Broker.Queue.Name = queueName
-	envelope.User.MessageID = messageID
+	envelope.BrokerMeta.Queue.Name = queueName
+	envelope.PublisherMeta.MessageID = messageID
 	return QueueDelivery{ClientID: clientID, Message: envelope}
 }
 
@@ -820,7 +820,7 @@ func wireEnvelope(t *testing.T, topic string, qos byte, payload []byte) []byte {
 	t.Helper()
 	msg := message.New(topic, payload)
 	defer message.Release(msg)
-	msg.Broker.Delivery.QoS = qos
+	msg.BrokerMeta.Delivery.QoS = qos
 	encoded, err := message.MarshalBinary(msg)
 	if err != nil {
 		t.Fatalf("encode wire envelope: %v", err)

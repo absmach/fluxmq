@@ -107,7 +107,7 @@ func (b *Broker) publishStats() {
 
 	for _, s := range stats {
 		msg := message.New(s.topic, []byte(s.value))
-		msg.Broker.Delivery.Retain = true
+		msg.BrokerMeta.Delivery.Retain = true
 
 		b.distribute(context.Background(), msg) //nolint:errcheck // fire-and-forget stats distribution
 

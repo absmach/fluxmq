@@ -147,8 +147,8 @@ func TestAppendContractUsesExactOffsetsAndPreservesBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read appended message: %v", err)
 	}
-	if !bytes.Equal(stored.User.Key, []byte{0x00, 0xff}) || !bytes.Equal(stored.User.Headers["binary"], []byte{0x00, 0xff}) {
-		t.Fatalf("binary key/headers changed: key=%v headers=%v", stored.User.Key, stored.User.Headers)
+	if !bytes.Equal(stored.PublisherMeta.Key, []byte{0x00, 0xff}) || !bytes.Equal(stored.PublisherMeta.Headers["binary"], []byte{0x00, 0xff}) {
+		t.Fatalf("binary key/headers changed: key=%v headers=%v", stored.PublisherMeta.Key, stored.PublisherMeta.Headers)
 	}
 	if count, err := store.Count(ctx, "same-pattern"); err != nil || count != 0 {
 		t.Fatalf("exact append routed to same-pattern queue: count=%d err=%v", count, err)
@@ -680,7 +680,7 @@ func TestSeekToTimestamp(t *testing.T) {
 	}
 	for i, ts := range points {
 		envelope := message.New(testQueueEvents, []byte{byte(i)})
-		envelope.Broker.Queue.CreatedAt = ts
+		envelope.BrokerMeta.Queue.CreatedAt = ts
 		if _, err := store.Append(ctx, testQueueEvents, envelope); err != nil {
 			t.Fatalf("append message %d: %v", i, err)
 		}
@@ -777,13 +777,13 @@ func TestQueueMutationsReportInvalidFiltersAsInvalidArgument(t *testing.T) {
 // may supply a fallback only for errors the queue domain has not classified.
 func TestMessageToProtoDetachesPooledEnvelopeData(t *testing.T) {
 	source := message.New("jobs", []byte("value"))
-	source.User.Key = []byte("key")
-	source.User.Headers = map[string][]byte{"binary": []byte("header")}
+	source.PublisherMeta.Key = []byte("key")
+	source.PublisherMeta.Headers = map[string][]byte{"binary": []byte("header")}
 
 	converted := (&Handler{}).messageToProto(source)
 	source.SetPayload([]byte("other"))
-	source.User.Key[0] = 'X'
-	source.User.Headers["binary"][0] = 'X'
+	source.PublisherMeta.Key[0] = 'X'
+	source.PublisherMeta.Headers["binary"][0] = 'X'
 	message.Release(source)
 
 	if string(converted.Value) != "value" || string(converted.Key) != "key" || string(converted.Headers["binary"]) != "header" {

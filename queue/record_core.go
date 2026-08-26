@@ -29,7 +29,7 @@ import (
 // that command.
 func (c *recordCore) appendResolved(ctx context.Context, queueName string, msg *message.Envelope, config types.QueueConfig) (AppendOutcome, error) {
 	queued := newQueuedRecord(msg, queueName, &config)
-	createdAt := queued.Broker.Queue.CreatedAt
+	createdAt := queued.BrokerMeta.Queue.CreatedAt
 
 	offset, err := c.appendConfiguredMessage(ctx, queueName, &config, queued)
 	if err := c.completeAppend(queueName, queued.Topic, offset, err); err != nil {
@@ -169,7 +169,7 @@ func (c *recordCore) appendToQueue(ctx context.Context, queueName string, msg *m
 	record := newQueuedRecord(msg, queueName, queueConfig)
 	// Read the assigned timestamp before the append: a successful append
 	// transfers ownership of the record to the store, which may release it.
-	createdAt := record.Broker.Queue.CreatedAt
+	createdAt := record.BrokerMeta.Queue.CreatedAt
 	topic := record.Topic
 	offset, err := c.appendConfiguredMessage(ctx, queueName, queueConfig, record)
 	if err := c.completeAppend(queueName, topic, offset, err); err != nil {
@@ -205,7 +205,7 @@ func (c *recordCore) appendBatchToQueue(ctx context.Context, queueName string, e
 
 	// Read the last record's timestamp before the append: a successful append
 	// transfers ownership of every envelope to the store.
-	lastCreatedAt := messages[len(messages)-1].Broker.Queue.CreatedAt
+	lastCreatedAt := messages[len(messages)-1].BrokerMeta.Queue.CreatedAt
 
 	firstOffset, err := c.queueStore.AppendBatch(ctx, queueName, messages)
 	if err != nil {
@@ -265,7 +265,7 @@ func (c *recordCore) publishToDurableStream(ctx context.Context, queueName strin
 	record := newQueuedRecord(msg, queueName, queueConfig)
 	// Read the assigned timestamp before the append: a successful append
 	// transfers ownership of the record to the store.
-	createdAt := record.Broker.Queue.CreatedAt
+	createdAt := record.BrokerMeta.Queue.CreatedAt
 	topic := record.Topic
 	offset, err := durableStore.AppendAndSync(ctx, queueName, record)
 	if err != nil {
@@ -353,24 +353,24 @@ func newQueuedRecord(msg *message.Envelope, queueName string, queueConfig *types
 	// Properties are re-filtered on the record itself: an ingress may hand over
 	// an envelope whose property map still holds reserved names, and the stored
 	// record is what every later reader sees.
-	record.User.Properties = message.FilterUserProperties(record.User.Properties)
+	record.PublisherMeta.Properties = message.FilterUserProperties(record.PublisherMeta.Properties)
 	// A stored record keeps only the publication timestamps from the delivery
 	// namespace. The rest of it — packet id, QoS, retain, inflight state — is
 	// the ingress connection's transaction state, not the record's.
-	record.Broker.Delivery = message.DeliveryMetadata{
-		PublishedAt: msg.Broker.Delivery.PublishedAt,
-		ExpiresAt:   msg.Broker.Delivery.ExpiresAt,
+	record.BrokerMeta.Delivery = message.DeliveryMetadata{
+		PublishedAt: msg.BrokerMeta.Delivery.PublishedAt,
+		ExpiresAt:   msg.BrokerMeta.Delivery.ExpiresAt,
 	}
-	record.Broker.Queue = message.QueueMetadata{
+	record.BrokerMeta.Queue = message.QueueMetadata{
 		State:     message.QueueStateQueued,
 		CreatedAt: now,
 	}
 	if queueConfig.MessageTTL > 0 {
-		record.Broker.Queue.ExpiresAt = now.Add(queueConfig.MessageTTL)
+		record.BrokerMeta.Queue.ExpiresAt = now.Add(queueConfig.MessageTTL)
 	}
-	if expiry := msg.Broker.Delivery.ExpiresAt; !expiry.IsZero() &&
-		(record.Broker.Queue.ExpiresAt.IsZero() || expiry.Before(record.Broker.Queue.ExpiresAt)) {
-		record.Broker.Queue.ExpiresAt = expiry
+	if expiry := msg.BrokerMeta.Delivery.ExpiresAt; !expiry.IsZero() &&
+		(record.BrokerMeta.Queue.ExpiresAt.IsZero() || expiry.Before(record.BrokerMeta.Queue.ExpiresAt)) {
+		record.BrokerMeta.Queue.ExpiresAt = expiry
 	}
 	return record
 }
@@ -384,7 +384,7 @@ func (c *recordCore) rejectStream(ctx context.Context, queueName string, group *
 		return err
 	}
 	defer message.Release(msg)
-	deliveryCount := max(msg.Broker.Queue.RetryCount+1, 1)
+	deliveryCount := max(msg.BrokerMeta.Queue.RetryCount+1, 1)
 	if err := c.moveToDLQ(ctx, queueName, group.ID, msg, offset, deliveryCount, reason, c.config.DLQTopicPrefix); err != nil {
 		return err
 	}
@@ -470,13 +470,13 @@ func (c *recordCore) moveToDLQ(ctx context.Context, queueName, groupID string, m
 	transferID := dlqTransferID(queueName, groupID, sourceOffset)
 	dlqMsg := msg.Clone()
 	dlqMsg.Topic = dlqTopic
-	dlqMsg.Broker.Delivery = message.DeliveryMetadata{}
-	dlqMsg.Broker.Source.Topic = msg.Topic
-	dlqMsg.Broker.Queue = message.QueueMetadata{
+	dlqMsg.BrokerMeta.Delivery = message.DeliveryMetadata{}
+	dlqMsg.BrokerMeta.Source.Topic = msg.Topic
+	dlqMsg.BrokerMeta.Queue = message.QueueMetadata{
 		State:     message.QueueStateDLQ,
 		CreatedAt: now,
 	}
-	dlqMsg.Broker.Transfer = message.TransferMetadata{
+	dlqMsg.BrokerMeta.Transfer = message.TransferMetadata{
 		ID:            transferID,
 		FailureReason: reason,
 		CompletedAt:   now,

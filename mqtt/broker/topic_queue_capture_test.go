@@ -38,7 +38,7 @@ func TestPublishCapturesOrdinaryTopicInMatchingQueues(t *testing.T) {
 	}
 
 	msg := message.New(topicCaptureTopic, []byte("payload"))
-	msg.Broker.Source.ClientID = topicCapturePublisherID
+	msg.BrokerMeta.Source.ClientID = topicCapturePublisherID
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("Publish failed: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestPublishSurvivesQueueCaptureFailure(t *testing.T) {
 	})
 
 	msg := message.New(topicCaptureTopic, []byte("payload"))
-	msg.Broker.Source.ClientID = topicCapturePublisherID
+	msg.BrokerMeta.Source.ClientID = topicCapturePublisherID
 	if err := b.Publish(context.Background(), msg); err != nil {
 		t.Fatalf("capture failure must not fail the publish, got %v", err)
 	}

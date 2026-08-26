@@ -156,7 +156,7 @@ func TestDrainPendingToOffline_ReleasesOriginalMessage(t *testing.T) {
 	require.NoError(t, errConn)
 
 	msg := message.NewWithBuffer("topic", payload.FromBytes([]byte("payload")))
-	msg.Broker.Delivery.QoS = 1
+	msg.BrokerMeta.Delivery.QoS = 1
 	buf := msg.Payload
 	require.NotNil(t, buf)
 	require.Equal(t, int32(1), buf.RefCount())

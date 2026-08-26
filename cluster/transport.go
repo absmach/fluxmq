@@ -384,7 +384,7 @@ func (t *Transport) FetchRetained(ctx context.Context, req *FetchRetainedReq) (*
 		Found: true,
 		Message: &clusterv1.RetainedMessage{
 			Envelope:  encoded,
-			Timestamp: msg.Broker.Delivery.PublishedAt.Unix(),
+			Timestamp: msg.BrokerMeta.Delivery.PublishedAt.Unix(),
 		},
 	}), nil
 }
@@ -1126,7 +1126,7 @@ func summarizeQueueBatchFailures(failures []queueBatchFailure) string {
 			reason = "unknown error"
 		}
 		parts = append(parts, fmt.Sprintf("client %s queue %s: %s",
-			failure.delivery.ClientID, failure.delivery.Message.Broker.Queue.Name, reason))
+			failure.delivery.ClientID, failure.delivery.Message.BrokerMeta.Queue.Name, reason))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -1294,7 +1294,7 @@ func encodedIsQoS0(encoded []byte) bool {
 	if err != nil {
 		return false
 	}
-	qos := envelope.Broker.Delivery.QoS
+	qos := envelope.BrokerMeta.Delivery.QoS
 	message.Release(envelope)
 	return qos == 0
 }
@@ -1306,8 +1306,8 @@ func encodeRouteQueueMessage(clientID string, msg *message.Envelope) (*clusterv1
 	}
 	return &clusterv1.RouteQueueMessageRequest{
 		ClientId:  clientID,
-		QueueName: msg.Broker.Queue.Name,
-		Sequence:  int64(msg.Broker.Queue.Offset),
+		QueueName: msg.BrokerMeta.Queue.Name,
+		Sequence:  int64(msg.BrokerMeta.Queue.Offset),
 		Envelope:  encoded,
 	}, nil
 }
@@ -1327,11 +1327,11 @@ func decodeRouteQueueMessage(wire *clusterv1.RouteQueueMessageRequest) (*message
 	// The routing controls stay authoritative: they are what the sender used to
 	// pick this node, and a receiver reads them without decoding.
 	if wire.QueueName != "" {
-		envelope.Broker.Queue.Name = wire.QueueName
+		envelope.BrokerMeta.Queue.Name = wire.QueueName
 	}
 	if wire.Sequence >= 0 {
-		envelope.Broker.Queue.Offset = uint64(wire.Sequence)
+		envelope.BrokerMeta.Queue.Offset = uint64(wire.Sequence)
 	}
-	envelope.Broker.Delivery.QoS = 1
+	envelope.BrokerMeta.Delivery.QoS = 1
 	return envelope, nil
 }

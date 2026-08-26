@@ -27,7 +27,7 @@ import (
 // therefore release the message as soon as this returns, even though the packet
 // may not be serialized until later on an asynchronous send queue.
 func EncodePublish(msg *message.Envelope, packetID uint16, version byte, dup bool) packets.ControlPacket {
-	return encodePublish(msg, packetID, version, dup, msg.Broker.Delivery.QoS, msg.Broker.Delivery.Retain)
+	return encodePublish(msg, packetID, version, dup, msg.BrokerMeta.Delivery.QoS, msg.BrokerMeta.Delivery.Retain)
 }
 
 // EncodePublishDelivery builds a packet from immutable publication data and
@@ -52,8 +52,8 @@ func encodePublish(msg *message.Envelope, packetID uint16, version byte, dup boo
 		p.ID = packetID
 
 		// Send the remaining message-expiry interval, not the original.
-		if msg.User.MessageExpiry != nil && !msg.Broker.Delivery.ExpiresAt.IsZero() {
-			if remaining := time.Until(msg.Broker.Delivery.ExpiresAt); remaining > 0 {
+		if msg.PublisherMeta.MessageExpiry != nil && !msg.BrokerMeta.Delivery.ExpiresAt.IsZero() {
+			if remaining := time.Until(msg.BrokerMeta.Delivery.ExpiresAt); remaining > 0 {
 				remainingSec := uint32(remaining.Seconds())
 				p.Properties.MessageExpiry = &remainingSec
 			}
@@ -91,10 +91,10 @@ func applyPublishProperties(props *v5.PublishProperties, msg *message.Envelope) 
 		return
 	}
 
-	props.ContentType = msg.User.ContentType
-	props.ResponseTopic = msg.User.ResponseTopic
-	props.CorrelationData = msg.User.CorrelationData
-	props.PayloadFormat = msg.User.PayloadFormat
+	props.ContentType = msg.PublisherMeta.ContentType
+	props.ResponseTopic = msg.PublisherMeta.ResponseTopic
+	props.CorrelationData = msg.PublisherMeta.CorrelationData
+	props.PayloadFormat = msg.PublisherMeta.PayloadFormat
 
 	projected := message.ProjectProperties(msg, message.PublicProjection)
 	if len(projected) > 0 {

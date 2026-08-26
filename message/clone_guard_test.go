@@ -17,7 +17,7 @@ import (
 // which is how a publisher's message-id stopped surviving delivery. This walks
 // the structs by reflection so the next added field fails here instead.
 func TestCloneCarriesEverySingleUserField(t *testing.T) {
-	typ := reflect.TypeOf(UserMetadata{})
+	typ := reflect.TypeOf(PublisherMetadata{})
 
 	for i := range typ.NumField() {
 		field := typ.Field(i)
@@ -25,14 +25,14 @@ func TestCloneCarriesEverySingleUserField(t *testing.T) {
 			envelope := Acquire()
 			defer Release(envelope)
 
-			target := reflect.ValueOf(&envelope.User).Elem().FieldByName(field.Name)
+			target := reflect.ValueOf(&envelope.PublisherMeta).Elem().FieldByName(field.Name)
 			require.True(t, target.CanSet(), "field %s is not settable", field.Name)
 			target.Set(nonZeroValue(t, field.Type))
 
 			clone := envelope.Clone()
 			defer Release(clone)
 
-			got := reflect.ValueOf(&clone.User).Elem().FieldByName(field.Name)
+			got := reflect.ValueOf(&clone.PublisherMeta).Elem().FieldByName(field.Name)
 			require.Falsef(t, got.IsZero(),
 				"Clone dropped UserMetadata.%s: hasUserMetadata does not test it", field.Name)
 		})

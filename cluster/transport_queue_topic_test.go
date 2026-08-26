@@ -36,20 +36,20 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 
 	envelope := queueTestEnvelope("$queue/m/domain/c/channel/tst", sourceTopic)
 	defer message.Release(envelope)
-	envelope.User.Properties = map[string]string{"user": testUserPropertyVal}
+	envelope.PublisherMeta.Properties = map[string]string{"user": testUserPropertyVal}
 
 	decoded := roundTripQueueMessage(t, envelope)
 	defer message.Release(decoded)
-	if decoded.Broker.Source.Topic != sourceTopic {
-		t.Fatalf("decoded source topic = %q, want %q", decoded.Broker.Source.Topic, sourceTopic)
+	if decoded.BrokerMeta.Source.Topic != sourceTopic {
+		t.Fatalf("decoded source topic = %q, want %q", decoded.BrokerMeta.Source.Topic, sourceTopic)
 	}
 	// Queue-owned metadata must not leak into the user properties a consumer
 	// sees as its own.
-	if _, leaked := decoded.User.Properties[message.PropertySourceTopic]; leaked {
+	if _, leaked := decoded.PublisherMeta.Properties[message.PropertySourceTopic]; leaked {
 		t.Fatal("the source topic leaked into user properties")
 	}
-	if decoded.User.Properties["user"] != testUserPropertyVal {
-		t.Fatalf("an ordinary user property was dropped: %v", decoded.User.Properties)
+	if decoded.PublisherMeta.Properties["user"] != testUserPropertyVal {
+		t.Fatalf("an ordinary user property was dropped: %v", decoded.PublisherMeta.Properties)
 	}
 }
 
@@ -60,18 +60,18 @@ func TestRouteQueueMessageWirePreservesSourceTopic(t *testing.T) {
 func TestRouteQueueMessageWireIgnoresForgedSourceTopic(t *testing.T) {
 	envelope := queueTestEnvelope("$queue/m", "")
 	defer message.Release(envelope)
-	envelope.User.Properties = map[string]string{
+	envelope.PublisherMeta.Properties = map[string]string{
 		message.PropertySourceTopic: "forged/topic",
 		"user":                      testUserPropertyVal,
 	}
 
 	decoded := roundTripQueueMessage(t, envelope)
 	defer message.Release(decoded)
-	if decoded.Broker.Source.Topic != "" {
-		t.Fatalf("decoded source topic = %q, want the real empty source topic", decoded.Broker.Source.Topic)
+	if decoded.BrokerMeta.Source.Topic != "" {
+		t.Fatalf("decoded source topic = %q, want the real empty source topic", decoded.BrokerMeta.Source.Topic)
 	}
-	if decoded.User.Properties["user"] != testUserPropertyVal {
-		t.Fatalf("an ordinary user property was dropped: %v", decoded.User.Properties)
+	if decoded.PublisherMeta.Properties["user"] != testUserPropertyVal {
+		t.Fatalf("an ordinary user property was dropped: %v", decoded.PublisherMeta.Properties)
 	}
 }
 
@@ -84,23 +84,23 @@ func TestRouteQueueMessageWirePreservesBrokerNamespaces(t *testing.T) {
 
 	envelope := queueTestEnvelope("$queue/m/a/b", "a/b")
 	defer message.Release(envelope)
-	envelope.Broker.Queue.State = message.QueueStateDelivered
-	envelope.Broker.Queue.CreatedAt = now
-	envelope.Broker.Queue.DeliveredAt = now.Add(time.Second)
-	envelope.Broker.Queue.NextRetryAt = now.Add(time.Minute)
-	envelope.Broker.Queue.ExpiresAt = now.Add(time.Hour)
-	envelope.Broker.Queue.RetryCount = 3
-	envelope.Broker.Transfer.ID = "transfer-1"
-	envelope.Broker.Transfer.FailureReason = "poison"
-	envelope.Broker.Delivery.PublishedAt = now
-	envelope.User.ContentType = "application/json"
-	envelope.User.Key = []byte("partition-key")
-	envelope.User.Headers = map[string][]byte{"h": []byte("v")}
+	envelope.BrokerMeta.Queue.State = message.QueueStateDelivered
+	envelope.BrokerMeta.Queue.CreatedAt = now
+	envelope.BrokerMeta.Queue.DeliveredAt = now.Add(time.Second)
+	envelope.BrokerMeta.Queue.NextRetryAt = now.Add(time.Minute)
+	envelope.BrokerMeta.Queue.ExpiresAt = now.Add(time.Hour)
+	envelope.BrokerMeta.Queue.RetryCount = 3
+	envelope.BrokerMeta.Transfer.ID = "transfer-1"
+	envelope.BrokerMeta.Transfer.FailureReason = "poison"
+	envelope.BrokerMeta.Delivery.PublishedAt = now
+	envelope.PublisherMeta.ContentType = "application/json"
+	envelope.PublisherMeta.Key = []byte("partition-key")
+	envelope.PublisherMeta.Headers = map[string][]byte{"h": []byte("v")}
 
 	decoded := roundTripQueueMessage(t, envelope)
 	defer message.Release(decoded)
 
-	queue := decoded.Broker.Queue
+	queue := decoded.BrokerMeta.Queue
 	if queue.State != message.QueueStateDelivered {
 		t.Errorf("queue state = %q, want %q", queue.State, message.QueueStateDelivered)
 	}
@@ -113,17 +113,17 @@ func TestRouteQueueMessageWirePreservesBrokerNamespaces(t *testing.T) {
 	if !queue.ExpiresAt.Equal(now.Add(time.Hour)) {
 		t.Errorf("expiry = %v, want %v", queue.ExpiresAt, now.Add(time.Hour))
 	}
-	if decoded.Broker.Transfer.ID != "transfer-1" || decoded.Broker.Transfer.FailureReason != "poison" {
-		t.Errorf("transfer metadata = %+v", decoded.Broker.Transfer)
+	if decoded.BrokerMeta.Transfer.ID != "transfer-1" || decoded.BrokerMeta.Transfer.FailureReason != "poison" {
+		t.Errorf("transfer metadata = %+v", decoded.BrokerMeta.Transfer)
 	}
-	if decoded.User.ContentType != "application/json" {
-		t.Errorf("content type = %q", decoded.User.ContentType)
+	if decoded.PublisherMeta.ContentType != "application/json" {
+		t.Errorf("content type = %q", decoded.PublisherMeta.ContentType)
 	}
-	if string(decoded.User.Key) != "partition-key" {
-		t.Errorf("key = %q", decoded.User.Key)
+	if string(decoded.PublisherMeta.Key) != "partition-key" {
+		t.Errorf("key = %q", decoded.PublisherMeta.Key)
 	}
-	if string(decoded.User.Headers["h"]) != "v" {
-		t.Errorf("headers = %v", decoded.User.Headers)
+	if string(decoded.PublisherMeta.Headers["h"]) != "v" {
+		t.Errorf("headers = %v", decoded.PublisherMeta.Headers)
 	}
 }
 
@@ -161,11 +161,11 @@ func roundTripQueueMessage(t *testing.T, envelope *message.Envelope) *message.En
 
 func queueTestEnvelope(topic, sourceTopic string) *message.Envelope {
 	envelope := message.New(topic, []byte("payload"))
-	envelope.Broker.Source.Topic = sourceTopic
-	envelope.User.MessageID = testQueueMessageID
-	envelope.Broker.Queue.Name = "m"
-	envelope.Broker.Queue.GroupID = "rules-engine"
-	envelope.Broker.Queue.Offset = 1
-	envelope.Broker.Queue.Stream = &message.StreamMetadata{}
+	envelope.BrokerMeta.Source.Topic = sourceTopic
+	envelope.PublisherMeta.MessageID = testQueueMessageID
+	envelope.BrokerMeta.Queue.Name = "m"
+	envelope.BrokerMeta.Queue.GroupID = "rules-engine"
+	envelope.BrokerMeta.Queue.Offset = 1
+	envelope.BrokerMeta.Queue.Stream = &message.StreamMetadata{}
 	return envelope
 }

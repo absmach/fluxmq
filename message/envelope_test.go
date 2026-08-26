@@ -18,18 +18,18 @@ const (
 
 func TestEnvelopeCloneSharesOnlyImmutablePayload(t *testing.T) {
 	original := New("devices/1", []byte("payload"))
-	original.User.Headers = map[string][]byte{"trace": []byte("one")}
-	original.User.Properties = map[string]string{"key": testPropertyValue}
-	original.Broker.Queue.Stream = &StreamMetadata{Offset: 7}
+	original.PublisherMeta.Headers = map[string][]byte{"trace": []byte("one")}
+	original.PublisherMeta.Properties = map[string]string{"key": testPropertyValue}
+	original.BrokerMeta.Queue.Stream = &StreamMetadata{Offset: 7}
 	clone := original.Clone()
 
 	if refs := original.Payload.RefCount(); refs != 2 {
 		t.Fatalf("payload references = %d, want 2", refs)
 	}
-	clone.User.Headers["trace"][0] = 'X'
-	clone.User.Properties["key"] = "changed"
-	clone.Broker.Queue.Stream.Offset = 8
-	if string(original.User.Headers["trace"]) != "one" || original.User.Properties["key"] != testPropertyValue || original.Broker.Queue.Stream.Offset != 7 {
+	clone.PublisherMeta.Headers["trace"][0] = 'X'
+	clone.PublisherMeta.Properties["key"] = "changed"
+	clone.BrokerMeta.Queue.Stream.Offset = 8
+	if string(original.PublisherMeta.Headers["trace"]) != "one" || original.PublisherMeta.Properties["key"] != testPropertyValue || original.BrokerMeta.Queue.Stream.Offset != 7 {
 		t.Fatal("clone aliases mutable metadata")
 	}
 
@@ -44,12 +44,12 @@ func TestEnvelopePoolReset(t *testing.T) {
 	envelope := Acquire()
 	envelope.Topic = "devices/1"
 	envelope.Payload = payload.FromBytes([]byte("payload"))
-	envelope.User.Properties = map[string]string{"key": testPropertyValue}
+	envelope.PublisherMeta.Properties = map[string]string{"key": testPropertyValue}
 	Release(envelope)
 
 	reused := Acquire()
 	defer Release(reused)
-	if reused.Version != Version1 || reused.Topic != "" || reused.Payload != nil || reused.User.Properties != nil {
+	if reused.Version != Version1 || reused.Topic != "" || reused.Payload != nil || reused.PublisherMeta.Properties != nil {
 		t.Fatalf("pooled envelope was not reset: %#v", reused)
 	}
 }
@@ -57,14 +57,14 @@ func TestEnvelopePoolReset(t *testing.T) {
 func TestPropertyProjectionTrustBoundary(t *testing.T) {
 	envelope := New("devices/1", nil)
 	defer Release(envelope)
-	envelope.User.Properties = map[string]string{
+	envelope.PublisherMeta.Properties = map[string]string{
 		"user":             "visible",
 		PropertyExternalID: "forged",
 		PropertyTraceID:    "forged",
 	}
-	envelope.Broker.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
-	envelope.Broker.Queue = QueueMetadata{Name: testQueueName, Offset: 3}
-	envelope.Broker.Trace.TraceID = "trusted"
+	envelope.BrokerMeta.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
+	envelope.BrokerMeta.Queue = QueueMetadata{Name: testQueueName, Offset: 3}
+	envelope.BrokerMeta.Trace.TraceID = "trusted"
 
 	public := ProjectProperties(envelope, PublicProjection)
 	if public["user"] != "visible" || public[PropertyMessageID] != testQueueName+":3" {

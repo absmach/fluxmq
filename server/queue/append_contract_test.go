@@ -69,7 +69,7 @@ func TestAppendResponsesCarryRecordTimestamps(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { coremessage.Release(stored) })
 
-	assert.WithinDuration(t, stored.Broker.Queue.CreatedAt, resp.Msg.Timestamp.AsTime(), time.Millisecond,
+	assert.WithinDuration(t, stored.BrokerMeta.Queue.CreatedAt, resp.Msg.Timestamp.AsTime(), time.Millisecond,
 		"append timestamp must be the record's, not the response time")
 	assert.False(t, resp.Msg.Timestamp.AsTime().Before(before.Add(-time.Second)))
 	assert.False(t, resp.Msg.Timestamp.AsTime().After(after.Add(time.Second)))
@@ -87,7 +87,7 @@ func TestAppendResponsesCarryRecordTimestamps(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { coremessage.Release(last) })
 
-	assert.WithinDuration(t, last.Broker.Queue.CreatedAt, batch.Msg.Timestamp.AsTime(), time.Millisecond,
+	assert.WithinDuration(t, last.BrokerMeta.Queue.CreatedAt, batch.Msg.Timestamp.AsTime(), time.Millisecond,
 		"batch timestamp must be the last appended record's")
 }
 

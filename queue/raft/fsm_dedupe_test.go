@@ -111,7 +111,7 @@ func TestLogFSMAppendOnceKeepsReplicasIdentical(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, string(onLeader.PayloadBytes()), string(onFollower.PayloadBytes()),
 			"replicas diverged at offset %d", offset)
-		assert.Equal(t, onLeader.Broker.Transfer.ID, onFollower.Broker.Transfer.ID)
+		assert.Equal(t, onLeader.BrokerMeta.Transfer.ID, onFollower.BrokerMeta.Transfer.ID)
 	}
 }
 
@@ -181,6 +181,6 @@ func TestLogFSMAppendOnceAutoCreatesMissingQueue(t *testing.T) {
 	stored, err := store.Read(ctx, queueName, result.Offset)
 	require.NoError(t, err)
 	t.Cleanup(func() { message.Release(stored) })
-	assert.Equal(t, testDedupeKey, stored.Broker.Transfer.ID,
+	assert.Equal(t, testDedupeKey, stored.BrokerMeta.Transfer.ID,
 		"the key must reach the record so a rebuild can recover it")
 }

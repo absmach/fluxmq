@@ -44,16 +44,16 @@ func TestAppendToQueueReturnsAssignedOffsetAndTargetsExactlyOneQueue(t *testing.
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("secondary", "shared/#")))
 
 	appended := publishEnvelope(t, "shared/value", []byte("payload"))
-	appended.User.Key = []byte{0x00, 0xff}
-	appended.User.Headers = map[string][]byte{"binary": {0x00, 0xff}}
+	appended.PublisherMeta.Key = []byte{0x00, 0xff}
+	appended.PublisherMeta.Headers = map[string][]byte{"binary": {0x00, 0xff}}
 	offset, err := appendOne(ctx, mgr, "primary", appended)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), offset)
 
 	msg, err := store.Read(ctx, "primary", offset)
 	require.NoError(t, err)
-	require.Equal(t, []byte{0x00, 0xff}, msg.User.Key)
-	require.Equal(t, []byte{0x00, 0xff}, msg.User.Headers["binary"])
+	require.Equal(t, []byte{0x00, 0xff}, msg.PublisherMeta.Key)
+	require.Equal(t, []byte{0x00, 0xff}, msg.PublisherMeta.Headers["binary"])
 
 	count, err := store.Count(ctx, "secondary")
 	require.NoError(t, err)
@@ -67,9 +67,9 @@ func TestAppendBatchToQueueReturnsContiguousOffsets(t *testing.T) {
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("batch", "batch/#")))
 
 	firstEnvelope := publishEnvelope(t, "batch/1", []byte("one"))
-	firstEnvelope.User.Key = []byte("k1")
+	firstEnvelope.PublisherMeta.Key = []byte("k1")
 	secondEnvelope := publishEnvelope(t, "batch/2", []byte("two"))
-	secondEnvelope.User.Key = []byte("k2")
+	secondEnvelope.PublisherMeta.Key = []byte("k2")
 	first, count, err := appendBatch(ctx, mgr, "batch", []*message.Envelope{firstEnvelope, secondEnvelope})
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), first)
@@ -79,8 +79,8 @@ func TestAppendBatchToQueueReturnsContiguousOffsets(t *testing.T) {
 	require.NoError(t, err)
 	lastMessage, err := store.Read(ctx, "batch", first+uint64(count)-1)
 	require.NoError(t, err)
-	require.Equal(t, []byte("k1"), firstMessage.User.Key)
-	require.Equal(t, []byte("k2"), lastMessage.User.Key)
+	require.Equal(t, []byte("k1"), firstMessage.PublisherMeta.Key)
+	require.Equal(t, []byte("k2"), lastMessage.PublisherMeta.Key)
 }
 
 func TestAppendBatchToQueueRejectsUnsupportedAtomicContracts(t *testing.T) {

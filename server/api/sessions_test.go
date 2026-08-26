@@ -464,7 +464,7 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 
 	if !connected {
 		msg := message.NewDelivery(filter, []byte("hello"), 1, false)
-		msg.Broker.Delivery.PacketID = 7
+		msg.BrokerMeta.Delivery.PacketID = 7
 		if err := s.Inflight().Add(7, msg, messages.Outbound); err != nil {
 			t.Fatalf("failed to add inflight message: %v", err)
 		}

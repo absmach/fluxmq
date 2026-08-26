@@ -24,8 +24,8 @@ func TestMessageStore(t *testing.T) {
 	// Test Store and Get
 	input := []byte("hello")
 	msg := message.New("test/topic", input)
-	msg.Broker.Delivery.QoS = 1
-	msg.Broker.Delivery.PacketID = 123
+	msg.BrokerMeta.Delivery.QoS = 1
+	msg.BrokerMeta.Delivery.PacketID = 123
 
 	if err := s.Store("client1/123", msg); err != nil {
 		t.Fatalf("Store failed: %v", err)
@@ -246,8 +246,8 @@ func TestRetainedStore(t *testing.T) {
 
 	// Test Set and Get
 	msg := message.New("sensors/temp", []byte("23.5"))
-	msg.Broker.Delivery.QoS = 1
-	msg.Broker.Delivery.Retain = true
+	msg.BrokerMeta.Delivery.QoS = 1
+	msg.BrokerMeta.Delivery.Retain = true
 
 	if err := s.Set(ctx, "sensors/temp", msg); err != nil {
 		t.Fatalf("Set failed: %v", err)

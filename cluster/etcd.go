@@ -1695,7 +1695,7 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, msg *message.Envelope) e
 	if err != nil {
 		return err
 	}
-	qos := msg.Broker.Delivery.QoS
+	qos := msg.BrokerMeta.Delivery.QoS
 
 	// Send one ForwardPublish per remote node
 	req := &clusterv1.ForwardPublishRequest{Envelope: encoded}

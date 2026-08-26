@@ -28,7 +28,7 @@ func TestRetainedStore_Set(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, msg.Topic, retrieved.Topic)
 	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
-	assert.Equal(t, msg.Broker.Delivery.QoS, retrieved.Broker.Delivery.QoS)
+	assert.Equal(t, msg.BrokerMeta.Delivery.QoS, retrieved.BrokerMeta.Delivery.QoS)
 }
 
 func TestRetainedStore_SetWithPayloadBuffer(t *testing.T) {
@@ -44,7 +44,7 @@ func TestRetainedStore_SetWithPayloadBuffer(t *testing.T) {
 	retrieved, err := store.Get(ctx, testTopic)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("buffered retained"), retrieved.PayloadBytes())
-	assert.Equal(t, byte(1), retrieved.Broker.Delivery.QoS)
+	assert.Equal(t, byte(1), retrieved.BrokerMeta.Delivery.QoS)
 }
 
 func TestRetainedStore_SetEmptyPayload(t *testing.T) {
@@ -78,7 +78,7 @@ func TestRetainedStore_Get(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "sensor/temperature", retrieved.Topic)
 	assert.Equal(t, []byte("25.5"), retrieved.PayloadBytes())
-	assert.Equal(t, byte(2), retrieved.Broker.Delivery.QoS)
+	assert.Equal(t, byte(2), retrieved.BrokerMeta.Delivery.QoS)
 }
 
 func TestRetainedStore_GetNotFound(t *testing.T) {
@@ -220,7 +220,7 @@ func TestRetainedStore_UpdateExisting(t *testing.T) {
 	retrieved, err := store.Get(ctx, "test/update")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("updated"), retrieved.PayloadBytes())
-	assert.Equal(t, byte(2), retrieved.Broker.Delivery.QoS)
+	assert.Equal(t, byte(2), retrieved.BrokerMeta.Delivery.QoS)
 }
 
 func setupRetainedStore(t *testing.T) *RetainedStore {

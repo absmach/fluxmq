@@ -43,8 +43,8 @@ func marshalBinary(envelope *Envelope, includePayload, includeKey bool) ([]byte,
 	if includePayload {
 		encoded = appendBytes(encoded, 3, envelope.PayloadBytes())
 	}
-	encoded = appendMessage(encoded, 4, encodeUser(envelope.User, includeKey))
-	encoded = appendMessage(encoded, 5, encodeBroker(envelope.Broker))
+	encoded = appendMessage(encoded, 4, encodeUser(envelope.PublisherMeta, includeKey))
+	encoded = appendMessage(encoded, 5, encodeBroker(envelope.BrokerMeta))
 	return encoded, nil
 }
 
@@ -88,12 +88,12 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
-			return decodeUser(raw, &envelope.User)
+			return decodeUser(raw, &envelope.PublisherMeta)
 		case 5:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
-			return decodeBroker(raw, &envelope.Broker)
+			return decodeBroker(raw, &envelope.BrokerMeta)
 		}
 		return nil
 	})
@@ -108,13 +108,13 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 	}
 	if metadataOnly {
 		decodedPayload = externalPayload
-		envelope.User.Key = bytes.Clone(externalKey)
+		envelope.PublisherMeta.Key = bytes.Clone(externalKey)
 	}
 	envelope.Payload = payload.FromBytes(decodedPayload)
 	return envelope, nil
 }
 
-func encodeUser(user UserMetadata, includeKey bool) []byte {
+func encodeUser(user PublisherMetadata, includeKey bool) []byte {
 	var encoded []byte
 	if includeKey {
 		encoded = appendBytes(encoded, 1, user.Key)
@@ -145,7 +145,7 @@ func encodeUser(user UserMetadata, includeKey bool) []byte {
 	return encoded
 }
 
-func decodeUser(encoded []byte, user *UserMetadata) error {
+func decodeUser(encoded []byte, user *PublisherMetadata) error {
 	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, raw []byte, scalar uint64) error {
 		switch number {
 		case 1:

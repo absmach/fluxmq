@@ -44,7 +44,7 @@ func TestSetMQTT5MetadataPreservesCorrelationData(t *testing.T) {
 			if len(input) > 0 {
 				input[0] ^= 0xff
 			}
-			assert.Equal(t, tt.correlationData, envelope.User.CorrelationData)
+			assert.Equal(t, tt.correlationData, envelope.PublisherMeta.CorrelationData)
 		})
 	}
 }
@@ -59,8 +59,8 @@ func TestSetMQTT5MetadataCopiesScalarPointers(t *testing.T) {
 	expiry = 1
 	payloadFormat = 0
 
-	assert.Equal(t, uint32(30), *envelope.User.MessageExpiry)
-	assert.Equal(t, byte(1), *envelope.User.PayloadFormat)
+	assert.Equal(t, uint32(30), *envelope.PublisherMeta.MessageExpiry)
+	assert.Equal(t, byte(1), *envelope.PublisherMeta.PayloadFormat)
 }
 
 func TestExtractUserPropertiesNil(t *testing.T) {

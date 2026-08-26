@@ -633,7 +633,8 @@ func main() {
 	}
 
 	stats := broker.NewStats()
-	b := broker.NewBroker(store, cl,
+	b := broker.NewBroker(
+		store, cl,
 		broker.WithLogger(logger),
 		broker.WithStats(stats),
 		broker.WithWebhooks(webhooks),
@@ -741,12 +742,14 @@ func main() {
 			switch transport {
 			case "http":
 				c := authcallout.NewHTTPClient(
-					httpclient.WithTLS(calloutTLS), cfg.Auth.External.URL, opts...)
+					httpclient.WithTLS(calloutTLS), cfg.Auth.External.URL, opts...,
+				)
 				return c, c
 			default:
 				c := authcallout.NewGRPCClient(
 					httpclient.GRPCWithTLS(cfg.Auth.External.URL, calloutTLS),
-					cfg.Auth.External.URL, opts...)
+					cfg.Auth.External.URL, opts...,
+				)
 				return c, c
 			}
 		}
@@ -1074,7 +1077,7 @@ func main() {
 			return
 		}
 		msg := message.New(topic, payload)
-		msg.Broker.Delivery.QoS = qos
+		msg.BrokerMeta.Delivery.QoS = qos
 		if err := message.ApplyTrustedProperties(msg, props); err != nil {
 			slog.Warn("cross-deliver dropped malformed properties", "client_id", clientID, "topic", topic, "error", err)
 		}
@@ -1433,7 +1436,8 @@ func main() {
 	}
 
 	// Initialize config reload manager.
-	reloadManager := reload.New(*configFile, cfg,
+	reloadManager := reload.New(
+		*configFile, cfg,
 		reload.WithLogSetup(reload.SetupLogger),
 		reload.WithRateLimiter(rateLimitManager),
 		reload.WithBroker(b),

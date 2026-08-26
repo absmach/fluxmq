@@ -53,7 +53,7 @@ func BenchmarkPublishToMatchingQueues(b *testing.B) {
 			payload := []byte("payload")
 
 			captured := publishEnvelope(b, "m/acme/c/temp/reading", payload)
-			captured.Broker.Source = message.SourceMetadata{ClientID: "publisher", Protocol: message.ProtocolMQTT}
+			captured.BrokerMeta.Source = message.SourceMetadata{ClientID: "publisher", Protocol: message.ProtocolMQTT}
 
 			b.ReportAllocs()
 			for b.Loop() {

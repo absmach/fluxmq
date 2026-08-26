@@ -18,7 +18,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 8, 15, 30, 123456789, time.UTC)
 	original := New("devices/1", []byte{0x00, 0x01, 0xfe, 0xff})
 	defer Release(original)
-	original.User = UserMetadata{
+	original.PublisherMeta = PublisherMetadata{
 		Key:             []byte{0x00, 0xff},
 		Headers:         map[string][]byte{"binary": {0x01, 0xfe}},
 		Properties:      map[string]string{"tenant": "acme"},
@@ -30,7 +30,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 		MessageExpiry:   &messageExpiry,
 		MessageID:       "publisher-1",
 	}
-	original.Broker = BrokerMetadata{
+	original.BrokerMeta = BrokerMetadata{
 		Source: SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT, Topic: "source/topic"},
 		Delivery: DeliveryMetadata{
 			PublishedAt:       now,
@@ -92,18 +92,18 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(decoded.PayloadBytes(), original.PayloadBytes()) {
 		t.Fatalf("decoded payload = %v, want %v", decoded.PayloadBytes(), original.PayloadBytes())
 	}
-	if !reflect.DeepEqual(decoded.User, original.User) {
-		t.Fatalf("decoded user metadata = %#v, want %#v", decoded.User, original.User)
+	if !reflect.DeepEqual(decoded.PublisherMeta, original.PublisherMeta) {
+		t.Fatalf("decoded user metadata = %#v, want %#v", decoded.PublisherMeta, original.PublisherMeta)
 	}
-	if !reflect.DeepEqual(decoded.Broker, original.Broker) {
-		t.Fatalf("decoded broker metadata = %#v, want %#v", decoded.Broker, original.Broker)
+	if !reflect.DeepEqual(decoded.BrokerMeta, original.BrokerMeta) {
+		t.Fatalf("decoded broker metadata = %#v, want %#v", decoded.BrokerMeta, original.BrokerMeta)
 	}
 }
 
 func TestBinaryEnvelopeMetadataUsesExternalPayloadAndKey(t *testing.T) {
 	original := New("devices/1", []byte("embedded payload"))
 	defer Release(original)
-	original.User.Key = []byte("embedded key")
+	original.PublisherMeta.Key = []byte("embedded key")
 
 	encoded, err := MarshalMetadata(original)
 	if err != nil {
@@ -119,8 +119,8 @@ func TestBinaryEnvelopeMetadataUsesExternalPayloadAndKey(t *testing.T) {
 
 	externalPayload[0] = 'X'
 	externalKey[0] = 'X'
-	if string(decoded.PayloadBytes()) != "record payload" || string(decoded.User.Key) != "record key" {
-		t.Fatalf("external record data was aliased: payload %q key %q", decoded.PayloadBytes(), decoded.User.Key)
+	if string(decoded.PayloadBytes()) != "record payload" || string(decoded.PublisherMeta.Key) != "record key" {
+		t.Fatalf("external record data was aliased: payload %q key %q", decoded.PayloadBytes(), decoded.PublisherMeta.Key)
 	}
 }
 

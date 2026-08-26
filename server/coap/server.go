@@ -35,8 +35,8 @@ type Config struct {
 
 func buildPublishMessage(topic string, data []byte, clientID, externalID, contentType string) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.User.ContentType = contentType
-	envelope.Broker.Source = message.SourceMetadata{ClientID: clientID, ExternalID: externalID, Protocol: message.ProtocolCoAP}
+	envelope.PublisherMeta.ContentType = contentType
+	envelope.BrokerMeta.Source = message.SourceMetadata{ClientID: clientID, ExternalID: externalID, Protocol: message.ProtocolCoAP}
 	return envelope
 }
 
@@ -275,7 +275,7 @@ func (s *Server) handlePublish(w mux.ResponseWriter, r *mux.Message) {
 	}
 
 	msg := buildPublishMessage(topic, payload, clientID, externalID, contentType)
-	msg.User.Properties = message.FilterUserProperties(props)
+	msg.PublisherMeta.Properties = message.FilterUserProperties(props)
 
 	s.logger.Debug("coap_publish",
 		slog.String("topic", topic),

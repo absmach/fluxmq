@@ -74,8 +74,8 @@ func TestRetainedStore_SmallMessageReplication(t *testing.T) {
 
 	// Create a small message (<1KB)
 	msg := message.NewDelivery("test/small", []byte("small payload"), 1, true)
-	msg.User.Properties = map[string]string{"test": testValue}
-	msg.Broker.Delivery.PublishedAt = time.Now()
+	msg.PublisherMeta.Properties = map[string]string{"test": testValue}
+	msg.BrokerMeta.Delivery.PublishedAt = time.Now()
 	defer msg.ReleasePayload()
 
 	// Store message on node1
@@ -92,7 +92,7 @@ func TestRetainedStore_SmallMessageReplication(t *testing.T) {
 	assert.Equal(t, msg.Topic, retrieved.Topic)
 	defer retrieved.ReleasePayload()
 	assert.Equal(t, msg.PayloadBytes(), retrieved.PayloadBytes())
-	assert.Equal(t, msg.Broker.Delivery.QoS, retrieved.Broker.Delivery.QoS)
+	assert.Equal(t, msg.BrokerMeta.Delivery.QoS, retrieved.BrokerMeta.Delivery.QoS)
 }
 
 // TestRetainedStore_LargeMessageFetchOnDemand tests that large messages (≥threshold) are not replicated.
@@ -140,7 +140,7 @@ func newTestRetainedStore(t *testing.T, nodeID string) *RetainedStore {
 func seedLocalRetained(t *testing.T, h *RetainedStore, topic string, payload []byte) {
 	t.Helper()
 	msg := message.NewDelivery(topic, payload, 1, true)
-	msg.Broker.Delivery.PublishedAt = time.Now()
+	msg.BrokerMeta.Delivery.PublishedAt = time.Now()
 	defer msg.ReleasePayload()
 	require.NoError(t, h.localStore.Set(context.Background(), topic, msg))
 	h.metadataCache[topic] = &RetainedMetadata{

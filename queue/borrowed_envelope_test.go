@@ -28,8 +28,8 @@ func TestPublishedRecordSurvivesTheCallersRelease(t *testing.T) {
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("orders", "orders/#")))
 
 	published := message.New("orders/new", []byte("the-payload"))
-	published.User.Properties = map[string]string{"tenant": "acme"}
-	published.User.Headers = map[string][]byte{"unit": []byte("celsius")}
+	published.PublisherMeta.Properties = map[string]string{"tenant": "acme"}
+	published.PublisherMeta.Headers = map[string][]byte{"unit": []byte("celsius")}
 
 	require.NoError(t, mgr.Publish(ctx, published))
 
@@ -41,8 +41,8 @@ func TestPublishedRecordSurvivesTheCallersRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "the-payload", string(stored.PayloadBytes()))
 	require.Equal(t, "orders/new", stored.Topic)
-	require.Equal(t, "acme", stored.User.Properties["tenant"])
-	require.Equal(t, "celsius", string(stored.User.Headers["unit"]))
+	require.Equal(t, "acme", stored.PublisherMeta.Properties["tenant"])
+	require.Equal(t, "celsius", string(stored.PublisherMeta.Headers["unit"]))
 }
 
 // The same contract on the capture path, which is harder: the dispatcher runs
@@ -56,7 +56,7 @@ func TestCapturedRecordSurvivesTheCallersRelease(t *testing.T) {
 	require.NoError(t, mgr.CreateQueue(ctx, types.DefaultQueueConfig("captured", "sensors/#")))
 
 	published := message.New("sensors/temperature", []byte("21.5"))
-	published.User.Properties = map[string]string{"tenant": "acme"}
+	published.PublisherMeta.Properties = map[string]string{"tenant": "acme"}
 
 	require.NoError(t, mgr.PublishToMatchingQueues(ctx, published))
 	message.Release(published)
@@ -70,7 +70,7 @@ func TestCapturedRecordSurvivesTheCallersRelease(t *testing.T) {
 	stored, err := store.Read(ctx, "captured", 0)
 	require.NoError(t, err)
 	require.Equal(t, "21.5", string(stored.PayloadBytes()))
-	require.Equal(t, "acme", stored.User.Properties["tenant"])
+	require.Equal(t, "acme", stored.PublisherMeta.Properties["tenant"])
 }
 
 // churnThePool hands out and returns buffers of the same size class, so a

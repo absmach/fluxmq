@@ -36,6 +36,6 @@ func (e *Envelope) Reset() {
 	e.ReleasePayload()
 	e.Version = Version1
 	e.Topic = ""
-	e.User = UserMetadata{}
-	e.Broker = BrokerMetadata{}
+	e.PublisherMeta = PublisherMetadata{}
+	e.BrokerMeta = BrokerMetadata{}
 }

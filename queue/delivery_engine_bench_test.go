@@ -14,8 +14,8 @@ func BenchmarkCreateRoutedQueueMessage(b *testing.B) {
 	payload := bytes.Repeat([]byte("x"), 1024)
 
 	msg := message.New("$queue/bench", payload)
-	msg.User.MessageID = "bench"
-	msg.Broker.Queue.Offset = 42
+	msg.PublisherMeta.MessageID = "bench"
+	msg.BrokerMeta.Queue.Offset = 42
 	defer message.Release(msg)
 
 	b.ReportAllocs()

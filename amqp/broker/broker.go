@@ -295,13 +295,13 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 	// corebroker.TopicQueuePublisher.
 	if publisher, ok := b.queueManager.(corebroker.TopicQueuePublisher); ok {
 		captured := message.New(topic, payload)
-		captured.Broker.Source = message.SourceMetadata{
+		captured.BrokerMeta.Source = message.SourceMetadata{
 			ClientID:   props[message.PropertyClientID],
 			ExternalID: props[message.PropertyExternalID],
 			Protocol:   message.Protocol(props[message.PropertyProtocol]),
 		}
-		captured.Broker.Trace = message.TraceFromProperties(props)
-		captured.User.Properties = message.FilterUserProperties(props)
+		captured.BrokerMeta.Trace = message.TraceFromProperties(props)
+		captured.PublisherMeta.Properties = message.FilterUserProperties(props)
 		err := publisher.PublishToMatchingQueues(ctx, captured)
 		message.Release(captured)
 		if err != nil {
@@ -345,7 +345,7 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 			b.logger.Warn("AMQP 0.9.1 cluster route publish dropped malformed properties",
 				"topic", topic, "error", err)
 		}
-		routed.Broker.Delivery.QoS = 1
+		routed.BrokerMeta.Delivery.QoS = 1
 		err := cl.RoutePublish(routeCtx, routed)
 		message.Release(routed)
 		if err != nil {

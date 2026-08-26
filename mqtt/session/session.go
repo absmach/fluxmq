@@ -490,7 +490,7 @@ func (s *Session) drainPendingToOffline() {
 	for {
 		select {
 		case item := <-s.pendingCh:
-			if item.msg.Broker.Delivery.QoS > 0 {
+			if item.msg.BrokerMeta.Delivery.QoS > 0 {
 				if err := s.OfflineQueue().Enqueue(item.msg); err != nil {
 					message.Release(item.msg)
 					continue

@@ -39,30 +39,30 @@ func benchRichEnvelope() *Envelope {
 
 	format := byte(1)
 	expiry := uint32(3600)
-	envelope.User.Key = []byte("partition-key")
-	envelope.User.Headers = map[string][]byte{
+	envelope.PublisherMeta.Key = []byte("partition-key")
+	envelope.PublisherMeta.Headers = map[string][]byte{
 		"x-tenant": []byte("acme"),
 		"x-region": []byte("eu-central-1"),
 	}
-	envelope.User.Properties = map[string]string{
+	envelope.PublisherMeta.Properties = map[string]string{
 		"content-version": "3",
 		"schema":          "telemetry.v2",
 	}
-	envelope.User.ContentType = "application/json"
-	envelope.User.ContentEncoding = "gzip"
-	envelope.User.ResponseTopic = "devices/sensor-1/reply"
-	envelope.User.CorrelationData = []byte("correlation-0123456789")
-	envelope.User.PayloadFormat = &format
-	envelope.User.MessageExpiry = &expiry
+	envelope.PublisherMeta.ContentType = "application/json"
+	envelope.PublisherMeta.ContentEncoding = "gzip"
+	envelope.PublisherMeta.ResponseTopic = "devices/sensor-1/reply"
+	envelope.PublisherMeta.CorrelationData = []byte("correlation-0123456789")
+	envelope.PublisherMeta.PayloadFormat = &format
+	envelope.PublisherMeta.MessageExpiry = &expiry
 
 	now := time.Now().UTC()
-	envelope.Broker.Source = SourceMetadata{
+	envelope.BrokerMeta.Source = SourceMetadata{
 		ClientID:   "sensor-1",
 		ExternalID: "ext-sensor-1",
 		Protocol:   ProtocolMQTT,
 		Topic:      "devices/sensor-1/telemetry",
 	}
-	envelope.Broker.Queue = QueueMetadata{
+	envelope.BrokerMeta.Queue = QueueMetadata{
 		Name:        "telemetry",
 		GroupID:     testGroupID,
 		Offset:      4096,
@@ -81,7 +81,7 @@ func benchRichEnvelope() *Envelope {
 			WorkGroup:          testGroupID,
 		},
 	}
-	envelope.Broker.Transfer = TransferMetadata{
+	envelope.BrokerMeta.Transfer = TransferMetadata{
 		ID:            "dlq-0f1e2d3c4b5a69788796a5b4c3d2e1f0",
 		FailureReason: "max delivery count exceeded",
 		FirstAttempt:  now.Add(-time.Hour),
@@ -92,7 +92,7 @@ func benchRichEnvelope() *Envelope {
 		SourceOffset:  4096,
 		DeliveryCount: 5,
 	}
-	envelope.Broker.Trace = TraceMetadata{
+	envelope.BrokerMeta.Trace = TraceMetadata{
 		TraceParent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
 		TraceState:  "fluxmq=t61rcWkgMzE",
 		TraceID:     "0af7651916cd43dd8448eb211c80319c",

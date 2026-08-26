@@ -416,13 +416,13 @@ func TestLocalPrincipalStampsOwnIdentityOverRelayedOrigin(t *testing.T) {
 	if qm.exactPublishCalls != 1 {
 		t.Fatalf("exact stream publish calls = %d, want 1", qm.exactPublishCalls)
 	}
-	if got := qm.exactPublish.Broker.Source.ExternalID; got != testLocalPrincipal {
+	if got := qm.exactPublish.BrokerMeta.Source.ExternalID; got != testLocalPrincipal {
 		t.Fatalf("external_id = %q, want %q", got, testLocalPrincipal)
 	}
-	if got := qm.exactPublish.Broker.Source.Protocol; got != message.ProtocolAMQP091 {
+	if got := qm.exactPublish.BrokerMeta.Source.Protocol; got != message.ProtocolAMQP091 {
 		t.Fatalf("protocol = %q, want %q", got, message.ProtocolAMQP091)
 	}
-	if _, ok := qm.exactPublish.User.Properties[message.PropertyExternalID]; ok {
+	if _, ok := qm.exactPublish.PublisherMeta.Properties[message.PropertyExternalID]; ok {
 		t.Fatal("broker source identity leaked into user properties")
 	}
 }

@@ -462,16 +462,16 @@ func TestHandleQueuePublishCarriesClientID(t *testing.T) {
 	if mockQM.publishCalls != 1 {
 		t.Fatalf("expected 1 queue publish, got %d", mockQM.publishCalls)
 	}
-	if mockQM.lastPublish.Broker.Source.ClientID != PrefixedClientID(testConnectionID) {
-		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.Broker.Source.ClientID)
+	if mockQM.lastPublish.BrokerMeta.Source.ClientID != PrefixedClientID(testConnectionID) {
+		t.Fatalf("expected client ID %q, got %q", PrefixedClientID(testConnectionID), mockQM.lastPublish.BrokerMeta.Source.ClientID)
 	}
-	if mockQM.lastPublish.User.Properties["trace"] != "1" {
-		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.User.Properties["trace"])
+	if mockQM.lastPublish.PublisherMeta.Properties["trace"] != "1" {
+		t.Fatalf("expected trace property preserved, got %q", mockQM.lastPublish.PublisherMeta.Properties["trace"])
 	}
-	if mockQM.lastPublish.Broker.Source.Protocol != message.ProtocolAMQP091 {
-		t.Fatalf("expected protocol %q, got %q", message.ProtocolAMQP091, mockQM.lastPublish.Broker.Source.Protocol)
+	if mockQM.lastPublish.BrokerMeta.Source.Protocol != message.ProtocolAMQP091 {
+		t.Fatalf("expected protocol %q, got %q", message.ProtocolAMQP091, mockQM.lastPublish.BrokerMeta.Source.Protocol)
 	}
-	if _, ok := mockQM.lastPublish.User.Properties[message.PropertyClientID]; ok {
+	if _, ok := mockQM.lastPublish.PublisherMeta.Properties[message.PropertyClientID]; ok {
 		t.Fatal("broker source identity leaked into user properties")
 	}
 }

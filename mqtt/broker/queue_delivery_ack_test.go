@@ -34,10 +34,10 @@ func queueDeliveryBroker(t *testing.T) (*Broker, *mockQueueManager, *session.Ses
 
 func queueDelivery() *message.Envelope {
 	msg := message.NewDelivery("$queue/m/acme/temp", []byte("reading"), 1, false)
-	msg.Broker.Queue.Name = "m"
-	msg.User.MessageID = "m:42"
-	msg.Broker.Queue.GroupID = "workers"
-	msg.Broker.Queue.Offset = 42
+	msg.BrokerMeta.Queue.Name = "m"
+	msg.PublisherMeta.MessageID = "m:42"
+	msg.BrokerMeta.Queue.GroupID = "workers"
+	msg.BrokerMeta.Queue.Offset = 42
 	return msg
 }
 

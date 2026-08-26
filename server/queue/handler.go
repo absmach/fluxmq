@@ -294,7 +294,8 @@ func (h *Handler) AppendQueue(ctx context.Context, stream *connect.ClientStream[
 		message.Release(envelope)
 		if err != nil {
 			return nil, newConnectErrorWithProgress(
-				queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
+				queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset),
+			)
 		}
 
 		if count == 0 {
@@ -307,7 +308,8 @@ func (h *Handler) AppendQueue(ctx context.Context, stream *connect.ClientStream[
 
 	if err := stream.Err(); err != nil {
 		return nil, newConnectErrorWithProgress(
-			queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset))
+			queue.ErrorCodeInternal, err, appendProgress(count, firstOffset, lastOffset),
+		)
 	}
 
 	// Same reasoning as AppendBatch: a zero-valued success is indistinguishable
@@ -481,18 +483,18 @@ func (h *Handler) SeekToTimestamp(ctx context.Context, req *connect.Request[queu
 		}
 
 		for _, m := range batch {
-			if !m.Broker.Queue.CreatedAt.Before(target) {
+			if !m.BrokerMeta.Queue.CreatedAt.Before(target) {
 				response := &queuev1.SeekResponse{
-					Offset:     m.Broker.Queue.Offset,
-					Timestamp:  timestamppb.New(m.Broker.Queue.CreatedAt),
-					ExactMatch: m.Broker.Queue.CreatedAt.Equal(target),
+					Offset:     m.BrokerMeta.Queue.Offset,
+					Timestamp:  timestamppb.New(m.BrokerMeta.Queue.CreatedAt),
+					ExactMatch: m.BrokerMeta.Queue.CreatedAt.Equal(target),
 				}
 				releaseMessages(batch)
 				return connect.NewResponse(response), nil
 			}
 		}
 
-		offset = batch[len(batch)-1].Broker.Queue.Offset + 1
+		offset = batch[len(batch)-1].BrokerMeta.Queue.Offset + 1
 		releaseMessages(batch)
 	}
 
@@ -1112,18 +1114,18 @@ func replicationModeToProto(mode types.ReplicationMode) queuev1.ReplicationMode 
 
 func (h *Handler) messageToProto(msg *coremessage.Envelope) *queuev1.Message {
 	protoMsg := &queuev1.Message{
-		Offset:    msg.Broker.Queue.Offset,
-		Timestamp: timestamppb.New(msg.Broker.Queue.CreatedAt),
-		Key:       bytes.Clone(msg.User.Key),
+		Offset:    msg.BrokerMeta.Queue.Offset,
+		Timestamp: timestamppb.New(msg.BrokerMeta.Queue.CreatedAt),
+		Key:       bytes.Clone(msg.PublisherMeta.Key),
 		Value:     msg.StablePayload(),
 	}
 
-	if len(msg.User.Headers) > 0 || len(msg.User.Properties) > 0 {
-		protoMsg.Headers = make(map[string][]byte, len(msg.User.Headers)+len(msg.User.Properties))
-		for k, v := range msg.User.Properties {
+	if len(msg.PublisherMeta.Headers) > 0 || len(msg.PublisherMeta.Properties) > 0 {
+		protoMsg.Headers = make(map[string][]byte, len(msg.PublisherMeta.Headers)+len(msg.PublisherMeta.Properties))
+		for k, v := range msg.PublisherMeta.Properties {
 			protoMsg.Headers[k] = []byte(v)
 		}
-		for k, v := range msg.User.Headers {
+		for k, v := range msg.PublisherMeta.Headers {
 			protoMsg.Headers[k] = bytes.Clone(v)
 		}
 	}
@@ -1180,7 +1182,7 @@ func (h *Handler) groupToProto(group *types.ConsumerGroup) *queuev1.ConsumerGrou
 // command borrows it, so the caller releases it once the append returns.
 func appendEnvelope(queueName string, value, key []byte, headers map[string][]byte) *message.Envelope {
 	envelope := message.New(queueName, value)
-	envelope.User.Key = key
-	envelope.User.Headers = headers
+	envelope.PublisherMeta.Key = key
+	envelope.PublisherMeta.Headers = headers
 	return envelope
 }

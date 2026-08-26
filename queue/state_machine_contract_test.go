@@ -176,7 +176,7 @@ func runStateMachineStorageContract(t *testing.T, backend stateMachineContractBa
 	if err != nil {
 		t.Fatalf("read first message: %v", err)
 	}
-	seek, err = machine.Seek(ctx, SeekCommand{QueueName: testQueueJobs, Kind: SeekTimestamp, Timestamp: first.Broker.Queue.CreatedAt})
+	seek, err = machine.Seek(ctx, SeekCommand{QueueName: testQueueJobs, Kind: SeekTimestamp, Timestamp: first.BrokerMeta.Queue.CreatedAt})
 	if err != nil {
 		t.Fatalf("seek timestamp: %v", err)
 	}

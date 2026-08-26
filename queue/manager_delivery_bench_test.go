@@ -27,8 +27,8 @@ func benchmarkQueueDeliveryPath(b *testing.B, queueCount int, fullSweep bool) {
 	var lastOffset uint64
 	var lastGroupID string
 	deliveryTarget := DeliveryTargetFunc(func(ctx context.Context, clientID string, msg *message.Envelope) error {
-		lastOffset = msg.Broker.Queue.Offset
-		lastGroupID = msg.Broker.Queue.GroupID
+		lastOffset = msg.BrokerMeta.Queue.Offset
+		lastGroupID = msg.BrokerMeta.Queue.GroupID
 		return nil
 	})
 

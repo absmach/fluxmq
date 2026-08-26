@@ -185,7 +185,7 @@ func (h *RetainedStore) Set(ctx context.Context, topic string, msg *message.Enve
 	metadata := &RetainedMetadata{
 		NodeID:     h.nodeID,
 		Topic:      topic,
-		QoS:        msg.Broker.Delivery.QoS,
+		QoS:        msg.BrokerMeta.Delivery.QoS,
 		Size:       len(payload),
 		Replicated: len(payload) < h.sizeThreshold,
 		Timestamp:  time.Now(),
@@ -612,9 +612,9 @@ func (h *RetainedStore) storeReplicatedEntry(ctx context.Context, topic string, 
 	}
 
 	msg := message.New(topic, payload)
-	msg.Broker.Delivery.QoS = entry.Metadata.QoS
-	msg.Broker.Delivery.Retain = true
-	msg.Broker.Delivery.PublishedAt = entry.Metadata.Timestamp
+	msg.BrokerMeta.Delivery.QoS = entry.Metadata.QoS
+	msg.BrokerMeta.Delivery.Retain = true
+	msg.BrokerMeta.Delivery.PublishedAt = entry.Metadata.Timestamp
 	if err := message.ApplyTrustedProperties(msg, entry.Properties); err != nil {
 		h.logger.Warn("replicated retained message has malformed properties",
 			slog.String("topic", topic),

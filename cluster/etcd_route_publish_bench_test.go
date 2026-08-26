@@ -65,7 +65,7 @@ func BenchmarkRoutePublish_QoS1_1kSubscribers(b *testing.B) {
 	c := benchmarkRoutePublishCluster(b, 1000)
 	ctx := context.Background()
 	msg := message.New("sensor/temp", []byte("42"))
-	msg.Broker.Delivery.QoS = 1
+	msg.BrokerMeta.Delivery.QoS = 1
 	defer message.Release(msg)
 
 	b.ReportAllocs()

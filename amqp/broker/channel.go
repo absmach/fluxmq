@@ -2365,8 +2365,8 @@ func queuePublishEnvelope(
 	topic string, body []byte, props map[string]string, source message.SourceMetadata,
 ) *message.Envelope {
 	envelope := message.New(topic, body)
-	envelope.Broker.Source = source
-	envelope.Broker.Trace = message.TraceFromProperties(props)
-	envelope.User.Properties = message.FilterUserProperties(props)
+	envelope.BrokerMeta.Source = source
+	envelope.BrokerMeta.Trace = message.TraceFromProperties(props)
+	envelope.PublisherMeta.Properties = message.FilterUserProperties(props)
 	return envelope
 }

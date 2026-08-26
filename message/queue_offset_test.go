@@ -54,7 +54,7 @@ func TestQueueOffsetFromProperties(t *testing.T) {
 func TestQueueDeliveryAlwaysProjectsItsOffset(t *testing.T) {
 	for _, offset := range []uint64{0, 1, 42} {
 		envelope := New("devices/1", []byte("payload"))
-		envelope.Broker.Queue = QueueMetadata{
+		envelope.BrokerMeta.Queue = QueueMetadata{
 			Name:    testOrdersQueue,
 			GroupID: testGroupID,
 			Offset:  offset,
@@ -89,8 +89,8 @@ func TestMessageIDNamespacesDoNotCollide(t *testing.T) {
 	t.Run("queue delivery names its record", func(t *testing.T) {
 		envelope := New("$queue/orders/new", []byte("payload"))
 		defer Release(envelope)
-		envelope.User.MessageID = "publisher-chose-this"
-		envelope.Broker.Queue = QueueMetadata{Name: testOrdersQueue, GroupID: testGroupID, Offset: 42}
+		envelope.PublisherMeta.MessageID = "publisher-chose-this"
+		envelope.BrokerMeta.Queue = QueueMetadata{Name: testOrdersQueue, GroupID: testGroupID, Offset: 42}
 
 		projected := ProjectProperties(envelope, PublicProjection)
 		assert.Equal(t, testOrdersQueue+":42", projected[PropertyMessageID],
@@ -100,7 +100,7 @@ func TestMessageIDNamespacesDoNotCollide(t *testing.T) {
 	t.Run("ordinary message keeps the publisher value", func(t *testing.T) {
 		envelope := New("devices/1", []byte("payload"))
 		defer Release(envelope)
-		envelope.User.MessageID = "publisher-chose-this"
+		envelope.PublisherMeta.MessageID = "publisher-chose-this"
 
 		projected := ProjectProperties(envelope, PublicProjection)
 		assert.Equal(t, "publisher-chose-this", projected[PropertyMessageID])
@@ -115,9 +115,9 @@ func TestMessageIDNamespacesDoNotCollide(t *testing.T) {
 			PropertyQueueName: testOrdersQueue,
 			PropertyOffset:    "42",
 		}))
-		assert.Equal(t, testOrdersQueue+":9999", envelope.User.MessageID,
+		assert.Equal(t, testOrdersQueue+":9999", envelope.PublisherMeta.MessageID,
 			"a wire message-id is the publisher's, and stays user metadata")
-		assert.Equal(t, testOrdersQueue+":42", envelope.Broker.Queue.DeliveryID(),
+		assert.Equal(t, testOrdersQueue+":42", envelope.BrokerMeta.Queue.DeliveryID(),
 			"the handle is derived from the queue and offset, not read from the peer")
 	})
 

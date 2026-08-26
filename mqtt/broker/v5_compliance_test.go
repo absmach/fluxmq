@@ -84,7 +84,7 @@ func TestV5NoLocalPreventsSelfDelivery(t *testing.T) {
 	require.NoError(t, b.subscribe(s, "devices/one", 1, storage.SubscribeOptions{NoLocal: true}))
 
 	msg := message.NewDelivery("devices/one", []byte("payload"), 1, false)
-	msg.Broker.Source.ClientID = "client-1"
+	msg.BrokerMeta.Source.ClientID = "client-1"
 	require.NoError(t, b.Publish(context.Background(), msg))
 
 	require.Len(t, conn.packets, 0)
@@ -109,7 +109,7 @@ func TestV5RetainAsPublishedAffectsDeliveryFlag(t *testing.T) {
 	require.NoError(t, b.subscribe(s2, "devices/two", 1, storage.SubscribeOptions{RetainAsPublished: true}))
 
 	msg := message.NewDelivery("devices/two", []byte("payload"), 1, true)
-	msg.Broker.Source.ClientID = "publisher"
+	msg.BrokerMeta.Source.ClientID = "publisher"
 	require.NoError(t, b.Publish(context.Background(), msg))
 
 	require.Len(t, conn1.packets, 1)
@@ -134,7 +134,7 @@ func TestV5RetainHandlingRespected(t *testing.T) {
 	require.NoError(t, errConn)
 
 	retained := message.NewDelivery(testRetainTopic, []byte("retained"), 1, true)
-	retained.Broker.Source.ClientID = "publisher"
+	retained.BrokerMeta.Source.ClientID = "publisher"
 	require.NoError(t, b.Publish(context.Background(), retained))
 	matchedRetained, err := b.GetRetainedMatching(testRetainTopic)
 	require.NoError(t, err)

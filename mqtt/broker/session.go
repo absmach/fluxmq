@@ -363,8 +363,8 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 			// ID do not overwrite each other, and carry the direction and state
 			// on the message so they survive a restore.
 			key := fmt.Sprintf("%s%s%d/%d", s.ID, inflightPrefix, inf.Direction, inf.PacketID)
-			inf.Message.Broker.Delivery.InflightDirection = byte(inf.Direction)
-			inf.Message.Broker.Delivery.InflightState = byte(inf.State)
+			inf.Message.BrokerMeta.Delivery.InflightDirection = byte(inf.Direction)
+			inf.Message.BrokerMeta.Delivery.InflightState = byte(inf.State)
 			b.stores.messages.Store(key, inf.Message) //nolint:errcheck // best-effort inflight message persistence
 		}
 	}
@@ -443,11 +443,11 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 	}
 
 	for _, msg := range inflightMsgs {
-		if msg.Broker.Delivery.PacketID == 0 {
+		if msg.BrokerMeta.Delivery.PacketID == 0 {
 			message.Release(msg)
 			continue
 		}
-		restoreInflightEntry(tracker, msg.Broker.Delivery.PacketID, msg, uint32(msg.Broker.Delivery.InflightDirection), uint32(msg.Broker.Delivery.InflightState))
+		restoreInflightEntry(tracker, msg.BrokerMeta.Delivery.PacketID, msg, uint32(msg.BrokerMeta.Delivery.InflightDirection), uint32(msg.BrokerMeta.Delivery.InflightState))
 	}
 
 	if err := b.stores.messages.DeleteByPrefix(clientID + inflightPrefix); err != nil {
@@ -541,7 +541,7 @@ func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, trac
 			b.logError("restore_inflight", err, slog.Uint64("packet_id", uint64(msg.PacketId)))
 			continue
 		}
-		storeMsg.Broker.Delivery.PacketID = uint16(msg.PacketId)
+		storeMsg.BrokerMeta.Delivery.PacketID = uint16(msg.PacketId)
 		restoreInflightEntry(tracker, uint16(msg.PacketId), storeMsg, msg.Direction, msg.State)
 	}
 

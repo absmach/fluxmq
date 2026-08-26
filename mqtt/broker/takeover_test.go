@@ -769,14 +769,14 @@ func TestDeliverMessage_EncodesForLeaseVersion(t *testing.T) {
 	defer b.Close()
 
 	v3msg := message.NewDelivery("t", []byte("x"), 1, false)
-	v3msg.Broker.Delivery.PacketID = 1
+	v3msg.BrokerMeta.Delivery.PacketID = 1
 	v3conn := newSyncConn()
 	require.NoError(t, b.DeliverMessage(v3conn, 4, v3msg, nil))
 	require.Len(t, v3conn.writtenPackets(), 1)
 	require.IsType(t, &v3.Publish{}, v3conn.writtenPackets()[0])
 
 	v5msg := message.NewDelivery("t", []byte("x"), 1, false)
-	v5msg.Broker.Delivery.PacketID = 2
+	v5msg.BrokerMeta.Delivery.PacketID = 2
 	v5conn := newSyncConn()
 	require.NoError(t, b.DeliverMessage(v5conn, 5, v5msg, nil))
 	require.Len(t, v5conn.writtenPackets(), 1)
@@ -940,11 +940,11 @@ func TestRestoreInflightFromStorage_PreservesDirection(t *testing.T) {
 
 	const clientID = "c"
 	out := message.NewDelivery("out", nil, 2, false)
-	out.Broker.Delivery.PacketID = 5
-	out.Broker.Delivery.InflightDirection = byte(messages.Outbound)
+	out.BrokerMeta.Delivery.PacketID = 5
+	out.BrokerMeta.Delivery.InflightDirection = byte(messages.Outbound)
 	in := message.NewDelivery("in", nil, 2, false)
-	in.Broker.Delivery.PacketID = 5
-	in.Broker.Delivery.InflightDirection = byte(messages.Inbound)
+	in.BrokerMeta.Delivery.PacketID = 5
+	in.BrokerMeta.Delivery.InflightDirection = byte(messages.Inbound)
 	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Outbound, 5), out))
 	require.NoError(t, b.stores.messages.Store(fmt.Sprintf("%s%s%d/%d", clientID, inflightPrefix, messages.Inbound, 5), in))
 
@@ -970,14 +970,14 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 		InflightMessages: []*clusterv1.InflightMessage{
 			inflightWire(t, 5, uint32(messages.Outbound), func(msg *message.Envelope) {
 				msg.Topic = "out"
-				msg.Broker.Delivery.QoS = 2
+				msg.BrokerMeta.Delivery.QoS = 2
 				msg.SetPayload([]byte("op"))
-				msg.Broker.Source.Topic = "sensors/temperature"
-				msg.User.Properties = map[string]string{"trace": "abc"}
+				msg.BrokerMeta.Source.Topic = "sensors/temperature"
+				msg.PublisherMeta.Properties = map[string]string{"trace": "abc"}
 			}),
 			inflightWire(t, 5, uint32(messages.Inbound), func(msg *message.Envelope) {
 				msg.Topic = "in"
-				msg.Broker.Delivery.QoS = 2
+				msg.BrokerMeta.Delivery.QoS = 2
 				msg.SetPayload([]byte("ip"))
 			}),
 		},
@@ -989,8 +989,8 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "out", gotOut.Topic)
 	require.Equal(t, "op", string(gotOut.PayloadBytes()), "payload must survive cluster transfer")
-	require.Equal(t, "sensors/temperature", gotOut.Broker.Source.Topic)
-	require.Equal(t, "abc", gotOut.User.Properties["trace"])
+	require.Equal(t, "sensors/temperature", gotOut.BrokerMeta.Source.Topic)
+	require.Equal(t, "abc", gotOut.PublisherMeta.Properties["trace"])
 	gotIn, err := tracker.AckInbound(5)
 	require.NoError(t, err)
 	require.Equal(t, "in", gotIn.Topic)
@@ -1010,15 +1010,15 @@ func TestRestoreInflightFromTakeover_PreservesQueueLifecycle(t *testing.T) {
 		InflightMessages: []*clusterv1.InflightMessage{
 			inflightWire(t, 7, uint32(messages.Outbound), func(msg *message.Envelope) {
 				msg.Topic = "$queue/orders/new"
-				msg.Broker.Delivery.QoS = 1
-				msg.Broker.Queue.Name = "orders"
-				msg.Broker.Queue.GroupID = testGroupWorkers
-				msg.Broker.Queue.Offset = 42
-				msg.Broker.Queue.State = message.QueueStateDelivered
-				msg.Broker.Queue.RetryCount = 2
-				msg.Broker.Queue.NextRetryAt = now.Add(time.Minute)
-				msg.Broker.Queue.ExpiresAt = now.Add(time.Hour)
-				msg.Broker.Transfer.ID = "transfer-7"
+				msg.BrokerMeta.Delivery.QoS = 1
+				msg.BrokerMeta.Queue.Name = "orders"
+				msg.BrokerMeta.Queue.GroupID = testGroupWorkers
+				msg.BrokerMeta.Queue.Offset = 42
+				msg.BrokerMeta.Queue.State = message.QueueStateDelivered
+				msg.BrokerMeta.Queue.RetryCount = 2
+				msg.BrokerMeta.Queue.NextRetryAt = now.Add(time.Minute)
+				msg.BrokerMeta.Queue.ExpiresAt = now.Add(time.Hour)
+				msg.BrokerMeta.Transfer.ID = "transfer-7"
 			}),
 		},
 	}
@@ -1027,14 +1027,14 @@ func TestRestoreInflightFromTakeover_PreservesQueueLifecycle(t *testing.T) {
 
 	got, err := tracker.Ack(7)
 	require.NoError(t, err)
-	require.Equal(t, "orders", got.Broker.Queue.Name)
-	require.Equal(t, "workers", got.Broker.Queue.GroupID)
-	require.Equal(t, uint64(42), got.Broker.Queue.Offset)
-	require.Equal(t, message.QueueStateDelivered, got.Broker.Queue.State)
-	require.Equal(t, 2, got.Broker.Queue.RetryCount)
-	require.True(t, got.Broker.Queue.NextRetryAt.Equal(now.Add(time.Minute)))
-	require.True(t, got.Broker.Queue.ExpiresAt.Equal(now.Add(time.Hour)))
-	require.Equal(t, "transfer-7", got.Broker.Transfer.ID)
+	require.Equal(t, "orders", got.BrokerMeta.Queue.Name)
+	require.Equal(t, "workers", got.BrokerMeta.Queue.GroupID)
+	require.Equal(t, uint64(42), got.BrokerMeta.Queue.Offset)
+	require.Equal(t, message.QueueStateDelivered, got.BrokerMeta.Queue.State)
+	require.Equal(t, 2, got.BrokerMeta.Queue.RetryCount)
+	require.True(t, got.BrokerMeta.Queue.NextRetryAt.Equal(now.Add(time.Minute)))
+	require.True(t, got.BrokerMeta.Queue.ExpiresAt.Equal(now.Add(time.Hour)))
+	require.Equal(t, "transfer-7", got.BrokerMeta.Transfer.ID)
 }
 
 // A takeover must survive one undecodable entry: the caller aborts session
@@ -1049,7 +1049,7 @@ func TestRestoreInflightFromTakeover_SkipsUndecodableEnvelope(t *testing.T) {
 			{PacketId: 1, Direction: uint32(messages.Outbound), Envelope: []byte{0xff, 0xff, 0xff}},
 			inflightWire(t, 2, uint32(messages.Outbound), func(msg *message.Envelope) {
 				msg.Topic = "ok"
-				msg.Broker.Delivery.QoS = 1
+				msg.BrokerMeta.Delivery.QoS = 1
 			}),
 		},
 	}
@@ -1070,11 +1070,11 @@ func TestRestoreInflightFromTakeover_SkipsInvalidDirection(t *testing.T) {
 		InflightMessages: []*clusterv1.InflightMessage{
 			inflightWire(t, 1, uint32(messages.Outbound), func(msg *message.Envelope) {
 				msg.Topic = "ok"
-				msg.Broker.Delivery.QoS = 1
+				msg.BrokerMeta.Delivery.QoS = 1
 			}),
 			inflightWire(t, 2, 99, func(msg *message.Envelope) { // corrupt direction
 				msg.Topic = "bad"
-				msg.Broker.Delivery.QoS = 1
+				msg.BrokerMeta.Delivery.QoS = 1
 			}),
 		},
 	}

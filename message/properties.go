@@ -129,9 +129,9 @@ func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) er
 	if envelope == nil {
 		return nil
 	}
-	envelope.User.Properties = FilterUserProperties(properties)
-	envelope.Broker.Source = SourceFromProperties(properties)
-	envelope.Broker.Source.Topic = properties[PropertySourceTopic]
+	envelope.PublisherMeta.Properties = FilterUserProperties(properties)
+	envelope.BrokerMeta.Source = SourceFromProperties(properties)
+	envelope.BrokerMeta.Source.Topic = properties[PropertySourceTopic]
 
 	var errs []error
 	parseUint := func(name string, raw string, target *uint64) {
@@ -149,9 +149,9 @@ func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) er
 	// A message-id on the wire is the publisher's own identifier, so it lands in
 	// user metadata. The broker's handle for a durable delivery is derived from
 	// the queue and offset below, and is never taken from the peer.
-	envelope.User.MessageID = properties[PropertyMessageID]
+	envelope.PublisherMeta.MessageID = properties[PropertyMessageID]
 
-	queue := &envelope.Broker.Queue
+	queue := &envelope.BrokerMeta.Queue
 	queue.Name = properties[PropertyQueueName]
 	queue.GroupID = properties[PropertyGroupID]
 	parseUint(PropertyOffset, properties[PropertyOffset], &queue.Offset)
@@ -182,9 +182,9 @@ func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) er
 		queue.Stream = stream
 	}
 
-	envelope.Broker.Transfer.ID = properties[PropertyTransferID]
-	envelope.Broker.Transfer.FailureReason = properties[PropertyDLQReason]
-	envelope.Broker.Trace = TraceFromProperties(properties)
+	envelope.BrokerMeta.Transfer.ID = properties[PropertyTransferID]
+	envelope.BrokerMeta.Transfer.FailureReason = properties[PropertyDLQReason]
+	envelope.BrokerMeta.Trace = TraceFromProperties(properties)
 
 	return errors.Join(errs...)
 }
@@ -195,22 +195,22 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 	if envelope == nil {
 		return nil
 	}
-	properties := FilterUserProperties(envelope.User.Properties)
+	properties := FilterUserProperties(envelope.PublisherMeta.Properties)
 
 	// The publisher's own identifier travels as user metadata. A queue delivery
 	// overwrites it below with the broker's handle, which is what a consumer
 	// needs to name the record.
-	if envelope.User.MessageID != "" {
+	if envelope.PublisherMeta.MessageID != "" {
 		properties = ensureProperties(properties)
-		properties[PropertyMessageID] = envelope.User.MessageID
+		properties[PropertyMessageID] = envelope.PublisherMeta.MessageID
 	}
 
-	if projection.Queue && hasQueueProjection(envelope.Broker.Queue) {
+	if projection.Queue && hasQueueProjection(envelope.BrokerMeta.Queue) {
 		properties = ensureProperties(properties)
-		projectQueueProperties(properties, envelope.Broker.Source, envelope.Broker.Queue)
+		projectQueueProperties(properties, envelope.BrokerMeta.Source, envelope.BrokerMeta.Queue)
 	}
 	if projection.Transfer {
-		if transfer := envelope.Broker.Transfer; transfer.ID != "" || transfer.FailureReason != "" {
+		if transfer := envelope.BrokerMeta.Transfer; transfer.ID != "" || transfer.FailureReason != "" {
 			properties = ensureProperties(properties)
 			if transfer.ID != "" {
 				properties[PropertyTransferID] = transfer.ID
@@ -221,7 +221,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 		}
 	}
 	if projection.Source {
-		if source := envelope.Broker.Source; source.ClientID != "" || source.ExternalID != "" || source.Protocol != "" {
+		if source := envelope.BrokerMeta.Source; source.ClientID != "" || source.ExternalID != "" || source.Protocol != "" {
 			properties = ensureProperties(properties)
 			if source.ClientID != "" {
 				properties[PropertyClientID] = source.ClientID
@@ -235,7 +235,7 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 		}
 	}
 	if projection.Trace {
-		if trace := envelope.Broker.Trace; trace.TraceParent != "" || trace.TraceState != "" || trace.TraceID != "" {
+		if trace := envelope.BrokerMeta.Trace; trace.TraceParent != "" || trace.TraceState != "" || trace.TraceID != "" {
 			properties = ensureProperties(properties)
 			if trace.TraceParent != "" {
 				properties[PropertyTraceParent] = trace.TraceParent

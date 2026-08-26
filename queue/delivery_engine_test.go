@@ -33,9 +33,9 @@ const (
 
 func newQueueEnvelope(id, topic string, data []byte) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.User.MessageID = id
-	envelope.Broker.Queue.State = message.QueueStateQueued
-	envelope.Broker.Queue.CreatedAt = time.Now()
+	envelope.PublisherMeta.MessageID = id
+	envelope.BrokerMeta.Queue.State = message.QueueStateQueued
+	envelope.BrokerMeta.Queue.CreatedAt = time.Now()
 	return envelope
 }
 
@@ -240,8 +240,8 @@ func TestDeliverQueueLocalConsumer(t *testing.T) {
 		t.Fatalf("expected 1 delivered message, got %d", count)
 	}
 
-	if delivered[0].Broker.Queue.Name != "tasks" { //nolint:goconst // test value
-		t.Fatalf("expected queue name tasks, got %s", delivered[0].Broker.Queue.Name)
+	if delivered[0].BrokerMeta.Queue.Name != "tasks" { //nolint:goconst // test value
+		t.Fatalf("expected queue name tasks, got %s", delivered[0].BrokerMeta.Queue.Name)
 	}
 }
 
@@ -284,8 +284,8 @@ func TestDeliverQueueRemoteConsumer(t *testing.T) {
 		t.Fatalf("expected 1 routed message, got %d", count)
 	}
 
-	if mockRemote.routed[0].msg.Broker.Queue.Name != "tasks" {
-		t.Fatalf("expected queue tasks, got %s", mockRemote.routed[0].msg.Broker.Queue.Name)
+	if mockRemote.routed[0].msg.BrokerMeta.Queue.Name != "tasks" {
+		t.Fatalf("expected queue tasks, got %s", mockRemote.routed[0].msg.BrokerMeta.Queue.Name)
 	}
 	if mockRemote.routed[0].nodeID != testNode2 { //nolint:goconst // test value
 		t.Fatalf("expected node-2, got %s", mockRemote.routed[0].nodeID)
@@ -411,7 +411,7 @@ func (r *mockRemoteRouter) RouteQueueMessage(ctx context.Context, nodeID, client
 	r.routed = append(r.routed, routedEntry{
 		nodeID:    nodeID,
 		clientID:  clientID,
-		queueName: msg.Broker.Queue.Name,
+		queueName: msg.BrokerMeta.Queue.Name,
 		msg:       msg.Clone(),
 	})
 	return r.routeErr
@@ -440,7 +440,7 @@ func (r *batchRemoteRouter) RouteQueueBatch(ctx context.Context, nodeID string, 
 		r.routed = append(r.routed, routedEntry{
 			nodeID:    nodeID,
 			clientID:  delivery.ClientID,
-			queueName: delivery.Message.Broker.Queue.Name,
+			queueName: delivery.Message.BrokerMeta.Queue.Name,
 			msg:       delivery.Message.Clone(),
 		})
 	}
@@ -478,7 +478,7 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 				groupID       string
 				msgID         string
 				deliveryCount int
-			}{queueName, groupID, msg.User.MessageID, deliveryCount})
+			}{queueName, groupID, msg.PublisherMeta.MessageID, deliveryCount})
 			mu.Unlock()
 			return nil
 		},
@@ -683,7 +683,7 @@ func TestDeliverQueueSkipsExpiredMessages(t *testing.T) {
 
 	// Append an expired message then a valid one.
 	expired := newQueueEnvelope("expired", "$queue/tasks/old", []byte("stale"))
-	expired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Second)
+	expired.BrokerMeta.Queue.ExpiresAt = time.Now().Add(-time.Second)
 	logStore.Append(ctx, "tasks", expired)                                                       //nolint:errcheck // test setup
 	logStore.Append(ctx, "tasks", newQueueEnvelope("valid", testQueueTasksNew, []byte("fresh"))) //nolint:errcheck // test setup
 
@@ -725,7 +725,7 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
 	expired := newQueueEnvelope("expired", "$queue/events/old", []byte("stale"))
-	expired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Second)
+	expired.BrokerMeta.Queue.ExpiresAt = time.Now().Add(-time.Second)
 	logStore.Append(ctx, testQueueEvents, expired)                                                     //nolint:errcheck // test setup
 	logStore.Append(ctx, testQueueEvents, newQueueEnvelope("valid", testEventsTopic, []byte("fresh"))) //nolint:errcheck // test setup
 
@@ -745,7 +745,7 @@ func TestDeliverStreamSkipsExpiredMessages(t *testing.T) {
 
 func TestCreateRoutedQueueMessageSharesImmutablePayload(t *testing.T) {
 	msg := newQueueEnvelope("routed-msg-1", testEventsTopic, []byte("remote-payload"))
-	msg.Broker.Queue.Offset = 7
+	msg.BrokerMeta.Queue.Offset = 7
 
 	routeMsg := createRoutedQueueMessage(msg, "readers", testQueueEvents, false, 0, false, "")
 	defer message.Release(routeMsg)
@@ -1015,10 +1015,10 @@ func TestDeliverQueueAllExpiredReturnsNoDelivery(t *testing.T) {
 	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
 
 	firstExpired := newQueueEnvelope("e1", "$queue/tasks/a", []byte("old1"))
-	firstExpired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Minute)
+	firstExpired.BrokerMeta.Queue.ExpiresAt = time.Now().Add(-time.Minute)
 	logStore.Append(ctx, "tasks", firstExpired) //nolint:errcheck // test setup
 	secondExpired := newQueueEnvelope("e2", "$queue/tasks/b", []byte("old2"))
-	secondExpired.Broker.Queue.ExpiresAt = time.Now().Add(-time.Minute)
+	secondExpired.BrokerMeta.Queue.ExpiresAt = time.Now().Add(-time.Minute)
 	logStore.Append(ctx, "tasks", secondExpired) //nolint:errcheck // test setup
 
 	ok := engine.DeliverQueue(ctx, "tasks")
