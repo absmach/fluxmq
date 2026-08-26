@@ -311,7 +311,7 @@ func TestStress_BufferPoolExhaustion(t *testing.T) {
 	}
 
 	// Create a pool with limited capacity
-	pool := payload.NewPoolWithCapacity(10, 10, 10)
+	pool := payload.NewPool()
 
 	const numGoroutines = 100
 	const operationsPerGoroutine = 10000

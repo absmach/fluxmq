@@ -24,7 +24,7 @@ func TestStore_AppendTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, "buffered")
 
-	pool := payload.NewPoolWithCapacity(1, 0, 0)
+	pool := payload.NewPool()
 	buf := pool.FromBytes([]byte("remote-payload"))
 	msg := message.NewWithBuffer("$queue/buffered", buf)
 	msg.PublisherMeta.MessageID = "append-buf"
@@ -42,7 +42,7 @@ func TestStore_AppendBatchTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, "buffered-batch")
 
-	pool := payload.NewPoolWithCapacity(1, 0, 0)
+	pool := payload.NewPool()
 	buf := pool.FromBytes([]byte("remote-payload"))
 	msg := message.NewWithBuffer("$queue/buffered-batch", buf)
 	msg.PublisherMeta.MessageID = "batch-buf"

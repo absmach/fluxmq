@@ -55,30 +55,6 @@ func BenchmarkPoolHit(b *testing.B) {
 	}
 }
 
-// BenchmarkPoolMiss measures the path taken when the class is empty, which is
-// what a burst wider than the channel capacity degrades to.
-//
-// The pool has zero capacity, so every Release is dropped and every Get misses.
-// An earlier version held buffers in a slice to force misses; it measured the
-// collector's response to holding a thousand large buffers instead, and for the
-// small class it stopped missing after the first drain returned them.
-func BenchmarkPoolMiss(b *testing.B) {
-	for _, size := range benchSizes {
-		b.Run(size.name, func(b *testing.B) {
-			pool := NewPoolWithCapacity(0, 0, 0)
-
-			b.ReportAllocs()
-			for b.Loop() {
-				pool.get(size.size).Release()
-			}
-
-			if stats := pool.Stats(); stats.SmallHits+stats.MediumHits+stats.LargeHits != 0 {
-				b.Fatalf("expected only misses, got hits: %+v", stats)
-			}
-		})
-	}
-}
-
 // BenchmarkPoolUnpooled is the comparison the pool has to beat: a plain
 // allocation of the same size, with no pool behind it.
 func BenchmarkPoolUnpooled(b *testing.B) {

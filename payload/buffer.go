@@ -18,6 +18,7 @@ package payload
 import (
 	"log/slog"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 )
 
@@ -118,34 +119,66 @@ type PoolSnapshot struct {
 	LargeMisses  uint64
 }
 
+// poolStats counts acquisitions and the subset of them that had to allocate.
+// Hits are derived rather than counted: a hit is an acquisition that did not
+// reach the class's New, and incrementing a separate counter for it would have
+// to observe that from outside, which cannot be done without a race.
 type poolStats struct {
-	smallHits    atomic.Uint64
-	mediumHits   atomic.Uint64
-	largeHits    atomic.Uint64
+	smallGets    atomic.Uint64
+	mediumGets   atomic.Uint64
+	largeGets    atomic.Uint64
 	smallMisses  atomic.Uint64
 	mediumMisses atomic.Uint64
 	largeMisses  atomic.Uint64
 }
 
 // Pool reuses payload buffers in three size classes.
+//
+// Each class is a sync.Pool, which the runtime drains on GC. The buffered
+// channels this replaces held strong references to everything in them, so a
+// burst of large payloads pinned memory for the life of the process — the
+// defaults allowed roughly 133 MB — invisible to GC and to any memory-pressure
+// signal. sync.Pool also keeps a per-P cache, so acquiring does not contend on
+// one channel per size class across every publisher.
 type Pool struct {
-	small  chan *Buffer
-	medium chan *Buffer
-	large  chan *Buffer
+	small  sync.Pool
+	medium sync.Pool
+	large  sync.Pool
 	stats  poolStats
 }
 
 // NewPool creates a pool sized for normal broker traffic.
-func NewPool() *Pool { return NewPoolWithCapacity(1000, 500, 100) }
-
-// NewPoolWithCapacity creates a pool with explicit size-class capacities.
-func NewPoolWithCapacity(small, medium, large int) *Pool {
-	return &Pool{
-		small:  make(chan *Buffer, small),
-		medium: make(chan *Buffer, medium),
-		large:  make(chan *Buffer, large),
+// NewPool creates a pool over the three size classes.
+//
+// There is no capacity to configure: how much a sync.Pool retains is the
+// runtime's decision, revised at every GC. The constructor that took three
+// capacities is gone with the channels — those numbers set a retention ceiling
+// nobody tuned and GC could not lower.
+func NewPool() *Pool {
+	p := &Pool{}
+	p.small.New = func() any {
+		p.stats.smallMisses.Add(1)
+		return NewBuffer(make([]byte, 0, smallClass), p)
 	}
+	p.medium.New = func() any {
+		p.stats.mediumMisses.Add(1)
+		return NewBuffer(make([]byte, 0, mediumClass), p)
+	}
+	p.large.New = func() any {
+		p.stats.largeMisses.Add(1)
+		return NewBuffer(make([]byte, 0, largeClass), p)
+	}
+	return p
 }
+
+// Size classes. A buffer is pooled in the smallest class that fits it, and a
+// request larger than the largest class is served by a plain allocation that is
+// never pooled.
+const (
+	smallClass  = 1024
+	mediumClass = 65536
+	largeClass  = 1048576
+)
 
 // get returns a buffer of size bytes with one owned reference.
 //
@@ -156,35 +189,30 @@ func NewPoolWithCapacity(small, medium, large int) *Pool {
 // from outside the package wants a variant that zeroes or takes the fill, not
 // this contract with a warning attached.
 func (p *Pool) get(size int) *Buffer {
-	var class chan *Buffer
-	var capacity int
-	var hits, misses *atomic.Uint64
+	var class *sync.Pool
+	var gets *atomic.Uint64
 
 	switch {
-	case size <= 1024:
-		class, capacity = p.small, 1024
-		hits, misses = &p.stats.smallHits, &p.stats.smallMisses
-	case size <= 65536:
-		class, capacity = p.medium, 65536
-		hits, misses = &p.stats.mediumHits, &p.stats.mediumMisses
-	case size <= 1048576:
-		class, capacity = p.large, 1048576
-		hits, misses = &p.stats.largeHits, &p.stats.largeMisses
+	case size <= smallClass:
+		class, gets = &p.small, &p.stats.smallGets
+	case size <= mediumClass:
+		class, gets = &p.medium, &p.stats.mediumGets
+	case size <= largeClass:
+		class, gets = &p.large, &p.stats.largeGets
 	default:
+		// Larger than any class: allocate exactly, and do not pool it. Handing
+		// it to the large class would let one oversized payload set the
+		// capacity every later caller inherits.
+		p.stats.largeGets.Add(1)
 		p.stats.largeMisses.Add(1)
-		return NewBuffer(make([]byte, size), p)
+		return NewBuffer(make([]byte, size), nil)
 	}
 
-	select {
-	case buf := <-class:
-		hits.Add(1)
-		buf.data = buf.data[:size]
-		buf.refs.Store(1)
-		return buf
-	default:
-		misses.Add(1)
-		return NewBuffer(make([]byte, size, capacity), p)
-	}
+	gets.Add(1)
+	buf := class.Get().(*Buffer)
+	buf.data = buf.data[:size]
+	buf.refs.Store(1)
+	return buf
 }
 
 // FromBytes returns a pooled buffer containing a copy of data.
@@ -202,47 +230,37 @@ func (p *Pool) put(buf *Buffer) {
 		return
 	}
 
-	var class chan *Buffer
 	switch capacity := cap(buf.data); {
-	case capacity <= 1024:
-		class = p.small
-	case capacity <= 65536:
-		class = p.medium
-	case capacity <= 1048576:
-		class = p.large
-	default:
-		return
-	}
-
-	select {
-	case class <- buf:
-	default:
+	case capacity <= smallClass:
+		p.small.Put(buf)
+	case capacity <= mediumClass:
+		p.medium.Put(buf)
+	case capacity <= largeClass:
+		p.large.Put(buf)
 	}
 }
 
 // Stats returns a consistent snapshot of pool counters.
 func (p *Pool) Stats() PoolSnapshot {
+	// Hits are gets that did not have to allocate. Both terms are read
+	// independently, so a snapshot taken during a burst can show a hit count one
+	// or two behind; it is a counter for operators, not an invariant.
 	return PoolSnapshot{
-		SmallHits:    p.stats.smallHits.Load(),
-		MediumHits:   p.stats.mediumHits.Load(),
-		LargeHits:    p.stats.largeHits.Load(),
+		SmallHits:    hits(p.stats.smallGets.Load(), p.stats.smallMisses.Load()),
+		MediumHits:   hits(p.stats.mediumGets.Load(), p.stats.mediumMisses.Load()),
+		LargeHits:    hits(p.stats.largeGets.Load(), p.stats.largeMisses.Load()),
 		SmallMisses:  p.stats.smallMisses.Load(),
 		MediumMisses: p.stats.mediumMisses.Load(),
 		LargeMisses:  p.stats.largeMisses.Load(),
 	}
 }
 
-// Clear empties every size class.
-func (p *Pool) Clear() {
-	for {
-		select {
-		case <-p.small:
-		case <-p.medium:
-		case <-p.large:
-		default:
-			return
-		}
+// hits derives the number of acquisitions served from the pool.
+func hits(gets, misses uint64) uint64 {
+	if gets < misses {
+		return 0
 	}
+	return gets - misses
 }
 
 // DefaultPool is shared by envelopes constructed from byte slices.

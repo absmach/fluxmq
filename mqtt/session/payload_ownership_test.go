@@ -34,7 +34,7 @@ func TestEncodePublishRetainsPayloadBuffer(t *testing.T) {
 		{"v5", packets.V5},
 	} {
 		t.Run(version.name, func(t *testing.T) {
-			pool := payloadbuf.NewPoolWithCapacity(4, 4, 4)
+			pool := payloadbuf.NewPool()
 			buf := pool.FromBytes([]byte("payload-bytes"))
 
 			msg := message.Acquire()
@@ -76,7 +76,7 @@ func TestAsyncDeliveryKeepsPayloadIntact(t *testing.T) {
 	}, nil))
 	conn.awaitWrite(t)
 
-	pool := payloadbuf.NewPoolWithCapacity(4, 4, 4)
+	pool := payloadbuf.NewPool()
 	buf := pool.FromBytes([]byte(payload))
 
 	msg := message.Acquire()
