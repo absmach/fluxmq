@@ -25,7 +25,13 @@ import (
 // The payload is not copied: the packet points into the message's buffer and
 // takes its own reference to it, which pkt.Release() drops. The caller may
 // therefore release the message as soon as this returns, even though the packet
-// may not be serialized until later on an asynchronous send queue.
+// may not be serialized until later on an asynchronous send queue. That holds
+// for EncodePublishDelivery below as well.
+//
+// EncodePublish reads QoS and retain off the envelope, so it is for a delivery
+// that owns its envelope. A caller sharing one envelope across subscribers must
+// use EncodePublishDelivery instead: the flags differ per subscriber, and
+// reading mutable delivery state off a shared envelope is a race.
 func EncodePublish(msg *message.Envelope, packetID uint16, version byte, dup bool) packets.ControlPacket {
 	return encodePublish(msg, packetID, version, dup, msg.BrokerMeta.Delivery.QoS, msg.BrokerMeta.Delivery.Retain)
 }
@@ -33,6 +39,11 @@ func EncodePublish(msg *message.Envelope, packetID uint16, version byte, dup boo
 // EncodePublishDelivery builds a packet from immutable publication data and
 // caller-owned delivery flags. It lets QoS 0 fanout share one envelope instead
 // of allocating or pooling a mutable envelope for every subscriber.
+//
+// It is the borrowed-envelope form: it reads nothing mutable off msg, so the
+// same envelope can be encoded concurrently for many subscribers with different
+// flags. EncodePublish is the owned form. They are separate entry points
+// because they are separate contracts, not because the body differs.
 func EncodePublishDelivery(msg *message.Envelope, packetID uint16, version byte, dup bool, qos byte, retain bool) packets.ControlPacket {
 	return encodePublish(msg, packetID, version, dup, qos, retain)
 }

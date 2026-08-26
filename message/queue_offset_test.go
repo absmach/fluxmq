@@ -125,3 +125,24 @@ func TestMessageIDNamespacesDoNotCollide(t *testing.T) {
 		assert.Equal(t, "", QueueMetadata{Offset: 7}.DeliveryID())
 	})
 }
+
+// An empty source topic used to be projected as an empty property, which said
+// only that the broker had nothing to say. Offset 0 is the opposite case and
+// must stay unconditional: it is the first record in a queue, and omitting it
+// would make it indistinguishable from a delivery carrying no offset.
+func TestQueueProjectionOmitsAnEmptySourceTopicButKeepsOffsetZero(t *testing.T) {
+	envelope := New("$queue/orders/new", []byte("payload"))
+	defer Release(envelope)
+	envelope.BrokerMeta.Queue = QueueMetadata{Name: testOrdersQueue, GroupID: testGroupID, Offset: 0}
+
+	projected := ProjectProperties(envelope, PublicProjection)
+	require.NotNil(t, projected)
+
+	_, present := projected[PropertySourceTopic]
+	assert.False(t, present, "an absent source topic must not be projected as an empty one")
+	assert.Equal(t, "0", projected[PropertyOffset], "offset 0 is a real offset")
+
+	envelope.BrokerMeta.Source.Topic = "orders/new"
+	withSource := ProjectProperties(envelope, PublicProjection)
+	assert.Equal(t, "orders/new", withSource[PropertySourceTopic])
+}

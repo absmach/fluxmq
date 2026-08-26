@@ -279,8 +279,15 @@ func projectQueueProperties(properties map[string]string, source SourceMetadata,
 	if queue.Name != "" {
 		properties[PropertyQueueName] = queue.Name
 	}
+	// Offset 0 is a real offset, so it is projected unconditionally: omitting it
+	// would make the first record in a queue indistinguishable from a delivery
+	// that carries no offset at all.
 	properties[PropertyOffset] = strconv.FormatUint(queue.Offset, 10)
-	properties[PropertySourceTopic] = source.Topic
+	// An empty source topic is different: there is no message published to "",
+	// so the property said only that the broker had nothing to say.
+	if source.Topic != "" {
+		properties[PropertySourceTopic] = source.Topic
+	}
 
 	if queue.Stream == nil {
 		return
