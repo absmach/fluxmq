@@ -90,10 +90,22 @@ func unmarshalBinary(encoded, externalPayload, externalKey []byte, metadataOnly 
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
+			// The log record owns the payload in metadata mode, so a blob
+			// carrying one is rejected rather than having it silently dropped
+			// in favour of the record's. MarshalMetadata omits this field, so
+			// this asserts the existing invariant rather than adding one.
+			if metadataOnly {
+				return ErrMetadataCarriesPayload
+			}
 			decodedPayload = raw
 		case 4:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
+			}
+			if metadataOnly {
+				if err := rejectEmbeddedKey(raw); err != nil {
+					return err
+				}
 			}
 			return decodeUser(raw, &envelope.PublisherMeta)
 		case 5:
@@ -331,9 +343,7 @@ func decodeSource(encoded []byte, source *SourceMetadata) error {
 func appendDelivery(encoded []byte, delivery DeliveryMetadata) []byte {
 	encoded = appendTime(encoded, 1, delivery.PublishedAt)
 	encoded = appendTime(encoded, 2, delivery.ExpiresAt)
-	for _, id := range delivery.SubscriptionIDs {
-		encoded = appendVarint(encoded, 3, uint64(id))
-	}
+	encoded = appendPackedVarints(encoded, 3, delivery.SubscriptionIDs)
 	encoded = appendNonZeroVarint(encoded, 4, uint64(delivery.PacketID))
 	encoded = appendNonZeroVarint(encoded, 5, uint64(delivery.QoS))
 	encoded = appendNonZeroVarint(encoded, 6, uint64(delivery.InflightDirection))
@@ -344,9 +354,15 @@ func appendDelivery(encoded []byte, delivery DeliveryMetadata) []byte {
 }
 
 func decodeDelivery(encoded []byte, delivery *DeliveryMetadata) error {
-	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, _ []byte, scalar uint64) error {
+	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, raw []byte, scalar uint64) error {
 		if number < 1 || number > 9 {
 			return nil
+		}
+		// Field 3 is a packed repeated field. A record written before it was
+		// packed carries one varint-tagged entry per ID, and proto3 requires a
+		// decoder to accept both forms, so both are read.
+		if number == 3 && wireType == protowire.BytesType {
+			return decodePackedSubscriptionIDs(raw, delivery)
 		}
 		if err := requireWireType(number, wireType, protowire.VarintType); err != nil {
 			return err
@@ -715,6 +731,51 @@ func estimateSize(envelope *Envelope, includeKey bool) int {
 	size += len(broker.Delivery.SubscriptionIDs) * 6
 
 	return size
+}
+
+// rejectEmbeddedKey reports a metadata blob that carries the publisher key. The
+// log record owns the key in metadata mode, so an embedded one would be dropped
+// silently in favour of the record's.
+func rejectEmbeddedKey(user []byte) error {
+	return walkFields(user, func(number protowire.Number, _ protowire.Type, _ []byte, _ uint64) error {
+		if number == 1 {
+			return ErrMetadataCarriesKey
+		}
+		return nil
+	})
+}
+
+// appendPackedVarints writes a repeated scalar field in proto3's default packed
+// form: one length-delimited field holding the concatenated varints, rather
+// than one tagged varint per element.
+//
+// The unpacked form this replaces was not what a .proto declaring
+// `repeated uint32` produces, so nothing generated from the schema of record
+// could have written a record this codec would read.
+func appendPackedVarints(encoded []byte, number protowire.Number, values []uint32) []byte {
+	if len(values) == 0 {
+		return encoded
+	}
+	encoded, at := beginNested(encoded, number)
+	for _, value := range values {
+		encoded = protowire.AppendVarint(encoded, uint64(value))
+	}
+	return endNested(encoded, at)
+}
+
+func decodePackedSubscriptionIDs(raw []byte, delivery *DeliveryMetadata) error {
+	for len(raw) > 0 {
+		value, n := protowire.ConsumeVarint(raw)
+		if n < 0 {
+			return fmt.Errorf("message envelope packed subscription IDs: %w", protowire.ParseError(n))
+		}
+		if value > uint64(^uint32(0)) {
+			return fmt.Errorf("message envelope subscription ID overflows uint32: %d", value)
+		}
+		delivery.SubscriptionIDs = append(delivery.SubscriptionIDs, uint32(value))
+		raw = raw[n:]
+	}
+	return nil
 }
 
 // nested marks where a length-delimited field began, so its length prefix can

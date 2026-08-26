@@ -404,10 +404,11 @@ type DeliveryMetadata struct {
 	// rather than written as the epoch.
 	PublishedAt int64 `protobuf:"zigzag64,1,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
 	ExpiresAt   int64 `protobuf:"zigzag64,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	// subscription_ids is deliberately unpacked, which is what the hand codec
-	// writes. Packing it would be smaller and is what a generated encoder emits
-	// by default, so changing it is a change to the stored format.
-	SubscriptionIds []uint32 `protobuf:"varint,3,rep,name=subscription_ids,json=subscriptionIds,proto3" json:"subscription_ids,omitempty"`
+	// subscription_ids is packed, proto3's default. It was written unpacked until
+	// the schema of record made the divergence visible: nothing generated from
+	// this file could produce a record the codec would read, because the decoder
+	// required a varint per element. It now reads both forms.
+	SubscriptionIds []uint32 `protobuf:"varint,3,rep,packed,name=subscription_ids,json=subscriptionIds,proto3" json:"subscription_ids,omitempty"`
 	PacketId        uint32   `protobuf:"varint,4,opt,name=packet_id,json=packetId,proto3" json:"packet_id,omitempty"`
 	Qos             uint32   `protobuf:"varint,5,opt,name=qos,proto3" json:"qos,omitempty"`
 	// direction: 0 = outbound (server->client), 1 = inbound (client->server).
@@ -939,12 +940,12 @@ const file_message_v1_envelope_proto_rawDesc = "" +
 	"\vexternal_id\x18\x02 \x01(\tR\n" +
 	"externalId\x12\x1a\n" +
 	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12\x14\n" +
-	"\x05topic\x18\x04 \x01(\tR\x05topic\"\xbe\x02\n" +
+	"\x05topic\x18\x04 \x01(\tR\x05topic\"\xba\x02\n" +
 	"\x10DeliveryMetadata\x12!\n" +
 	"\fpublished_at\x18\x01 \x01(\x12R\vpublishedAt\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\x12R\texpiresAt\x12-\n" +
-	"\x10subscription_ids\x18\x03 \x03(\rB\x02\x10\x00R\x0fsubscriptionIds\x12\x1b\n" +
+	"expires_at\x18\x02 \x01(\x12R\texpiresAt\x12)\n" +
+	"\x10subscription_ids\x18\x03 \x03(\rR\x0fsubscriptionIds\x12\x1b\n" +
 	"\tpacket_id\x18\x04 \x01(\rR\bpacketId\x12\x10\n" +
 	"\x03qos\x18\x05 \x01(\rR\x03qos\x12-\n" +
 	"\x12inflight_direction\x18\x06 \x01(\rR\x11inflightDirection\x12%\n" +

@@ -84,10 +84,11 @@ message DeliveryMetadata {
   // rather than written as the epoch.
   sint64 published_at = 1;
   sint64 expires_at = 2;
-  // subscription_ids is deliberately unpacked, which is what the hand codec
-  // writes. Packing it would be smaller and is what a generated encoder emits
-  // by default, so changing it is a change to the stored format.
-  repeated uint32 subscription_ids = 3 [packed = false];
+  // subscription_ids is packed, proto3's default. It was written unpacked until
+  // the schema of record made the divergence visible: nothing generated from
+  // this file could produce a record the codec would read, because the decoder
+  // required a varint per element. It now reads both forms.
+  repeated uint32 subscription_ids = 3;
   uint32 packet_id = 4;
   uint32 qos = 5;
   // direction: 0 = outbound (server->client), 1 = inbound (client->server).

@@ -27,6 +27,14 @@ const (
 // versions. This implementation deliberately has no compatibility decoder.
 var ErrUnsupportedVersion = errors.New("unsupported message envelope version")
 
+// A metadata blob describes a log record whose value and key the record itself
+// owns. Carrying either inside the blob would leave two sources for one field,
+// with the embedded one silently losing.
+var (
+	ErrMetadataCarriesPayload = errors.New("message envelope metadata carries a payload")
+	ErrMetadataCarriesKey     = errors.New("message envelope metadata carries a publisher key")
+)
+
 // Protocol identifies the ingress protocol without leaking protocol-specific
 // types into the broker core.
 type Protocol string
