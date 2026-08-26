@@ -19,7 +19,7 @@ func TestBufferReferenceLifetime(t *testing.T) {
 	}
 	buf.Release()
 
-	reused := pool.Get(len("payload"))
+	reused := pool.get(len("payload"))
 	defer reused.Release()
 	if reused != buf {
 		t.Fatal("released buffer was not returned to its size-class pool")
@@ -39,10 +39,10 @@ func TestFromBytesCopiesInput(t *testing.T) {
 
 func TestOversizedBufferIsNotReused(t *testing.T) {
 	pool := NewPoolWithCapacity(1, 1, 1)
-	buf := pool.Get(1048577)
+	buf := pool.get(1048577)
 	buf.Release()
 
-	next := pool.Get(1048577)
+	next := pool.get(1048577)
 	defer next.Release()
 	if next == buf {
 		t.Fatal("oversized buffer must not be retained by the pool")

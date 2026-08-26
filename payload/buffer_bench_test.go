@@ -40,11 +40,11 @@ func BenchmarkPoolHit(b *testing.B) {
 		b.Run(size.name, func(b *testing.B) {
 			pool := NewPool()
 			// Prime the class so the first iteration is a hit like the rest.
-			pool.Get(size.size).Release()
+			pool.get(size.size).Release()
 
 			b.ReportAllocs()
 			for b.Loop() {
-				pool.Get(size.size).Release()
+				pool.get(size.size).Release()
 			}
 
 			stats := pool.Stats()
@@ -69,7 +69,7 @@ func BenchmarkPoolMiss(b *testing.B) {
 
 			b.ReportAllocs()
 			for b.Loop() {
-				pool.Get(size.size).Release()
+				pool.get(size.size).Release()
 			}
 
 			if stats := pool.Stats(); stats.SmallHits+stats.MediumHits+stats.LargeHits != 0 {
@@ -103,7 +103,7 @@ func BenchmarkPoolParallel(b *testing.B) {
 			b.ReportAllocs()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					pool.Get(size.size).Release()
+					pool.get(size.size).Release()
 				}
 			})
 		})

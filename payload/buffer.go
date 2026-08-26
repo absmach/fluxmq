@@ -70,13 +70,26 @@ func (b *Buffer) Release() {
 		return
 	}
 	if refs < 0 {
-		doubleReleaseCount.Add(1)
+		count := doubleReleaseCount.Add(1)
 		b.refs.Store(0)
+		// One ownership bug inside a fan-out loop reaches here once per
+		// message, and a stack capture is expensive enough to change the
+		// behaviour being diagnosed. The first few carry the stack that
+		// identifies the caller; DoubleReleaseCount is the durable signal for
+		// the rest.
+		if count > loggedDoubleReleases {
+			return
+		}
 		slog.Error("payload.Buffer: negative reference count",
 			slog.Int("count", int(refs)),
+			slog.Uint64("double_releases", count),
 			slog.String("stack", string(debug.Stack())))
 	}
 }
+
+// loggedDoubleReleases bounds how many negative reference counts capture a
+// stack. The first ones say where the bug is; the counter says how bad it is.
+const loggedDoubleReleases = 5
 
 // RefCount returns the current reference count for diagnostics and tests.
 func (b *Buffer) RefCount() int32 {
@@ -125,8 +138,15 @@ func NewPoolWithCapacity(small, medium, large int) *Pool {
 	}
 }
 
-// Get returns a buffer of size bytes with one owned reference.
-func (p *Pool) Get(size int) *Buffer {
+// get returns a buffer of size bytes with one owned reference.
+//
+// It is unexported because a pool hit reslices the previous owner's buffer and
+// does not clear it: a caller that asks for n bytes and fills fewer hands the
+// tail of a previous message to whoever reads it next. The only caller,
+// FromBytes, copies over the full length immediately. Anything that needs this
+// from outside the package wants a variant that zeroes or takes the fill, not
+// this contract with a warning attached.
+func (p *Pool) get(size int) *Buffer {
 	var class chan *Buffer
 	var capacity int
 	var hits, misses *atomic.Uint64
@@ -163,7 +183,7 @@ func (p *Pool) FromBytes(data []byte) *Buffer {
 	if len(data) == 0 {
 		return nil
 	}
-	buf := p.Get(len(data))
+	buf := p.get(len(data))
 	copy(buf.data, data)
 	return buf
 }
@@ -218,9 +238,6 @@ func (p *Pool) Clear() {
 
 // DefaultPool is shared by envelopes constructed from byte slices.
 var DefaultPool = NewPool()
-
-// Get returns a buffer from DefaultPool.
-func Get(size int) *Buffer { return DefaultPool.Get(size) }
 
 // FromBytes returns a DefaultPool buffer containing a copy of data.
 func FromBytes(data []byte) *Buffer { return DefaultPool.FromBytes(data) }

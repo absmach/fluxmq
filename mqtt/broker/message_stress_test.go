@@ -329,7 +329,7 @@ func TestStress_BufferPoolExhaustion(t *testing.T) {
 			for j := 0; j < operationsPerGoroutine; j++ {
 				// Mix of sizes
 				size := 512 + (id*j)%1024
-				buf := pool.Get(size)
+				buf := pool.FromBytes(make([]byte, size))
 
 				// Simulate a consumer inspecting the immutable payload.
 				_ = buf.Len()
