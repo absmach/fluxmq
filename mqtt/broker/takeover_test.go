@@ -968,11 +968,18 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 
 	state := &clusterv1.SessionState{
 		InflightMessages: []*clusterv1.InflightMessage{
-			{
-				PacketId: 5, Topic: "out", Qos: 2, Direction: uint32(messages.Outbound), Payload: []byte("op"),
-				Properties: map[string]string{"x-source-topic": "sensors/temperature", "trace": "abc"},
-			},
-			{PacketId: 5, Topic: "in", Qos: 2, Direction: uint32(messages.Inbound), Payload: []byte("ip")},
+			inflightWire(t, 5, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "out"
+				msg.Broker.Delivery.QoS = 2
+				msg.SetPayload([]byte("op"))
+				msg.Broker.Source.Topic = "sensors/temperature"
+				msg.User.Properties = map[string]string{"trace": "abc"}
+			}),
+			inflightWire(t, 5, uint32(messages.Inbound), func(msg *message.Envelope) {
+				msg.Topic = "in"
+				msg.Broker.Delivery.QoS = 2
+				msg.SetPayload([]byte("ip"))
+			}),
 		},
 	}
 	tracker := messages.NewInflightTracker(16)
@@ -990,6 +997,69 @@ func TestRestoreInflightFromTakeover_PreservesDirection(t *testing.T) {
 	require.Equal(t, "ip", string(gotIn.PayloadBytes()))
 }
 
+// A session takeover used to flatten each inflight message into a string map,
+// which had no representation for the queue lifecycle. A durable delivery moved
+// to another node with a zero delivery count, no retry deadline and no expiry,
+// so its redelivery limit and TTL restarted from scratch on the new owner.
+func TestRestoreInflightFromTakeover_PreservesQueueLifecycle(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	state := &clusterv1.SessionState{
+		InflightMessages: []*clusterv1.InflightMessage{
+			inflightWire(t, 7, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "$queue/orders/new"
+				msg.Broker.Delivery.QoS = 1
+				msg.Broker.Queue.Name = "orders"
+				msg.Broker.Queue.GroupID = testGroupWorkers
+				msg.Broker.Queue.Offset = 42
+				msg.Broker.Queue.State = message.QueueStateDelivered
+				msg.Broker.Queue.RetryCount = 2
+				msg.Broker.Queue.NextRetryAt = now.Add(time.Minute)
+				msg.Broker.Queue.ExpiresAt = now.Add(time.Hour)
+				msg.Broker.Transfer.ID = "transfer-7"
+			}),
+		},
+	}
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromTakeover(state, tracker))
+
+	got, err := tracker.Ack(7)
+	require.NoError(t, err)
+	require.Equal(t, "orders", got.Broker.Queue.Name)
+	require.Equal(t, "workers", got.Broker.Queue.GroupID)
+	require.Equal(t, uint64(42), got.Broker.Queue.Offset)
+	require.Equal(t, message.QueueStateDelivered, got.Broker.Queue.State)
+	require.Equal(t, 2, got.Broker.Queue.RetryCount)
+	require.True(t, got.Broker.Queue.NextRetryAt.Equal(now.Add(time.Minute)))
+	require.True(t, got.Broker.Queue.ExpiresAt.Equal(now.Add(time.Hour)))
+	require.Equal(t, "transfer-7", got.Broker.Transfer.ID)
+}
+
+// A takeover must survive one undecodable entry: the caller aborts session
+// creation on an error, so failing here would lose the whole session rather
+// than one message.
+func TestRestoreInflightFromTakeover_SkipsUndecodableEnvelope(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+
+	state := &clusterv1.SessionState{
+		InflightMessages: []*clusterv1.InflightMessage{
+			{PacketId: 1, Direction: uint32(messages.Outbound), Envelope: []byte{0xff, 0xff, 0xff}},
+			inflightWire(t, 2, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "ok"
+				msg.Broker.Delivery.QoS = 1
+			}),
+		},
+	}
+	tracker := messages.NewInflightTracker(16)
+	require.NoError(t, b.restoreInflightFromTakeover(state, tracker))
+
+	require.False(t, tracker.Has(1), "an undecodable entry must be dropped")
+	require.True(t, tracker.Has(2), "a decodable entry after it must still be restored")
+}
+
 // TestRestoreInflightFromTakeover_SkipsInvalidDirection guards finding #2: a
 // corrupt direction from transferred state is skipped, not panicking.
 func TestRestoreInflightFromTakeover_SkipsInvalidDirection(t *testing.T) {
@@ -998,8 +1068,14 @@ func TestRestoreInflightFromTakeover_SkipsInvalidDirection(t *testing.T) {
 
 	state := &clusterv1.SessionState{
 		InflightMessages: []*clusterv1.InflightMessage{
-			{PacketId: 1, Topic: "ok", Qos: 1, Direction: uint32(messages.Outbound)},
-			{PacketId: 2, Topic: "bad", Qos: 1, Direction: 99}, // corrupt
+			inflightWire(t, 1, uint32(messages.Outbound), func(msg *message.Envelope) {
+				msg.Topic = "ok"
+				msg.Broker.Delivery.QoS = 1
+			}),
+			inflightWire(t, 2, 99, func(msg *message.Envelope) { // corrupt direction
+				msg.Topic = "bad"
+				msg.Broker.Delivery.QoS = 1
+			}),
 		},
 	}
 	tracker := messages.NewInflightTracker(16)
@@ -1021,4 +1097,17 @@ func TestSession_AckInbound_UsesDirectionalAck(t *testing.T) {
 	got, err := s.AckInbound(9)
 	require.NoError(t, err)
 	require.Equal(t, "in", got.Topic)
+}
+
+// inflightWire builds the takeover wire form of one inflight entry. The wire
+// carries a whole binary envelope, so the test states what the envelope holds
+// and lets the codec decide how it travels.
+func inflightWire(t *testing.T, packetID, direction uint32, build func(*message.Envelope)) *clusterv1.InflightMessage {
+	t.Helper()
+	msg := message.Acquire()
+	defer message.Release(msg)
+	build(msg)
+	encoded, err := message.MarshalBinary(msg)
+	require.NoError(t, err)
+	return &clusterv1.InflightMessage{PacketId: packetID, Direction: direction, Envelope: encoded}
 }

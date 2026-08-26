@@ -1075,7 +1075,9 @@ func main() {
 		}
 		msg := message.New(topic, payload)
 		msg.Broker.Delivery.QoS = qos
-		message.ApplyTrustedProperties(msg, props)
+		if err := message.ApplyTrustedProperties(msg, props); err != nil {
+			slog.Warn("cross-deliver dropped malformed properties", "client_id", clientID, "topic", topic, "error", err)
+		}
 		if _, err := b.DeliverToSession(ctx, s, msg); err != nil {
 			slog.Debug("cross-deliver to MQTT session failed", "client_id", clientID, "topic", topic, "error", err)
 		}

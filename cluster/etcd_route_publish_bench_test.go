@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -63,12 +64,14 @@ func benchmarkRoutePublishCluster(b *testing.B, subscribers int) *EtcdCluster {
 func BenchmarkRoutePublish_QoS1_1kSubscribers(b *testing.B) {
 	c := benchmarkRoutePublishCluster(b, 1000)
 	ctx := context.Background()
+	msg := message.New("sensor/temp", []byte("42"))
+	msg.Broker.Delivery.QoS = 1
+	defer message.Release(msg)
 
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		if err := c.RoutePublish(ctx, "sensor/temp", []byte("42"), 1, false, nil); err != nil {
+	for b.Loop() {
+		if err := c.RoutePublish(ctx, msg); err != nil {
 			b.Fatalf("route publish failed: %v", err)
 		}
 	}

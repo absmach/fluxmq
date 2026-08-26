@@ -340,7 +340,15 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 		// shutdown cancels in-flight cluster routes, but cap with a timeout.
 		routeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := cl.RoutePublish(routeCtx, topic, payload, 1, false, props); err != nil {
+		routed := message.New(topic, payload)
+		if err := message.ApplyTrustedProperties(routed, props); err != nil {
+			b.logger.Warn("AMQP 0.9.1 cluster route publish dropped malformed properties",
+				"topic", topic, "error", err)
+		}
+		routed.Broker.Delivery.QoS = 1
+		err := cl.RoutePublish(routeCtx, routed)
+		message.Release(routed)
+		if err != nil {
 			b.logger.Error("AMQP 0.9.1 cluster route publish failed", "topic", topic, "error", err)
 			return fmt.Errorf("cluster route publish: %w", err)
 		}

@@ -20,6 +20,7 @@ type stubForwardPublishHandler struct {
 }
 
 func (s *stubForwardPublishHandler) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
+	defer message.Release(msg)
 	if s.errByTopic == nil {
 		return nil
 	}
@@ -33,7 +34,7 @@ func TestForwardPublishBatchNoHandler(t *testing.T) {
 
 	req := connect.NewRequest(&clusterv1.ForwardPublishBatchRequest{
 		Messages: []*clusterv1.ForwardPublishRequest{
-			{Topic: testTopicAB},
+			wireForward(t, testTopicAB, 0, nil),
 		},
 	})
 	resp, err := tr.ForwardPublishBatch(context.Background(), req)
@@ -62,8 +63,8 @@ func TestForwardPublishBatchReportsPartialFailures(t *testing.T) {
 	req := connect.NewRequest(&clusterv1.ForwardPublishBatchRequest{
 		Messages: []*clusterv1.ForwardPublishRequest{
 			nil,
-			{Topic: "ok/topic", Payload: []byte("ok")},
-			{Topic: testTopicBad, Payload: []byte("bad")},
+			wireForward(t, "ok/topic", 0, []byte("ok")),
+			wireForward(t, testTopicBad, 0, []byte("bad")),
 		},
 	})
 	resp, err := tr.ForwardPublishBatch(context.Background(), req)

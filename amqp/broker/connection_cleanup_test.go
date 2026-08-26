@@ -113,7 +113,7 @@ func (c *testCluster) ListAllQueueConsumers(_ context.Context) ([]*cluster.Queue
 	return nil, nil
 }
 
-func (c *testCluster) ForwardQueuePublish(_ context.Context, _, _ string, _ []byte, _ map[string]string, _ bool) error {
+func (c *testCluster) ForwardQueuePublish(_ context.Context, _ string, _ *message.Envelope, _ []string, _ bool) error {
 	return nil
 }
 
@@ -128,7 +128,7 @@ func (c *testCluster) NodeID() string                        { return "test" }
 func (c *testCluster) Nodes() []cluster.NodeInfo             { return nil }
 func (c *testCluster) Retained() storage.RetainedStore       { return nil }
 func (c *testCluster) Wills() storage.WillStore              { return nil }
-func (c *testCluster) RoutePublish(_ context.Context, _ string, _ []byte, _ byte, _ bool, _ map[string]string) error {
+func (c *testCluster) RoutePublish(_ context.Context, _ *message.Envelope) error {
 	return nil
 }
 

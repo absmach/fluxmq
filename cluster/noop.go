@@ -128,7 +128,7 @@ func (s *noopWillStore) GetPending(ctx context.Context, _ time.Time) ([]*storage
 
 // Message routing - no routing in single-node
 
-func (n *NoopCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
+func (n *NoopCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	// Single-node: no remote nodes to route to
 	return nil
 }
@@ -142,7 +142,7 @@ func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 
 // Queue routing - not applicable in single-node
 
-func (n *NoopCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, payload []byte, properties map[string]string) error {
+func (n *NoopCluster) EnqueueRemote(ctx context.Context, nodeID, queueName string, msg *message.Envelope) error {
 	// Single-node: no remote nodes to enqueue to
 	return ErrClusterNotEnabled
 }
@@ -179,7 +179,7 @@ func (n *NoopCluster) ListAllQueueConsumers(ctx context.Context) ([]*QueueConsum
 	return nil, nil
 }
 
-func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
+func (n *NoopCluster) ForwardQueuePublish(ctx context.Context, nodeID string, msg *message.Envelope, targetQueues []string, forwardToLeader bool) error {
 	// Single-node: no remote nodes to forward to
 	return ErrClusterNotEnabled
 }

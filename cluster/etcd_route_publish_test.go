@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 )
@@ -73,7 +74,7 @@ func TestRoutePublishQoS1ForwardsSync(t *testing.T) {
 		return nil
 	})
 
-	err := c.RoutePublish(context.Background(), "sensor/temp", []byte("42"), 1, false, map[string]string{"k": "v"})
+	err := c.RoutePublish(context.Background(), routedEnvelope("sensor/temp", []byte("42"), 1, map[string]string{"k": "v"}))
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -103,7 +104,7 @@ func TestRoutePublishQoS1PropagatesError(t *testing.T) {
 		return nil
 	})
 
-	err := c.RoutePublish(context.Background(), "sensor/temp", []byte("42"), 1, false, nil)
+	err := c.RoutePublish(context.Background(), routedEnvelope("sensor/temp", []byte("42"), 1, nil))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -127,7 +128,7 @@ func TestRoutePublishQoS0ForwardsAsync(t *testing.T) {
 		return nil
 	})
 
-	err := c.RoutePublish(context.Background(), "sensor/temp", []byte("42"), 0, false, nil)
+	err := c.RoutePublish(context.Background(), routedEnvelope("sensor/temp", []byte("42"), 0, nil))
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -164,7 +165,7 @@ func TestRoutePublishQoS0DoesNotPropagateFlushError(t *testing.T) {
 		return errors.New("transport down")
 	})
 
-	err := c.RoutePublish(context.Background(), "sensor/temp", []byte("42"), 0, false, nil)
+	err := c.RoutePublish(context.Background(), routedEnvelope("sensor/temp", []byte("42"), 0, nil))
 	if err != nil {
 		t.Fatalf("QoS 0 should not propagate flush errors, got %v", err)
 	}
@@ -202,7 +203,7 @@ func TestRoutePublishNoRemoteNodesSkipsForwarding(t *testing.T) {
 		},
 	)
 
-	if err := c.RoutePublish(context.Background(), "sensor/temp", []byte("42"), 1, false, nil); err != nil {
+	if err := c.RoutePublish(context.Background(), routedEnvelope("sensor/temp", []byte("42"), 1, nil)); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if called {
@@ -244,17 +245,8 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 			if len(items) != 1 {
 				t.Fatalf("expected 1 forwarded message, got %d", len(items))
 			}
-			msg := items[0]
-			props := make(map[string]string, len(msg.Properties))
-			for k, v := range msg.Properties {
-				props[k] = v
-			}
 			forwarded <- &clusterv1.ForwardPublishRequest{
-				Topic:      msg.Topic,
-				Payload:    append([]byte(nil), msg.Payload...),
-				Qos:        msg.Qos,
-				Retain:     msg.Retain,
-				Properties: props,
+				Envelope: append([]byte(nil), items[0].Envelope...),
 			}
 			return nil
 		},
@@ -265,27 +257,43 @@ func TestRoutePublishQoS0AsyncSnapshotsPayloadAndProperties(t *testing.T) {
 		"trace": "one",
 	}
 
-	if err := c.RoutePublish(context.Background(), "sensor/temp", payload, 0, false, properties); err != nil {
+	msg := routedEnvelope("sensor/temp", payload, 0, properties)
+	if err := c.RoutePublish(context.Background(), msg); err != nil {
 		t.Fatalf("route publish failed: %v", err)
 	}
 
-	// Mutate original inputs after RoutePublish returns. Forwarded data must stay unchanged.
+	// Mutate and release the caller's envelope after RoutePublish returns. The
+	// async flush must still see what was routed: encoding it produced a copy.
 	payload[0] = 'X'
 	properties["trace"] = "two"
 	properties["new"] = testValue
+	message.Release(msg)
 
 	select {
 	case got := <-forwarded:
-		if string(got.Payload) != "first-message" {
-			t.Fatalf("expected payload %q, got %q", "first-message", string(got.Payload))
+		decoded, err := message.UnmarshalBinary(got.Envelope)
+		if err != nil {
+			t.Fatalf("decode forwarded envelope: %v", err)
 		}
-		if got.Properties["trace"] != "one" {
-			t.Fatalf("expected trace property %q, got %q", "one", got.Properties["trace"])
+		defer message.Release(decoded)
+		if string(decoded.PayloadBytes()) != "first-message" {
+			t.Fatalf("expected payload %q, got %q", "first-message", string(decoded.PayloadBytes()))
 		}
-		if _, ok := got.Properties["new"]; ok {
-			t.Fatalf("unexpected property propagated from caller mutation: %v", got.Properties)
+		if decoded.User.Properties["trace"] != "one" {
+			t.Fatalf("expected trace property %q, got %q", "one", decoded.User.Properties["trace"])
+		}
+		if _, ok := decoded.User.Properties["new"]; ok {
+			t.Fatalf("unexpected property propagated from caller mutation: %v", decoded.User.Properties)
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for forwarded publish")
 	}
+}
+
+// routedEnvelope builds the envelope a caller lends to RoutePublish.
+func routedEnvelope(topic string, payload []byte, qos byte, properties map[string]string) *message.Envelope {
+	msg := message.New(topic, payload)
+	msg.Broker.Delivery.QoS = qos
+	msg.User.Properties = properties
+	return msg
 }

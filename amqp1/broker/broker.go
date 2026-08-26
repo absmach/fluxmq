@@ -157,7 +157,15 @@ func (b *Broker) Publish(ctx context.Context, topic string, payload []byte, prop
 		// cluster routes, but cap with a timeout.
 		routeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if err := cl.RoutePublish(routeCtx, topic, payload, 1, false, props); err != nil {
+		routed := coremessage.New(topic, payload)
+		if err := coremessage.ApplyTrustedProperties(routed, props); err != nil {
+			b.logger.Warn("AMQP cluster route publish dropped malformed properties",
+				"topic", topic, "error", err)
+		}
+		routed.Broker.Delivery.QoS = 1
+		err := cl.RoutePublish(routeCtx, routed)
+		coremessage.Release(routed)
+		if err != nil {
 			b.logger.Error("AMQP cluster route publish failed", "topic", topic, "error", err)
 		}
 	}

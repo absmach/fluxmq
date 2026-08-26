@@ -1421,9 +1421,10 @@ func (m *Manager) forwardToRemoteNodes(ctx context.Context, publish types.Publis
 	}
 
 	// Forward to each unique remote node
-	properties := projectPublishMetadata(message.FilterUserProperties(publish.Properties), publish.Source, publish.Trace)
+	forwarded := publish.Envelope()
+	defer message.Release(forwarded)
 	for nodeID := range remoteNodes {
-		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, publish.Topic, publish.Payload, properties, false); err != nil {
+		if err := m.cluster.ForwardQueuePublish(ctx, nodeID, forwarded, nil, false); err != nil {
 			m.logger.Warn("failed to forward publish to remote node",
 				slog.String("node", nodeID),
 				slog.String("topic", publish.Topic),
@@ -1816,45 +1817,12 @@ func (m *Manager) forwardPublishToLeader(ctx context.Context, publish types.Publ
 		return fmt.Errorf("raft leader unavailable")
 	}
 
-	props := message.FilterUserProperties(publish.Properties)
-	props = projectPublishMetadata(props, publish.Source, publish.Trace)
-	if len(targetQueues) > 0 {
-		// Need a writable map — cloneWithoutForwardingMeta may have returned
-		// the original when no forwarding key was present.
-		writable := make(map[string]string, len(props)+1)
-		for k, v := range props {
-			writable[k] = v
-		}
-		writable[message.PropertyForwardTargetQueues] = strings.Join(targetQueues, ",")
-		props = writable
-	}
+	// targetQueues travels beside the envelope as a typed routing control. It
+	// used to be joined into a user property, where a publisher could set it.
+	forwarded := publish.Envelope()
+	defer message.Release(forwarded)
 
-	return m.cluster.ForwardQueuePublish(ctx, leaderID, publish.Topic, publish.Payload, props, true)
-}
-
-func projectPublishMetadata(properties map[string]string, source message.SourceMetadata, trace message.TraceMetadata) map[string]string {
-	if properties == nil {
-		properties = make(map[string]string, 3)
-	}
-	if source.ClientID != "" {
-		properties[message.PropertyClientID] = source.ClientID
-	}
-	if source.ExternalID != "" {
-		properties[message.PropertyExternalID] = source.ExternalID
-	}
-	if source.Protocol != "" {
-		properties[message.PropertyProtocol] = string(source.Protocol)
-	}
-	if trace.TraceParent != "" {
-		properties[message.PropertyTraceParent] = trace.TraceParent
-	}
-	if trace.TraceState != "" {
-		properties[message.PropertyTraceState] = trace.TraceState
-	}
-	if trace.TraceID != "" {
-		properties[message.PropertyTraceID] = trace.TraceID
-	}
-	return properties
+	return m.cluster.ForwardQueuePublish(ctx, leaderID, forwarded, targetQueues, true)
 }
 
 // runPoisonSweepLoop performs the dead-letter transfers the claim path defers.
@@ -2146,14 +2114,11 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 // It routes by topic pattern and so may append to several queues, which is why
 // it reports no offset: there is no single record to name. Callers that need an
 // exact offset use the append path instead.
-func (m *Manager) EnqueueLocal(ctx context.Context, topic string, payload []byte, properties map[string]string) error {
-	return m.Publish(ctx, types.PublishRequest{
-		Source:     message.SourceFromProperties(properties),
-		Trace:      message.TraceFromProperties(properties),
-		Topic:      topic,
-		Payload:    payload,
-		Properties: message.FilterUserProperties(properties),
-	})
+// It borrows msg for the duration of the call.
+func (m *Manager) EnqueueLocal(ctx context.Context, topic string, msg *message.Envelope) error {
+	publish := types.PublishFromEnvelope(msg)
+	publish.Topic = topic
+	return m.Publish(ctx, publish)
 }
 
 // DeliverQueueMessage implements cluster.QueueHandler.DeliverQueueMessage.

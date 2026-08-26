@@ -4,6 +4,8 @@
 package message
 
 import (
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -113,32 +115,65 @@ func TraceFromProperties(properties map[string]string) TraceMetadata {
 	}
 }
 
-// ApplyTrustedProperties decodes the cluster protobuf property projection into
-// typed namespaces. It is only for authenticated
-// broker-to-broker and trusted-service boundaries; public ingress must call
-// FilterUserProperties and set SourceMetadata from its authenticated session.
-func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) {
+// ApplyTrustedProperties decodes a flattened property projection into typed
+// namespaces. It is only for authenticated broker-to-broker and
+// trusted-service boundaries; public ingress must call FilterUserProperties and
+// set SourceMetadata from its authenticated session.
+//
+// It reports every numeric property it could not decode instead of substituting
+// a zero. A malformed offset used to be indistinguishable from offset 0, so a
+// corrupt or hostile value silently redirected an acknowledgement to the head of
+// the queue. The envelope is still filled in as far as it can be, so a caller
+// that chooses to continue sees every field that did parse.
+func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) error {
 	if envelope == nil {
-		return
+		return nil
 	}
 	envelope.User.Properties = FilterUserProperties(properties)
 	envelope.Broker.Source = SourceFromProperties(properties)
 	envelope.Broker.Source.Topic = properties[PropertySourceTopic]
 
+	var errs []error
+	parseUint := func(name string, raw string, target *uint64) {
+		if raw == "" {
+			return
+		}
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("property %q: %w", name, err))
+			return
+		}
+		*target = value
+	}
+
 	queue := &envelope.Broker.Queue
 	queue.MessageID = properties[PropertyMessageID]
 	queue.Name = properties[PropertyQueueName]
 	queue.GroupID = properties[PropertyGroupID]
-	queue.Offset, _ = strconv.ParseUint(properties[PropertyOffset], 10, 64)
+	parseUint(PropertyOffset, properties[PropertyOffset], &queue.Offset)
 	if rawOffset, ok := properties[PropertyStreamOffset]; ok {
 		stream := &StreamMetadata{}
-		stream.Offset, _ = strconv.ParseUint(rawOffset, 10, 64)
-		stream.Timestamp, _ = strconv.ParseInt(properties[PropertyStreamTimestamp], 10, 64)
+		parseUint(PropertyStreamOffset, rawOffset, &stream.Offset)
+		if raw := properties[PropertyStreamTimestamp]; raw != "" {
+			timestamp, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("property %q: %w", PropertyStreamTimestamp, err))
+			} else {
+				stream.Timestamp = timestamp
+			}
+		}
 		if rawCommitted, exists := properties[PropertyWorkCommitted]; exists {
 			stream.HasCommittedOffset = true
-			stream.CommittedOffset, _ = strconv.ParseUint(rawCommitted, 10, 64)
+			parseUint(PropertyWorkCommitted, rawCommitted, &stream.CommittedOffset)
 		}
-		stream.WorkAcknowledged, _ = strconv.ParseBool(properties[PropertyWorkAcked])
+		if raw := properties[PropertyWorkAcked]; raw != "" {
+			acknowledged, err := strconv.ParseBool(raw)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("property %q: %w", PropertyWorkAcked, err))
+			} else {
+				stream.WorkAcknowledged = acknowledged
+			}
+		}
 		stream.WorkGroup = properties[PropertyWorkGroup]
 		queue.Stream = stream
 	}
@@ -146,6 +181,8 @@ func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) {
 	envelope.Broker.Transfer.ID = properties[PropertyTransferID]
 	envelope.Broker.Transfer.FailureReason = properties[PropertyDLQReason]
 	envelope.Broker.Trace = TraceFromProperties(properties)
+
+	return errors.Join(errs...)
 }
 
 // ProjectProperties returns a fresh wire property map. Broker-owned values are

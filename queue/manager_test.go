@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1751,6 +1753,7 @@ type forwardPublishCall struct {
 	topic           string
 	payload         []byte
 	properties      map[string]string
+	targetQueues    []string
 	forwardToLeader bool
 }
 
@@ -1849,7 +1852,7 @@ func (c *mockCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 }
 func (c *mockCluster) Retained() brokerstorage.RetainedStore { return nil }
 func (c *mockCluster) Wills() brokerstorage.WillStore        { return nil }
-func (c *mockCluster) RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error {
+func (c *mockCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }
 
@@ -1902,14 +1905,17 @@ func (c *mockCluster) ListAllQueueConsumers(ctx context.Context) ([]*cluster.Que
 	return consumers, nil
 }
 
-func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error {
+// The manager only lends the envelope, so record a snapshot of what crossed the
+// boundary rather than the envelope itself.
+func (c *mockCluster) ForwardQueuePublish(ctx context.Context, nodeID string, msg *message.Envelope, targetQueues []string, forwardToLeader bool) error {
 	c.forwardCallsMu.Lock()
 	defer c.forwardCallsMu.Unlock()
 	c.forwardCalls = append(c.forwardCalls, forwardPublishCall{
 		nodeID:          nodeID,
-		topic:           topic,
-		payload:         payload,
-		properties:      properties,
+		topic:           msg.Topic,
+		payload:         bytes.Clone(msg.PayloadBytes()),
+		properties:      maps.Clone(msg.User.Properties),
+		targetQueues:    slices.Clone(targetQueues),
 		forwardToLeader: forwardToLeader,
 	})
 	return nil
@@ -2566,11 +2572,13 @@ func TestPublishForwardPolicySplitsByLeaderAndMarksTargets(t *testing.T) {
 		if !call.forwardToLeader {
 			t.Fatalf("expected forward-to-leader call")
 		}
-		target := call.properties[message.PropertyForwardTargetQueues]
-		if target == "" {
-			t.Fatalf("expected target queues metadata")
+		if len(call.targetQueues) != 1 {
+			t.Fatalf("expected exactly one target queue, got %v", call.targetQueues)
 		}
-		seenTarget[target] = true
+		if _, forged := call.properties[message.PropertyForwardTargetQueues]; forged {
+			t.Fatal("forwarding intent must not travel as a user property")
+		}
+		seenTarget[call.targetQueues[0]] = true
 	}
 
 	if !seenTarget["q1"] || !seenTarget["q2"] {
@@ -3109,12 +3117,13 @@ func TestEnqueueLocal(t *testing.T) {
 	}
 	defer manager.Stop() //nolint:errcheck // test cleanup
 
-	err := manager.EnqueueLocal(ctx, "$queue/remote", []byte("remote payload"), map[string]string{
-		"key":                    testCustomValue,
-		message.PropertyClientID: "mqtt:remote-client",
-		message.PropertyProtocol: string(message.ProtocolMQTT),
-		message.PropertyTraceID:  "trace-remote",
-	})
+	remote := message.New("$queue/remote", []byte("remote payload"))
+	remote.User.Properties = map[string]string{"key": testCustomValue}
+	remote.Broker.Source.ClientID = "mqtt:remote-client"
+	remote.Broker.Source.Protocol = message.ProtocolMQTT
+	remote.Broker.Trace.TraceID = "trace-remote"
+	err := manager.EnqueueLocal(ctx, "$queue/remote", remote)
+	message.Release(remote)
 	if err != nil {
 		t.Fatalf("EnqueueLocal failed: %v", err)
 	}

@@ -222,10 +222,13 @@ func (b *Broker) distribute(ctx context.Context, msg *message.Envelope) error {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
-		// Zero-copy: Pass the payload directly (cluster routing will handle serialization)
-		payload := msg.PayloadBytes()
-		properties := message.ProjectProperties(msg, message.TrustedServiceProjection)
-		if err := b.cluster.RoutePublish(ctx, msg.Topic, payload, msg.Broker.Delivery.QoS, false, properties); err != nil {
+		// A cross-node hop always carries retain=0: the receiving node re-stamps
+		// the flag per local subscription. Clear it on a borrowed shallow copy
+		// rather than on msg, which local fan-out may still be reading.
+		// RoutePublish only reads the copy, and never releases it.
+		forward := *msg
+		forward.Broker.Delivery.Retain = false
+		if err := b.cluster.RoutePublish(ctx, &forward); err != nil {
 			b.logError("cluster_route_publish", err, slog.String("topic", msg.Topic))
 			if msg.Broker.Delivery.QoS > 0 {
 				return fmt.Errorf("cluster route publish: %w", err)

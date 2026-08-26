@@ -532,12 +532,16 @@ func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, trac
 		return nil
 	}
 
+	// An entry that will not decode is dropped, not fatal: the caller aborts the
+	// whole session takeover on an error, and losing one inflight message beats
+	// losing the session.
 	for _, msg := range state.InflightMessages {
-		storeMsg := message.New(msg.Topic, msg.GetPayload())
-		storeMsg.Broker.Delivery.QoS = byte(msg.Qos)
-		storeMsg.Broker.Delivery.Retain = msg.Retain
+		storeMsg, err := message.UnmarshalBinary(msg.Envelope)
+		if err != nil {
+			b.logError("restore_inflight", err, slog.Uint64("packet_id", uint64(msg.PacketId)))
+			continue
+		}
 		storeMsg.Broker.Delivery.PacketID = uint16(msg.PacketId)
-		message.ApplyTrustedProperties(storeMsg, msg.Properties)
 		restoreInflightEntry(tracker, uint16(msg.PacketId), storeMsg, msg.Direction, msg.State)
 	}
 
@@ -551,11 +555,13 @@ func (b *Broker) restoreQueueFromTakeover(state *clusterv1.SessionState, queue m
 	}
 
 	for _, msg := range state.QueuedMessages {
-		storeMsg := message.New(msg.Topic, msg.GetPayload())
-		storeMsg.Broker.Delivery.QoS = byte(msg.Qos)
-		storeMsg.Broker.Delivery.Retain = msg.Retain
+		storeMsg, err := message.UnmarshalBinary(msg.Envelope)
+		if err != nil {
+			b.logError("restore_queue", err)
+			continue
+		}
 		if err := queue.Enqueue(storeMsg); err != nil {
-			b.logError("restore_queue", err, slog.String("topic", msg.Topic))
+			b.logError("restore_queue", err, slog.String("topic", storeMsg.Topic))
 			message.Release(storeMsg)
 			continue
 		}
@@ -642,27 +648,31 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 
 	// Capture inflight messages
 	for _, msg := range s.Inflight().GetAll() {
+		encoded, err := message.MarshalBinary(msg.Message)
+		if err != nil {
+			b.logError("capture_inflight", err, slog.String("topic", msg.Message.Topic))
+			continue
+		}
 		state.InflightMessages = append(state.InflightMessages, &clusterv1.InflightMessage{
-			PacketId:   uint32(msg.PacketID),
-			Topic:      msg.Message.Topic,
-			Payload:    msg.Message.StablePayload(),
-			Qos:        uint32(msg.Message.Broker.Delivery.QoS),
-			Retain:     msg.Message.Broker.Delivery.Retain,
-			Timestamp:  time.Now().Unix(),
-			Direction:  uint32(msg.Direction),
-			State:      uint32(msg.State),
-			Properties: message.ProjectProperties(msg.Message, message.TrustedServiceProjection),
+			PacketId:  uint32(msg.PacketID),
+			Timestamp: time.Now().Unix(),
+			Direction: uint32(msg.Direction),
+			State:     uint32(msg.State),
+			Envelope:  encoded,
 		})
 	}
 
 	// Capture queued messages
 	for _, msg := range s.OfflineQueue().Drain() {
+		encoded, err := message.MarshalBinary(msg)
+		if err != nil {
+			b.logError("capture_offline_queue", err, slog.String("topic", msg.Topic))
+			message.Release(msg)
+			continue
+		}
 		state.QueuedMessages = append(state.QueuedMessages, &clusterv1.QueuedMessage{
-			Topic:     msg.Topic,
-			Payload:   msg.StablePayload(),
-			Qos:       uint32(msg.Broker.Delivery.QoS),
-			Retain:    msg.Broker.Delivery.Retain,
 			Timestamp: time.Now().Unix(),
+			Envelope:  encoded,
 		})
 		message.Release(msg)
 	}

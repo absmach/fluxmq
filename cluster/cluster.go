@@ -100,9 +100,11 @@ type QueueConsumerDirectory interface {
 
 // QueueForwarder forwards queue-related operations to peer nodes.
 type QueueForwarder interface {
-	// ForwardQueuePublish forwards a queue publish to a remote node.
+	// ForwardQueuePublish forwards a queue publish to a remote node. It borrows
+	// msg for the duration of the call. targetQueues names the queues the
+	// publish must land in, or is empty to route by topic.
 	// The remote node will store the message in its local matching queues.
-	ForwardQueuePublish(ctx context.Context, nodeID, topic string, payload []byte, properties map[string]string, forwardToLeader bool) error
+	ForwardQueuePublish(ctx context.Context, nodeID string, msg *message.Envelope, targetQueues []string, forwardToLeader bool) error
 
 	// ForwardGroupOp forwards a consumer group mutation to the Raft leader
 	// node for the given queue.
@@ -159,8 +161,9 @@ type Cluster interface {
 
 	// RoutePublish routes a publish message to all nodes with interested subscribers.
 	// The cluster implementation finds which nodes have matching subscriptions
-	// and forwards the message to them.
-	RoutePublish(ctx context.Context, topic string, payload []byte, qos byte, retain bool, properties map[string]string) error
+	// and forwards the message to them. It borrows msg for the duration of the
+	// call.
+	RoutePublish(ctx context.Context, msg *message.Envelope) error
 
 	// TakeoverSession initiates session takeover from one node to another.
 	// This is called when a client reconnects to a different node.

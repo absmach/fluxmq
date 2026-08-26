@@ -50,13 +50,15 @@ service BrokerService {
 // =============================================================================
 
 message PublishRequest {
+  reserved 2, 3, 4, 5, 6, 7;
+  reserved "topic", "payload", "qos", "retain", "dup", "properties";
+
+  // client_id routes the publish and is readable without decoding the message.
   string client_id = 1;
-  string topic = 2;
-  bytes payload = 3;
-  uint32 qos = 4;
-  bool retain = 5;
-  bool dup = 6;
-  map<string, string> properties = 7;
+  // envelope is a complete binary message.Envelope. It carries the topic,
+  // payload, delivery flags and every broker-owned namespace as typed values,
+  // rather than a flattened string map that had to be parsed back on arrival.
+  bytes envelope = 8;
 }
 
 message PublishResponse {
@@ -107,28 +109,29 @@ message SessionState {
 }
 
 message InflightMessage {
+  reserved 2, 3, 4, 5, 9;
+  reserved "topic", "payload", "qos", "retain", "properties";
+
   uint32 packet_id = 1;
-  string topic = 2;
-  bytes payload = 3;
-  uint32 qos = 4;
-  bool retain = 5;
   int64 timestamp = 6;
   // direction: 0 = outbound (server->client), 1 = inbound (client->server).
   uint32 direction = 7;
   // state: inflight delivery state (0 = publish sent, 1 = pubrec received).
   uint32 state = 8;
-  // properties preserves MQTT v5 properties and broker-owned queue metadata
-  // across a session takeover. Broker-owned values are still filtered at the
-  // external protocol boundary.
-  map<string, string> properties = 9;
+  // envelope is a complete binary message.Envelope, so a takeover carries the
+  // queue and transfer metadata that the string map silently dropped.
+  bytes envelope = 10;
 }
 
 message QueuedMessage {
-  string topic = 1;
-  bytes payload = 2;
-  uint32 qos = 3;
-  bool retain = 4;
+  reserved 1, 2, 3, 4;
+  reserved "topic", "payload", "qos", "retain";
+
   int64 timestamp = 5;
+  // envelope is a complete binary message.Envelope. The flattened form carried
+  // no properties at all, so a takeover silently emptied the offline queue's
+  // user metadata.
+  bytes envelope = 6;
 }
 
 message Subscription {
@@ -160,12 +163,12 @@ message FetchRetainedResponse {
 }
 
 message RetainedMessage {
-  string topic = 1;
-  bytes payload = 2;
-  uint32 qos = 3;
-  bool retain = 4;
-  map<string, string> properties = 5;
+  reserved 1, 2, 3, 4, 5;
+  reserved "topic", "payload", "qos", "retain", "properties";
+
   int64 timestamp = 6;
+  // envelope is a complete binary message.Envelope.
+  bytes envelope = 7;
 }
 
 // =============================================================================
@@ -187,11 +190,23 @@ message FetchWillResponse {
 // =============================================================================
 
 message EnqueueRemoteRequest {
+  reserved 2, 3;
+  reserved "payload", "properties";
+
+  // Routing controls stay typed: they say how to route the message, not what
+  // the message is, and a receiver reads them without decoding the envelope.
+  //
+  // queue_name names the destination of a direct enqueue and is empty for a
+  // forwarded publish, which routes by the envelope's topic.
   string queue_name = 1;
-  bytes payload = 2;
-  map<string, string> properties = 3;
   bool forwarded_publish = 4;
   bool forward_to_leader = 5;
+  // envelope is a complete binary message.Envelope.
+  bytes envelope = 6;
+  // forward_target_queues names the queues a forwarded publish must land in.
+  // It used to travel as a comma-joined string inside the user property map,
+  // where it was indistinguishable from a property a publisher had set.
+  repeated string forward_target_queues = 7;
 }
 
 message EnqueueRemoteResponse {
@@ -200,14 +215,16 @@ message EnqueueRemoteResponse {
 }
 
 message RouteQueueMessageRequest {
+  reserved 3, 4, 5, 7;
+  reserved "message_id", "payload", "properties", "topic";
+
   string client_id = 1;
   string queue_name = 2;
-  string message_id = 3;
-  bytes payload = 4;
-  map<string, string> properties = 5;
   int64 sequence = 6;
-  // Canonical queue delivery topic. Senders must set this field.
-  string topic = 7;
+  // envelope is a complete binary message.Envelope. message_id is gone with
+  // the string map: it was a synthesized queue:offset that overwrote whatever
+  // the publisher had set, and sequence already carries the offset.
+  bytes envelope = 8;
 }
 
 message RouteQueueMessageResponse {
@@ -368,13 +385,14 @@ message ForwardGroupOpResponse {
 // =============================================================================
 
 message ForwardPublishRequest {
-  string topic = 1;
-  bytes payload = 2;
-  uint32 qos = 3;
-  bool retain = 4;
-  map<string, string> properties = 5;
+  reserved 1, 2, 3, 4, 5;
+  reserved "topic", "payload", "qos", "retain", "properties";
+
+  // envelope is a complete binary message.Envelope.
+  //
   // NOTE: Deduplication across retries is not implemented yet.
   // A future dedup_key field can be added for idempotent forwarding.
+  bytes envelope = 6;
 }
 
 message ForwardPublishBatchRequest {
