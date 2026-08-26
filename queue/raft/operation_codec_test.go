@@ -118,24 +118,54 @@ func TestOperationCodecRejectsMalformedWire(t *testing.T) {
 	assert.ErrorIs(t, err, errMalformedOperation, "the new storage contract must not carry a legacy JSON fallback")
 }
 
-// A field this binary does not know is a field a newer peer added. The entry
-// carrying it is already committed, so refusing it would apply the mutation
-// everywhere except here. Tolerating it is what keeps a rolling upgrade from
-// diverging; operationWireVersion is the gate for a change that must not be
-// applied blindly.
-func TestOperationCodecToleratesUnknownFields(t *testing.T) {
-	wire := &raftv1.Operation{
-		Version: operationWireVersion,
-		Command: &raftv1.Operation_DeleteQueue{DeleteQueue: &raftv1.DeleteQueueOperation{QueueName: testOperationQueue}},
-	}
-	data, err := proto.Marshal(wire)
-	require.NoError(t, err)
-	data = append(data, 0x98, 0x06, 0x01) // field 99, varint 1
+// A field this binary has no name for is a field it cannot apply. The domain
+// conversion reads named fields only, so tolerating one would mean applying a
+// zero value where a newer replica applied the real thing — and losing the
+// evidence at the next snapshot. Refusing is the loud half of that choice.
+func TestOperationCodecRejectsUnknownFields(t *testing.T) {
+	t.Run("top level", func(t *testing.T) {
+		wire := &raftv1.Operation{
+			Version: operationWireVersion,
+			Command: &raftv1.Operation_DeleteQueue{DeleteQueue: &raftv1.DeleteQueueOperation{QueueName: testOperationQueue}},
+		}
+		data, err := proto.Marshal(wire)
+		require.NoError(t, err)
+		data = append(data, 0x98, 0x06, 0x01) // field 99, varint 1
 
-	decoded, err := unmarshalOperation(data)
-	require.NoError(t, err)
-	assert.Equal(t, OpDeleteQueue, decoded.Type)
-	assert.Equal(t, testOperationQueue, decoded.QueueName)
+		_, err = unmarshalOperation(data)
+		assert.ErrorIs(t, err, errMalformedOperation)
+	})
+
+	// The state-bearing fields are the nested ones, so this is the case that
+	// actually matters: an unknown field on the queue config a newer leader
+	// sent, several messages deep.
+	t.Run("nested in queue config", func(t *testing.T) {
+		config := conformanceQueueConfig()
+		wire, err := encodeOperation(&Operation{Type: OpCreateQueue, QueueName: config.Name, QueueConfig: &config})
+		require.NoError(t, err)
+		wire.GetCreateQueue().Config.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x07})
+
+		data, err := proto.Marshal(wire)
+		require.NoError(t, err)
+
+		_, err = unmarshalOperation(data)
+		assert.ErrorIs(t, err, errMalformedOperation, "an unknown nested field must not decode to a zero value")
+	})
+
+	// Repeated message fields are walked too: a group carries its pending list
+	// and its consumers as lists, and either can gain a field.
+	t.Run("nested in repeated group state", func(t *testing.T) {
+		group := conformanceConsumerGroup(conformanceTime)
+		wire, err := encodeOperation(&Operation{Type: OpCreateGroup, QueueName: testOperationQueue, GroupID: group.ID, GroupState: group})
+		require.NoError(t, err)
+		wire.GetCreateGroup().Group.Pending[0].ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x07})
+
+		data, err := proto.Marshal(wire)
+		require.NoError(t, err)
+
+		_, err = unmarshalOperation(data)
+		assert.ErrorIs(t, err, errMalformedOperation)
+	})
 }
 
 func TestOperationCodecRejectsIncompleteDomainOperations(t *testing.T) {
@@ -177,13 +207,4 @@ func TestOperationCodecSortsMapBackedGroupState(t *testing.T) {
 	require.Len(t, state.Consumers, 2)
 	assert.Equal(t, "a", state.Pending[0].ConsumerId)
 	assert.Equal(t, "a", state.Consumers[0].Id)
-}
-
-func completeWireQueueConfig() *raftv1.QueueConfigState {
-	return &raftv1.QueueConfigState{
-		RetryPolicy: &raftv1.RetryPolicyState{},
-		DeadLetter:  &raftv1.DeadLetterState{},
-		Replication: &raftv1.ReplicationState{},
-		Retention:   &raftv1.RetentionState{},
-	}
 }

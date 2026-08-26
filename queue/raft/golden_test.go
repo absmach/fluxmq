@@ -4,6 +4,7 @@
 package raft
 
 import (
+	"bytes"
 	"flag"
 	"os"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestGoldenRaftEncodings(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	snapshot, err := marshalSnapshot(conformanceSnapshot())
+	snapshot, err := conformanceSnapshotBytes()
 	require.NoError(t, err)
 
 	goldens := map[string][]byte{
@@ -78,16 +79,31 @@ func conformanceOperation() *Operation {
 	}
 }
 
-func conformanceSnapshot() *GlobalSnapshotData {
+// conformanceSnapshotBytes pins the framing as well as the messages: a snapshot
+// is a stream of length-delimited frames, and collapsing it back into a single
+// message would be invisible to a test that only compared decoded values.
+func conformanceSnapshotBytes() ([]byte, error) {
 	config := conformanceQueueConfig()
-	return &GlobalSnapshotData{
-		Timestamp: conformanceTime,
-		Queues: []QueueSnapshotData{{
-			QueueName:   testOperationQueue,
-			QueueConfig: &config,
-			Groups:      []*types.ConsumerGroup{conformanceConsumerGroup(conformanceTime)},
-		}},
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	if err := writer.WriteHeader(conformanceTime); err != nil {
+		return nil, err
 	}
+	if err := writer.WriteQueue(QueueSnapshotData{
+		QueueName:   testOperationQueue,
+		QueueConfig: &config,
+		Groups:      []*types.ConsumerGroup{conformanceConsumerGroup(conformanceTime)},
+		Head:        3,
+		Tail:        5,
+	}); err != nil {
+		return nil, err
+	}
+	for offset := uint64(3); offset < 5; offset++ {
+		if err := writer.WriteRecord(offset, []byte{byte(offset), 0x01, 0x02}); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 // conformanceQueueConfig populates every field the schema declares, which is

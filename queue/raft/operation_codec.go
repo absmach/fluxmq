@@ -12,16 +12,23 @@ import (
 	raftv1 "github.com/absmach/fluxmq/pkg/proto/raft/v1"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// operationWireVersion gates the shape of the encoded operation. Unknown
-// fields are deliberately tolerated rather than rejected: a committed entry
-// that this binary refuses to decode is an entry every other replica applied
-// and this one did not, so rejecting an additive field would turn a rolling
-// upgrade into silent state divergence. A change that a peer must not apply
-// blindly bumps this version instead, which every peer checks.
+// operationWireVersion gates the shape of the encoded operation.
+//
+// A field this binary does not know is a field it cannot apply. Tolerating it
+// would not make the entry harmless: the domain conversion below reads named
+// fields only, so an unknown one is dropped, this replica applies the zero
+// value where a newer one applied the real thing, and the difference vanishes
+// from the next snapshot this node writes. Refusing to decode stops the node
+// instead, which is the loud half of the same choice Apply makes.
+//
+// That makes a rolling upgrade a matter of not emitting a field until every
+// peer understands it — a version bump the writer gates on — rather than of
+// hoping older peers ignore it safely.
 const operationWireVersion uint32 = 1
 
 var errMalformedOperation = errors.New("malformed queue raft operation")
@@ -46,6 +53,9 @@ func unmarshalOperation(data []byte) (*Operation, error) {
 	wire := new(raftv1.Operation)
 	if err := proto.Unmarshal(data, wire); err != nil {
 		return nil, fmt.Errorf("%w: decode protobuf: %w", errMalformedOperation, err)
+	}
+	if err := rejectUnknownFields(wire.ProtoReflect()); err != nil {
+		return nil, fmt.Errorf("%w: %w", errMalformedOperation, err)
 	}
 	return decodeOperation(wire)
 }
@@ -739,4 +749,42 @@ func operationInt(value int64, field string) (int, error) {
 		return 0, fmt.Errorf("%s exceeds int range", field)
 	}
 	return converted, nil
+}
+
+// rejectUnknownFields walks a decoded message and refuses any field this build
+// has no name for, at any depth. The walk has to be recursive because the
+// fields that carry replicated state — a queue config, a group's cursor — are
+// nested, and an unknown one there is exactly the one that would be applied as
+// a zero value.
+func rejectUnknownFields(msg protoreflect.Message) error {
+	if len(msg.GetUnknown()) != 0 {
+		return fmt.Errorf("unknown fields in %s", msg.Descriptor().FullName())
+	}
+	var nestedErr error
+	msg.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		switch {
+		case field.IsMap():
+			if field.MapValue().Kind() != protoreflect.MessageKind {
+				return true
+			}
+			value.Map().Range(func(_ protoreflect.MapKey, item protoreflect.Value) bool {
+				nestedErr = rejectUnknownFields(item.Message())
+				return nestedErr == nil
+			})
+		case field.IsList():
+			if field.Kind() != protoreflect.MessageKind {
+				return true
+			}
+			list := value.List()
+			for i := range list.Len() {
+				if nestedErr = rejectUnknownFields(list.Get(i).Message()); nestedErr != nil {
+					break
+				}
+			}
+		case field.Kind() == protoreflect.MessageKind:
+			nestedErr = rejectUnknownFields(value.Message())
+		}
+		return nestedErr == nil
+	})
+	return nestedErr
 }

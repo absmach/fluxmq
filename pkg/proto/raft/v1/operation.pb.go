@@ -2373,34 +2373,40 @@ func (x *LogEntry) GetAppendedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// Snapshot is the persisted FSM snapshot: the queue configs and consumer
-// groups a restoring node needs to reach the state the log was compacted at.
-// It reuses QueueConfigState and ConsumerGroupState so the snapshot and the
-// log share one encoder, and a field added to either state is carried by both
-// or by neither.
-type Snapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Queues        []*QueueSnapshot       `protobuf:"bytes,3,rep,name=queues,proto3" json:"queues,omitempty"`
+// A snapshot is written as a sequence of length-delimited SnapshotFrames
+// rather than as one message. A queue's records are its bulk, and neither the
+// node writing the snapshot nor the node restoring it should have to hold all
+// of them in memory at once to do it.
+//
+// The frames reuse QueueConfigState and ConsumerGroupState so the snapshot and
+// the log share one encoder, and a field added to either state is carried by
+// both or by neither.
+type SnapshotFrame struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Frame:
+	//
+	//	*SnapshotFrame_Header
+	//	*SnapshotFrame_Queue
+	//	*SnapshotFrame_Record
+	Frame         isSnapshotFrame_Frame `protobuf_oneof:"frame"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Snapshot) Reset() {
-	*x = Snapshot{}
+func (x *SnapshotFrame) Reset() {
+	*x = SnapshotFrame{}
 	mi := &file_raft_v1_operation_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Snapshot) String() string {
+func (x *SnapshotFrame) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Snapshot) ProtoMessage() {}
+func (*SnapshotFrame) ProtoMessage() {}
 
-func (x *Snapshot) ProtoReflect() protoreflect.Message {
+func (x *SnapshotFrame) ProtoReflect() protoreflect.Message {
 	mi := &file_raft_v1_operation_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2412,44 +2418,139 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
-func (*Snapshot) Descriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotFrame.ProtoReflect.Descriptor instead.
+func (*SnapshotFrame) Descriptor() ([]byte, []int) {
 	return file_raft_v1_operation_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *Snapshot) GetVersion() uint32 {
+func (x *SnapshotFrame) GetFrame() isSnapshotFrame_Frame {
+	if x != nil {
+		return x.Frame
+	}
+	return nil
+}
+
+func (x *SnapshotFrame) GetHeader() *SnapshotHeader {
+	if x != nil {
+		if x, ok := x.Frame.(*SnapshotFrame_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *SnapshotFrame) GetQueue() *QueueSnapshot {
+	if x != nil {
+		if x, ok := x.Frame.(*SnapshotFrame_Queue); ok {
+			return x.Queue
+		}
+	}
+	return nil
+}
+
+func (x *SnapshotFrame) GetRecord() *SnapshotRecord {
+	if x != nil {
+		if x, ok := x.Frame.(*SnapshotFrame_Record); ok {
+			return x.Record
+		}
+	}
+	return nil
+}
+
+type isSnapshotFrame_Frame interface {
+	isSnapshotFrame_Frame()
+}
+
+type SnapshotFrame_Header struct {
+	Header *SnapshotHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type SnapshotFrame_Queue struct {
+	Queue *QueueSnapshot `protobuf:"bytes,2,opt,name=queue,proto3,oneof"`
+}
+
+type SnapshotFrame_Record struct {
+	Record *SnapshotRecord `protobuf:"bytes,3,opt,name=record,proto3,oneof"`
+}
+
+func (*SnapshotFrame_Header) isSnapshotFrame_Frame() {}
+
+func (*SnapshotFrame_Queue) isSnapshotFrame_Frame() {}
+
+func (*SnapshotFrame_Record) isSnapshotFrame_Frame() {}
+
+type SnapshotHeader struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotHeader) Reset() {
+	*x = SnapshotHeader{}
+	mi := &file_raft_v1_operation_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotHeader) ProtoMessage() {}
+
+func (x *SnapshotHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_raft_v1_operation_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotHeader.ProtoReflect.Descriptor instead.
+func (*SnapshotHeader) Descriptor() ([]byte, []int) {
+	return file_raft_v1_operation_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *SnapshotHeader) GetVersion() uint32 {
 	if x != nil {
 		return x.Version
 	}
 	return 0
 }
 
-func (x *Snapshot) GetTimestamp() *timestamppb.Timestamp {
+func (x *SnapshotHeader) GetTimestamp() *timestamppb.Timestamp {
 	if x != nil {
 		return x.Timestamp
 	}
 	return nil
 }
 
-func (x *Snapshot) GetQueues() []*QueueSnapshot {
-	if x != nil {
-		return x.Queues
-	}
-	return nil
-}
-
+// QueueSnapshot opens a queue. Every SnapshotRecord that follows belongs to it
+// until the next QueueSnapshot frame.
+//
+// head is the offset the log begins at. Truncation moves it away from zero and
+// consumers hold offsets, so a queue rebuilt from zero would hand every
+// consumer the wrong record.
 type QueueSnapshot struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	Config        *QueueConfigState      `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
 	Groups        []*ConsumerGroupState  `protobuf:"bytes,3,rep,name=groups,proto3" json:"groups,omitempty"`
+	Head          uint64                 `protobuf:"varint,4,opt,name=head,proto3" json:"head,omitempty"`
+	Tail          uint64                 `protobuf:"varint,5,opt,name=tail,proto3" json:"tail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *QueueSnapshot) Reset() {
 	*x = QueueSnapshot{}
-	mi := &file_raft_v1_operation_proto_msgTypes[27]
+	mi := &file_raft_v1_operation_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2461,7 +2562,7 @@ func (x *QueueSnapshot) String() string {
 func (*QueueSnapshot) ProtoMessage() {}
 
 func (x *QueueSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_raft_v1_operation_proto_msgTypes[27]
+	mi := &file_raft_v1_operation_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2474,7 +2575,7 @@ func (x *QueueSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueSnapshot.ProtoReflect.Descriptor instead.
 func (*QueueSnapshot) Descriptor() ([]byte, []int) {
-	return file_raft_v1_operation_proto_rawDescGZIP(), []int{27}
+	return file_raft_v1_operation_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *QueueSnapshot) GetQueueName() string {
@@ -2494,6 +2595,72 @@ func (x *QueueSnapshot) GetConfig() *QueueConfigState {
 func (x *QueueSnapshot) GetGroups() []*ConsumerGroupState {
 	if x != nil {
 		return x.Groups
+	}
+	return nil
+}
+
+func (x *QueueSnapshot) GetHead() uint64 {
+	if x != nil {
+		return x.Head
+	}
+	return 0
+}
+
+func (x *QueueSnapshot) GetTail() uint64 {
+	if x != nil {
+		return x.Tail
+	}
+	return 0
+}
+
+type SnapshotRecord struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Offset        uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	Envelope      []byte                 `protobuf:"bytes,2,opt,name=envelope,proto3" json:"envelope,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotRecord) Reset() {
+	*x = SnapshotRecord{}
+	mi := &file_raft_v1_operation_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotRecord) ProtoMessage() {}
+
+func (x *SnapshotRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_raft_v1_operation_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotRecord.ProtoReflect.Descriptor instead.
+func (*SnapshotRecord) Descriptor() ([]byte, []int) {
+	return file_raft_v1_operation_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SnapshotRecord) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *SnapshotRecord) GetEnvelope() []byte {
+	if x != nil {
+		return x.Envelope
 	}
 	return nil
 }
@@ -2702,16 +2869,25 @@ const file_raft_v1_operation_proto_rawDesc = "" +
 	"extensions\x18\x06 \x01(\fR\n" +
 	"extensions\x12;\n" +
 	"\vappended_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"appendedAt\"\x95\x01\n" +
-	"\bSnapshot\x12\x18\n" +
+	"appendedAt\"\xc3\x01\n" +
+	"\rSnapshotFrame\x128\n" +
+	"\x06header\x18\x01 \x01(\v2\x1e.fluxmq.raft.v1.SnapshotHeaderH\x00R\x06header\x125\n" +
+	"\x05queue\x18\x02 \x01(\v2\x1d.fluxmq.raft.v1.QueueSnapshotH\x00R\x05queue\x128\n" +
+	"\x06record\x18\x03 \x01(\v2\x1e.fluxmq.raft.v1.SnapshotRecordH\x00R\x06recordB\a\n" +
+	"\x05frame\"d\n" +
+	"\x0eSnapshotHeader\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x128\n" +
-	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x125\n" +
-	"\x06queues\x18\x03 \x03(\v2\x1d.fluxmq.raft.v1.QueueSnapshotR\x06queues\"\xa4\x01\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xcc\x01\n" +
 	"\rQueueSnapshot\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x128\n" +
 	"\x06config\x18\x02 \x01(\v2 .fluxmq.raft.v1.QueueConfigStateR\x06config\x12:\n" +
-	"\x06groups\x18\x03 \x03(\v2\".fluxmq.raft.v1.ConsumerGroupStateR\x06groups*w\n" +
+	"\x06groups\x18\x03 \x03(\v2\".fluxmq.raft.v1.ConsumerGroupStateR\x06groups\x12\x12\n" +
+	"\x04head\x18\x04 \x01(\x04R\x04head\x12\x12\n" +
+	"\x04tail\x18\x05 \x01(\x04R\x04tail\"D\n" +
+	"\x0eSnapshotRecord\x12\x16\n" +
+	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12\x1a\n" +
+	"\benvelope\x18\x02 \x01(\fR\benvelope*w\n" +
 	"\x11ConsumerGroupMode\x12#\n" +
 	"\x1fCONSUMER_GROUP_MODE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19CONSUMER_GROUP_MODE_QUEUE\x10\x01\x12\x1e\n" +
@@ -2747,7 +2923,7 @@ func file_raft_v1_operation_proto_rawDescGZIP() []byte {
 }
 
 var file_raft_v1_operation_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_raft_v1_operation_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_raft_v1_operation_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_raft_v1_operation_proto_goTypes = []any{
 	(ConsumerGroupMode)(0),              // 0: fluxmq.raft.v1.ConsumerGroupMode
 	(QueueType)(0),                      // 1: fluxmq.raft.v1.QueueType
@@ -2779,13 +2955,15 @@ var file_raft_v1_operation_proto_goTypes = []any{
 	(*ReplicationState)(nil),            // 27: fluxmq.raft.v1.ReplicationState
 	(*RetentionState)(nil),              // 28: fluxmq.raft.v1.RetentionState
 	(*LogEntry)(nil),                    // 29: fluxmq.raft.v1.LogEntry
-	(*Snapshot)(nil),                    // 30: fluxmq.raft.v1.Snapshot
-	(*QueueSnapshot)(nil),               // 31: fluxmq.raft.v1.QueueSnapshot
-	(*timestamppb.Timestamp)(nil),       // 32: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),         // 33: google.protobuf.Duration
+	(*SnapshotFrame)(nil),               // 30: fluxmq.raft.v1.SnapshotFrame
+	(*SnapshotHeader)(nil),              // 31: fluxmq.raft.v1.SnapshotHeader
+	(*QueueSnapshot)(nil),               // 32: fluxmq.raft.v1.QueueSnapshot
+	(*SnapshotRecord)(nil),              // 33: fluxmq.raft.v1.SnapshotRecord
+	(*timestamppb.Timestamp)(nil),       // 34: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),         // 35: google.protobuf.Duration
 }
 var file_raft_v1_operation_proto_depIdxs = []int32{
-	32, // 0: fluxmq.raft.v1.Operation.timestamp:type_name -> google.protobuf.Timestamp
+	34, // 0: fluxmq.raft.v1.Operation.timestamp:type_name -> google.protobuf.Timestamp
 	5,  // 1: fluxmq.raft.v1.Operation.append:type_name -> fluxmq.raft.v1.AppendOperation
 	6,  // 2: fluxmq.raft.v1.Operation.truncate:type_name -> fluxmq.raft.v1.TruncateOperation
 	7,  // 3: fluxmq.raft.v1.Operation.create_group:type_name -> fluxmq.raft.v1.CreateGroupOperation
@@ -2811,44 +2989,46 @@ var file_raft_v1_operation_proto_depIdxs = []int32{
 	21, // 23: fluxmq.raft.v1.ConsumerGroupState.cursor:type_name -> fluxmq.raft.v1.QueueCursorState
 	22, // 24: fluxmq.raft.v1.ConsumerGroupState.pending:type_name -> fluxmq.raft.v1.PendingEntryState
 	23, // 25: fluxmq.raft.v1.ConsumerGroupState.consumers:type_name -> fluxmq.raft.v1.ConsumerState
-	32, // 26: fluxmq.raft.v1.ConsumerGroupState.created_at:type_name -> google.protobuf.Timestamp
-	32, // 27: fluxmq.raft.v1.ConsumerGroupState.updated_at:type_name -> google.protobuf.Timestamp
-	32, // 28: fluxmq.raft.v1.PendingEntryState.claimed_at:type_name -> google.protobuf.Timestamp
-	32, // 29: fluxmq.raft.v1.ConsumerState.registered_at:type_name -> google.protobuf.Timestamp
-	32, // 30: fluxmq.raft.v1.ConsumerState.last_heartbeat:type_name -> google.protobuf.Timestamp
+	34, // 26: fluxmq.raft.v1.ConsumerGroupState.created_at:type_name -> google.protobuf.Timestamp
+	34, // 27: fluxmq.raft.v1.ConsumerGroupState.updated_at:type_name -> google.protobuf.Timestamp
+	34, // 28: fluxmq.raft.v1.PendingEntryState.claimed_at:type_name -> google.protobuf.Timestamp
+	34, // 29: fluxmq.raft.v1.ConsumerState.registered_at:type_name -> google.protobuf.Timestamp
+	34, // 30: fluxmq.raft.v1.ConsumerState.last_heartbeat:type_name -> google.protobuf.Timestamp
 	1,  // 31: fluxmq.raft.v1.QueueConfigState.type:type_name -> fluxmq.raft.v1.QueueType
-	33, // 32: fluxmq.raft.v1.QueueConfigState.expires_after:type_name -> google.protobuf.Duration
-	32, // 33: fluxmq.raft.v1.QueueConfigState.last_consumer_disconnect:type_name -> google.protobuf.Timestamp
+	35, // 32: fluxmq.raft.v1.QueueConfigState.expires_after:type_name -> google.protobuf.Duration
+	34, // 33: fluxmq.raft.v1.QueueConfigState.last_consumer_disconnect:type_name -> google.protobuf.Timestamp
 	25, // 34: fluxmq.raft.v1.QueueConfigState.retry_policy:type_name -> fluxmq.raft.v1.RetryPolicyState
 	26, // 35: fluxmq.raft.v1.QueueConfigState.dead_letter:type_name -> fluxmq.raft.v1.DeadLetterState
 	27, // 36: fluxmq.raft.v1.QueueConfigState.replication:type_name -> fluxmq.raft.v1.ReplicationState
 	28, // 37: fluxmq.raft.v1.QueueConfigState.retention:type_name -> fluxmq.raft.v1.RetentionState
-	33, // 38: fluxmq.raft.v1.QueueConfigState.message_ttl:type_name -> google.protobuf.Duration
-	33, // 39: fluxmq.raft.v1.QueueConfigState.delivery_timeout:type_name -> google.protobuf.Duration
-	33, // 40: fluxmq.raft.v1.QueueConfigState.heartbeat_timeout:type_name -> google.protobuf.Duration
-	33, // 41: fluxmq.raft.v1.RetryPolicyState.initial_backoff:type_name -> google.protobuf.Duration
-	33, // 42: fluxmq.raft.v1.RetryPolicyState.max_backoff:type_name -> google.protobuf.Duration
-	33, // 43: fluxmq.raft.v1.RetryPolicyState.total_timeout:type_name -> google.protobuf.Duration
+	35, // 38: fluxmq.raft.v1.QueueConfigState.message_ttl:type_name -> google.protobuf.Duration
+	35, // 39: fluxmq.raft.v1.QueueConfigState.delivery_timeout:type_name -> google.protobuf.Duration
+	35, // 40: fluxmq.raft.v1.QueueConfigState.heartbeat_timeout:type_name -> google.protobuf.Duration
+	35, // 41: fluxmq.raft.v1.RetryPolicyState.initial_backoff:type_name -> google.protobuf.Duration
+	35, // 42: fluxmq.raft.v1.RetryPolicyState.max_backoff:type_name -> google.protobuf.Duration
+	35, // 43: fluxmq.raft.v1.RetryPolicyState.total_timeout:type_name -> google.protobuf.Duration
 	2,  // 44: fluxmq.raft.v1.ReplicationState.mode:type_name -> fluxmq.raft.v1.ReplicationMode
-	33, // 45: fluxmq.raft.v1.ReplicationState.ack_timeout:type_name -> google.protobuf.Duration
-	33, // 46: fluxmq.raft.v1.ReplicationState.heartbeat_timeout:type_name -> google.protobuf.Duration
-	33, // 47: fluxmq.raft.v1.ReplicationState.election_timeout:type_name -> google.protobuf.Duration
-	33, // 48: fluxmq.raft.v1.ReplicationState.snapshot_interval:type_name -> google.protobuf.Duration
-	33, // 49: fluxmq.raft.v1.RetentionState.retention_time:type_name -> google.protobuf.Duration
-	33, // 50: fluxmq.raft.v1.RetentionState.time_check_interval:type_name -> google.protobuf.Duration
-	33, // 51: fluxmq.raft.v1.RetentionState.compaction_lag:type_name -> google.protobuf.Duration
-	33, // 52: fluxmq.raft.v1.RetentionState.compaction_interval:type_name -> google.protobuf.Duration
+	35, // 45: fluxmq.raft.v1.ReplicationState.ack_timeout:type_name -> google.protobuf.Duration
+	35, // 46: fluxmq.raft.v1.ReplicationState.heartbeat_timeout:type_name -> google.protobuf.Duration
+	35, // 47: fluxmq.raft.v1.ReplicationState.election_timeout:type_name -> google.protobuf.Duration
+	35, // 48: fluxmq.raft.v1.ReplicationState.snapshot_interval:type_name -> google.protobuf.Duration
+	35, // 49: fluxmq.raft.v1.RetentionState.retention_time:type_name -> google.protobuf.Duration
+	35, // 50: fluxmq.raft.v1.RetentionState.time_check_interval:type_name -> google.protobuf.Duration
+	35, // 51: fluxmq.raft.v1.RetentionState.compaction_lag:type_name -> google.protobuf.Duration
+	35, // 52: fluxmq.raft.v1.RetentionState.compaction_interval:type_name -> google.protobuf.Duration
 	3,  // 53: fluxmq.raft.v1.LogEntry.type:type_name -> fluxmq.raft.v1.LogType
-	32, // 54: fluxmq.raft.v1.LogEntry.appended_at:type_name -> google.protobuf.Timestamp
-	32, // 55: fluxmq.raft.v1.Snapshot.timestamp:type_name -> google.protobuf.Timestamp
-	31, // 56: fluxmq.raft.v1.Snapshot.queues:type_name -> fluxmq.raft.v1.QueueSnapshot
-	24, // 57: fluxmq.raft.v1.QueueSnapshot.config:type_name -> fluxmq.raft.v1.QueueConfigState
-	20, // 58: fluxmq.raft.v1.QueueSnapshot.groups:type_name -> fluxmq.raft.v1.ConsumerGroupState
-	59, // [59:59] is the sub-list for method output_type
-	59, // [59:59] is the sub-list for method input_type
-	59, // [59:59] is the sub-list for extension type_name
-	59, // [59:59] is the sub-list for extension extendee
-	0,  // [0:59] is the sub-list for field type_name
+	34, // 54: fluxmq.raft.v1.LogEntry.appended_at:type_name -> google.protobuf.Timestamp
+	31, // 55: fluxmq.raft.v1.SnapshotFrame.header:type_name -> fluxmq.raft.v1.SnapshotHeader
+	32, // 56: fluxmq.raft.v1.SnapshotFrame.queue:type_name -> fluxmq.raft.v1.QueueSnapshot
+	33, // 57: fluxmq.raft.v1.SnapshotFrame.record:type_name -> fluxmq.raft.v1.SnapshotRecord
+	34, // 58: fluxmq.raft.v1.SnapshotHeader.timestamp:type_name -> google.protobuf.Timestamp
+	24, // 59: fluxmq.raft.v1.QueueSnapshot.config:type_name -> fluxmq.raft.v1.QueueConfigState
+	20, // 60: fluxmq.raft.v1.QueueSnapshot.groups:type_name -> fluxmq.raft.v1.ConsumerGroupState
+	61, // [61:61] is the sub-list for method output_type
+	61, // [61:61] is the sub-list for method input_type
+	61, // [61:61] is the sub-list for extension type_name
+	61, // [61:61] is the sub-list for extension extendee
+	0,  // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_raft_v1_operation_proto_init() }
@@ -2873,13 +3053,18 @@ func file_raft_v1_operation_proto_init() {
 		(*Operation_UpdateQueue)(nil),
 		(*Operation_DeleteQueue)(nil),
 	}
+	file_raft_v1_operation_proto_msgTypes[26].OneofWrappers = []any{
+		(*SnapshotFrame_Header)(nil),
+		(*SnapshotFrame_Queue)(nil),
+		(*SnapshotFrame_Record)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_raft_v1_operation_proto_rawDesc), len(file_raft_v1_operation_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -4,6 +4,9 @@
 package raft
 
 import (
+	"bytes"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -99,40 +102,76 @@ func benchmarkAppendOperation() *Operation {
 	}
 }
 
-var benchmarkCodecSnapshot *GlobalSnapshotData
-
-func BenchmarkSnapshotCodecMarshal(b *testing.B) {
-	snapshot := benchmarkSnapshot()
+// A snapshot is written per compaction rather than per publish. What matters is
+// that it stays linear in the state it carries and that neither side has to
+// hold a queue's records in memory at once, so these drive the frame writer and
+// reader over a stream rather than a single message.
+func BenchmarkSnapshotCodecWrite(b *testing.B) {
+	queues, records := benchmarkSnapshotQueues()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		var err error
-		benchmarkCodecBytes, err = marshalSnapshot(snapshot)
-		if err != nil {
+		var sink nopWriter
+		writer := newSnapshotWriter(&sink)
+		if err := writer.WriteHeader(conformanceTime); err != nil {
 			b.Fatal(err)
+		}
+		for _, queue := range queues {
+			if err := writer.WriteQueue(queue); err != nil {
+				b.Fatal(err)
+			}
+			for offset, record := range records {
+				if err := writer.WriteRecord(uint64(offset), record); err != nil {
+					b.Fatal(err)
+				}
+			}
 		}
 	}
 }
 
-func BenchmarkSnapshotCodecUnmarshal(b *testing.B) {
-	data, err := marshalSnapshot(benchmarkSnapshot())
-	if err != nil {
+func BenchmarkSnapshotCodecRead(b *testing.B) {
+	queues, records := benchmarkSnapshotQueues()
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	if err := writer.WriteHeader(conformanceTime); err != nil {
 		b.Fatal(err)
 	}
+	for _, queue := range queues {
+		if err := writer.WriteQueue(queue); err != nil {
+			b.Fatal(err)
+		}
+		for offset, record := range records {
+			if err := writer.WriteRecord(uint64(offset), record); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	data := buf.Bytes()
+
 	b.ReportAllocs()
 	b.SetBytes(int64(len(data)))
 	b.ResetTimer()
 	for range b.N {
-		benchmarkCodecSnapshot, err = unmarshalSnapshot(data)
-		if err != nil {
+		reader := newSnapshotReader(bytes.NewReader(data))
+		if err := reader.ReadHeader(); err != nil {
 			b.Fatal(err)
+		}
+		for {
+			entry, err := reader.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkCodecEntry = entry
 		}
 	}
 }
 
-// A snapshot is written per compaction rather than per publish, so what matters
-// here is that it stays linear in the state it carries.
-func benchmarkSnapshot() *GlobalSnapshotData {
+var benchmarkCodecEntry snapshotEntry
+
+func benchmarkSnapshotQueues() ([]QueueSnapshotData, [][]byte) {
 	queues := make([]QueueSnapshotData, 0, 16)
 	for range 16 {
 		config := conformanceQueueConfig()
@@ -140,7 +179,16 @@ func benchmarkSnapshot() *GlobalSnapshotData {
 			QueueName:   config.Name,
 			QueueConfig: &config,
 			Groups:      []*types.ConsumerGroup{conformanceConsumerGroup(conformanceTime)},
+			Tail:        8,
 		})
 	}
-	return &GlobalSnapshotData{Queues: queues, Timestamp: conformanceTime}
+	records := make([][]byte, 8)
+	for i := range records {
+		records[i] = make([]byte, 1024)
+	}
+	return queues, records
 }
+
+type nopWriter struct{}
+
+func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }

@@ -70,13 +70,10 @@ func TestLogEntryCodecRejectsMalformedWire(t *testing.T) {
 	assert.ErrorIs(t, unmarshalLogEntry(legacyJSON, new(hraft.Log)), errMalformedLogEntry)
 }
 
-func TestLogEntryCodecToleratesUnknownFields(t *testing.T) {
+func TestLogEntryCodecRejectsUnknownFields(t *testing.T) {
 	data, err := proto.Marshal(&raftv1.LogEntry{Version: logEntryWireVersion, Index: 9, Type: raftv1.LogType_LOG_TYPE_COMMAND})
 	require.NoError(t, err)
 	data = append(data, 0x98, 0x06, 0x01) // field 99, varint 1
 
-	var decoded hraft.Log
-	require.NoError(t, unmarshalLogEntry(data, &decoded))
-	assert.Equal(t, uint64(9), decoded.Index)
-	assert.Equal(t, hraft.LogCommand, decoded.Type)
+	assert.ErrorIs(t, unmarshalLogEntry(data, new(hraft.Log)), errMalformedLogEntry)
 }

@@ -4,7 +4,11 @@
 package raft
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -12,108 +16,217 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/encoding/protodelim"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestSnapshotCodecRoundTripsQueuesAndGroups(t *testing.T) {
-	now := time.Date(2026, 8, 26, 10, 11, 12, 13, time.UTC)
+func TestSnapshotCodecRoundTripsQueuesGroupsAndRecords(t *testing.T) {
+	now := conformanceTime
 	config := conformanceQueueConfig()
-	snapshot := &GlobalSnapshotData{
-		Timestamp: now,
-		Queues: []QueueSnapshotData{
-			{
-				QueueName:   testOperationQueue,
-				QueueConfig: &config,
-				Groups:      []*types.ConsumerGroup{conformanceConsumerGroup(now)},
-			},
-			{QueueName: "config-less", Groups: nil},
-		},
-	}
 
-	data, err := marshalSnapshot(snapshot)
-	require.NoError(t, err)
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	require.NoError(t, writer.WriteHeader(now))
+	require.NoError(t, writer.WriteQueue(QueueSnapshotData{
+		QueueName:   testOperationQueue,
+		QueueConfig: &config,
+		Groups:      []*types.ConsumerGroup{conformanceConsumerGroup(now)},
+		Head:        7,
+		Tail:        9,
+	}))
+	require.NoError(t, writer.WriteRecord(7, []byte("record-seven")))
+	require.NoError(t, writer.WriteRecord(8, []byte("record-eight")))
+	require.NoError(t, writer.WriteQueue(QueueSnapshotData{QueueName: "config-less"}))
 
-	decoded, err := unmarshalSnapshot(data)
-	require.NoError(t, err)
-	require.Len(t, decoded.Queues, 2)
-	assert.True(t, snapshot.Timestamp.Equal(decoded.Timestamp))
+	reader := newSnapshotReader(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, reader.ReadHeader())
+	assert.True(t, now.Equal(reader.timestamp))
 
-	assert.Equal(t, testOperationQueue, decoded.Queues[0].QueueName)
-	require.NotNil(t, decoded.Queues[0].QueueConfig)
-	assert.Equal(t, config, *decoded.Queues[0].QueueConfig)
-	require.Len(t, decoded.Queues[0].Groups, 1)
-	assert.Equal(t, snapshot.Queues[0].Groups[0].Snapshot(), decoded.Queues[0].Groups[0].Snapshot())
+	entries := drainSnapshot(t, reader)
+	require.Len(t, entries, 4)
 
-	assert.Equal(t, "config-less", decoded.Queues[1].QueueName)
-	assert.Nil(t, decoded.Queues[1].QueueConfig)
-	assert.Empty(t, decoded.Queues[1].Groups)
+	require.NotNil(t, entries[0].Queue)
+	assert.Equal(t, testOperationQueue, entries[0].Queue.QueueName)
+	assert.Equal(t, uint64(7), entries[0].Queue.Head)
+	assert.Equal(t, uint64(9), entries[0].Queue.Tail)
+	require.NotNil(t, entries[0].Queue.QueueConfig)
+	assert.Equal(t, config, *entries[0].Queue.QueueConfig)
+	require.Len(t, entries[0].Queue.Groups, 1)
+	assert.Equal(t, conformanceConsumerGroup(now).Snapshot(), entries[0].Queue.Groups[0].Snapshot())
 
-	reencoded, err := marshalSnapshot(decoded)
-	require.NoError(t, err)
-	assert.Equal(t, data, reencoded, "snapshot encoding must be deterministic and lossless")
+	require.NotNil(t, entries[1].Record)
+	assert.Equal(t, uint64(7), entries[1].Record.Offset)
+	assert.Equal(t, []byte("record-seven"), entries[1].Record.Envelope)
+	require.NotNil(t, entries[2].Record)
+	assert.Equal(t, uint64(8), entries[2].Record.Offset)
+
+	require.NotNil(t, entries[3].Queue)
+	assert.Equal(t, "config-less", entries[3].Queue.QueueName)
+	assert.Nil(t, entries[3].Queue.QueueConfig)
 }
 
-// The snapshot and the log carry the same queue and group state. Encoding them
-// through the same functions is what keeps the two from drifting, so this pins
+// The snapshot and the log carry the same queue and group state. Encoding both
+// through the same functions is what keeps them from drifting, so this pins
 // that a config written into a snapshot decodes to what an operation would.
 func TestSnapshotCodecSharesStateEncodingWithOperations(t *testing.T) {
 	config := conformanceQueueConfig()
 
-	viaSnapshot, err := marshalSnapshot(&GlobalSnapshotData{
-		Queues: []QueueSnapshotData{{QueueName: testOperationQueue, QueueConfig: &config}},
-	})
-	require.NoError(t, err)
-	fromSnapshot, err := unmarshalSnapshot(viaSnapshot)
-	require.NoError(t, err)
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	require.NoError(t, writer.WriteHeader(conformanceTime))
+	require.NoError(t, writer.WriteQueue(QueueSnapshotData{QueueName: testOperationQueue, QueueConfig: &config}))
+
+	reader := newSnapshotReader(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, reader.ReadHeader())
+	entries := drainSnapshot(t, reader)
+	require.Len(t, entries, 1)
 
 	viaOperation, err := marshalOperation(&Operation{Type: OpCreateQueue, QueueName: testOperationQueue, QueueConfig: &config})
 	require.NoError(t, err)
 	fromOperation, err := unmarshalOperation(viaOperation)
 	require.NoError(t, err)
 
-	assert.Equal(t, *fromOperation.QueueConfig, *fromSnapshot.Queues[0].QueueConfig)
+	assert.Equal(t, *fromOperation.QueueConfig, *entries[0].Queue.QueueConfig)
 }
 
-func TestSnapshotCodecRejectsMalformedWire(t *testing.T) {
-	tests := map[string]*raftv1.Snapshot{
-		caseUnsupportedVersion: {Version: snapshotWireVersion + 1},
-		caseInvalidTimestamp:   {Version: snapshotWireVersion, Timestamp: &timestamppb.Timestamp{Seconds: 253402300800}},
-		"incomplete config": {
-			Version: snapshotWireVersion,
-			Queues:  []*raftv1.QueueSnapshot{{QueueName: testOperationQueue, Config: &raftv1.QueueConfigState{}}},
-		},
-		"unknown queue enum": {
-			Version: snapshotWireVersion,
-			Queues:  []*raftv1.QueueSnapshot{{QueueName: testOperationQueue, Config: unknownTypeWireQueueConfig()}},
-		},
-		"group without cursor": {
-			Version: snapshotWireVersion,
-			Queues:  []*raftv1.QueueSnapshot{{QueueName: testOperationQueue, Groups: []*raftv1.ConsumerGroupState{{Id: testOperationGroup}}}},
-		},
+// Framing is what keeps a snapshot's cost independent of what the queues hold,
+// so the bytes on the wire have to stay a stream of length-delimited frames
+// rather than becoming one message again.
+func TestSnapshotCodecWritesOneFramePerEntry(t *testing.T) {
+	var buf bytes.Buffer
+	writer := newSnapshotWriter(&buf)
+	require.NoError(t, writer.WriteHeader(conformanceTime))
+	require.NoError(t, writer.WriteQueue(QueueSnapshotData{QueueName: testOperationQueue}))
+	for offset := range uint64(3) {
+		require.NoError(t, writer.WriteRecord(offset, []byte("payload")))
 	}
-	for name, wire := range tests {
-		t.Run(name, func(t *testing.T) {
-			data, err := proto.Marshal(wire)
-			require.NoError(t, err)
-			_, err = unmarshalSnapshot(data)
-			assert.ErrorIs(t, err, errMalformedSnapshot)
+
+	source := bufio.NewReader(bytes.NewReader(buf.Bytes()))
+	frames := 0
+	for {
+		var frame raftv1.SnapshotFrame
+		if err := (protodelim.UnmarshalOptions{}).UnmarshalFrom(source, &frame); err != nil {
+			break
+		}
+		frames++
+	}
+	assert.Equal(t, 5, frames, "header, queue, and one frame per record")
+	assert.Equal(t, int64(buf.Len()), writer.written)
+}
+
+func TestSnapshotCodecRejectsMalformedStream(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		reader := newSnapshotReader(bytes.NewReader(nil))
+		assert.ErrorIs(t, reader.ReadHeader(), errMalformedSnapshot)
+	})
+
+	t.Run("no header", func(t *testing.T) {
+		data := frameBytes(t, &raftv1.SnapshotFrame{
+			Frame: &raftv1.SnapshotFrame_Queue{Queue: &raftv1.QueueSnapshot{QueueName: testOperationQueue}},
 		})
-	}
+		reader := newSnapshotReader(bytes.NewReader(data))
+		assert.ErrorIs(t, reader.ReadHeader(), errMalformedSnapshot)
+	})
 
-	_, err := unmarshalSnapshot(nil)
-	assert.ErrorIs(t, err, errMalformedSnapshot)
-	_, err = marshalSnapshot(nil)
-	assert.ErrorIs(t, err, errMalformedSnapshot)
+	t.Run("unsupported version", func(t *testing.T) {
+		data := frameBytes(t, &raftv1.SnapshotFrame{
+			Frame: &raftv1.SnapshotFrame_Header{Header: &raftv1.SnapshotHeader{Version: snapshotWireVersion + 1}},
+		})
+		reader := newSnapshotReader(bytes.NewReader(data))
+		assert.ErrorIs(t, reader.ReadHeader(), errMalformedSnapshot)
+	})
 
-	legacyJSON, err := json.Marshal(map[string]any{"queues": []any{}, "timestamp": time.Now()})
-	require.NoError(t, err)
-	_, err = unmarshalSnapshot(legacyJSON)
-	assert.ErrorIs(t, err, errMalformedSnapshot, "the snapshot contract must not carry a legacy JSON fallback")
+	t.Run("invalid timestamp", func(t *testing.T) {
+		data := frameBytes(t, &raftv1.SnapshotFrame{
+			Frame: &raftv1.SnapshotFrame_Header{Header: &raftv1.SnapshotHeader{
+				Version:   snapshotWireVersion,
+				Timestamp: &timestamppb.Timestamp{Seconds: 253402300800},
+			}},
+		})
+		reader := newSnapshotReader(bytes.NewReader(data))
+		assert.ErrorIs(t, reader.ReadHeader(), errMalformedSnapshot)
+	})
+
+	t.Run("tail before head", func(t *testing.T) {
+		reader := newSnapshotReader(bytes.NewReader(headerAnd(t, &raftv1.SnapshotFrame{
+			Frame: &raftv1.SnapshotFrame_Queue{Queue: &raftv1.QueueSnapshot{QueueName: testOperationQueue, Head: 9, Tail: 4}},
+		})))
+		require.NoError(t, reader.ReadHeader())
+		_, err := reader.Next()
+		assert.ErrorIs(t, err, errMalformedSnapshot)
+	})
+
+	t.Run("incomplete config", func(t *testing.T) {
+		reader := newSnapshotReader(bytes.NewReader(headerAnd(t, &raftv1.SnapshotFrame{
+			Frame: &raftv1.SnapshotFrame_Queue{Queue: &raftv1.QueueSnapshot{
+				QueueName: testOperationQueue, Config: &raftv1.QueueConfigState{},
+			}},
+		})))
+		require.NoError(t, reader.ReadHeader())
+		_, err := reader.Next()
+		assert.ErrorIs(t, err, errMalformedSnapshot)
+	})
+
+	t.Run("unknown field", func(t *testing.T) {
+		frame := &raftv1.SnapshotFrame{
+			Frame: &raftv1.SnapshotFrame_Queue{Queue: &raftv1.QueueSnapshot{
+				QueueName: testOperationQueue, Config: completeWireQueueConfig(),
+			}},
+		}
+		frame.GetQueue().Config.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x07})
+		reader := newSnapshotReader(bytes.NewReader(headerAnd(t, frame)))
+		require.NoError(t, reader.ReadHeader())
+		_, err := reader.Next()
+		assert.ErrorIs(t, err, errMalformedSnapshot, "state this build cannot read must not restore as a zero value")
+	})
+
+	t.Run("legacy json", func(t *testing.T) {
+		legacy, err := json.Marshal(map[string]any{"queues": []any{}, "timestamp": time.Now()})
+		require.NoError(t, err)
+		reader := newSnapshotReader(bytes.NewReader(legacy))
+		assert.Error(t, reader.ReadHeader(), "the snapshot contract must not carry a legacy JSON fallback")
+	})
 }
 
-func unknownTypeWireQueueConfig() *raftv1.QueueConfigState {
-	config := completeWireQueueConfig()
-	config.Type = raftv1.QueueType(99)
-	return config
+func drainSnapshot(t *testing.T, reader *snapshotReader) []snapshotEntry {
+	t.Helper()
+
+	var entries []snapshotEntry
+	for {
+		entry, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return entries
+		}
+		require.NoError(t, err)
+		entries = append(entries, entry)
+	}
+}
+
+func frameBytes(t *testing.T, frames ...*raftv1.SnapshotFrame) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	for _, frame := range frames {
+		_, err := protodelim.MarshalTo(&buf, frame)
+		require.NoError(t, err)
+	}
+	return buf.Bytes()
+}
+
+func headerAnd(t *testing.T, frames ...*raftv1.SnapshotFrame) []byte {
+	t.Helper()
+
+	header := &raftv1.SnapshotFrame{
+		Frame: &raftv1.SnapshotFrame_Header{Header: &raftv1.SnapshotHeader{Version: snapshotWireVersion}},
+	}
+	return frameBytes(t, append([]*raftv1.SnapshotFrame{header}, frames...)...)
+}
+
+func completeWireQueueConfig() *raftv1.QueueConfigState {
+	return &raftv1.QueueConfigState{
+		RetryPolicy: &raftv1.RetryPolicyState{},
+		DeadLetter:  &raftv1.DeadLetterState{},
+		Replication: &raftv1.ReplicationState{},
+		Retention:   &raftv1.RetentionState{},
+	}
 }

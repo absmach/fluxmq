@@ -98,6 +98,45 @@ type QueueStore interface {
 	Count(ctx context.Context, queueName string) (uint64, error)
 }
 
+// SnapshotableQueueStore is a queue store whose logs can be captured for a
+// Raft snapshot and rebuilt from one.
+//
+// Messages are replicated state: they arrive through the Raft log like every
+// other mutation, so a snapshot that carries only queue configs and consumer
+// groups is incomplete. A follower that installs such a snapshot advances past
+// the log entries the leader compacted and never acquires the records they
+// carried, with nothing left to detect the loss.
+//
+// Reconstructing a queue needs the records and the offset its log begins at.
+// Truncation moves that offset away from zero, and offsets are what consumers
+// hold, so a queue rebuilt from zero hands every consumer the wrong record.
+//
+// Deduplication state is not carried separately: the key lives in the record
+// (BrokerMeta.Transfer.ID), so the index is rebuilt from the records restored.
+type SnapshotableQueueStore interface {
+	QueueStore
+
+	// SnapshotQueue returns the queue's first valid offset and an owned copy of
+	// every record it holds, in ascending offset order. The caller must release
+	// every returned envelope.
+	SnapshotQueue(ctx context.Context, queueName string) (head uint64, records []*message.Envelope, err error)
+
+	// RestoreQueue replaces any queue of this name with an empty log whose next
+	// offset is head, so restored records keep the offsets they were written at.
+	RestoreQueue(ctx context.Context, config types.QueueConfig, head uint64) error
+
+	// RestoreRecord appends one record to a queue opened by RestoreQueue and
+	// takes ownership of msg. Records must arrive in ascending offset order
+	// with no gaps; an offset that does not continue the log is an error.
+	RestoreRecord(ctx context.Context, queueName string, offset uint64, msg *message.Envelope) error
+
+	// ResetForRestore drops every queue and its records, reserved queues
+	// included, so a snapshot can be laid down over an empty store. A queue the
+	// snapshot does not mention is one the group no longer has; leaving it
+	// behind would keep this replica holding records nothing else does.
+	ResetForRestore(ctx context.Context) error
+}
+
 // DeduplicatingQueueStore appends at most one record per deduplication key.
 //
 // It exists so a transfer that must not duplicate — a dead-letter move, which

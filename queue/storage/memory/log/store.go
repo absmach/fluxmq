@@ -8,6 +8,7 @@ package log
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -16,7 +17,10 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 )
 
-var _ storage.DurableQueueStore = (*Store)(nil)
+var (
+	_ storage.DurableQueueStore      = (*Store)(nil)
+	_ storage.SnapshotableQueueStore = (*Store)(nil)
+)
 
 // Store implements queueStore and ConsumerGroupStore using in-memory data structures.
 type Store struct {
@@ -855,3 +859,131 @@ func (s *Store) AppendOnceAndSync(ctx context.Context, queueName, dedupeKey stri
 // DeduplicationWindow implements storage.DeduplicatingQueueStore. Every retained
 // record is covered: the index is pruned only by truncation.
 func (s *Store) DeduplicationWindow() int { return 0 }
+
+// SnapshotQueue implements storage.SnapshotableQueueStore.
+//
+// The records are cloned rather than referenced because the snapshot is
+// serialized after the FSM has moved on: a clone is an O(1) metadata copy that
+// retains the payload, so capturing a whole log costs a pooled envelope and a
+// refcount per record rather than a copy of the bytes.
+func (s *Store) SnapshotQueue(ctx context.Context, queueName string) (uint64, []*message.Envelope, error) {
+	sl, err := s.getQueueLog(queueName)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+	if sl.deleted {
+		return 0, nil, storage.ErrQueueNotFound
+	}
+
+	records := make([]*message.Envelope, 0, len(sl.messages))
+	for _, envelope := range sl.messages {
+		records = append(records, envelope.Clone())
+	}
+	return sl.head, records, nil
+}
+
+// RestoreQueue implements storage.SnapshotableQueueStore.
+//
+// It replaces whatever this node holds for the name, reserved queues included:
+// a snapshot is the authoritative state of the group, not a change to merge
+// into local state, so anything already here is by definition stale.
+func (s *Store) RestoreQueue(ctx context.Context, config types.QueueConfig, head uint64) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
+
+	if val, exists := s.logs.LoadAndDelete(config.Name); exists {
+		stale := val.(*log)
+		stale.mu.Lock()
+		stale.deleted = true
+		for _, envelope := range stale.messages {
+			message.Release(envelope)
+		}
+		stale.messages = nil
+		stale.dedupe = nil
+		stale.mu.Unlock()
+	}
+
+	s.logs.Store(config.Name, &log{
+		config:   config,
+		messages: make([]*message.Envelope, 0, s.config.InitialCapacity),
+		head:     head,
+		tail:     head,
+		dedupe:   make(map[string]uint64),
+	})
+	s.topicIndex.AddQueue(config.Name, config.Topics)
+	s.groups.Store(config.Name, &sync.Map{})
+	s.consumers.Store(config.Name, &sync.Map{})
+
+	return nil
+}
+
+// RestoreRecord implements storage.SnapshotableQueueStore.
+//
+// The deduplication index is rebuilt here rather than carried in the snapshot.
+// The key is written into the record by AppendOnce, so the records are already
+// the authoritative copy and a second one could only disagree with them.
+func (s *Store) RestoreRecord(ctx context.Context, queueName string, offset uint64, msg *message.Envelope) error {
+	sl, err := s.getQueueLog(queueName)
+	if err != nil {
+		message.Release(msg)
+		return err
+	}
+
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	if sl.deleted {
+		message.Release(msg)
+		return storage.ErrQueueNotFound
+	}
+
+	// A snapshot describes a contiguous log. An offset that does not continue
+	// it means the stream is damaged, and accepting it would put every later
+	// record at the wrong offset.
+	if offset != sl.tail {
+		message.Release(msg)
+		return fmt.Errorf("%w: restore expected offset %d, got %d", storage.ErrOffsetOutOfRange, sl.tail, offset)
+	}
+
+	msg.BrokerMeta.Queue.Offset = offset
+	sl.messages = append(sl.messages, msg)
+	sl.tail++
+	if key := msg.BrokerMeta.Transfer.ID; key != "" {
+		sl.dedupe[key] = offset
+	}
+
+	return nil
+}
+
+// ResetForRestore implements storage.SnapshotableQueueStore.
+func (s *Store) ResetForRestore(ctx context.Context) error {
+	s.logs.Range(func(key, value any) bool {
+		name, _ := key.(string)
+		if !s.logs.CompareAndDelete(name, value) {
+			return true
+		}
+		stale := value.(*log)
+		stale.mu.Lock()
+		stale.deleted = true
+		for _, envelope := range stale.messages {
+			message.Release(envelope)
+		}
+		stale.messages = nil
+		stale.dedupe = nil
+		stale.mu.Unlock()
+		s.topicIndex.RemoveQueue(name)
+		return true
+	})
+	s.groups.Range(func(key, _ any) bool {
+		s.groups.Delete(key)
+		return true
+	})
+	s.consumers.Range(func(key, _ any) bool {
+		s.consumers.Delete(key)
+		return true
+	})
+	return nil
+}

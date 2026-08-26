@@ -55,6 +55,9 @@ func unmarshalLogEntry(data []byte, entry *hraft.Log) error {
 	if err := proto.Unmarshal(data, wire); err != nil {
 		return fmt.Errorf("%w: decode protobuf: %w", errMalformedLogEntry, err)
 	}
+	if err := rejectUnknownFields(wire.ProtoReflect()); err != nil {
+		return fmt.Errorf("%w: %w", errMalformedLogEntry, err)
+	}
 	if wire.Version != logEntryWireVersion {
 		return fmt.Errorf("%w: unsupported version %d", errMalformedLogEntry, wire.Version)
 	}

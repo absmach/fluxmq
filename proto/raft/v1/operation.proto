@@ -255,19 +255,42 @@ enum LogType {
   LOG_TYPE_CONFIGURATION = 6;
 }
 
-// Snapshot is the persisted FSM snapshot: the queue configs and consumer
-// groups a restoring node needs to reach the state the log was compacted at.
-// It reuses QueueConfigState and ConsumerGroupState so the snapshot and the
-// log share one encoder, and a field added to either state is carried by both
-// or by neither.
-message Snapshot {
-  uint32 version = 1;
-  google.protobuf.Timestamp timestamp = 2;
-  repeated QueueSnapshot queues = 3;
+// A snapshot is written as a sequence of length-delimited SnapshotFrames
+// rather than as one message. A queue's records are its bulk, and neither the
+// node writing the snapshot nor the node restoring it should have to hold all
+// of them in memory at once to do it.
+//
+// The frames reuse QueueConfigState and ConsumerGroupState so the snapshot and
+// the log share one encoder, and a field added to either state is carried by
+// both or by neither.
+message SnapshotFrame {
+  oneof frame {
+    SnapshotHeader header = 1;
+    QueueSnapshot queue = 2;
+    SnapshotRecord record = 3;
+  }
 }
 
+message SnapshotHeader {
+  uint32 version = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+// QueueSnapshot opens a queue. Every SnapshotRecord that follows belongs to it
+// until the next QueueSnapshot frame.
+//
+// head is the offset the log begins at. Truncation moves it away from zero and
+// consumers hold offsets, so a queue rebuilt from zero would hand every
+// consumer the wrong record.
 message QueueSnapshot {
   string queue_name = 1;
   QueueConfigState config = 2;
   repeated ConsumerGroupState groups = 3;
+  uint64 head = 4;
+  uint64 tail = 5;
+}
+
+message SnapshotRecord {
+  uint64 offset = 1;
+  bytes envelope = 2;
 }
