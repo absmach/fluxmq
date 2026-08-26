@@ -23,7 +23,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 		Headers:         map[string][]byte{"binary": {0x01, 0xfe}},
 		Properties:      map[string]string{"tenant": "acme"},
 		ContentType:     "application/octet-stream",
-		ContentEncoding: "gzip",
+		ContentEncoding: testContentEncoding,
 		ResponseTopic:   "responses/1",
 		CorrelationData: []byte{0x80, 0x00},
 		PayloadFormat:   &payloadFormat,

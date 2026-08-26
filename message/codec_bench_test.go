@@ -23,8 +23,10 @@ import (
 // cluster/etcd.go, which marshals it for every retained write.
 
 const (
-	benchPayloadSize = 256
-	testGroupID      = "workers"
+	benchPayloadSize    = 256
+	testGroupID         = "workers"
+	testContentEncoding = "gzip"
+	testTelemetryQueue  = "telemetry"
 )
 
 // benchEmptyEnvelope carries a payload and nothing else.
@@ -49,7 +51,7 @@ func benchRichEnvelope() *Envelope {
 		"schema":          "telemetry.v2",
 	}
 	envelope.PublisherMeta.ContentType = "application/json"
-	envelope.PublisherMeta.ContentEncoding = "gzip"
+	envelope.PublisherMeta.ContentEncoding = testContentEncoding
 	envelope.PublisherMeta.ResponseTopic = "devices/sensor-1/reply"
 	envelope.PublisherMeta.CorrelationData = []byte("correlation-0123456789")
 	envelope.PublisherMeta.PayloadFormat = &format
@@ -63,7 +65,7 @@ func benchRichEnvelope() *Envelope {
 		Topic:      "devices/sensor-1/telemetry",
 	}
 	envelope.BrokerMeta.Queue = QueueMetadata{
-		Name:        "telemetry",
+		Name:        testTelemetryQueue,
 		GroupID:     testGroupID,
 		Offset:      4096,
 		State:       QueueStateDelivered,
@@ -87,7 +89,7 @@ func benchRichEnvelope() *Envelope {
 		FirstAttempt:  now.Add(-time.Hour),
 		LastAttempt:   now,
 		CompletedAt:   now,
-		SourceQueue:   "telemetry",
+		SourceQueue:   testTelemetryQueue,
 		SourceGroup:   testGroupID,
 		SourceOffset:  4096,
 		DeliveryCount: 5,

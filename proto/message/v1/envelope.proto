@@ -1,0 +1,156 @@
+// Copyright (c) Abstract Machines
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package message.v1;
+
+// Envelope is the format every stored broker message is written in.
+//
+// This file is the schema of record. The implementation is the hand-written
+// codec in message/codec.go, and message/conformance_test.go holds the two
+// against each other: the hand codec's bytes must parse into these messages
+// field for field, and a golden encoding is pinned in
+// message/testdata/envelope-v1.bin. A change to one that is not made in the
+// other fails that test.
+//
+// It exists because the persisted format was previously defined only by two Go
+// switch statements kept aligned by hand, so a reviewer of a change to it had
+// no artefact to review. Every stored message depends on this format; the
+// client-facing RPC schemas, whose worst failure is a broken call, already had
+// one.
+message Envelope {
+  // version is mandatory and is always written, so a valid encoding is never
+  // empty. Decoders reject any value other than 1.
+  uint32 version = 1;
+  string topic = 2;
+  // payload and publisher.key are omitted in metadata-only encodings, where the
+  // log record holds the value and key beside the metadata rather than inside
+  // it. A metadata blob that carries either of them is rejected rather than
+  // silently preferred over the record's own.
+  bytes payload = 3;
+  PublisherMetadata publisher = 4;
+  BrokerMetadata broker = 5;
+}
+
+// PublisherMetadata is what the publisher owns. The broker never interprets it
+// beyond filtering reserved property names at ingress.
+message PublisherMetadata {
+  // See Envelope.payload: omitted in metadata-only encodings.
+  bytes key = 1;
+  map<string, bytes> headers = 2;
+  map<string, string> properties = 3;
+  string content_type = 4;
+  string content_encoding = 5;
+  string response_topic = 6;
+  bytes correlation_data = 7;
+  // payload_format and message_expiry are optional so that "absent" stays
+  // distinguishable from an explicit zero, which is what they are in the Go
+  // representation.
+  optional uint32 payload_format = 8;
+  optional uint32 message_expiry = 9;
+  // message_id is the publisher's own identifier, as carried by AMQP. The
+  // broker's handle for a durable delivery is derived from the queue and
+  // offset instead, and is never stored.
+  string message_id = 10;
+}
+
+// BrokerMetadata is what the broker owns. It is never accepted from an
+// untrusted peer.
+message BrokerMetadata {
+  SourceMetadata source = 1;
+  DeliveryMetadata delivery = 2;
+  QueueMetadata queue = 3;
+  TransferMetadata transfer = 4;
+  TraceMetadata trace = 5;
+}
+
+// SourceMetadata identifies the authenticated origin of a message.
+message SourceMetadata {
+  string client_id = 1;
+  string external_id = 2;
+  // protocol is a string rather than an enum because that is what the codec
+  // writes today. An enum would cost less per record and reject an unknown
+  // value at the boundary.
+  string protocol = 3;
+  // topic is the topic the message was published to, before any queue
+  // delivery address was derived from it.
+  string topic = 4;
+}
+
+// DeliveryMetadata carries the protocol transaction state of one delivery.
+message DeliveryMetadata {
+  // Timestamps are zigzag-encoded Unix nanoseconds, and a zero time is omitted
+  // rather than written as the epoch.
+  sint64 published_at = 1;
+  sint64 expires_at = 2;
+  // subscription_ids is deliberately unpacked, which is what the hand codec
+  // writes. Packing it would be smaller and is what a generated encoder emits
+  // by default, so changing it is a change to the stored format.
+  repeated uint32 subscription_ids = 3 [packed = false];
+  uint32 packet_id = 4;
+  uint32 qos = 5;
+  // direction: 0 = outbound (server->client), 1 = inbound (client->server).
+  uint32 inflight_direction = 6;
+  // state: 0 = publish sent, 1 = pubrec received.
+  uint32 inflight_state = 7;
+  bool retain = 8;
+  bool duplicate = 9;
+}
+
+// QueueMetadata is the durable-queue lifecycle of a record.
+message QueueMetadata {
+  // Field 1 held a message identifier that is now derived from name and offset.
+  // Nothing writes it; a record written by an older broker still decodes.
+  reserved 1;
+  reserved "message_id";
+
+  string name = 2;
+  string group_id = 3;
+  uint64 offset = 4;
+  // state is a string rather than an enum, as protocol is; see SourceMetadata.
+  string state = 5;
+  sint64 created_at = 6;
+  sint64 delivered_at = 7;
+  sint64 next_retry_at = 8;
+  uint32 retry_count = 9;
+  sint64 expires_at = 10;
+  // stream is present only for a record in a stream-mode consumer group, which
+  // is why it is a message rather than inline fields: absent and zeroed are
+  // different states.
+  StreamMetadata stream = 11;
+}
+
+// StreamMetadata is the stream-mode projection of a record.
+message StreamMetadata {
+  uint64 offset = 1;
+  sint64 timestamp = 2;
+  uint64 committed_offset = 3;
+  // has_committed_offset distinguishes a group that has committed offset 0 from
+  // one that has committed nothing.
+  bool has_committed_offset = 4;
+  bool work_acknowledged = 5;
+  string work_group = 6;
+}
+
+// TransferMetadata records a recoverable broker-owned transfer, such as a move
+// to a dead-letter queue.
+message TransferMetadata {
+  // id is the stable identity a dead-letter transfer is deduplicated by.
+  string id = 1;
+  string failure_reason = 2;
+  sint64 first_attempt = 3;
+  sint64 last_attempt = 4;
+  sint64 completed_at = 5;
+  string source_queue = 6;
+  string source_group = 7;
+  uint64 source_offset = 8;
+  uint32 delivery_count = 9;
+}
+
+// TraceMetadata carries W3C trace context across broker hops.
+message TraceMetadata {
+  string trace_parent = 1;
+  string trace_state = 2;
+  string trace_id = 3;
+}
