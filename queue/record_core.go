@@ -59,26 +59,31 @@ func (unmanagedServices) CreateQueue(context.Context, types.QueueConfig) error {
 
 func (unmanagedServices) replicationCoordinator() queueRaftCoordinator { return nil }
 
-// noScheduler drops wake-ups, for a core with no delivery engine behind it.
-type noScheduler struct{}
-
-func (noScheduler) Schedule(string) {}
-
-// newRecordCore builds a core from stores and policy alone. A caller that has a
-// Manager assigns its services afterwards; without them the core still appends,
-// it just cannot resolve protected contracts, replicate, or create a missing
-// dead-letter queue.
-func newRecordCore(queueStore storage.QueueStore, groupStore storage.ConsumerGroupStore, config Config, metrics *consumer.Metrics, logger *slog.Logger) *recordCore {
+// newRecordCore builds a complete core. Every field is supplied here and none
+// is assigned afterwards: a half-built core that is filled in later is what
+// produced the degraded construction modes this replaced, and what let comments
+// describe a dependency the code did not have.
+func newRecordCore(
+	queueStore storage.QueueStore,
+	groupStore storage.ConsumerGroupStore,
+	config Config,
+	metrics *consumer.Metrics,
+	logger *slog.Logger,
+	schedule deliveryScheduler,
+	services managerServices,
+	ackDurability AckDurability,
+	storeSupportsSync bool,
+) *recordCore {
 	return &recordCore{
 		queueStore:        queueStore,
 		groupStore:        groupStore,
-		delivery:          noScheduler{},
+		delivery:          schedule,
 		metrics:           metrics,
 		logger:            logger,
 		config:            config,
-		ackDurability:     NormalizeAckDurability(config.AckDurability),
-		storeSupportsSync: storeSupportsDurableSync(queueStore),
-		services:          unmanagedServices{},
+		ackDurability:     ackDurability,
+		storeSupportsSync: storeSupportsSync,
+		services:          services,
 	}
 }
 

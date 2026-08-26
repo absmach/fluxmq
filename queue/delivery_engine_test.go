@@ -60,11 +60,14 @@ func newTestEngine(t *testing.T, local Deliverer, remote RemoteRouter) (*Deliver
 		nodeID = "node-1" //nolint:goconst // test value
 	}
 
-	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger)
+	schedule := newDeliveryQueue(deliveryScheduleDepth, logger)
+	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger,
+		schedule, unmanagedServices{}, AckDurabilityBuffered, false)
 	machine := newStateMachine(records, logStore, groupStore, consumerMgr)
 
 	engine := NewDeliveryEngine(
 		machine,
+		schedule,
 		logStore, groupStore, consumerMgr,
 		local, remote, nodeID,
 		DistributionForward, 100, logger,
@@ -122,7 +125,7 @@ func TestScheduleDedup(t *testing.T) {
 
 	// Only one item should be in the channel.
 	select {
-	case name := <-engine.queue:
+	case name := <-engine.schedule.pending():
 		if name != "q1" {
 			t.Fatalf("expected q1, got %s", name)
 		}
@@ -132,7 +135,7 @@ func TestScheduleDedup(t *testing.T) {
 
 	// Channel should now be empty.
 	select {
-	case name := <-engine.queue:
+	case name := <-engine.schedule.pending():
 		t.Fatalf("expected empty channel, got %s", name)
 	default:
 		// ok
@@ -145,7 +148,7 @@ func TestScheduleEmptyQueueName(t *testing.T) {
 	engine.Schedule("")
 
 	select {
-	case <-engine.queue:
+	case <-engine.schedule.pending():
 		t.Fatal("expected empty string to be ignored")
 	default:
 		// ok
@@ -165,7 +168,7 @@ func TestScheduleAllQueues(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 3; i++ {
 		select {
-		case name := <-engine.queue:
+		case name := <-engine.schedule.pending():
 			seen[name] = true
 		default:
 			t.Fatalf("expected 3 items, got %d", i)
@@ -183,15 +186,15 @@ func TestUnschedule(t *testing.T) {
 	engine, _, _ := newTestEngine(t, nil, nil)
 
 	// Manually add to enqueued set to simulate a pending schedule.
-	engine.mu.Lock()
-	engine.enqueued["q1"] = struct{}{}
-	engine.mu.Unlock()
+	engine.schedule.mu.Lock()
+	engine.schedule.enqueued["q1"] = struct{}{}
+	engine.schedule.mu.Unlock()
 
 	engine.Unschedule("q1")
 
-	engine.mu.Lock()
-	_, exists := engine.enqueued["q1"]
-	engine.mu.Unlock()
+	engine.schedule.mu.Lock()
+	_, exists := engine.schedule.enqueued["q1"]
+	engine.schedule.mu.Unlock()
 
 	if exists {
 		t.Fatal("expected q1 to be removed from enqueued set")
@@ -482,11 +485,14 @@ func TestDLQCallbackOnMaxDeliveryCount(t *testing.T) {
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
 
-	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger)
+	schedule := newDeliveryQueue(deliveryScheduleDepth, logger)
+	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger,
+		schedule, unmanagedServices{}, AckDurabilityBuffered, false)
 	machine := newStateMachine(records, logStore, groupStore, consumerMgr)
 
 	engine := NewDeliveryEngine(
 		machine,
+		schedule,
 		logStore, groupStore, consumerMgr,
 		local, nil, "",
 		DistributionForward, 100, logger,
@@ -572,11 +578,14 @@ func TestDLQCallbackNilHandlerRedeliversInsteadOfBlocking(t *testing.T) {
 	}
 	consumerMgr := consumer.NewManager(logStore, groupStore, consumerCfg)
 
-	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger)
+	schedule := newDeliveryQueue(deliveryScheduleDepth, logger)
+	records := newRecordCore(logStore, groupStore, DefaultConfig(), consumer.NewMetrics(), logger,
+		schedule, unmanagedServices{}, AckDurabilityBuffered, false)
 	machine := newStateMachine(records, logStore, groupStore, consumerMgr)
 
 	engine := NewDeliveryEngine(
 		machine,
+		schedule,
 		logStore, groupStore, consumerMgr,
 		local, nil, "",
 		DistributionForward, 100, logger,

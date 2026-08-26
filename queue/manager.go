@@ -291,11 +291,6 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		ackDurability = AckDurabilityBuffered
 	}
 
-	// mgr is populated below and captured by the record core's registry
-	// callbacks; only the dead-letter handler was freed of it, by closing over
-	// the core instead. Breaking the rest of that cycle is separate work.
-	var mgr *Manager
-
 	protectedQueueContracts, protectedQueueConfigErr := buildProtectedQueueContracts(config.ProtectedQueueContracts)
 
 	raftGroupStore := newRaftGroupStore(groupStore)
@@ -306,14 +301,45 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		raftGroupStore.SetForwarder(cl)
 	}
 
-	// The record core takes stores and policy directly and reaches Manager's
-	// registries through the services interface assigned below. Building it
-	// first is what lets the consumer manager and the state machine each be
-	// constructed once, fully formed, rather than in a degraded mode that later
-	// gets overwritten.
-	records := newRecordCore(queueStore, raftGroupStore, config, metrics, logger)
-	records.ackDurability = ackDurability
-	records.storeSupportsSync = storeSupportsSync
+	var localNodeID string
+	var remote RemoteRouter
+	if cl != nil {
+		localNodeID = cl.NodeID()
+		remote = cl
+	}
+	distMode := normalizeDistributionMode(config.DistributionMode)
+
+	// The wake-up channel between appending and delivering. Owned by neither,
+	// so the core can hold it before the engine that drains it exists.
+	schedule := newDeliveryQueue(deliveryScheduleDepth, logger)
+
+	// The facade is built first, empty of the components it aggregates, so the
+	// record core can be constructed complete and never mutated afterwards. A
+	// facade assembling its own fields is ordinary; a core that is half-built
+	// and later filled in is what produced the degraded modes this replaced.
+	mgr := &Manager{
+		queueStore:     queueStore,
+		groupStore:     raftGroupStore,
+		raftGroupStore: raftGroupStore,
+		deliveryTarget: dt,
+
+		logger:                  logger,
+		config:                  config,
+		ackDurability:           ackDurability,
+		storeSupportsSync:       storeSupportsSync,
+		writePolicy:             normalizeWritePolicy(config.WritePolicy),
+		distributionMode:        distMode,
+		protectedQueueContracts: protectedQueueContracts,
+		protectedQueueConfigErr: protectedQueueConfigErr,
+		cluster:                 cl,
+		localNodeID:             localNodeID,
+		subscriptions:           make(map[string]map[string]*subscriptionRef),
+		stopCh:                  make(chan struct{}),
+		metrics:                 metrics,
+	}
+
+	records := newRecordCore(queueStore, raftGroupStore, config, metrics, logger,
+		schedule, mgr, ackDurability, storeSupportsSync)
 
 	dlqPrefix := config.DLQTopicPrefix
 	if dlqPrefix == "" {
@@ -342,22 +368,11 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 	consumerMgr := consumer.NewManager(queueStore, raftGroupStore, consumerCfg)
 
-	var localNodeID string
-	if cl != nil {
-		localNodeID = cl.NodeID()
-	}
-
-	distMode := normalizeDistributionMode(config.DistributionMode)
-
-	var remote RemoteRouter
-	if cl != nil {
-		remote = cl
-	}
-
 	machine := newStateMachine(records, queueStore, raftGroupStore, consumerMgr)
 
 	engine := NewDeliveryEngine(
 		machine,
+		schedule,
 		queueStore, raftGroupStore, consumerMgr,
 		dt,
 		remote,
@@ -366,42 +381,14 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		config.DeliveryBatchSize,
 		logger,
 	)
-	engine.setConsumerRemovedCallback(func(ctx context.Context, queueName, groupID string, consumerIDs []string) {
-		if mgr != nil {
-			mgr.handleConsumersRemoved(ctx, queueName, groupID, consumerIDs)
-		}
-	})
+	engine.setConsumerRemovedCallback(mgr.handleConsumersRemoved)
 
-	mgr = &Manager{
-		queueStore:      queueStore,
-		groupStore:      raftGroupStore,
-		raftGroupStore:  raftGroupStore,
-		consumerManager: consumerMgr,
-		deliveryTarget:  dt,
-
-		logger:                  logger,
-		config:                  config,
-		ackDurability:           ackDurability,
-		storeSupportsSync:       storeSupportsSync,
-		writePolicy:             normalizeWritePolicy(config.WritePolicy),
-		distributionMode:        distMode,
-		protectedQueueContracts: protectedQueueContracts,
-		protectedQueueConfigErr: protectedQueueConfigErr,
-		cluster:                 cl,
-		localNodeID:             localNodeID,
-		subscriptions:           make(map[string]map[string]*subscriptionRef),
-		stopCh:                  make(chan struct{}),
-		delivery:                engine,
-		metrics:                 metrics,
-		records:                 records,
-		stateMachine:            machine,
-	}
-
-	// Assigned after construction because the cycle is real: the core wakes
-	// delivery, and the engine that delivers needs the state machine the core
-	// backs. Both happen before anything is started.
-	records.delivery = engine
-	records.services = mgr
+	// The facade takes ownership of what it aggregates. The core above is
+	// already complete and is not touched again.
+	mgr.consumerManager = consumerMgr
+	mgr.records = records
+	mgr.stateMachine = machine
+	mgr.delivery = engine
 
 	mgr.capture = newCaptureDispatcher(
 		config.CaptureWorkers,

@@ -48,9 +48,7 @@ type DeliveryEngine struct {
 	logger            *slog.Logger
 	onConsumerRemoved func(context.Context, string, string, []string)
 
-	mu       sync.Mutex
-	enqueued map[string]struct{}
-	queue    chan string
+	schedule *deliveryQueue
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -60,6 +58,7 @@ type DeliveryEngine struct {
 // single-node deployments.
 func NewDeliveryEngine(
 	machine *stateMachine,
+	schedule *deliveryQueue,
 	queueStore storage.QueueStore,
 	groupStore storage.ConsumerGroupStore,
 	consumerMgr *consumer.Manager,
@@ -81,8 +80,7 @@ func NewDeliveryEngine(
 		distributionMode: distributionMode,
 		batchSize:        batchSize,
 		logger:           logger,
-		enqueued:         make(map[string]struct{}),
-		queue:            make(chan string, 4096),
+		schedule:         schedule,
 		stopCh:           make(chan struct{}),
 	}
 }
@@ -106,25 +104,7 @@ func (e *DeliveryEngine) Stop() {
 // Schedule enqueues a queue name for delivery. Duplicate schedules for the
 // same queue are coalesced until the queue is delivered.
 func (e *DeliveryEngine) Schedule(queueName string) {
-	if queueName == "" {
-		return
-	}
-
-	e.mu.Lock()
-	if _, exists := e.enqueued[queueName]; exists {
-		e.mu.Unlock()
-		return
-	}
-	e.enqueued[queueName] = struct{}{}
-	e.mu.Unlock()
-
-	select {
-	case e.queue <- queueName:
-	default:
-		e.logger.Warn("delivery channel full, dropping trigger (will retry on next sweep)",
-			slog.String("queue", queueName))
-		e.markDelivered(queueName)
-	}
+	e.schedule.Schedule(queueName)
 }
 
 // ScheduleAll lists all queues and schedules each for delivery.
@@ -169,9 +149,7 @@ func (e *DeliveryEngine) DeliverQueue(ctx context.Context, queueName string) boo
 }
 
 func (e *DeliveryEngine) markDelivered(queueName string) {
-	e.mu.Lock()
-	delete(e.enqueued, queueName)
-	e.mu.Unlock()
+	e.schedule.markDelivered(queueName)
 }
 
 func (e *DeliveryEngine) run(ctx context.Context) {
@@ -184,7 +162,7 @@ func (e *DeliveryEngine) run(ctx context.Context) {
 		select {
 		case <-e.stopCh:
 			return
-		case queueName := <-e.queue:
+		case queueName := <-e.schedule.pending():
 			e.markDelivered(queueName)
 			if e.DeliverQueue(ctx, queueName) {
 				e.Schedule(queueName)
