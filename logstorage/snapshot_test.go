@@ -146,12 +146,16 @@ func TestAdapterCreateConsumerGroupSeedsOperationalState(t *testing.T) {
 	config := snapshotQueueConfig("jobs")
 	require.NoError(t, adapter.CreateQueue(ctx, config))
 
+	// Committed is the oldest offset still unacknowledged, so the entry pending
+	// at that offset is exactly the one a restore must not settle. A fixture
+	// that puts the pending entry below Committed contradicts itself and would
+	// hide that.
 	claimedAt := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
 	group := &types.ConsumerGroup{
 		ID: "workers", QueueName: config.Name, Mode: types.GroupModeQueue,
 		Cursor: &types.QueueCursor{Cursor: 8, Committed: 7},
 		PEL: map[string][]*types.PendingEntry{
-			"c1": {{Offset: 6, ConsumerID: "c1", ClaimedAt: claimedAt, DeliveryCount: 3}},
+			"c1": {{Offset: 7, ConsumerID: "c1", ClaimedAt: claimedAt, DeliveryCount: 3}},
 		},
 		Consumers: map[string]*types.ConsumerInfo{},
 	}
@@ -161,14 +165,47 @@ func TestAdapterCreateConsumerGroupSeedsOperationalState(t *testing.T) {
 	require.NoError(t, err)
 	snapshot := got.Snapshot()
 	assert.Equal(t, uint64(8), snapshot.Cursor.Cursor, "the cursor must survive the restore")
-	require.Len(t, snapshot.PEL["c1"], 1)
-	assert.Equal(t, uint64(6), snapshot.PEL["c1"][0].Offset)
+	require.Len(t, snapshot.PEL["c1"], 1, "the entry at the committed offset must survive the restore")
+	assert.Equal(t, uint64(7), snapshot.PEL["c1"][0].Offset)
 	assert.Equal(t, 3, snapshot.PEL["c1"][0].DeliveryCount,
 		"the attempt count decides redelivery and dead-lettering, so it must survive too")
 
+	committed, err := adapter.store.GetCommittedOffset(config.Name, "workers")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), committed, "the committed position must survive the restore")
+
 	// The entry has to be actionable, not merely visible.
-	assert.NoError(t, adapter.RemovePendingEntry(ctx, config.Name, "workers", "c1", 6),
+	assert.NoError(t, adapter.RemovePendingEntry(ctx, config.Name, "workers", "c1", 7),
 		"a restored pending entry must be settleable")
+}
+
+// Raft applies entries while Persist runs. A view that resolves its queue by
+// name would follow a delete-and-recreate onto a different log, and the snapshot
+// would pair one queue's records with another's configuration and groups.
+func TestAdapterQueueSnapshotFailsWhenQueueIsReplaced(t *testing.T) {
+	ctx := context.Background()
+	adapter := newSnapshotAdapter(t)
+	config := snapshotQueueConfig("replaced-under-capture")
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+	_, err := adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("old")))
+	require.NoError(t, err)
+
+	reader, err := adapter.OpenQueueSnapshot(ctx, config.Name)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+
+	require.NoError(t, adapter.DeleteQueue(ctx, config.Name))
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+	_, err = adapter.Append(ctx, config.Name, message.New(config.Name+"/x", []byte("new")))
+	require.NoError(t, err)
+
+	_, envelope, ok, err := reader.Next(ctx)
+	if envelope != nil {
+		message.Release(envelope)
+	}
+	assert.False(t, ok, "a replaced queue must not read back as the captured one")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replaced")
 }
 
 // RestoreQueue replaces what is already there: a snapshot is the group's state,

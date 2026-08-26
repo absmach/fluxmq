@@ -534,8 +534,12 @@ func (a *Adapter) seedConsumerState(group *types.ConsumerGroup) error {
 		}
 	}
 
+	// The committed position is restored, not replayed as an acknowledgement.
+	// CommitOffset is an ack, and the committed position is the oldest offset
+	// still unacknowledged, so acking it would settle the very entry the
+	// snapshot was carrying.
 	if snapshot.Cursor.Committed > 0 {
-		if err := a.store.CommitOffset(group.QueueName, group.ID, snapshot.Cursor.Committed); err != nil {
+		if err := a.store.RestoreAckFloor(group.QueueName, group.ID, snapshot.Cursor.Committed); err != nil {
 			return fmt.Errorf("restore committed offset of group %q: %w", group.ID, err)
 		}
 	}

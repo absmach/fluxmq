@@ -45,7 +45,19 @@ func (a *Adapter) OpenQueueSnapshot(ctx context.Context, queueName string) (stor
 		return nil, fmt.Errorf("queue %q tail %d precedes head %d", queueName, tail, head)
 	}
 
-	return &adapterQueueSnapshot{adapter: a, queueName: queueName, head: head, tail: tail, next: head}, nil
+	// The segment manager is captured so a queue replaced under an open view is
+	// caught. Reading by name alone would silently follow a delete-and-recreate
+	// onto a different log, and the snapshot would pair one queue's records with
+	// another's configuration and groups.
+	manager, err := a.store.getQueue(queueName)
+	if err != nil {
+		return nil, translateQueueErr(err)
+	}
+
+	return &adapterQueueSnapshot{
+		adapter: a, queueName: queueName, manager: manager,
+		head: head, tail: tail, next: head,
+	}, nil
 }
 
 // adapterQueueSnapshot reads a fixed offset range in batches, so the memory it
@@ -53,6 +65,7 @@ func (a *Adapter) OpenQueueSnapshot(ctx context.Context, queueName string) (stor
 type adapterQueueSnapshot struct {
 	adapter   *Adapter
 	queueName string
+	manager   *SegmentManager
 	head      uint64
 	tail      uint64
 	next      uint64
@@ -66,6 +79,9 @@ func (r *adapterQueueSnapshot) Next(ctx context.Context) (uint64, *message.Envel
 	if len(r.buffered) == 0 {
 		if r.next >= r.tail {
 			return 0, nil, false, nil
+		}
+		if err := r.checkNotReplaced(); err != nil {
+			return 0, nil, false, err
 		}
 
 		limit := min(int(r.tail-r.next), snapshotReadBatch)
@@ -84,6 +100,19 @@ func (r *adapterQueueSnapshot) Next(ctx context.Context) (uint64, *message.Envel
 	offset := r.next
 	r.next++
 	return offset, envelope, true, nil
+}
+
+// checkNotReplaced fails the capture if the queue it was opened on is gone or
+// has been recreated since.
+func (r *adapterQueueSnapshot) checkNotReplaced() error {
+	current, err := r.adapter.store.getQueue(r.queueName)
+	if err != nil {
+		return fmt.Errorf("queue %q went away while it was being captured: %w", r.queueName, translateQueueErr(err))
+	}
+	if current != r.manager {
+		return fmt.Errorf("queue %q was replaced while it was being captured", r.queueName)
+	}
+	return nil
 }
 
 func (r *adapterQueueSnapshot) Close() error {

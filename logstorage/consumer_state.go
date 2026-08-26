@@ -544,6 +544,25 @@ func (cs *ConsumerState) RestorePending(offset uint64, consumerID string, claime
 	})
 }
 
+// RestoreAckFloor puts the committed position back without acknowledging
+// anything.
+//
+// Committing an offset is an acknowledgement, and the committed position is the
+// oldest offset still unacknowledged, so replaying it as an ack would settle
+// precisely the entry a snapshot was carrying.
+func (cs *ConsumerState) RestoreAckFloor(floor uint64) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	cs.applyAdvanceFloor(floor)
+
+	return cs.writeOp(&Operation{
+		Type:      OpAdvanceFloor,
+		Offset:    floor,
+		Timestamp: time.Now().UnixMilli(),
+	})
+}
+
 // DeliverBatch marks multiple messages as delivered.
 func (cs *ConsumerState) DeliverBatch(offsets []uint64, consumerID string) error {
 	cs.mu.Lock()
