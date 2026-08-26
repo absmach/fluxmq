@@ -9,6 +9,7 @@ import (
 
 	"github.com/absmach/fluxmq/amqp/codec"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +35,11 @@ func TestAMQP091QueueErrorContract(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAMQP091DurabilityUnconfirmedIsUnavailable(t *testing.T) {
+	code, _ := amqp091QueueError(storage.ErrDurabilityUnconfirmed)
+	require.Equal(t, uint16(codec.InternalError), code)
 }
 
 func TestAMQP091UnconfirmedQueueFailureClosesChannel(t *testing.T) {

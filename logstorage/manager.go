@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/absmach/fluxmq/queue/storage"
 )
 
 // SegmentManager manages segments for a single partition.
@@ -259,7 +261,7 @@ func (m *SegmentManager) appendDurable(batch *Batch) (uint64, error) {
 		// The record is written; only the barrier over it failed. The offset is
 		// returned with the error so a caller that must not write it twice can
 		// tell "not accepted" from "accepted but not yet durable".
-		return offset, fmt.Errorf("%w for offset %d: %w", ErrDurabilityBarrier, offset, err)
+		return offset, fmt.Errorf("%w for offset %d: %w", storage.ErrDurabilityUnconfirmed, offset, err)
 	}
 	return offset, nil
 }

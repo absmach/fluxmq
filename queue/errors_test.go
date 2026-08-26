@@ -32,6 +32,8 @@ func TestClassifyErrorContract(t *testing.T) {
 		{name: "offset range", err: storage.ErrOffsetOutOfRange, want: Failure{Code: ErrorCodeOutOfRange}},
 		{name: "message too large", err: ErrQueueMessageTooLarge, want: Failure{Code: ErrorCodeResourceExhausted, Durability: DurabilityNotAttempted}},
 		{name: "PEL full", err: consumer.ErrPELFull, want: Failure{Code: ErrorCodeResourceExhausted, Retryable: true, Durability: DurabilityNotAttempted}},
+		{name: "durability unconfirmed", err: storage.ErrDurabilityUnconfirmed, want: Failure{Code: ErrorCodeUnavailable, Retryable: true, Durability: DurabilityUnconfirmed}},
+		{name: "deduplication state unconfirmed", err: storage.ErrDeduplicationStateUnconfirmed, want: Failure{Code: ErrorCodeUnavailable, Retryable: true}},
 		{name: "protected", err: ErrProtectedQueueMutation, want: Failure{Code: ErrorCodeFailedPrecondition}},
 		{name: "durability unsupported", err: ErrFsyncReplicatedQueueUnsupported, want: Failure{Code: ErrorCodeFailedPrecondition, Durability: DurabilityUnsupported}},
 		{name: "replication unavailable", err: ErrReplicationUnavailable, want: Failure{Code: ErrorCodeUnavailable, Retryable: true, Leader: LeaderUnavailable, Durability: DurabilityUnconfirmed}},

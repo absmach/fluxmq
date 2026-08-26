@@ -19,6 +19,12 @@ var (
 	ErrInvalidOffset        = errors.New("invalid offset")
 	ErrConsumerGroupExists  = errors.New("consumer group already exists")
 	ErrPendingEntryNotFound = errors.New("pending entry not found")
+
+	// ErrDurabilityUnconfirmed reports that a write was accepted but its
+	// durability barrier did not complete. The returned offset identifies the
+	// accepted record; callers must retry by identity or establish a barrier
+	// over that record, never blindly append it again.
+	ErrDurabilityUnconfirmed = errors.New("write accepted but durability is unconfirmed")
 )
 
 var (
@@ -40,6 +46,11 @@ var (
 	// ErrDeduplicationUnsupported reports that a deduplicated append reached a
 	// store or a replication path that cannot perform the check.
 	ErrDeduplicationUnsupported = errors.New("deduplicated append is not supported")
+
+	// ErrDeduplicationStateUnconfirmed reports that the record was accepted but
+	// the durable identity index could not confirm it. Retrying the same key is
+	// safe; appending under a different key is not.
+	ErrDeduplicationStateUnconfirmed = errors.New("deduplication state is unconfirmed")
 )
 
 // QueueStore provides append-only log storage with offset-based access.
@@ -94,9 +105,10 @@ type QueueStore interface {
 // a crash or a failed settlement without producing a second record.
 //
 // The key must be derivable from the source coordinates rather than generated
-// per attempt, so a retry computes the same key. It must also be persisted in
-// the record: an index that lives only in memory is rebuilt from the log, and
-// a key that was never written cannot be recovered.
+// per attempt, so a retry computes the same key. It is persisted both in the
+// record and in a durable derived index. The record remains authoritative;
+// the index makes recovery bounded by the uncertain append suffix rather than
+// the queue's retained history.
 type DeduplicatingQueueStore interface {
 	// AppendOnce appends msg unless a record with the same dedupeKey is already
 	// present within the store's deduplication window, in which case it returns
@@ -111,8 +123,9 @@ type DeduplicatingQueueStore interface {
 	// DurableQueueStore.AppendAndSync: it returns only once the record it
 	// appended is durable.
 	//
-	// A barrier that fails after the record is written must not be reported as
-	// a plain failure and forgotten: the retry would append the record twice.
+	// A barrier that fails after the record is written returns
+	// ErrDurabilityUnconfirmed and must not be reported as a plain failure and
+	// forgotten: the retry would append the record twice.
 	// Nor may it be reported as success: the caller settles its source on that
 	// answer. Such an attempt returns an error, and a later attempt with the
 	// same key establishes the barrier over the record that already exists

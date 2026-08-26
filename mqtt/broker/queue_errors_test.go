@@ -13,6 +13,7 @@ import (
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	queuepkg "github.com/absmach/fluxmq/queue"
+	"github.com/absmach/fluxmq/queue/storage"
 	qtypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +21,11 @@ import (
 type failingMQTTQueueManager struct {
 	mockQueueManager
 	publishErr error
+}
+
+func TestMQTT5DurabilityUnconfirmedIsUnavailable(t *testing.T) {
+	code, _ := mqtt5QueuePublishError(storage.ErrDurabilityUnconfirmed)
+	require.Equal(t, byte(v5.PubAckUnspecifiedError), code)
 }
 
 func (m *failingMQTTQueueManager) Publish(context.Context, qtypes.PublishRequest) error {
