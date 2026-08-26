@@ -171,3 +171,37 @@ func envelopeWithBroker(broker []byte) []byte {
 	encoded = protowire.AppendTag(encoded, 5, protowire.BytesType)
 	return protowire.AppendBytes(encoded, broker)
 }
+
+// Protocol and queue state are varint enums. Records written before that carry
+// them as UTF-8 strings, and unlike the subscription-ID change above there is
+// no accepting both: a string and an enum cannot be told apart by value, only
+// by wire type, and silently reading one as the other would put an arbitrary
+// number where a validated enum belongs.
+//
+// So the old form is refused, and this pins that it is refused rather than
+// misread. Every record written before the enum change is unreadable by design;
+// see the migration note in V1-READINESS.md.
+func TestLegacyStringEnumsAreRejectedNotMisread(t *testing.T) {
+	t.Run("protocol", func(t *testing.T) {
+		source := protowire.AppendTag(nil, 3, protowire.BytesType)
+		source = protowire.AppendBytes(source, []byte("mqtt"))
+		broker := protowire.AppendTag(nil, 1, protowire.BytesType)
+		broker = protowire.AppendBytes(broker, source)
+
+		_, err := UnmarshalBinary(envelopeWithBroker(broker))
+		require.Error(t, err, "a string-form protocol must not decode")
+		require.Contains(t, err.Error(), "wire type",
+			"the failure must name the wire type, so the cause is legible in a log")
+	})
+
+	t.Run("queue state", func(t *testing.T) {
+		queue := protowire.AppendTag(nil, 5, protowire.BytesType)
+		queue = protowire.AppendBytes(queue, []byte("queued"))
+		broker := protowire.AppendTag(nil, 3, protowire.BytesType)
+		broker = protowire.AppendBytes(broker, queue)
+
+		_, err := UnmarshalBinary(envelopeWithBroker(broker))
+		require.Error(t, err, "a string-form queue state must not decode")
+		require.Contains(t, err.Error(), "wire type")
+	})
+}

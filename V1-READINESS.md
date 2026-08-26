@@ -76,6 +76,23 @@ It is true now, and of the current tree rather than of the assessed tag:
   optionals, and the raw payload-buffer field are no longer exposed: clones
   share immutable metadata and writers replace it through copy-on-write values.
 
+**Upgrading over existing queue data is a break, and a deliberate one.** Making
+protocol and queue lifecycle compact validated enums changed how they sit on the
+wire — a varint where a UTF-8 string used to be. A string and an enum cannot be
+told apart by value, only by wire type, so accepting both would put an arbitrary
+number where a validated enum belongs. The decoder refuses the old form instead,
+and `TestLegacyStringEnumsAreRejectedNotMisread` pins that it is refused rather
+than misread.
+
+What an operator sees: **the broker starts normally**, because nothing decodes
+envelopes at startup or during recovery. Every read from a queue holding
+pre-upgrade records then fails with `decode queue envelope metadata at offset N`,
+and delivery from that queue stops. The records are unreadable, not destroyed.
+
+A queue log written before this change has to be discarded before the queue will
+deliver again. This is the pre-1.0 freedom being spent deliberately; after the
+tag the same change would need a version field and a reader for both forms.
+
 The next broker-core work is a recoverable transition boundary, followed by a
 capability interface that keeps experimental Raft outside the stable API. See
 [`ROADMAP.md`](./ROADMAP.md#next).
