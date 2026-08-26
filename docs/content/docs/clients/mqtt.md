@@ -49,30 +49,43 @@ mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
 ## Queue ACK/NACK/REJECT with `mosquitto_pub`
 
 `mosquitto_sub` does not automatically send queue acknowledgments.  
-To ack (or nack/reject), publish to queue ack topics with MQTT v5 user properties:
+To ack (or nack/reject), publish to queue ack topics with MQTT v5 user
+properties naming the consumer group and the offset being settled:
 
 ```bash
 # Ack
 mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders/$ack' -m '' \
-  -D publish user-property message-id 'orders:42' \
-  -D publish user-property group-id 'workers'
+  -D publish user-property x-group-id 'workers' \
+  -D publish user-property x-offset '42'
 
 # Nack (retry)
 mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders/$nack' -m '' \
-  -D publish user-property message-id 'orders:42' \
-  -D publish user-property group-id 'workers'
+  -D publish user-property x-group-id 'workers' \
+  -D publish user-property x-offset '42'
 
 # Reject (no retry)
 mosquitto_pub -V mqttv5 -h localhost -p 1884 -u usr -P pwd \
   -t '$queue/orders/$reject' -m '' \
-  -D publish user-property message-id 'orders:42' \
-  -D publish user-property group-id 'workers' \
+  -D publish user-property x-group-id 'workers' \
+  -D publish user-property x-offset '42' \
   -D publish user-property reason 'invalid payload'
 ```
 
-`message-id` format is typically `<queue>:<offset>` (for example `orders:42`).
+The offset arrives on the delivery as the `offset` user property, and also as
+the tail of the `message-id` handle, whose format is `<queue>:<offset>` (for
+example `orders:42`). Offset `0` is the first record in a queue, so it must be
+sent explicitly; a settlement with no `x-offset` is refused rather than settling
+the head of the queue.
+
+<Callout type="warn">
+Earlier releases documented sending `message-id` and `group-id` back on the ack
+topic. Those are broker-owned delivery property names: every protocol boundary
+strips them from client input so a publisher cannot forge them, which meant a
+settlement sent that way never reached the broker. Use `x-group-id` and
+`x-offset`, the same inbound command names AMQP 0.9.1 already uses.
+</Callout>
 
 ## Special Topics
 

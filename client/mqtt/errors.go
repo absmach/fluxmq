@@ -40,6 +40,9 @@ var (
 	ErrReconnectBufferFull  = errors.New("reconnect publish buffer is full")
 	ErrQueueAckRequiresV5   = errors.New("queue acknowledgments require MQTT v5 user properties")
 	ErrQueueAckMissingGroup = errors.New("group-id required for queue acknowledgment")
+	// ErrQueueAckMalformedMessageID reports a delivery handle the offset cannot
+	// be read from. The broker stamps "<queue>:<offset>".
+	ErrQueueAckMalformedMessageID = errors.New("queue acknowledgment message-id is not <queue>:<offset>")
 
 	// Authentication errors.
 	ErrAuthFailed         = errors.New("enhanced authentication failed")

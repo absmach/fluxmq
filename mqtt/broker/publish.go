@@ -395,15 +395,17 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *message.Envelope, rout
 		return fmt.Errorf("invalid queue topic: %s", route.PublishTopic)
 	}
 
-	// Extract message ID and group ID from properties
-	groupID := msg.Broker.Queue.GroupID
-	offset := msg.Broker.Queue.Offset
-
-	if groupID == "" {
-		b.logError("queue_ack_missing_group_id", fmt.Errorf("group-id not found in properties"),
-			slog.String("topic", msg.Topic))
-		return fmt.Errorf("group-id required for queue acknowledgment")
+	// The delivery being settled is named by the client, in the inbound command
+	// namespace. It cannot be read from Broker.Queue: those are broker-owned
+	// outbound fields, and the protocol boundary strips their reserved property
+	// names from client input, so nothing a consumer sends ever reaches them.
+	settlement, err := types.SettlementFromProperties(msg.User.Properties)
+	if err != nil {
+		b.logError("queue_ack_invalid_settlement", err, slog.String("topic", msg.Topic))
+		return err
 	}
+	groupID := settlement.GroupID
+	offset := settlement.Offset
 
 	switch route.AckKind {
 	case broker.AckAccept:
