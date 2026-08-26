@@ -251,7 +251,6 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 	if err != nil {
 		return &ApplyResult{Error: err}
 	}
-	messageID := envelope.Broker.Queue.MessageID
 
 	offset, err := f.queueStore.Append(ctx, op.QueueName, envelope)
 	if errors.Is(err, storage.ErrQueueNotFound) {
@@ -268,14 +267,12 @@ func (f *LogFSM) applyAppend(ctx context.Context, op *Operation) *ApplyResult {
 		message.Release(envelope)
 		f.logger.Error("failed to apply append",
 			slog.String("queue", op.QueueName),
-			slog.String("message_id", messageID),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
 	}
 
 	f.logger.Debug("applied append",
 		slog.String("queue", op.QueueName),
-		slog.String("message_id", messageID),
 		slog.Uint64("offset", offset))
 
 	return &ApplyResult{Offset: offset}
@@ -306,7 +303,6 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 	if err != nil {
 		return &ApplyResult{Error: err}
 	}
-	messageID := envelope.Broker.Queue.MessageID
 
 	offset, deduplicated, err := deduplicating.AppendOnce(ctx, op.QueueName, op.DedupeKey, envelope)
 	if errors.Is(err, storage.ErrQueueNotFound) {
@@ -323,7 +319,6 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 		message.Release(envelope)
 		f.logger.Error("failed to apply deduplicated append",
 			slog.String("queue", op.QueueName),
-			slog.String("message_id", messageID),
 			slog.String("dedupe_key", op.DedupeKey),
 			slog.String("error", err.Error()))
 		return &ApplyResult{Error: err}
@@ -331,7 +326,6 @@ func (f *LogFSM) applyAppendOnce(ctx context.Context, op *Operation) *ApplyResul
 
 	f.logger.Debug("applied deduplicated append",
 		slog.String("queue", op.QueueName),
-		slog.String("message_id", messageID),
 		slog.String("dedupe_key", op.DedupeKey),
 		slog.Uint64("offset", offset),
 		slog.Bool("deduplicated", deduplicated))

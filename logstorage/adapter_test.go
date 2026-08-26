@@ -19,7 +19,7 @@ import (
 
 func queueEnvelope(id, topic string, data []byte) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.Broker.Queue.MessageID = id
+	envelope.User.MessageID = id
 	return envelope
 }
 

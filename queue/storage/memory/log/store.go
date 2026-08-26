@@ -394,7 +394,7 @@ func messageSize(msg *message.Envelope) int64 {
 	}
 	size := int64(len(msg.PayloadBytes()))
 	size += int64(len(msg.Topic))
-	size += int64(len(msg.Broker.Queue.MessageID))
+	size += int64(len(msg.User.MessageID))
 	for k, v := range msg.User.Properties {
 		size += int64(len(k) + len(v))
 	}

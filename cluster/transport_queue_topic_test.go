@@ -162,7 +162,7 @@ func roundTripQueueMessage(t *testing.T, envelope *message.Envelope) *message.En
 func queueTestEnvelope(topic, sourceTopic string) *message.Envelope {
 	envelope := message.New(topic, []byte("payload"))
 	envelope.Broker.Source.Topic = sourceTopic
-	envelope.Broker.Queue.MessageID = testQueueMessageID
+	envelope.User.MessageID = testQueueMessageID
 	envelope.Broker.Queue.Name = "m"
 	envelope.Broker.Queue.GroupID = "rules-engine"
 	envelope.Broker.Queue.Offset = 1

@@ -232,8 +232,12 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *core
 			amqpMsg.ApplicationProperties[key] = value
 		}
 	}
-	if msg.Broker.Queue.MessageID != "" {
-		amqpMsg.Properties.MessageID = msg.Broker.Queue.MessageID
+	// A durable delivery is named by the broker's handle; anything else carries
+	// whatever identifier the publisher set.
+	if handle := msg.Broker.Queue.DeliveryID(); handle != "" {
+		amqpMsg.Properties.MessageID = handle
+	} else if msg.User.MessageID != "" {
+		amqpMsg.Properties.MessageID = msg.User.MessageID
 	}
 
 	c.deliverAMQPMessage(msg.Topic, amqpMsg, msg.Broker.Delivery.QoS) //nolint:contextcheck // fire-and-forget delivery, metrics use background context

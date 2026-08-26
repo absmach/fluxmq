@@ -141,6 +141,7 @@ func encodeUser(user UserMetadata, includeKey bool) []byte {
 	if user.MessageExpiry != nil {
 		encoded = appendVarint(encoded, 9, uint64(*user.MessageExpiry))
 	}
+	encoded = appendString(encoded, 10, user.MessageID)
 	return encoded
 }
 
@@ -214,6 +215,11 @@ func decodeUser(encoded []byte, user *UserMetadata) error {
 			}
 			value := uint32(scalar)
 			user.MessageExpiry = &value
+		case 10:
+			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
+				return err
+			}
+			user.MessageID = string(raw)
 		}
 		return nil
 	})
@@ -362,9 +368,11 @@ func decodeDelivery(encoded []byte, delivery *DeliveryMetadata) error {
 	})
 }
 
+// Field 1 is retired: it held a message identifier that is now derived from the
+// queue and offset. Nothing writes it, and decodeQueue ignores it, so a record
+// written by an older broker still decodes.
 func encodeQueue(queue QueueMetadata) []byte {
 	var encoded []byte
-	encoded = appendString(encoded, 1, queue.MessageID)
 	encoded = appendString(encoded, 2, queue.Name)
 	encoded = appendString(encoded, 3, queue.GroupID)
 	encoded = appendNonZeroVarint(encoded, 4, queue.Offset)
@@ -383,7 +391,7 @@ func encodeQueue(queue QueueMetadata) []byte {
 func decodeQueue(encoded []byte, queue *QueueMetadata) error {
 	return walkFields(encoded, func(number protowire.Number, wireType protowire.Type, raw []byte, scalar uint64) error {
 		switch number {
-		case 1, 2, 3, 5, 11:
+		case 2, 3, 5, 11:
 			if err := requireWireType(number, wireType, protowire.BytesType); err != nil {
 				return err
 			}
@@ -395,8 +403,6 @@ func decodeQueue(encoded []byte, queue *QueueMetadata) error {
 			return nil
 		}
 		switch number {
-		case 1:
-			queue.MessageID = string(raw)
 		case 2:
 			queue.Name = string(raw)
 		case 3:

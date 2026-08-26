@@ -2128,8 +2128,8 @@ func TestCrossNodeMessageRouting(t *testing.T) {
 				t.Error("Expected routed message payload to be set")
 				continue
 			}
-			if rm.message.Broker.Queue.MessageID == "" {
-				t.Error("Expected routed message-id to be set")
+			if rm.message.Broker.Queue.DeliveryID() == "" {
+				t.Error("Expected routed delivery to name its queue and offset")
 			}
 			if rm.message.Broker.Queue.GroupID == "" {
 				t.Error("Expected routed message to include group-id")
@@ -2199,8 +2199,8 @@ func TestRemoteRoutingIncludesAckMetadata(t *testing.T) {
 	if msg.message == nil {
 		t.Fatal("expected routed queue message payload")
 	}
-	if msg.message.Broker.Queue.MessageID != "tasks:0" {
-		t.Fatalf("expected message-id tasks:0, got %q", msg.message.Broker.Queue.MessageID)
+	if got := msg.message.Broker.Queue.DeliveryID(); got != "tasks:0" {
+		t.Fatalf("expected delivery handle tasks:0, got %q", got)
 	}
 	if got := msg.message.Broker.Queue.GroupID; got != testGroupWorkers { //nolint:goconst // test value
 		t.Fatalf("expected group-id workers, got %q", got)
@@ -2698,10 +2698,9 @@ func TestDeliverQueueMessage(t *testing.T) {
 	msg := message.New("$queue/test", []byte("routed payload"))
 	msg.User.Properties = map[string]string{"custom": "prop"}
 	msg.Broker.Queue = message.QueueMetadata{
-		MessageID: "msg-123",
-		Name:      testQueueTest,
-		GroupID:   testGroupWorkers,
-		Offset:    42,
+		Name:    testQueueTest,
+		GroupID: testGroupWorkers,
+		Offset:  42,
 	}
 
 	err := manager.DeliverQueueMessage(ctx, "target-client", msg)
@@ -2728,8 +2727,8 @@ func TestDeliverQueueMessage(t *testing.T) {
 		t.Errorf("Expected payload 'routed payload', got '%s'", string(deliveredMsg.PayloadBytes()))
 	}
 
-	if deliveredMsg.Broker.Queue.MessageID != "msg-123" {
-		t.Errorf("Expected message-id 'msg-123', got '%s'", deliveredMsg.Broker.Queue.MessageID)
+	if got := deliveredMsg.Broker.Queue.DeliveryID(); got != testQueueTest+":42" {
+		t.Errorf("Expected delivery handle '%s:42', got '%s'", testQueueTest, got)
 	}
 	if deliveredMsg.Broker.Queue.Name != testQueueTest {
 		t.Errorf("Expected queue 'test', got '%s'", deliveredMsg.Broker.Queue.Name)
@@ -2754,7 +2753,7 @@ func TestDeliverQueueMessagePreservesCanonicalTopic(t *testing.T) {
 	)
 
 	envelope := message.New("$queue/"+testCapturedTopic, []byte("payload"))
-	envelope.Broker.Queue = message.QueueMetadata{MessageID: "m:1", Name: "m", GroupID: "rules-engine", Offset: 1}
+	envelope.Broker.Queue = message.QueueMetadata{Name: "m", GroupID: "rules-engine", Offset: 1}
 	err := manager.DeliverQueueMessage(context.Background(), "target-client", envelope)
 	if err != nil {
 		t.Fatalf("DeliverQueueMessage failed: %v", err)
@@ -3483,8 +3482,14 @@ func TestMoveToDLQCreatesQueueAndAppendsMessage(t *testing.T) {
 	if msg.Broker.Transfer.ID != dlqTransferID("tasks", testGroupWorkers, 42) {
 		t.Fatalf("transfer identity is not derived from the source coordinates: %q", msg.Broker.Transfer.ID)
 	}
-	if msg.Broker.Queue.MessageID != "" {
-		t.Fatalf("queue message id must be left to delivery, got %q", msg.Broker.Queue.MessageID)
+	// The publisher's own identifier is user metadata and survives the transfer.
+	// The delivery handle does not: it names a record in the source queue, and
+	// the dead-letter copy is a different record at a different offset.
+	if msg.User.MessageID != "bad-msg-1" {
+		t.Fatalf("the publisher message id must survive the transfer, got %q", msg.User.MessageID)
+	}
+	if msg.Broker.Queue.Name == "tasks" {
+		t.Fatalf("the transfer still names the source queue: %q", msg.Broker.Queue.Name)
 	}
 	if msg.Broker.Transfer.FailureReason != "decode failed" {
 		t.Fatalf("expected reject reason, got %q", msg.Broker.Transfer.FailureReason)

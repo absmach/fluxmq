@@ -680,7 +680,6 @@ func TestSeekToTimestamp(t *testing.T) {
 	}
 	for i, ts := range points {
 		envelope := message.New(testQueueEvents, []byte{byte(i)})
-		envelope.Broker.Queue.MessageID = "m"
 		envelope.Broker.Queue.CreatedAt = ts
 		if _, err := store.Append(ctx, testQueueEvents, envelope); err != nil {
 			t.Fatalf("append message %d: %v", i, err)

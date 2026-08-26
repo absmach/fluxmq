@@ -104,7 +104,7 @@ func newTestLogFSM() (*LogFSM, *memlog.Store) {
 
 func newQueuedEnvelope(id, topic string, data []byte) *message.Envelope {
 	envelope := message.New(topic, data)
-	envelope.Broker.Queue.MessageID = id
+	envelope.User.MessageID = id
 	envelope.Broker.Queue.State = message.QueueStateQueued
 	envelope.Broker.Queue.CreatedAt = time.Now()
 	return envelope

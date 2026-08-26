@@ -24,7 +24,7 @@ import (
 
 const (
 	benchPayloadSize = 256
-	benchGroupID     = "workers"
+	testGroupID      = "workers"
 )
 
 // benchEmptyEnvelope carries a payload and nothing else.
@@ -63,9 +63,8 @@ func benchRichEnvelope() *Envelope {
 		Topic:      "devices/sensor-1/telemetry",
 	}
 	envelope.Broker.Queue = QueueMetadata{
-		MessageID:   "telemetry:4096",
 		Name:        "telemetry",
-		GroupID:     benchGroupID,
+		GroupID:     testGroupID,
 		Offset:      4096,
 		State:       QueueStateDelivered,
 		CreatedAt:   now,
@@ -79,7 +78,7 @@ func benchRichEnvelope() *Envelope {
 			CommittedOffset:    4000,
 			HasCommittedOffset: true,
 			WorkAcknowledged:   true,
-			WorkGroup:          benchGroupID,
+			WorkGroup:          testGroupID,
 		},
 	}
 	envelope.Broker.Transfer = TransferMetadata{
@@ -89,7 +88,7 @@ func benchRichEnvelope() *Envelope {
 		LastAttempt:   now,
 		CompletedAt:   now,
 		SourceQueue:   "telemetry",
-		SourceGroup:   benchGroupID,
+		SourceGroup:   testGroupID,
 		SourceOffset:  4096,
 		DeliveryCount: 5,
 	}

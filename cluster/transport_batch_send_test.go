@@ -56,7 +56,7 @@ func newTestTransport(nodeID string, mock *mockBrokerClient) *Transport {
 func newQueueDelivery(clientID, queueName, messageID, body string) QueueDelivery {
 	envelope := message.New("", []byte(body))
 	envelope.Broker.Queue.Name = queueName
-	envelope.Broker.Queue.MessageID = messageID
+	envelope.User.MessageID = messageID
 	return QueueDelivery{ClientID: clientID, Message: envelope}
 }
 

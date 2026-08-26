@@ -28,6 +28,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 		CorrelationData: []byte{0x80, 0x00},
 		PayloadFormat:   &payloadFormat,
 		MessageExpiry:   &messageExpiry,
+		MessageID:       "publisher-1",
 	}
 	original.Broker = BrokerMetadata{
 		Source: SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT, Topic: "source/topic"},
@@ -43,7 +44,6 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 			Duplicate:         true,
 		},
 		Queue: QueueMetadata{
-			MessageID:   testMessageID,
 			Name:        testQueueName,
 			GroupID:     "group",
 			Offset:      9,
@@ -59,7 +59,7 @@ func TestBinaryEnvelopeRoundTrip(t *testing.T) {
 				CommittedOffset:    8,
 				HasCommittedOffset: true,
 				WorkAcknowledged:   true,
-				WorkGroup:          "workers",
+				WorkGroup:          testGroupID,
 			},
 		},
 		Transfer: TransferMetadata{

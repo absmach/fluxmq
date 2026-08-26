@@ -146,8 +146,12 @@ func ApplyTrustedProperties(envelope *Envelope, properties map[string]string) er
 		*target = value
 	}
 
+	// A message-id on the wire is the publisher's own identifier, so it lands in
+	// user metadata. The broker's handle for a durable delivery is derived from
+	// the queue and offset below, and is never taken from the peer.
+	envelope.User.MessageID = properties[PropertyMessageID]
+
 	queue := &envelope.Broker.Queue
-	queue.MessageID = properties[PropertyMessageID]
 	queue.Name = properties[PropertyQueueName]
 	queue.GroupID = properties[PropertyGroupID]
 	parseUint(PropertyOffset, properties[PropertyOffset], &queue.Offset)
@@ -192,6 +196,14 @@ func ProjectProperties(envelope *Envelope, projection Projection) map[string]str
 		return nil
 	}
 	properties := FilterUserProperties(envelope.User.Properties)
+
+	// The publisher's own identifier travels as user metadata. A queue delivery
+	// overwrites it below with the broker's handle, which is what a consumer
+	// needs to name the record.
+	if envelope.User.MessageID != "" {
+		properties = ensureProperties(properties)
+		properties[PropertyMessageID] = envelope.User.MessageID
+	}
 
 	if projection.Queue && hasQueueProjection(envelope.Broker.Queue) {
 		properties = ensureProperties(properties)
@@ -251,12 +263,15 @@ func ensureProperties(properties map[string]string) map[string]string {
 }
 
 func hasQueueProjection(queue QueueMetadata) bool {
-	return queue.MessageID != "" || queue.Name != "" || queue.GroupID != "" || queue.Stream != nil
+	return queue.Name != "" || queue.GroupID != "" || queue.Stream != nil
 }
 
 func projectQueueProperties(properties map[string]string, source SourceMetadata, queue QueueMetadata) {
-	if queue.MessageID != "" {
-		properties[PropertyMessageID] = queue.MessageID
+	// The broker's delivery handle owns the message-id of a durable delivery. It
+	// is stamped after the user properties, so a publisher's own message-id
+	// cannot be mistaken for the record a consumer is looking at.
+	if handle := queue.DeliveryID(); handle != "" {
+		properties[PropertyMessageID] = handle
 	}
 	if queue.GroupID != "" {
 		properties[PropertyGroupID] = queue.GroupID

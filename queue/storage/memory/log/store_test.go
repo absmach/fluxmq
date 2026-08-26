@@ -27,7 +27,7 @@ func TestStore_AppendTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 	pool := payload.NewPoolWithCapacity(1, 0, 0)
 	buf := pool.FromBytes([]byte("remote-payload"))
 	msg := message.NewWithBuffer("$queue/buffered", buf)
-	msg.Broker.Queue.MessageID = "append-buf"
+	msg.User.MessageID = "append-buf"
 
 	_, err := store.Append(ctx, "buffered", msg)
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestStore_AppendBatchTakesEnvelopeOwnershipWithoutCopy(t *testing.T) {
 	pool := payload.NewPoolWithCapacity(1, 0, 0)
 	buf := pool.FromBytes([]byte("remote-payload"))
 	msg := message.NewWithBuffer("$queue/buffered-batch", buf)
-	msg.Broker.Queue.MessageID = "batch-buf"
+	msg.User.MessageID = "batch-buf"
 
 	_, err := store.AppendBatch(ctx, "buffered-batch", []*message.Envelope{msg})
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestStore_AppendPlainPayloadNotCopied(t *testing.T) {
 
 	data := []byte("plain-payload")
 	msg := message.New("$queue/plain", data)
-	msg.Broker.Queue.MessageID = "plain-1"
+	msg.User.MessageID = "plain-1"
 
 	_, err := store.Append(ctx, "plain", msg)
 	require.NoError(t, err)

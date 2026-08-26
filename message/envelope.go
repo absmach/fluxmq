@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strconv"
 	"time"
 
 	"github.com/absmach/fluxmq/payload"
@@ -61,6 +62,12 @@ type UserMetadata struct {
 	CorrelationData []byte
 	PayloadFormat   *byte
 	MessageExpiry   *uint32
+
+	// MessageID is the publisher's own identifier, as carried by AMQP's
+	// message-id property. It is user metadata: the broker never reads it and a
+	// publisher may set it to anything. The broker's own handle for a durable
+	// delivery is QueueMetadata.DeliveryID, derived from the queue and offset.
+	MessageID string
 }
 
 // SourceMetadata identifies the authenticated origin. It is broker-owned and
@@ -96,8 +103,14 @@ type StreamMetadata struct {
 }
 
 // QueueMetadata contains durable-queue identity and lifecycle state.
+//
+// It stores no message identifier. A durable record is named by its queue and
+// offset, and the string form clients see is derived from those by DeliveryID
+// at the protocol boundary. The stored field it replaces held two different
+// things at two different times — a delivery handle written at delivery, and
+// whatever a publisher had put in a message-id property — so neither could be
+// trusted to mean the other.
 type QueueMetadata struct {
-	MessageID   string
 	Name        string
 	GroupID     string
 	Offset      uint64
@@ -108,6 +121,17 @@ type QueueMetadata struct {
 	RetryCount  int
 	ExpiresAt   time.Time
 	Stream      *StreamMetadata
+}
+
+// DeliveryID is the broker's handle for a durable delivery, "<queue>:<offset>".
+// It is derived rather than stored: the queue and the offset are the identity,
+// and any string form is a rendering of them for a protocol that needs one.
+// A record with no queue has no delivery handle.
+func (q QueueMetadata) DeliveryID() string {
+	if q.Name == "" {
+		return ""
+	}
+	return q.Name + ":" + strconv.FormatUint(q.Offset, 10)
 }
 
 // TransferMetadata records a recoverable broker-owned message transfer such
@@ -280,7 +304,8 @@ func (e *Envelope) Clone() *Envelope {
 func hasUserMetadata(user UserMetadata) bool {
 	return len(user.Key) > 0 || len(user.Headers) > 0 || len(user.Properties) > 0 ||
 		user.ContentType != "" || user.ContentEncoding != "" || user.ResponseTopic != "" ||
-		len(user.CorrelationData) > 0 || user.PayloadFormat != nil || user.MessageExpiry != nil
+		len(user.CorrelationData) > 0 || user.PayloadFormat != nil || user.MessageExpiry != nil ||
+		user.MessageID != ""
 }
 
 func hasDeliveryMetadata(delivery DeliveryMetadata) bool {

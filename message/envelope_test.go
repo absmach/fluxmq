@@ -11,7 +11,6 @@ import (
 
 const (
 	testClientID      = "client"
-	testMessageID     = "message"
 	testQueueName     = "queue"
 	testPropertyValue = "value"
 	testSubject       = "subject"
@@ -64,11 +63,11 @@ func TestPropertyProjectionTrustBoundary(t *testing.T) {
 		PropertyTraceID:    "forged",
 	}
 	envelope.Broker.Source = SourceMetadata{ClientID: testClientID, ExternalID: testSubject, Protocol: ProtocolMQTT}
-	envelope.Broker.Queue = QueueMetadata{MessageID: testMessageID, Name: testQueueName, Offset: 3}
+	envelope.Broker.Queue = QueueMetadata{Name: testQueueName, Offset: 3}
 	envelope.Broker.Trace.TraceID = "trusted"
 
 	public := ProjectProperties(envelope, PublicProjection)
-	if public["user"] != "visible" || public[PropertyMessageID] != testMessageID {
+	if public["user"] != "visible" || public[PropertyMessageID] != testQueueName+":3" {
 		t.Fatalf("public projection lost delivery metadata: %#v", public)
 	}
 	if _, ok := public[PropertyExternalID]; ok {

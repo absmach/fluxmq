@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -585,11 +584,12 @@ func createDeliveryMessage(msg *message.Envelope, groupID string, queueName stri
 		ExpiresAt:   msg.Broker.Delivery.ExpiresAt,
 		QoS:         1,
 	}
+	// No delivery handle is stored: the queue and offset are the identity, and
+	// the string a consumer sees is rendered from them at the protocol boundary.
 	delivery.Broker.Queue = message.QueueMetadata{
-		MessageID: queueName + ":" + strconv.FormatUint(msg.Broker.Queue.Offset, 10),
-		Name:      queueName,
-		GroupID:   groupID,
-		Offset:    msg.Broker.Queue.Offset,
+		Name:    queueName,
+		GroupID: groupID,
+		Offset:  msg.Broker.Queue.Offset,
 	}
 	return delivery
 }
