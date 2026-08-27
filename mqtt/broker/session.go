@@ -538,6 +538,17 @@ func (b *Broker) HandleSessionLeaseLost(_ context.Context, clientIDs []string) {
 
 // handleDisconnect handles session disconnect.
 func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
+	sessionLock := b.sessionLocks.Key(s.ID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
+
+	// Disconnect callbacks run asynchronously. A clean reconnect can replace
+	// the session before the old callback starts; that stale callback must not
+	// delete or persist state belonging to the replacement session.
+	if b.sessionsMap.Get(s.ID) != s {
+		return
+	}
+
 	if b.auth != nil {
 		b.auth.Forget(s.ID)
 	}
@@ -592,18 +603,7 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	}
 
 	if s.CleanStart && s.ExpiryInterval == 0 {
-		sessionLock := b.sessionLocks.Key(s.ID)
-		sessionLock.Lock()
 		b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
-		sessionLock.Unlock()
-
-		// Release ownership for clean sessions
-		if b.cluster != nil {
-			ctx := context.Background()
-			if err := b.cluster.ReleaseSession(ctx, s.ID); err != nil {
-				b.logError("cluster_release_session", err, slog.String("client_id", s.ID))
-			}
-		}
 	}
 	// For persistent sessions, DON'T release ownership immediately
 	// Keep ownership so messages can still be routed to this node
