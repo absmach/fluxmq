@@ -318,3 +318,16 @@ func TestQueueConfigRejectsMalformedTopicFilters(t *testing.T) {
 		})
 	}
 }
+
+// A queue may not be configured to accept a record larger than its own Raft
+// group could snapshot. Such a record would make snapshotting — and with it log
+// compaction — fail for as long as it was retained.
+func TestQueueConfigRejectsMessageSizeAboveCeiling(t *testing.T) {
+	config := DefaultQueueConfig("bounded", "bounded/#")
+
+	config.MaxMessageSize = MaxMessageSizeCeiling
+	assert.NoError(t, config.Validate(), "the ceiling itself must be accepted")
+
+	config.MaxMessageSize = MaxMessageSizeCeiling + 1
+	assert.ErrorIs(t, config.Validate(), ErrInvalidConfig)
+}

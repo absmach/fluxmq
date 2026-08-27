@@ -16,6 +16,7 @@ import (
 	"time"
 
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
+	queuetypes "github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/topics"
 	"gopkg.in/yaml.v3"
 )
@@ -1887,6 +1888,9 @@ func (c *Config) Validate() error {
 	if c.Broker.MaxMessageSize < 1024 {
 		return fmt.Errorf("broker.max_message_size must be at least 1KB")
 	}
+	if int64(c.Broker.MaxMessageSize) > queuetypes.MaxMessageSizeCeiling {
+		return fmt.Errorf("broker.max_message_size must be at most %d bytes", queuetypes.MaxMessageSizeCeiling)
+	}
 	if c.Broker.RetryInterval < time.Second {
 		return fmt.Errorf("broker.retry_interval must be at least 1 second")
 	}
@@ -2182,6 +2186,12 @@ func (c *Config) Validate() error {
 		seenQueues[q.Name] = true
 		if len(q.Topics) == 0 {
 			return fmt.Errorf("queues[%d].topics cannot be empty", i)
+		}
+		if q.Limits.MaxMessageSize < 0 {
+			return fmt.Errorf("queues[%d].limits.max_message_size cannot be negative", i)
+		}
+		if q.Limits.MaxMessageSize > queuetypes.MaxMessageSizeCeiling {
+			return fmt.Errorf("queues[%d].limits.max_message_size must be at most %d bytes", i, queuetypes.MaxMessageSizeCeiling)
 		}
 		if err := validateQueueAckDurability(fmt.Sprintf("queues[%d].ack_durability", i), q.AckDurability); err != nil {
 			return err

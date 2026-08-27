@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
+	queuetypes "github.com/absmach/fluxmq/queue/types"
 )
 
 const (
@@ -879,4 +880,56 @@ func TestValidateRejectsMalformedQueueTopicFilters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A record has to fit in one queue-Raft snapshot frame. A broker or queue
+// configured above what a frame can hold would accept a record its own group
+// could never snapshot, and log compaction would fail for as long as that record
+// was retained. The bound belongs in validation because tightening it after 1.0
+// would reject configurations that used to load.
+func TestValidateBoundsMessageSizeByTheSnapshotCeiling(t *testing.T) {
+	ceiling := int64(queuetypes.MaxMessageSizeCeiling)
+
+	t.Run("broker at the ceiling", func(t *testing.T) {
+		cfg := Default()
+		cfg.Broker.MaxMessageSize = int(ceiling)
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	t.Run("broker above the ceiling", func(t *testing.T) {
+		cfg := Default()
+		cfg.Broker.MaxMessageSize = int(ceiling) + 1
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "broker.max_message_size must be at most") {
+			t.Fatalf("Validate() error = %v, want a broker.max_message_size ceiling error", err)
+		}
+	})
+
+	t.Run("queue above the ceiling", func(t *testing.T) {
+		cfg := Default()
+		cfg.Queues = []QueueConfig{{
+			Name:   "q",
+			Topics: []string{"q/#"},
+			Limits: QueueLimits{MaxMessageSize: ceiling + 1},
+		}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "queues[0].limits.max_message_size must be at most") {
+			t.Fatalf("Validate() error = %v, want a queues[].limits.max_message_size ceiling error", err)
+		}
+	})
+
+	t.Run("queue negative", func(t *testing.T) {
+		cfg := Default()
+		cfg.Queues = []QueueConfig{{
+			Name:   "q",
+			Topics: []string{"q/#"},
+			Limits: QueueLimits{MaxMessageSize: -1},
+		}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "queues[0].limits.max_message_size cannot be negative") {
+			t.Fatalf("Validate() error = %v, want a negative max_message_size error", err)
+		}
+	})
 }

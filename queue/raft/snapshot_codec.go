@@ -33,6 +33,13 @@ const snapshotReadBuffer = 64 << 10
 // the broker would have accepted in the first place.
 const snapshotMaxFrame = 128 << 20
 
+// A record frame has to be able to carry the largest message a queue may be
+// configured to accept, plus the envelope metadata around it. If the ceiling
+// ever rises past what a frame holds, queues would accept records their own
+// group could never snapshot, so the two limits are pinned together here rather
+// than left to agree by coincidence.
+var _ = [1]struct{}{}[snapshotMaxFrame-2*types.MaxMessageSizeCeiling]
+
 var errMalformedSnapshot = errors.New("malformed queue raft snapshot")
 
 // snapshotWriter writes a snapshot as length-delimited frames.

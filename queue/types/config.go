@@ -12,6 +12,18 @@ import (
 	"github.com/absmach/fluxmq/topics"
 )
 
+// MaxMessageSizeCeiling bounds what max_message_size may be set to.
+//
+// A record has to fit in one queue-Raft snapshot frame, and that frame carries
+// the whole encoded envelope: payload, topic, headers, properties, correlation
+// data. A queue configured above what a frame can hold would accept a record it
+// could never snapshot, and once that record existed the group's snapshots — and
+// with them log compaction — would fail for as long as it was retained.
+//
+// The ceiling is half the frame limit so the metadata around a payload has room
+// that no reasonable envelope will exhaust. queue/raft pins the two together.
+const MaxMessageSizeCeiling = 64 << 20 // 64MB
+
 // ErrInvalidConfig indicates an invalid queue configuration.
 var ErrInvalidConfig = errors.New("invalid queue configuration")
 
@@ -303,6 +315,8 @@ func (c *QueueConfig) Validate() error {
 	case len(c.Topics) == 0:
 		return ErrInvalidConfig
 	case c.MaxMessageSize <= 0:
+		return ErrInvalidConfig
+	case c.MaxMessageSize > MaxMessageSizeCeiling:
 		return ErrInvalidConfig
 	case c.MaxDepth <= 0:
 		return ErrInvalidConfig
