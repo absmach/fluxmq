@@ -917,7 +917,7 @@ func TestUpdateQueueMaskAppliesZeroValues(t *testing.T) {
 	if _, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
 		Name:       testQueueOrders,
 		Config:     &queuev1.QueueConfig{Retention: &queuev1.RetentionConfig{MaxBytes: 0}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"config.retention.max_bytes"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{updatePathRetentionMaxBytes}},
 	})); err != nil {
 		t.Fatalf("update queue: %v", err)
 	}
@@ -1017,7 +1017,7 @@ func TestUpdateQueueRequiresConfig(t *testing.T) {
 
 	tests := map[string]*fieldmaskpb.FieldMask{
 		"no mask":            nil,
-		"mask naming a path": {Paths: []string{"config.retention.max_bytes"}},
+		"mask naming a path": {Paths: []string{updatePathRetentionMaxBytes}},
 	}
 
 	for name, mask := range tests {
