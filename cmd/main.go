@@ -395,6 +395,41 @@ func releaseShutdownResources(
 	}
 }
 
+// warnListenerScopedBinding reports MQTT listeners that authenticate the same
+// principals as an mTLS listener but do not bind them to a client certificate.
+// The binding is enforced where the certificate is verified, so a principal
+// that must present one on the mTLS listener still reaches the broker with
+// credentials alone over any other MQTT listener that is enabled.
+func warnListenerScopedBinding(cfg *config.Config, logger *slog.Logger) {
+	if strings.TrimSpace(cfg.Server.MQTT.TCP.MTLS.Addr) == "" && strings.TrimSpace(cfg.Server.MQTT.WebSocket.MTLS.Addr) == "" {
+		return
+	}
+
+	unbound := make([]string, 0, 6)
+	for _, listener := range []struct {
+		name string
+		addr string
+	}{
+		{"server.mqtt.tcp.v3", cfg.Server.MQTT.TCP.V3.Addr},
+		{"server.mqtt.tcp.v5", cfg.Server.MQTT.TCP.V5.Addr},
+		{"server.mqtt.tcp.tls", cfg.Server.MQTT.TCP.TLS.Addr},
+		{"server.mqtt.websocket.v3", cfg.Server.MQTT.WebSocket.V3.Addr},
+		{"server.mqtt.websocket.v5", cfg.Server.MQTT.WebSocket.V5.Addr},
+		{"server.mqtt.websocket.tls", cfg.Server.MQTT.WebSocket.TLS.Addr},
+	} {
+		if strings.TrimSpace(listener.addr) != "" {
+			unbound = append(unbound, listener.name)
+		}
+	}
+	if len(unbound) == 0 {
+		return
+	}
+
+	logger.Warn("mqtt certificate binding is enforced per listener",
+		slog.Any("listeners_without_certificate_binding", unbound),
+		slog.String("effect", "a principal required to present a certificate on the mTLS listener can still connect with credentials alone on these"))
+}
+
 func main() {
 	configFile := flag.String("config", "", "Path to configuration file")
 	configOptional := flag.Bool("config-optional", false,
@@ -1108,6 +1143,8 @@ func main() {
 	var wg sync.WaitGroup
 	serverErr := make(chan error, 10)
 
+	warnListenerScopedBinding(cfg, logger)
+
 	tcpSlots := []struct {
 		name string
 		cfg  config.MQTTTCPListenerConfig
@@ -1130,17 +1167,18 @@ func main() {
 		}
 
 		tcpCfg := tcp.Config{
-			Address:          slot.cfg.Addr,
-			TLSConfig:        tlsCfg,
-			ShutdownTimeout:  cfg.Server.ShutdownTimeout,
-			MaxConnections:   slot.cfg.MaxConnections,
-			ReadTimeout:      slot.cfg.ReadTimeout,
-			WriteTimeout:     slot.cfg.WriteTimeout,
-			SendQueueSize:    cfg.Session.MaxSendQueueSize,
-			DisconnectOnFull: cfg.Session.DisconnectOnFull,
-			ProtocolVersion:  protocolVersionForMode(slot.cfg.Protocol),
-			MaxPacketSize:    maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
-			Logger:           logger,
+			Address:              slot.cfg.Addr,
+			TLSConfig:            tlsCfg,
+			ShutdownTimeout:      cfg.Server.ShutdownTimeout,
+			MaxConnections:       slot.cfg.MaxConnections,
+			ReadTimeout:          slot.cfg.ReadTimeout,
+			WriteTimeout:         slot.cfg.WriteTimeout,
+			SendQueueSize:        cfg.Session.MaxSendQueueSize,
+			DisconnectOnFull:     cfg.Session.DisconnectOnFull,
+			ProtocolVersion:      protocolVersionForMode(slot.cfg.Protocol),
+			MaxPacketSize:        maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			RequireMQTTTwoFactor: slot.name == listenerMTLS,
+			Logger:               logger,
 		}
 		tcpCfg.IPRateLimiter = rateLimitManager
 		tcpServer := tcp.New(tcpCfg, b)
@@ -1177,16 +1215,17 @@ func main() {
 		}
 
 		wsCfg := websocket.Config{
-			Address:         slot.cfg.Addr,
-			Path:            slot.cfg.Path,
-			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-			TLSConfig:       tlsCfg,
-			ProtocolVersion: protocolVersionForMode(slot.cfg.Protocol),
-			AllowedOrigins:  slot.cfg.AllowedOrigins,
-			MaxPacketSize:   maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
-			ReadTimeout:     slot.cfg.ReadTimeout,
-			WriteTimeout:    slot.cfg.WriteTimeout,
-			MaxConnections:  slot.cfg.MaxConnections,
+			Address:              slot.cfg.Addr,
+			Path:                 slot.cfg.Path,
+			ShutdownTimeout:      cfg.Server.ShutdownTimeout,
+			TLSConfig:            tlsCfg,
+			ProtocolVersion:      protocolVersionForMode(slot.cfg.Protocol),
+			AllowedOrigins:       slot.cfg.AllowedOrigins,
+			MaxPacketSize:        maxMQTTPacketSize(cfg.Broker.MaxMessageSize),
+			ReadTimeout:          slot.cfg.ReadTimeout,
+			WriteTimeout:         slot.cfg.WriteTimeout,
+			MaxConnections:       slot.cfg.MaxConnections,
+			RequireMQTTTwoFactor: slot.name == listenerMTLS,
 		}
 		wsCfg.IPRateLimiter = rateLimitManager
 

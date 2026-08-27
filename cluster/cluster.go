@@ -169,7 +169,7 @@ type Cluster interface {
 	// This is called when a client reconnects to a different node.
 	// The old node disconnects the client and returns its full state.
 	// Returns the session state to be restored, or nil if no state exists.
-	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error)
+	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error)
 
 	// RouteQueueMessage sends a queue message to a remote consumer.
 	// This is called in proxy mode when the worker needs to deliver a message
@@ -200,7 +200,7 @@ type MessageHandler interface {
 	// GetSessionStateAndClose captures the full state of a session and closes it.
 	// This is called when another node is taking over the session.
 	// Returns nil if the session doesn't exist on this node.
-	GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error)
+	GetSessionStateAndClose(ctx context.Context, clientID string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error)
 
 	// HandleSessionLeaseLost fences local sessions whose ownership lease was
 	// lost. The implementation must stop serving those connections before this

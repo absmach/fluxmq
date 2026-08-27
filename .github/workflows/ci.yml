@@ -53,6 +53,9 @@ jobs:
           # branch deletes — and both fail without a BSR token.
           push: false
           archive: false
+          # Keep the workflow token read-only; Buf's optional PR comment needs
+          # pull-request write permission and otherwise fails a successful run.
+          pr_comment: false
 
       - name: Check protobuf compatibility
         run: make proto-breaking

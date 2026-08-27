@@ -105,6 +105,13 @@ settlement sent that way never reached the broker. Use `x-group-id` and
 - Queue consumer groups require MQTT v5 (`-V mqttv5`) if you want explicit `consumer-group` assignment.
 - Reusing the same consumer group with different queue filters creates distinct internal groups per filter (`group@pattern` in logs).
 - TLS and mTLS listeners are configured via `server.mqtt.tcp.tls` and `server.mqtt.tcp.mtls`.
+- MQTT mTLS requires two bound factors on every connection: a CA-verified
+  client certificate plus CONNECT username/password accepted by the external
+  MQTT authenticator. The returned external identity must exactly equal the
+  verified leaf certificate CN.
+- Username and password are sent only in CONNECT. FluxMQ stores the resolved
+  external identity on the session and uses it for later PUBLISH and SUBSCRIBE
+  authorization calls.
 - Listener protocol mode can be pinned per TCP/WebSocket listener via `protocol: auto|v3|v5`.
 - Shared subscriptions are supported.
 

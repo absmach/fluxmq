@@ -1026,6 +1026,8 @@ var errUpdateConfigRequired = errors.New("update requires a config; an update wi
 // into, out of, or between replication groups.
 var errReplicationPlacementImmutable = errors.New("queue replication placement is fixed at creation; moving a queue between groups is a migration, not a configuration update")
 
+const updatePathRetentionMaxBytes = "config.retention.max_bytes"
+
 // updatePaths selects the fields an update applies.
 //
 // An empty mask selects everything, which makes an update a full replacement:
@@ -1059,7 +1061,7 @@ var knownUpdatePaths = map[string]bool{
 	"config":                        true,
 	"config.retention":              true,
 	"config.retention.max_age":      true,
-	"config.retention.max_bytes":    true,
+	updatePathRetentionMaxBytes:     true,
 	"config.retention.min_messages": true,
 	"config.max_message_size":       true,
 	"config.replication":            true,
@@ -1169,7 +1171,7 @@ func applyQueueSettingsFromProto(config *types.QueueConfig, cfg *queuev1.QueueCo
 		config.MessageTTL = maxAge
 		config.Retention.RetentionTime = maxAge
 	}
-	if paths.has("config.retention.max_bytes") {
+	if paths.has(updatePathRetentionMaxBytes) {
 		config.Retention.RetentionBytes = clampUint64ToInt64(retention.MaxBytes)
 	}
 	if paths.has("config.retention.min_messages") {

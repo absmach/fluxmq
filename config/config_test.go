@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mqtttls "github.com/absmach/fluxmq/pkg/tls"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -480,7 +481,7 @@ func TestValidate(t *testing.T) {
 			name: "unknown auth protocol",
 			modify: func(c *Config) {
 				c.Auth.External.URL = testAuthURL
-				c.Auth.External.Protocols = map[string]bool{protocolMQTT: true, "websocket": true}
+				c.Auth.External.Protocols = map[string]bool{protocolMQTT: true, sectionMQTTWebSocket: true}
 			},
 			wantErr: true,
 		},
@@ -497,7 +498,7 @@ func TestValidate(t *testing.T) {
 			name: "unknown blocking hook protocol",
 			modify: func(c *Config) {
 				c.Hooks.URL = testAuthURL
-				c.Hooks.Protocols = map[string]bool{protocolMQTT: true, "websocket": true}
+				c.Hooks.Protocols = map[string]bool{protocolMQTT: true, sectionMQTTWebSocket: true}
 			},
 			wantErr: true,
 		},
@@ -672,6 +673,79 @@ func TestExternalAuthEnabledFor(t *testing.T) {
 			if got := tt.cfg.EnabledFor(tt.protocol); got != tt.want {
 				t.Fatalf("EnabledFor(%q) = %v, want %v", tt.protocol, got, tt.want)
 			}
+		})
+	}
+}
+
+func TestMQTTMTLSTwoFactorValidation(t *testing.T) {
+	configure := func(c *Config, websocket bool) {
+		c.Auth.External.URL = testAuthURL
+		c.Auth.External.Protocols = map[string]bool{protocolMQTT: true}
+		if websocket {
+			listener := &c.Server.MQTT.WebSocket.MTLS
+			listener.Addr = "127.0.0.1:2885"
+			listener.TLS.CertFile = "server.crt"
+			listener.TLS.KeyFile = "server.key"
+			listener.TLS.ClientCAFile = testCAFile
+			listener.TLS.ClientAuth = clientAuthRequire
+			return
+		}
+		listener := &c.Server.MQTT.TCP.MTLS
+		listener.Addr = "127.0.0.1:2885"
+		listener.TLS.CertFile = "server.crt"
+		listener.TLS.KeyFile = "server.key"
+		listener.TLS.ClientCAFile = testCAFile
+		listener.TLS.ClientAuth = clientAuthRequire
+	}
+
+	for _, websocket := range []bool{false, true} {
+		transport := "tcp"
+		if websocket {
+			transport = "websocket"
+		}
+		t.Run(transport, func(t *testing.T) {
+			t.Run("valid default common name binding", func(t *testing.T) {
+				cfg := Default()
+				configure(cfg, websocket)
+				require.NoError(t, cfg.Validate())
+			})
+
+			t.Run("external MQTT auth required", func(t *testing.T) {
+				cfg := Default()
+				configure(cfg, websocket)
+				cfg.Auth.External.URL = ""
+				require.ErrorContains(t, cfg.Validate(), "requires auth.external with mqtt enabled")
+			})
+
+			t.Run("equivalent client auth spellings accepted", func(t *testing.T) {
+				for _, mode := range []string{"require", "require_and_verify", "require-and-verify", "requireandverify", ""} {
+					name := mode
+					if name == "" {
+						name = "unset with client CA"
+					}
+					t.Run(name, func(t *testing.T) {
+						cfg := Default()
+						configure(cfg, websocket)
+						if websocket {
+							cfg.Server.MQTT.WebSocket.MTLS.TLS.ClientAuth = mode
+						} else {
+							cfg.Server.MQTT.TCP.MTLS.TLS.ClientAuth = mode
+						}
+						require.NoError(t, cfg.Validate())
+					})
+				}
+			})
+
+			t.Run("weak client auth rejected", func(t *testing.T) {
+				cfg := Default()
+				configure(cfg, websocket)
+				if websocket {
+					cfg.Server.MQTT.WebSocket.MTLS.TLS.ClientAuth = "verify_if_given"
+				} else {
+					cfg.Server.MQTT.TCP.MTLS.TLS.ClientAuth = "verify_if_given"
+				}
+				require.ErrorContains(t, cfg.Validate(), "client_auth must verify the client certificate")
+			})
 		})
 	}
 }

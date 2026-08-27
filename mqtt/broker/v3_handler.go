@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -80,28 +81,23 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		}
 	}
 
-	externalID := ""
-	if h.broker.auth != nil {
-		username := p.Username
-		password := string(p.Password)
-
-		authenticated, resolvedID, err := h.broker.auth.Authenticate(ctx, clientID, username, password)
-		if err != nil || !authenticated {
-			h.broker.telemetry.stats.IncrementAuthErrors()
-			sendV3ConnAck(conn, false, v3.ConnAckBadUsernameOrPassword) //nolint:errcheck // best-effort rejection reply before closing
-			conn.Close()
-			return ErrNotAuthorized
-		}
-		externalID = resolvedID
-	}
-	hookExternalID, ok := h.broker.ApplyRegisterHooks(ctx, clientID, externalID, p.Username, string(p.Password), corebroker.HookProtocolMQTT)
-	if !ok {
+	externalID, boundMTLS, err := h.broker.authenticateMQTTConnect(ctx, mqttConnectCredentials{
+		clientID:     clientID,
+		username:     p.Username,
+		password:     string(p.Password),
+		usernameFlag: p.UsernameFlag,
+		passwordFlag: p.PasswordFlag,
+	})
+	if err != nil {
 		h.broker.telemetry.stats.IncrementAuthErrors()
-		sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+		code := byte(v3.ConnAckNotAuthorized)
+		if errors.Is(err, errMQTTCredentialsRejected) {
+			code = v3.ConnAckBadUsernameOrPassword
+		}
+		sendV3ConnAck(conn, false, code) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return ErrNotAuthorized
 	}
-	externalID = hookExternalID
 
 	var will *storage.WillMessage
 	if p.WillFlag {
@@ -124,21 +120,26 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	}
 
 	opts := session.Options{
+		ExternalID:     externalID,
 		CleanStart:     cleanStart,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		ReceiveMaximum: 65535,
 		Will:           will,
 	}
 
-	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts) //nolint:contextcheck // CreateSession has no context parameter yet; 73 call sites, tracked separately
+	s, isNew, err := h.broker.CreateSessionForIdentity(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // CreateSession has no context parameter yet; 73 call sites, tracked separately
 	if err != nil {
+		if errors.Is(err, cluster.ErrSessionIdentityMismatch) {
+			h.broker.telemetry.stats.IncrementAuthErrors()
+			sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+			conn.Close()
+			return ErrNotAuthorized
+		}
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err
 	}
-
-	s.ExternalID = externalID
 
 	// Apply the negotiated options and take over any existing connection. v3
 	// has no session expiry, Receive Maximum, or topic aliases.
@@ -157,6 +158,7 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	if superseded != nil {
 		go h.broker.drainSuperseded(context.WithoutCancel(ctx), superseded)
 	}
+	h.broker.BindExternalID(clientID, externalID)
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
@@ -252,7 +254,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	requestedTopic := topic
 	hookReq, ok := h.broker.ApplyPublishHooks(context.Background(), corebroker.BlockingHookRequest{
 		ClientID:   s.ID,
-		ExternalID: s.ExternalID,
+		ExternalID: s.ExternalIdentity(),
 		Protocol:   corebroker.HookProtocolMQTT,
 		Topic:      topic,
 		Payload:    payload,
@@ -295,7 +297,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 			return ErrTopicInvalid
 		}
 	}
-	if h.broker.auth != nil && !h.broker.CanPublish(s.ctx, s.ID, topic) {
+	if h.broker.auth != nil && !h.broker.CanPublishIdentity(s.ctx, s.AuthorizationIdentity(), topic) {
 		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return ErrNotAuthorized
 	}
@@ -438,7 +440,7 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 
 		filter := t.Name
 		subQoS := t.QoS
-		filter, subQoS, ok = h.broker.ApplySubscribeHooks(context.Background(), s.ID, s.ExternalID, corebroker.HookProtocolMQTT, filter, subQoS)
+		filter, subQoS, ok = h.broker.ApplySubscribeHooks(context.Background(), s.ID, s.ExternalIdentity(), corebroker.HookProtocolMQTT, filter, subQoS)
 		if !ok {
 			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v3.SubAckFailure
@@ -455,7 +457,7 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 			}
 			s.AddSubscriptionAlias(t.Name, filter)
 		}
-		if h.broker.auth != nil && !h.broker.CanSubscribe(s.ctx, s.ID, filter) {
+		if h.broker.auth != nil && !h.broker.CanSubscribeIdentity(s.ctx, s.AuthorizationIdentity(), filter) {
 			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v3.SubAckFailure
 			continue
@@ -525,7 +527,7 @@ func (h *v3Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 		if resolved := s.ResolveSubscriptionAlias(filter); resolved != filter {
 			filter = resolved
 		} else {
-			filter, ok = h.broker.ApplyUnsubscribeHooks(context.Background(), s.ID, s.ExternalID, corebroker.HookProtocolMQTT, filter)
+			filter, ok = h.broker.ApplyUnsubscribeHooks(context.Background(), s.ID, s.ExternalIdentity(), corebroker.HookProtocolMQTT, filter)
 			if !ok {
 				h.broker.telemetry.stats.IncrementAuthzErrors()
 				continue

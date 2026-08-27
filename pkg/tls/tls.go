@@ -71,6 +71,23 @@ func parseClientAuth(value string) (clientAuthMode, error) {
 	}
 }
 
+// ClientAuthVerifiesPeer reports whether a client_auth value, combined with
+// the presence of a client CA, results in tls.RequireAndVerifyClientCert.
+// Callers that must refuse weaker modes ask this instead of comparing the raw
+// string, so every spelling the parser accepts is treated alike and the answer
+// cannot drift from applyClientAuthTLS.
+func ClientAuthVerifiesPeer(value string, hasClientCA bool) bool {
+	mode, err := parseClientAuth(value)
+	if err != nil {
+		return false
+	}
+	if mode == clientAuthUnset {
+		return hasClientCA
+	}
+
+	return mode == clientAuthRequireAndVerify
+}
+
 func parseTLSMinVersion(value string) (uint16, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	switch normalized {

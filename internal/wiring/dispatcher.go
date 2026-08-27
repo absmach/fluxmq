@@ -77,8 +77,8 @@ func (d *MessageDispatcher) ForwardPublish(ctx context.Context, msg *message.Env
 	return errors.Join(errs...)
 }
 
-func (d *MessageDispatcher) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
-	return d.mqtt.GetSessionStateAndClose(ctx, clientID)
+func (d *MessageDispatcher) GetSessionStateAndClose(ctx context.Context, clientID string, identity *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
+	return d.mqtt.GetSessionStateAndClose(ctx, clientID, identity)
 }
 
 func (d *MessageDispatcher) HandleSessionLeaseLost(ctx context.Context, clientIDs []string) {

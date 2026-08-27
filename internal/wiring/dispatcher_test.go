@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -31,7 +32,7 @@ func (f *fakeMQTTClusterHandler) ForwardPublish(ctx context.Context, msg *messag
 	return f.forwardErr
 }
 
-func (f *fakeMQTTClusterHandler) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
+func (f *fakeMQTTClusterHandler) GetSessionStateAndClose(ctx context.Context, clientID string, identity *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
 

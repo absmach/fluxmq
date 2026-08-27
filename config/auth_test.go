@@ -434,7 +434,22 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 			wantError: "server.amqp091.internal.ca_file required",
 		},
 		{
-			name: "requires exact client auth mode",
+			name: "rejects a client auth mode that does not verify",
+			configure: func(listener *AMQP091ListenerConfig) {
+				listener.Addr = testInternalAddr
+				listener.MaxConnections = 32
+				listener.TLS.CertFile = testServerCert
+				listener.TLS.KeyFile = testServerKey
+				listener.TLS.ClientCAFile = testClientCA
+				listener.TLS.ClientAuth = "require_any"
+			},
+			wantError: "server.amqp091.internal.client_auth must verify the client certificate",
+		},
+		{
+			// "require-and-verify" selects the same TLS mode as "require".
+			// Rejecting it would fail a deployed configuration that is
+			// exactly as strict as the one spelled the other way.
+			name: "accepts an equivalent client auth spelling",
 			configure: func(listener *AMQP091ListenerConfig) {
 				listener.Addr = testInternalAddr
 				listener.MaxConnections = 32
@@ -443,7 +458,6 @@ func TestValidateInternalAMQP091Listener(t *testing.T) {
 				listener.TLS.ClientCAFile = testClientCA
 				listener.TLS.ClientAuth = "require-and-verify"
 			},
-			wantError: "server.amqp091.internal.client_auth must be \"require\"",
 		},
 		{
 			name: "requires a positive connection limit",
@@ -561,12 +575,20 @@ func TestValidateLocalAMQP091Listeners(t *testing.T) {
 			configure: func(*AMQP091ListenerConfig) {},
 		},
 		{
-			name: "requires exact client auth mode",
+			name: "rejects a client auth mode that does not verify",
 			configure: func(listener *AMQP091ListenerConfig) {
 				configureValid(listener)
 				listener.TLS.ClientAuth = "verify-if-given"
 			},
-			wantError: "client_auth must be \"require\"",
+			wantError: "client_auth must verify the client certificate",
+		},
+		{
+			name: "accepts an equivalent client auth spelling",
+			configure: func(listener *AMQP091ListenerConfig) {
+				configureValid(listener)
+				listener.TLS.ClientAuth = "requireandverify"
+			},
+			withPrincipal: true,
 		},
 		{
 			name:      "requires a positive connection limit",

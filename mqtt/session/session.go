@@ -113,6 +113,7 @@ type Session struct {
 
 // Options holds options for creating a new session.
 type Options struct {
+	ExternalID     string
 	KeepAlive      time.Duration
 	Will           *storage.WillMessage
 	ExpiryInterval uint32
@@ -159,6 +160,7 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 
 	s := &Session{
 		ID:                   clientID,
+		ExternalID:           opts.ExternalID,
 		Version:              version,
 		state:                StateNew,
 		msgHandler:           msgHandler,
@@ -203,6 +205,83 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 	}
 
 	return s
+}
+
+// IdentityAllows reports whether a CONNECT resolving to incoming may use a
+// session already bound to bound. A connection whose identity is bound to a
+// verified certificate requires an exact non-empty match. Other listeners may
+// adopt a legacy unbound session, but may not transfer a bound persistent
+// session to a different principal.
+//
+// This is the single definition of that rule. The live session, the persisted
+// session record, and the state captured by a cross-node takeover all decide
+// with it, so the three cannot drift apart.
+func IdentityAllows(bound, incoming string, requireBound bool) bool {
+	if requireBound {
+		return incoming != "" && bound == incoming
+	}
+	return bound == "" || bound == incoming
+}
+
+// CanUseExternalIdentity reports whether a CONNECT resolving to externalID may
+// use this session, without binding it. The node that currently owns a session
+// answers a remote takeover request with it, where nothing is bound locally.
+func (s *Session) CanUseExternalIdentity(externalID string, requireBound bool) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return IdentityAllows(s.ExternalID, externalID, requireBound)
+}
+
+// BindExternalIdentity binds the session to a CONNECT identity and reports
+// whether that identity may use the session.
+//
+// The comparison and the write happen under one lock. Two concurrent CONNECTs
+// for the same client ID therefore cannot both observe an unbound session and
+// then interleave their writes, which would leave the session authorizing one
+// principal's connection under another principal's identity.
+func (s *Session) BindExternalIdentity(externalID string, requireBound bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !IdentityAllows(s.ExternalID, externalID, requireBound) {
+		return false
+	}
+	s.ExternalID = externalID
+
+	return true
+}
+
+// MarkOffline stamps the disconnect time of a session that is registered
+// without ever having held a connection, so session expiry runs from now.
+// A takeover that the connecting client turned out not to be authorized to use
+// is kept for the principal it belongs to, and must not look infinitely old to
+// the expiry sweep.
+func (s *Session) MarkOffline() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.disconnectedAt.IsZero() {
+		s.disconnectedAt = time.Now()
+	}
+}
+
+// ExternalIdentity returns the session's authenticated external principal.
+func (s *Session) ExternalIdentity() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ExternalID
+}
+
+// AuthorizationIdentity returns the external principal when one was resolved,
+// otherwise the MQTT client ID for backward-compatible unauthenticated paths.
+func (s *Session) AuthorizationIdentity() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ExternalID != "" {
+		return s.ExternalID
+	}
+	return s.ID
 }
 
 // ConnectOptions carries the per-connection settings negotiated by a CONNECT.

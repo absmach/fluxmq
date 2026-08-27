@@ -75,6 +75,33 @@ reviewed contract change even though they are not interfaces.
 For YAML, new optional keys with backward-compatible defaults are additive.
 Existing keys and absent-versus-zero semantics remain stable.
 
+One pre-1.0 security hardening is intentionally stronger than the previous
+absent behavior: enabling `server.mqtt.tcp.mtls` or
+`server.mqtt.websocket.mtls` now requires external MQTT credentials and binds
+the returned identity to the verified client certificate CN. Certificate-only
+MQTT mTLS configurations must add the external auth callout, and certificates
+whose CN is not exactly the returned external ID must be reissued. The broker
+fails startup instead of silently running with one factor.
+
+A persistent MQTT session with a resolved external identity also refuses a
+reconnect that resolves the same client ID to a different principal, including
+reconnects through another listener and cross-node takeovers. Use a new MQTT
+client ID or Clean Start to deliberately establish a session for another
+principal; Clean Start behaves the same whether the session is held by this
+node or another one. This prevents an otherwise-valid account from inheriting
+another account's queued session data.
+
+A session persisted before its client had a resolved identity is bound to no
+principal. A plain or TLS reconnect adopts it as before. An mTLS connection
+discards it and starts a fresh session rather than inheriting subscriptions
+made before the binding existed, so the first reconnect after enabling mTLS
+reports no session present.
+
+`client_auth` on an MQTT `mtls` listener is validated by effective TLS mode.
+Every spelling that selects `RequireAndVerifyClientCert`, and an unset value
+alongside `ca_file`, remains valid; modes that do not verify the peer are
+refused.
+
 ## Queue failure contract
 
 `queue.Failure` is the protocol-independent failure. Its stable fields are:

@@ -266,6 +266,23 @@ func (b *Broker) Authenticate(ctx context.Context, clientID, username, password 
 	return b.auth.Authenticate(ctx, clientID, username, password)
 }
 
+// ValidateCredentials validates credentials without changing the client-ID
+// identity cache. MQTT mTLS uses it while certificate binding is still pending.
+func (b *Broker) ValidateCredentials(ctx context.Context, clientID, username, password string) (bool, string, error) {
+	if b.auth == nil {
+		return true, "", nil
+	}
+	return b.auth.ValidateCredentials(ctx, clientID, username, password)
+}
+
+// BindExternalID commits the resolved identity after CONNECT authentication
+// and certificate binding have both succeeded.
+func (b *Broker) BindExternalID(clientID, externalID string) {
+	if b.auth != nil {
+		b.auth.SetExternalID(clientID, externalID)
+	}
+}
+
 // CanPublish checks publish authorization for a client/topic pair.
 // Returns true when authz is not configured.
 func (b *Broker) CanPublish(ctx context.Context, clientID, topic string) bool {
@@ -282,6 +299,24 @@ func (b *Broker) CanSubscribe(ctx context.Context, clientID, filter string) bool
 		return true
 	}
 	return b.auth.CanSubscribe(ctx, clientID, filter)
+}
+
+// CanPublishIdentity checks publish authorization for an immutable session
+// identity rather than resolving it through the client-ID cache.
+func (b *Broker) CanPublishIdentity(ctx context.Context, externalID, topic string) bool {
+	if b.auth == nil {
+		return true
+	}
+	return b.auth.CanPublishIdentity(ctx, externalID, topic)
+}
+
+// CanSubscribeIdentity checks subscribe authorization for an immutable
+// session identity rather than resolving it through the client-ID cache.
+func (b *Broker) CanSubscribeIdentity(ctx context.Context, externalID, filter string) bool {
+	if b.auth == nil {
+		return true
+	}
+	return b.auth.CanSubscribeIdentity(ctx, externalID, filter)
 }
 
 // ApplyRegisterHooks runs the optional auth_on_register hook.

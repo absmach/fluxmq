@@ -135,7 +135,7 @@ func (n *NoopCluster) RoutePublish(ctx context.Context, msg *message.Envelope) e
 
 // Session takeover - not applicable in single-node
 
-func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
+func (n *NoopCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	// Single-node: no remote nodes to take over from
 	return nil, nil
 }

@@ -93,12 +93,10 @@ func NewAuthEngine(auth Authenticator, authz Authorizer, opts ...AuthEngineOptio
 	}
 }
 
-// Authenticate validates client credentials.
-// Returns true if authenticated or if no authenticator is configured.
-// On success, also returns the resolved external identity (empty when the
-// authenticator did not provide one) and caches it for subsequent
-// authorization calls.
-func (e *AuthEngine) Authenticate(ctx context.Context, clientID, username, password string) (bool, string, error) {
+// ValidateCredentials validates client credentials without changing the
+// client-ID identity cache. Callers that have additional checks to perform can
+// commit the identity with SetExternalID only after every check succeeds.
+func (e *AuthEngine) ValidateCredentials(ctx context.Context, clientID, username, password string) (bool, string, error) {
 	if e.auth == nil {
 		return true, "", nil
 	}
@@ -109,11 +107,26 @@ func (e *AuthEngine) Authenticate(ctx context.Context, clientID, username, passw
 	if result == nil {
 		return false, "", nil
 	}
-	if result.Authenticated && result.ID != "" {
-		e.identities.Store(clientID, result.ID)
+	if result.Authenticated {
 		return true, result.ID, nil
 	}
-	return result.Authenticated, "", nil
+	return false, "", nil
+}
+
+// Authenticate validates client credentials.
+// Returns true if authenticated or if no authenticator is configured.
+// On success, also returns the resolved external identity (empty when the
+// authenticator did not provide one) and caches it for subsequent
+// authorization calls.
+func (e *AuthEngine) Authenticate(ctx context.Context, clientID, username, password string) (bool, string, error) {
+	authenticated, externalID, err := e.ValidateCredentials(ctx, clientID, username, password)
+	if err != nil || !authenticated {
+		return authenticated, externalID, err
+	}
+	if externalID != "" {
+		e.identities.Store(clientID, externalID)
+	}
+	return true, externalID, nil
 }
 
 // CanPublish checks if a client is authorized to publish to a topic.
@@ -132,6 +145,24 @@ func (e *AuthEngine) CanSubscribe(ctx context.Context, clientID, filter string) 
 		return true
 	}
 	return e.authz.CanSubscribe(ctx, e.resolveID(clientID), filter)
+}
+
+// CanPublishIdentity authorizes an already-resolved external identity without
+// consulting the mutable client-ID cache.
+func (e *AuthEngine) CanPublishIdentity(ctx context.Context, externalID, topic string) bool {
+	if e.authz == nil {
+		return true
+	}
+	return e.authz.CanPublish(ctx, externalID, topic)
+}
+
+// CanSubscribeIdentity authorizes an already-resolved external identity
+// without consulting the mutable client-ID cache.
+func (e *AuthEngine) CanSubscribeIdentity(ctx context.Context, externalID, filter string) bool {
+	if e.authz == nil {
+		return true
+	}
+	return e.authz.CanSubscribe(ctx, externalID, filter)
 }
 
 // Forget removes the cached identity mapping for a client.

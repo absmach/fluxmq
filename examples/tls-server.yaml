@@ -39,6 +39,8 @@ server:
         key_file: "/etc/fluxmq/certs/server.key"
         ca_file: "/etc/fluxmq/certs/ca.crt"
         client_auth: "require"
+        # The verified leaf certificate CN must exactly equal the external
+        # entity ID returned by the auth service below.
         min_version: "TLS1.2"
         prefer_server_cipher_suites: true
         cipher_suites:
@@ -129,6 +131,17 @@ cluster:
 log:
   level: "info"
   format: "json"
+
+# MQTT mTLS is bound two-factor authentication: the certificate identity above
+# and CONNECT username/password must both be valid. This endpoint must
+# implement FluxMQ's auth callout contract.
+auth:
+  external:
+    url: "http://localhost:7016"
+    transport: "grpc"
+    timeout: "5s"
+    protocols:
+      mqtt: true
 # Notes:
 # 1. Generate certificates:
 #    openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes
@@ -140,9 +153,14 @@ log:
 #    client_auth: "require"
 #
 # 3. Clients connect using:
-#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -t test -m "hello"
+#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -u entity-id -P api-key -t test -m "hello"
 #
-# 4. For mutual TLS (mTLS):
-#    mosquitto_pub -h localhost -p 8884 --cafile ca.crt --cert client.crt --key client.key -t test -m "hello"
+#    The auth callout below covers every MQTT listener, not only the mTLS one,
+#    so the TLS listener authenticates with credentials too. Only the mTLS
+#    listener additionally binds the identity to the client certificate.
+#
+# 4. For mutual TLS (mTLS), the username must resolve to the identity in the
+#    verified certificate CN and the password must pass external authentication:
+#    mosquitto_pub -h localhost -p 8884 --cafile ca.crt --cert client.crt --key client.key -u entity-id -P api-key -t test -m "hello"
 #
 # 5. For CoAP DTLS, configure coap.dtls or coap.mdtls with cert/key (and ca_file for mdtls).

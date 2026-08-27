@@ -1646,6 +1646,18 @@ func (c *Config) Validate() error {
 		} else if tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.mqtt.tcp.%s TLS fields are not supported for non-TLS listeners", slot.name)
 		}
+		if slot.requireClientAuth {
+			// Any spelling that resolves to RequireAndVerifyClientCert is
+			// accepted, including the empty value that a client CA already
+			// promotes to it. What matters is the effective TLS mode, not
+			// which alias the operator wrote.
+			if !mqtttls.ClientAuthVerifiesPeer(slot.cfg.TLS.ClientAuth, slot.cfg.TLS.ClientCAFile != "") {
+				return fmt.Errorf("server.mqtt.tcp.%s.client_auth must verify the client certificate (%q)", slot.name, clientAuthRequire)
+			}
+			if !c.Auth.External.EnabledFor(protocolMQTT) {
+				return fmt.Errorf("server.mqtt.tcp.%s requires auth.external with mqtt enabled", slot.name)
+			}
+		}
 	}
 
 	for _, slot := range wsSlots {
@@ -1679,6 +1691,18 @@ func (c *Config) Validate() error {
 			}
 		} else if tlsConfigured(slot.cfg.TLS) {
 			return fmt.Errorf("server.mqtt.websocket.%s TLS fields are not supported for non-TLS listeners", slot.name)
+		}
+		if slot.requireClientAuth {
+			// Any spelling that resolves to RequireAndVerifyClientCert is
+			// accepted, including the empty value that a client CA already
+			// promotes to it. What matters is the effective TLS mode, not
+			// which alias the operator wrote.
+			if !mqtttls.ClientAuthVerifiesPeer(slot.cfg.TLS.ClientAuth, slot.cfg.TLS.ClientCAFile != "") {
+				return fmt.Errorf("server.mqtt.websocket.%s.client_auth must verify the client certificate (%q)", slot.name, clientAuthRequire)
+			}
+			if !c.Auth.External.EnabledFor(protocolMQTT) {
+				return fmt.Errorf("server.mqtt.websocket.%s requires auth.external with mqtt enabled", slot.name)
+			}
 		}
 	}
 
@@ -1811,8 +1835,8 @@ func (c *Config) Validate() error {
 			if err := validateListenerTLS("server.amqp091."+slot.name, slot.cfg.TLS, slot.requireClientAuth); err != nil {
 				return err
 			}
-			if slot.requireExactClientAuth && strings.ToLower(strings.TrimSpace(slot.cfg.TLS.ClientAuth)) != clientAuthRequire {
-				return fmt.Errorf("server.amqp091.%s.client_auth must be \"require\"", slot.name)
+			if slot.requireExactClientAuth && !mqtttls.ClientAuthVerifiesPeer(slot.cfg.TLS.ClientAuth, slot.cfg.TLS.ClientCAFile != "") {
+				return fmt.Errorf("server.amqp091.%s.client_auth must verify the client certificate (\"require\")", slot.name)
 			}
 		}
 	}

@@ -42,7 +42,7 @@ func (r *leaseLossRecorder) DeliverToClient(context.Context, string, *message.En
 	return nil
 }
 
-func (r *leaseLossRecorder) GetSessionStateAndClose(context.Context, string) (*clusterv1.SessionState, error) {
+func (r *leaseLossRecorder) GetSessionStateAndClose(context.Context, string, *SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
 

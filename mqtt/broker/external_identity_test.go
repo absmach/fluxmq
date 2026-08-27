@@ -151,7 +151,7 @@ func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 	handler := newV5Handler(b)
 	pub := &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
-		TopicName:   "telemetry/room1",
+		TopicName:   testTelemetryRoom,
 		Payload:     []byte("hello"),
 		Properties: &v5.PublishProperties{
 			User: []v5.User{{Key: message.PropertyExternalID, Value: "spoofed"}},
@@ -162,6 +162,27 @@ func TestV5PublishSetsExternalIDProperty(t *testing.T) {
 	require.NotNil(t, gotProps)
 	require.Equal(t, "mqtt-client", gotProps[message.PropertyClientID])
 	require.Equal(t, "ext-456", gotProps[message.PropertyExternalID])
+}
+
+func TestMQTTPublishAuthorizationUsesSessionIdentity(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+
+	authz := &captureAuthorizer{}
+	engine := corebroker.NewAuthEngine(nil, authz)
+	engine.SetExternalID("mqtt-client", "cache-attacker")
+	b.SetAuthEngine(engine)
+
+	s, _, err := b.CreateSession("mqtt-client", 5, session.Options{CleanStart: true, ExternalID: "session-owner"})
+	require.NoError(t, err)
+
+	handler := newV5Handler(b)
+	require.NoError(t, handler.HandlePublish(bindConn(s), &v5.Publish{
+		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 0},
+		TopicName:   testTelemetryRoom,
+		Payload:     []byte("hello"),
+	}))
+	require.Equal(t, "session-owner", authz.publishID)
 }
 
 func TestV5PublishRejectsHookQoSMutation(t *testing.T) {
@@ -180,7 +201,7 @@ func TestV5PublishRejectsHookQoSMutation(t *testing.T) {
 	err = handler.HandlePublish(bindConn(s), &v5.Publish{
 		FixedHeader: packets.FixedHeader{PacketType: packets.PublishType, QoS: 1},
 		ID:          7,
-		TopicName:   "telemetry/room1",
+		TopicName:   testTelemetryRoom,
 		Payload:     []byte("payload"),
 	})
 

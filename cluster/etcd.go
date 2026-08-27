@@ -1741,7 +1741,7 @@ func (c *EtcdCluster) warnUnknownOwners(topic string, count int) {
 }
 
 // TakeoverSession initiates session takeover from one node to another.
-func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
+func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	if fromNode == toNode {
 		return nil, nil
 	}
@@ -1766,7 +1766,7 @@ func (c *EtcdCluster) TakeoverSession(ctx context.Context, clientID, fromNode, t
 		}
 	}()
 
-	state, err := c.transport.SendTakeover(ctx, fromNode, clientID, fromNode, toNode)
+	state, err := c.transport.SendTakeover(ctx, fromNode, clientID, fromNode, toNode, identity)
 	if err != nil {
 		return nil, fmt.Errorf("failed to request takeover from %s: %w", fromNode, err)
 	}
@@ -1918,11 +1918,11 @@ func (c *EtcdCluster) DeliverToClient(ctx context.Context, clientID string, msg 
 
 // GetSessionStateAndClose implements MessageHandler.GetSessionStateAndClose.
 // Delegates to the broker to capture session state and close the session.
-func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
+func (c *EtcdCluster) GetSessionStateAndClose(ctx context.Context, clientID string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	if c.msgHandler == nil {
 		return nil, ErrNoMessageHandlerConfigured
 	}
-	return c.msgHandler.GetSessionStateAndClose(ctx, clientID)
+	return c.msgHandler.GetSessionStateAndClose(ctx, clientID, identity)
 }
 
 // GetRetainedMessage implements MessageHandler.GetRetainedMessage.
@@ -2300,7 +2300,7 @@ func (c *EtcdCluster) HandleTakeover(ctx context.Context, clientID, fromNode, to
 	}
 
 	// Get session state and close the session
-	sessionState, err := c.msgHandler.GetSessionStateAndClose(ctx, clientID)
+	sessionState, err := c.msgHandler.GetSessionStateAndClose(ctx, clientID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session state: %w", err)
 	}
