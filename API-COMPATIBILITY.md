@@ -16,10 +16,8 @@ supported adapter.
   cluster-wire change is reviewed on its own terms instead of being weighed
   against a published promise.
 
-  `proto/raft/v1` separately defines the persisted operation, log-entry, and
-  snapshot format for experimental queue replication. It is not a public v1 promise,
-  but `api/compat/proto-raft-v1.binpb` makes accidental on-disk breaks a hard
-  failure while that implementation evolves.
+  `proto/raft/v1` is not a promise at all; it is listed under experimental
+  surfaces below, with the on-disk gate that still applies to it.
 
   CI runs `make proto-breaking`, which checks every protobuf surface. Every
   gate is a hard failure.
@@ -44,14 +42,45 @@ supported adapter.
   `queue/types`. A client writes and reads these strings, so the value is the
   contract and a rename is a protocol change.
 - Configuration: the accepted YAML keys and strict decoding behavior pinned by
-  `config/schema_test.go`. Adding a key is compatible; removing, renaming, or
-  changing absent-versus-zero behavior is not.
+  `config/schema_test.go`, except the experimental keys listed below. Adding a
+  key is compatible; removing, renaming, or changing absent-versus-zero
+  behavior is not.
 - Protocol queue projections described below for MQTT 3.1.1, MQTT 5.0,
   AMQP 0.9.1, AMQP 1.0, and the Connect QueueService.
 
-The HTTP-MQTT and CoAP bridges and queue Raft replication remain experimental.
-They are not part of this compatibility contract. Replication-related failures
-are nevertheless represented without leaking Raft into the public error model.
+## Experimental surfaces
+
+These are outside the compatibility contract. They may change shape, be renamed,
+or be removed in a minor release. Naming them is the point: a surface that is
+merely undocumented gets depended on anyway, and the configuration bullet above
+would otherwise read as freezing every key the schema accepts.
+
+- The HTTP-MQTT and CoAP bridges.
+- Queue Raft replication, which is disabled by default and covers:
+  - the `cluster.raft` configuration subtree — `auto_provision_groups`,
+    `replication_factor`, `sync_mode`, `min_in_sync_replicas`, `ack_timeout`,
+    `write_policy`, `distribution_mode`, `bind_addr`, `data_dir`, `peers`, the
+    Raft tuning keys, and `groups`;
+  - the `queues[].replication` subtree — `enabled`, `group`,
+    `replication_factor`, `mode`, `min_in_sync_replicas`, `ack_timeout`, and the
+    per-queue Raft tuning overrides;
+  - the `queue/raft` Go package, and `queue/storage.SnapshotableQueueStore`
+    along with the reader it returns;
+  - `proto/raft/v1`, the persisted operation, log-entry, and snapshot format.
+
+`cluster.raft.enabled` is the exception. It is pinned by `config/schema_test.go`
+and stays, because an operator needs a stable way to keep the feature off; that
+pin promises the flag continues to exist, not that the keys beneath it are
+stable.
+
+The carve-out does not weaken the on-disk gate. `make proto-breaking` still
+checks `api/compat/proto-raft-v1.binpb`, because a schema break there stops an
+existing node from restarting, which is a worse failure than an incompatible
+configuration and is not excused by the feature being experimental.
+
+Replication-related failures are represented without leaking Raft into the
+public error model, so a client does not become dependent on the feature by
+handling its errors.
 
 ## Evolution rules
 

@@ -1004,6 +1004,13 @@ func main() {
 
 		// Initialize queue Raft replication if enabled (default + optional per-group managers).
 		if cfg.Cluster.Enabled && cfg.Cluster.Raft.Enabled {
+			// Queue replication is outside the compatibility contract: its
+			// configuration keys and Go surface may change in a minor release.
+			// The operator turning it on is the one who needs to know that, and
+			// a document they may never read is not where they will find it.
+			logger.Warn("queue Raft replication is experimental and is not covered by the 1.0 compatibility contract",
+				"detail", "cluster.raft and queues[].replication keys may change in a minor release")
+
 			raftCoordinator, defaultRaftManager, groupRuntimes, err := qraft.StartQueueCoordinator(
 				cfg.Cluster.NodeID,
 				cfg.Cluster.Raft,
