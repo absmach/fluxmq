@@ -6,6 +6,7 @@ syntax = "proto3";
 package fluxmq.queue.v1;
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -245,36 +246,22 @@ message SegmentConfig {
   uint32 index_interval = 3;
 }
 
+// ReplicationConfig places a queue in a replication group.
+//
+// It states desired placement and nothing else. Replication factor, membership,
+// and Raft timing belong to the group, which is provisioned by an operator and
+// may hold many queues; a queue restating them could only agree with the group
+// or be wrong. Acknowledgement behaviour is deliberately absent until there is a
+// response model that does not report an offset before one has been assigned.
+//
+// Presence is the signal: a queue whose config carries this message is
+// replicated, one without it is local. The group is fixed when the queue is
+// created, because changing it moves the queue's records between Raft groups and
+// is a migration rather than a configuration edit.
 message ReplicationConfig {
-  // Enable queue replication.
-  bool enabled = 1;
-
-  // Number of replicas in the replication group.
-  uint32 replication_factor = 2;
-
-  // Replication acknowledgment mode.
-  ReplicationMode mode = 3;
-
-  // Minimum replicas that must acknowledge.
-  uint32 min_in_sync_replicas = 4;
-
-  // Timeout for synchronous replication acknowledgment.
-  google.protobuf.Duration ack_timeout = 5;
-
-  // Optional per-queue Raft heartbeat timeout override.
-  google.protobuf.Duration heartbeat_timeout = 6;
-
-  // Optional per-queue Raft election timeout override.
-  google.protobuf.Duration election_timeout = 7;
-
-  // Optional per-queue Raft snapshot interval override.
-  google.protobuf.Duration snapshot_interval = 8;
-
-  // Optional per-queue Raft snapshot threshold override.
-  uint64 snapshot_threshold = 9;
-
-  // Logical Raft group identifier for this queue (empty = default).
-  string group = 10;
+  // Opaque identifier of a pre-provisioned replication group. Empty selects the
+  // default group. Immutable after the queue is created.
+  string group = 1;
 }
 
 message QueueState {
@@ -299,12 +286,6 @@ enum CompressionType {
   COMPRESSION_TYPE_NONE = 1;
   COMPRESSION_TYPE_S2 = 2;
   COMPRESSION_TYPE_ZSTD = 3;
-}
-
-enum ReplicationMode {
-  REPLICATION_MODE_UNSPECIFIED = 0;
-  REPLICATION_MODE_SYNC = 1;
-  REPLICATION_MODE_ASYNC = 2;
 }
 
 // QueueErrorDetail is attached to Connect/gRPC errors returned by QueueService.
@@ -560,7 +541,25 @@ message DeleteQueueRequest {
 
 message UpdateQueueRequest {
   string name = 1;
+
+  // Required. An update without a config cannot express a change: with no mask
+  // it asks for a full replacement, and with one it names paths whose values
+  // are absent.
   QueueConfig config = 2;
+
+  // Fields to update, relative to this request — "config.retention.max_bytes",
+  // "config.replication", and so on. A prefix selects everything beneath it.
+  //
+  // Without a mask this is a full replacement: every mutable field takes the
+  // value carried in config, so omitting one clears it. That is what makes a
+  // zero meaningful — max_bytes = 0 means unlimited and cannot otherwise be
+  // distinguished from "not set" — and it is why read-modify-write is the
+  // expected flow: read the queue, change what you mean to change, send it back.
+  //
+  // Omitting config.replication, or listing it in the mask without a message,
+  // therefore asks for a local queue. On an already replicated queue that is a
+  // migration, and is refused.
+  google.protobuf.FieldMask update_mask = 3;
 }
 
 // --- Append ---

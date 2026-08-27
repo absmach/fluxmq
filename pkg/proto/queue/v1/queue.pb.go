@@ -14,6 +14,7 @@ import (
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -79,55 +80,6 @@ func (CompressionType) EnumDescriptor() ([]byte, []int) {
 	return file_queue_v1_queue_proto_rawDescGZIP(), []int{0}
 }
 
-type ReplicationMode int32
-
-const (
-	ReplicationMode_REPLICATION_MODE_UNSPECIFIED ReplicationMode = 0
-	ReplicationMode_REPLICATION_MODE_SYNC        ReplicationMode = 1
-	ReplicationMode_REPLICATION_MODE_ASYNC       ReplicationMode = 2
-)
-
-// Enum value maps for ReplicationMode.
-var (
-	ReplicationMode_name = map[int32]string{
-		0: "REPLICATION_MODE_UNSPECIFIED",
-		1: "REPLICATION_MODE_SYNC",
-		2: "REPLICATION_MODE_ASYNC",
-	}
-	ReplicationMode_value = map[string]int32{
-		"REPLICATION_MODE_UNSPECIFIED": 0,
-		"REPLICATION_MODE_SYNC":        1,
-		"REPLICATION_MODE_ASYNC":       2,
-	}
-)
-
-func (x ReplicationMode) Enum() *ReplicationMode {
-	p := new(ReplicationMode)
-	*p = x
-	return p
-}
-
-func (x ReplicationMode) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ReplicationMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[1].Descriptor()
-}
-
-func (ReplicationMode) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[1]
-}
-
-func (x ReplicationMode) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ReplicationMode.Descriptor instead.
-func (ReplicationMode) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{1}
-}
-
 type QueueErrorCode int32
 
 const (
@@ -188,11 +140,11 @@ func (x QueueErrorCode) String() string {
 }
 
 func (QueueErrorCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[2].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[1].Descriptor()
 }
 
 func (QueueErrorCode) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[2]
+	return &file_queue_v1_queue_proto_enumTypes[1]
 }
 
 func (x QueueErrorCode) Number() protoreflect.EnumNumber {
@@ -201,7 +153,7 @@ func (x QueueErrorCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use QueueErrorCode.Descriptor instead.
 func (QueueErrorCode) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{2}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{1}
 }
 
 type QueueOwnershipState int32
@@ -240,11 +192,11 @@ func (x QueueOwnershipState) String() string {
 }
 
 func (QueueOwnershipState) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[3].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[2].Descriptor()
 }
 
 func (QueueOwnershipState) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[3]
+	return &file_queue_v1_queue_proto_enumTypes[2]
 }
 
 func (x QueueOwnershipState) Number() protoreflect.EnumNumber {
@@ -253,7 +205,7 @@ func (x QueueOwnershipState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use QueueOwnershipState.Descriptor instead.
 func (QueueOwnershipState) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{3}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{2}
 }
 
 type QueueLeaderState int32
@@ -292,11 +244,11 @@ func (x QueueLeaderState) String() string {
 }
 
 func (QueueLeaderState) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[4].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[3].Descriptor()
 }
 
 func (QueueLeaderState) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[4]
+	return &file_queue_v1_queue_proto_enumTypes[3]
 }
 
 func (x QueueLeaderState) Number() protoreflect.EnumNumber {
@@ -305,7 +257,7 @@ func (x QueueLeaderState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use QueueLeaderState.Descriptor instead.
 func (QueueLeaderState) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{4}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{3}
 }
 
 type QueueDurabilityState int32
@@ -344,11 +296,11 @@ func (x QueueDurabilityState) String() string {
 }
 
 func (QueueDurabilityState) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[5].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[4].Descriptor()
 }
 
 func (QueueDurabilityState) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[5]
+	return &file_queue_v1_queue_proto_enumTypes[4]
 }
 
 func (x QueueDurabilityState) Number() protoreflect.EnumNumber {
@@ -357,7 +309,7 @@ func (x QueueDurabilityState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use QueueDurabilityState.Descriptor instead.
 func (QueueDurabilityState) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{5}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{4}
 }
 
 type InitialPosition int32
@@ -393,11 +345,11 @@ func (x InitialPosition) String() string {
 }
 
 func (InitialPosition) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[6].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[5].Descriptor()
 }
 
 func (InitialPosition) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[6]
+	return &file_queue_v1_queue_proto_enumTypes[5]
 }
 
 func (x InitialPosition) Number() protoreflect.EnumNumber {
@@ -406,7 +358,7 @@ func (x InitialPosition) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InitialPosition.Descriptor instead.
 func (InitialPosition) EnumDescriptor() ([]byte, []int) {
-	return file_queue_v1_queue_proto_rawDescGZIP(), []int{6}
+	return file_queue_v1_queue_proto_rawDescGZIP(), []int{5}
 }
 
 // Special offset values.
@@ -446,11 +398,11 @@ func (x TailRequest_StartFrom) String() string {
 }
 
 func (TailRequest_StartFrom) Descriptor() protoreflect.EnumDescriptor {
-	return file_queue_v1_queue_proto_enumTypes[7].Descriptor()
+	return file_queue_v1_queue_proto_enumTypes[6].Descriptor()
 }
 
 func (TailRequest_StartFrom) Type() protoreflect.EnumType {
-	return &file_queue_v1_queue_proto_enumTypes[7]
+	return &file_queue_v1_queue_proto_enumTypes[6]
 }
 
 func (x TailRequest_StartFrom) Number() protoreflect.EnumNumber {
@@ -942,28 +894,23 @@ func (x *SegmentConfig) GetIndexInterval() uint32 {
 	return 0
 }
 
+// ReplicationConfig places a queue in a replication group.
+//
+// It states desired placement and nothing else. Replication factor, membership,
+// and Raft timing belong to the group, which is provisioned by an operator and
+// may hold many queues; a queue restating them could only agree with the group
+// or be wrong. Acknowledgement behaviour is deliberately absent until there is a
+// response model that does not report an offset before one has been assigned.
+//
+// Presence is the signal: a queue whose config carries this message is
+// replicated, one without it is local. The group is fixed when the queue is
+// created, because changing it moves the queue's records between Raft groups and
+// is a migration rather than a configuration edit.
 type ReplicationConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Enable queue replication.
-	Enabled bool `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	// Number of replicas in the replication group.
-	ReplicationFactor uint32 `protobuf:"varint,2,opt,name=replication_factor,json=replicationFactor,proto3" json:"replication_factor,omitempty"`
-	// Replication acknowledgment mode.
-	Mode ReplicationMode `protobuf:"varint,3,opt,name=mode,proto3,enum=fluxmq.queue.v1.ReplicationMode" json:"mode,omitempty"`
-	// Minimum replicas that must acknowledge.
-	MinInSyncReplicas uint32 `protobuf:"varint,4,opt,name=min_in_sync_replicas,json=minInSyncReplicas,proto3" json:"min_in_sync_replicas,omitempty"`
-	// Timeout for synchronous replication acknowledgment.
-	AckTimeout *durationpb.Duration `protobuf:"bytes,5,opt,name=ack_timeout,json=ackTimeout,proto3" json:"ack_timeout,omitempty"`
-	// Optional per-queue Raft heartbeat timeout override.
-	HeartbeatTimeout *durationpb.Duration `protobuf:"bytes,6,opt,name=heartbeat_timeout,json=heartbeatTimeout,proto3" json:"heartbeat_timeout,omitempty"`
-	// Optional per-queue Raft election timeout override.
-	ElectionTimeout *durationpb.Duration `protobuf:"bytes,7,opt,name=election_timeout,json=electionTimeout,proto3" json:"election_timeout,omitempty"`
-	// Optional per-queue Raft snapshot interval override.
-	SnapshotInterval *durationpb.Duration `protobuf:"bytes,8,opt,name=snapshot_interval,json=snapshotInterval,proto3" json:"snapshot_interval,omitempty"`
-	// Optional per-queue Raft snapshot threshold override.
-	SnapshotThreshold uint64 `protobuf:"varint,9,opt,name=snapshot_threshold,json=snapshotThreshold,proto3" json:"snapshot_threshold,omitempty"`
-	// Logical Raft group identifier for this queue (empty = default).
-	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
+	// Opaque identifier of a pre-provisioned replication group. Empty selects the
+	// default group. Immutable after the queue is created.
+	Group         string `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -996,69 +943,6 @@ func (x *ReplicationConfig) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ReplicationConfig.ProtoReflect.Descriptor instead.
 func (*ReplicationConfig) Descriptor() ([]byte, []int) {
 	return file_queue_v1_queue_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *ReplicationConfig) GetEnabled() bool {
-	if x != nil {
-		return x.Enabled
-	}
-	return false
-}
-
-func (x *ReplicationConfig) GetReplicationFactor() uint32 {
-	if x != nil {
-		return x.ReplicationFactor
-	}
-	return 0
-}
-
-func (x *ReplicationConfig) GetMode() ReplicationMode {
-	if x != nil {
-		return x.Mode
-	}
-	return ReplicationMode_REPLICATION_MODE_UNSPECIFIED
-}
-
-func (x *ReplicationConfig) GetMinInSyncReplicas() uint32 {
-	if x != nil {
-		return x.MinInSyncReplicas
-	}
-	return 0
-}
-
-func (x *ReplicationConfig) GetAckTimeout() *durationpb.Duration {
-	if x != nil {
-		return x.AckTimeout
-	}
-	return nil
-}
-
-func (x *ReplicationConfig) GetHeartbeatTimeout() *durationpb.Duration {
-	if x != nil {
-		return x.HeartbeatTimeout
-	}
-	return nil
-}
-
-func (x *ReplicationConfig) GetElectionTimeout() *durationpb.Duration {
-	if x != nil {
-		return x.ElectionTimeout
-	}
-	return nil
-}
-
-func (x *ReplicationConfig) GetSnapshotInterval() *durationpb.Duration {
-	if x != nil {
-		return x.SnapshotInterval
-	}
-	return nil
-}
-
-func (x *ReplicationConfig) GetSnapshotThreshold() uint64 {
-	if x != nil {
-		return x.SnapshotThreshold
-	}
-	return 0
 }
 
 func (x *ReplicationConfig) GetGroup() string {
@@ -2198,9 +2082,25 @@ func (x *DeleteQueueRequest) GetName() string {
 }
 
 type UpdateQueueRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Config        *QueueConfig           `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Required. An update without a config cannot express a change: with no mask
+	// it asks for a full replacement, and with one it names paths whose values
+	// are absent.
+	Config *QueueConfig `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
+	// Fields to update, relative to this request — "config.retention.max_bytes",
+	// "config.replication", and so on. A prefix selects everything beneath it.
+	//
+	// Without a mask this is a full replacement: every mutable field takes the
+	// value carried in config, so omitting one clears it. That is what makes a
+	// zero meaningful — max_bytes = 0 means unlimited and cannot otherwise be
+	// distinguished from "not set" — and it is why read-modify-write is the
+	// expected flow: read the queue, change what you mean to change, send it back.
+	//
+	// Omitting config.replication, or listing it in the mask without a message,
+	// therefore asks for a local queue. On an already replicated queue that is a
+	// migration, and is refused.
+	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,3,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2245,6 +2145,13 @@ func (x *UpdateQueueRequest) GetName() string {
 func (x *UpdateQueueRequest) GetConfig() *QueueConfig {
 	if x != nil {
 		return x.Config
+	}
+	return nil
+}
+
+func (x *UpdateQueueRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
+	if x != nil {
+		return x.UpdateMask
 	}
 	return nil
 }
@@ -4636,7 +4543,7 @@ var File_queue_v1_queue_proto protoreflect.FileDescriptor
 
 const file_queue_v1_queue_proto_rawDesc = "" +
 	"\n" +
-	"\x14queue/v1/queue.proto\x12\x0ffluxmq.queue.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc4\x02\n" +
+	"\x14queue/v1/queue.proto\x12\x0ffluxmq.queue.v1\x1a\x1egoogle/protobuf/duration.proto\x1a google/protobuf/field_mask.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc4\x02\n" +
 	"\aMessage\x12\x16\n" +
 	"\x06offset\x18\x01 \x01(\x04R\x06offset\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x10\n" +
@@ -4677,20 +4584,9 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\rSegmentConfig\x12\x19\n" +
 	"\bmax_size\x18\x01 \x01(\x04R\amaxSize\x122\n" +
 	"\amax_age\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x06maxAge\x12%\n" +
-	"\x0eindex_interval\x18\x03 \x01(\rR\rindexInterval\"\x9a\x04\n" +
-	"\x11ReplicationConfig\x12\x18\n" +
-	"\aenabled\x18\x01 \x01(\bR\aenabled\x12-\n" +
-	"\x12replication_factor\x18\x02 \x01(\rR\x11replicationFactor\x124\n" +
-	"\x04mode\x18\x03 \x01(\x0e2 .fluxmq.queue.v1.ReplicationModeR\x04mode\x12/\n" +
-	"\x14min_in_sync_replicas\x18\x04 \x01(\rR\x11minInSyncReplicas\x12:\n" +
-	"\vack_timeout\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\n" +
-	"ackTimeout\x12F\n" +
-	"\x11heartbeat_timeout\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\x10heartbeatTimeout\x12D\n" +
-	"\x10election_timeout\x18\a \x01(\v2\x19.google.protobuf.DurationR\x0felectionTimeout\x12F\n" +
-	"\x11snapshot_interval\x18\b \x01(\v2\x19.google.protobuf.DurationR\x10snapshotInterval\x12-\n" +
-	"\x12snapshot_threshold\x18\t \x01(\x04R\x11snapshotThreshold\x12\x14\n" +
-	"\x05group\x18\n" +
-	" \x01(\tR\x05group\"\x8c\x02\n" +
+	"\x0eindex_interval\x18\x03 \x01(\rR\rindexInterval\")\n" +
+	"\x11ReplicationConfig\x12\x14\n" +
+	"\x05group\x18\x01 \x01(\tR\x05group\"\x8c\x02\n" +
 	"\n" +
 	"QueueState\x12%\n" +
 	"\x0etotal_messages\x18\x01 \x01(\x04R\rtotalMessages\x12\x1f\n" +
@@ -4797,10 +4693,12 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x06queues\x18\x01 \x03(\v2\x16.fluxmq.queue.v1.QueueR\x06queues\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"(\n" +
 	"\x12DeleteQueueRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"^\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\x9b\x01\n" +
 	"\x12UpdateQueueRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
-	"\x06config\x18\x02 \x01(\v2\x1c.fluxmq.queue.v1.QueueConfigR\x06config\"\xd9\x01\n" +
+	"\x06config\x18\x02 \x01(\v2\x1c.fluxmq.queue.v1.QueueConfigR\x06config\x12;\n" +
+	"\vupdate_mask\x18\x03 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
+	"updateMask\"\xd9\x01\n" +
 	"\rAppendRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x10\n" +
@@ -5026,11 +4924,7 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\x1cCOMPRESSION_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15COMPRESSION_TYPE_NONE\x10\x01\x12\x17\n" +
 	"\x13COMPRESSION_TYPE_S2\x10\x02\x12\x19\n" +
-	"\x15COMPRESSION_TYPE_ZSTD\x10\x03*j\n" +
-	"\x0fReplicationMode\x12 \n" +
-	"\x1cREPLICATION_MODE_UNSPECIFIED\x10\x00\x12\x19\n" +
-	"\x15REPLICATION_MODE_SYNC\x10\x01\x12\x1a\n" +
-	"\x16REPLICATION_MODE_ASYNC\x10\x02*\xbb\x03\n" +
+	"\x15COMPRESSION_TYPE_ZSTD\x10\x03*\xbb\x03\n" +
 	"\x0eQueueErrorCode\x12 \n" +
 	"\x1cQUEUE_ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19QUEUE_ERROR_CODE_INTERNAL\x10\x01\x12\x1d\n" +
@@ -5113,220 +5007,216 @@ func file_queue_v1_queue_proto_rawDescGZIP() []byte {
 	return file_queue_v1_queue_proto_rawDescData
 }
 
-var file_queue_v1_queue_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_queue_v1_queue_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_queue_v1_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
 var file_queue_v1_queue_proto_goTypes = []any{
 	(CompressionType)(0),               // 0: fluxmq.queue.v1.CompressionType
-	(ReplicationMode)(0),               // 1: fluxmq.queue.v1.ReplicationMode
-	(QueueErrorCode)(0),                // 2: fluxmq.queue.v1.QueueErrorCode
-	(QueueOwnershipState)(0),           // 3: fluxmq.queue.v1.QueueOwnershipState
-	(QueueLeaderState)(0),              // 4: fluxmq.queue.v1.QueueLeaderState
-	(QueueDurabilityState)(0),          // 5: fluxmq.queue.v1.QueueDurabilityState
-	(InitialPosition)(0),               // 6: fluxmq.queue.v1.InitialPosition
-	(TailRequest_StartFrom)(0),         // 7: fluxmq.queue.v1.TailRequest.StartFrom
-	(*Message)(nil),                    // 8: fluxmq.queue.v1.Message
-	(*DeliveryInfo)(nil),               // 9: fluxmq.queue.v1.DeliveryInfo
-	(*Queue)(nil),                      // 10: fluxmq.queue.v1.Queue
-	(*QueueConfig)(nil),                // 11: fluxmq.queue.v1.QueueConfig
-	(*RetentionConfig)(nil),            // 12: fluxmq.queue.v1.RetentionConfig
-	(*SegmentConfig)(nil),              // 13: fluxmq.queue.v1.SegmentConfig
-	(*ReplicationConfig)(nil),          // 14: fluxmq.queue.v1.ReplicationConfig
-	(*QueueState)(nil),                 // 15: fluxmq.queue.v1.QueueState
-	(*QueueErrorDetail)(nil),           // 16: fluxmq.queue.v1.QueueErrorDetail
-	(*AppendProgress)(nil),             // 17: fluxmq.queue.v1.AppendProgress
-	(*SettlementProgress)(nil),         // 18: fluxmq.queue.v1.SettlementProgress
-	(*QueueInfo)(nil),                  // 19: fluxmq.queue.v1.QueueInfo
-	(*ConsumerGroup)(nil),              // 20: fluxmq.queue.v1.ConsumerGroup
-	(*ConsumerGroupConfig)(nil),        // 21: fluxmq.queue.v1.ConsumerGroupConfig
-	(*QueueCursor)(nil),                // 22: fluxmq.queue.v1.QueueCursor
-	(*ConsumerInfo)(nil),               // 23: fluxmq.queue.v1.ConsumerInfo
-	(*PendingEntry)(nil),               // 24: fluxmq.queue.v1.PendingEntry
-	(*CreateQueueRequest)(nil),         // 25: fluxmq.queue.v1.CreateQueueRequest
-	(*GetQueueRequest)(nil),            // 26: fluxmq.queue.v1.GetQueueRequest
-	(*ListQueuesRequest)(nil),          // 27: fluxmq.queue.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),         // 28: fluxmq.queue.v1.ListQueuesResponse
-	(*DeleteQueueRequest)(nil),         // 29: fluxmq.queue.v1.DeleteQueueRequest
-	(*UpdateQueueRequest)(nil),         // 30: fluxmq.queue.v1.UpdateQueueRequest
-	(*AppendRequest)(nil),              // 31: fluxmq.queue.v1.AppendRequest
-	(*AppendResponse)(nil),             // 32: fluxmq.queue.v1.AppendResponse
-	(*AppendBatchRequest)(nil),         // 33: fluxmq.queue.v1.AppendBatchRequest
-	(*BatchMessage)(nil),               // 34: fluxmq.queue.v1.BatchMessage
-	(*AppendBatchResponse)(nil),        // 35: fluxmq.queue.v1.AppendBatchResponse
-	(*ReadRequest)(nil),                // 36: fluxmq.queue.v1.ReadRequest
-	(*ReadBatchRequest)(nil),           // 37: fluxmq.queue.v1.ReadBatchRequest
-	(*ReadBatchResponse)(nil),          // 38: fluxmq.queue.v1.ReadBatchResponse
-	(*TailRequest)(nil),                // 39: fluxmq.queue.v1.TailRequest
-	(*SeekToOffsetRequest)(nil),        // 40: fluxmq.queue.v1.SeekToOffsetRequest
-	(*SeekToTimestampRequest)(nil),     // 41: fluxmq.queue.v1.SeekToTimestampRequest
-	(*SeekResponse)(nil),               // 42: fluxmq.queue.v1.SeekResponse
-	(*CreateConsumerGroupRequest)(nil), // 43: fluxmq.queue.v1.CreateConsumerGroupRequest
-	(*GetConsumerGroupRequest)(nil),    // 44: fluxmq.queue.v1.GetConsumerGroupRequest
-	(*ListConsumerGroupsRequest)(nil),  // 45: fluxmq.queue.v1.ListConsumerGroupsRequest
-	(*ListConsumerGroupsResponse)(nil), // 46: fluxmq.queue.v1.ListConsumerGroupsResponse
-	(*DeleteConsumerGroupRequest)(nil), // 47: fluxmq.queue.v1.DeleteConsumerGroupRequest
-	(*JoinGroupRequest)(nil),           // 48: fluxmq.queue.v1.JoinGroupRequest
-	(*JoinGroupResponse)(nil),          // 49: fluxmq.queue.v1.JoinGroupResponse
-	(*LeaveGroupRequest)(nil),          // 50: fluxmq.queue.v1.LeaveGroupRequest
-	(*HeartbeatRequest)(nil),           // 51: fluxmq.queue.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),          // 52: fluxmq.queue.v1.HeartbeatResponse
-	(*ConsumeRequest)(nil),             // 53: fluxmq.queue.v1.ConsumeRequest
-	(*ConsumeResponse)(nil),            // 54: fluxmq.queue.v1.ConsumeResponse
-	(*ConsumeQueueRequest)(nil),        // 55: fluxmq.queue.v1.ConsumeQueueRequest
-	(*AckRequest)(nil),                 // 56: fluxmq.queue.v1.AckRequest
-	(*AckResponse)(nil),                // 57: fluxmq.queue.v1.AckResponse
-	(*NackRequest)(nil),                // 58: fluxmq.queue.v1.NackRequest
-	(*ClaimRequest)(nil),               // 59: fluxmq.queue.v1.ClaimRequest
-	(*ClaimResponse)(nil),              // 60: fluxmq.queue.v1.ClaimResponse
-	(*GetPendingRequest)(nil),          // 61: fluxmq.queue.v1.GetPendingRequest
-	(*GetPendingResponse)(nil),         // 62: fluxmq.queue.v1.GetPendingResponse
-	(*GetQueueInfoRequest)(nil),        // 63: fluxmq.queue.v1.GetQueueInfoRequest
-	(*GetStatsRequest)(nil),            // 64: fluxmq.queue.v1.GetStatsRequest
-	(*QueueStats)(nil),                 // 65: fluxmq.queue.v1.QueueStats
-	(*ConsumerGroupSummary)(nil),       // 66: fluxmq.queue.v1.ConsumerGroupSummary
-	(*PurgeRequest)(nil),               // 67: fluxmq.queue.v1.PurgeRequest
-	(*PurgeResponse)(nil),              // 68: fluxmq.queue.v1.PurgeResponse
-	(*TruncateRequest)(nil),            // 69: fluxmq.queue.v1.TruncateRequest
-	nil,                                // 70: fluxmq.queue.v1.Message.HeadersEntry
-	nil,                                // 71: fluxmq.queue.v1.ConsumerInfo.MetadataEntry
-	nil,                                // 72: fluxmq.queue.v1.AppendRequest.HeadersEntry
-	nil,                                // 73: fluxmq.queue.v1.BatchMessage.HeadersEntry
-	nil,                                // 74: fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
-	(*timestamppb.Timestamp)(nil),      // 75: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),        // 76: google.protobuf.Duration
+	(QueueErrorCode)(0),                // 1: fluxmq.queue.v1.QueueErrorCode
+	(QueueOwnershipState)(0),           // 2: fluxmq.queue.v1.QueueOwnershipState
+	(QueueLeaderState)(0),              // 3: fluxmq.queue.v1.QueueLeaderState
+	(QueueDurabilityState)(0),          // 4: fluxmq.queue.v1.QueueDurabilityState
+	(InitialPosition)(0),               // 5: fluxmq.queue.v1.InitialPosition
+	(TailRequest_StartFrom)(0),         // 6: fluxmq.queue.v1.TailRequest.StartFrom
+	(*Message)(nil),                    // 7: fluxmq.queue.v1.Message
+	(*DeliveryInfo)(nil),               // 8: fluxmq.queue.v1.DeliveryInfo
+	(*Queue)(nil),                      // 9: fluxmq.queue.v1.Queue
+	(*QueueConfig)(nil),                // 10: fluxmq.queue.v1.QueueConfig
+	(*RetentionConfig)(nil),            // 11: fluxmq.queue.v1.RetentionConfig
+	(*SegmentConfig)(nil),              // 12: fluxmq.queue.v1.SegmentConfig
+	(*ReplicationConfig)(nil),          // 13: fluxmq.queue.v1.ReplicationConfig
+	(*QueueState)(nil),                 // 14: fluxmq.queue.v1.QueueState
+	(*QueueErrorDetail)(nil),           // 15: fluxmq.queue.v1.QueueErrorDetail
+	(*AppendProgress)(nil),             // 16: fluxmq.queue.v1.AppendProgress
+	(*SettlementProgress)(nil),         // 17: fluxmq.queue.v1.SettlementProgress
+	(*QueueInfo)(nil),                  // 18: fluxmq.queue.v1.QueueInfo
+	(*ConsumerGroup)(nil),              // 19: fluxmq.queue.v1.ConsumerGroup
+	(*ConsumerGroupConfig)(nil),        // 20: fluxmq.queue.v1.ConsumerGroupConfig
+	(*QueueCursor)(nil),                // 21: fluxmq.queue.v1.QueueCursor
+	(*ConsumerInfo)(nil),               // 22: fluxmq.queue.v1.ConsumerInfo
+	(*PendingEntry)(nil),               // 23: fluxmq.queue.v1.PendingEntry
+	(*CreateQueueRequest)(nil),         // 24: fluxmq.queue.v1.CreateQueueRequest
+	(*GetQueueRequest)(nil),            // 25: fluxmq.queue.v1.GetQueueRequest
+	(*ListQueuesRequest)(nil),          // 26: fluxmq.queue.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),         // 27: fluxmq.queue.v1.ListQueuesResponse
+	(*DeleteQueueRequest)(nil),         // 28: fluxmq.queue.v1.DeleteQueueRequest
+	(*UpdateQueueRequest)(nil),         // 29: fluxmq.queue.v1.UpdateQueueRequest
+	(*AppendRequest)(nil),              // 30: fluxmq.queue.v1.AppendRequest
+	(*AppendResponse)(nil),             // 31: fluxmq.queue.v1.AppendResponse
+	(*AppendBatchRequest)(nil),         // 32: fluxmq.queue.v1.AppendBatchRequest
+	(*BatchMessage)(nil),               // 33: fluxmq.queue.v1.BatchMessage
+	(*AppendBatchResponse)(nil),        // 34: fluxmq.queue.v1.AppendBatchResponse
+	(*ReadRequest)(nil),                // 35: fluxmq.queue.v1.ReadRequest
+	(*ReadBatchRequest)(nil),           // 36: fluxmq.queue.v1.ReadBatchRequest
+	(*ReadBatchResponse)(nil),          // 37: fluxmq.queue.v1.ReadBatchResponse
+	(*TailRequest)(nil),                // 38: fluxmq.queue.v1.TailRequest
+	(*SeekToOffsetRequest)(nil),        // 39: fluxmq.queue.v1.SeekToOffsetRequest
+	(*SeekToTimestampRequest)(nil),     // 40: fluxmq.queue.v1.SeekToTimestampRequest
+	(*SeekResponse)(nil),               // 41: fluxmq.queue.v1.SeekResponse
+	(*CreateConsumerGroupRequest)(nil), // 42: fluxmq.queue.v1.CreateConsumerGroupRequest
+	(*GetConsumerGroupRequest)(nil),    // 43: fluxmq.queue.v1.GetConsumerGroupRequest
+	(*ListConsumerGroupsRequest)(nil),  // 44: fluxmq.queue.v1.ListConsumerGroupsRequest
+	(*ListConsumerGroupsResponse)(nil), // 45: fluxmq.queue.v1.ListConsumerGroupsResponse
+	(*DeleteConsumerGroupRequest)(nil), // 46: fluxmq.queue.v1.DeleteConsumerGroupRequest
+	(*JoinGroupRequest)(nil),           // 47: fluxmq.queue.v1.JoinGroupRequest
+	(*JoinGroupResponse)(nil),          // 48: fluxmq.queue.v1.JoinGroupResponse
+	(*LeaveGroupRequest)(nil),          // 49: fluxmq.queue.v1.LeaveGroupRequest
+	(*HeartbeatRequest)(nil),           // 50: fluxmq.queue.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),          // 51: fluxmq.queue.v1.HeartbeatResponse
+	(*ConsumeRequest)(nil),             // 52: fluxmq.queue.v1.ConsumeRequest
+	(*ConsumeResponse)(nil),            // 53: fluxmq.queue.v1.ConsumeResponse
+	(*ConsumeQueueRequest)(nil),        // 54: fluxmq.queue.v1.ConsumeQueueRequest
+	(*AckRequest)(nil),                 // 55: fluxmq.queue.v1.AckRequest
+	(*AckResponse)(nil),                // 56: fluxmq.queue.v1.AckResponse
+	(*NackRequest)(nil),                // 57: fluxmq.queue.v1.NackRequest
+	(*ClaimRequest)(nil),               // 58: fluxmq.queue.v1.ClaimRequest
+	(*ClaimResponse)(nil),              // 59: fluxmq.queue.v1.ClaimResponse
+	(*GetPendingRequest)(nil),          // 60: fluxmq.queue.v1.GetPendingRequest
+	(*GetPendingResponse)(nil),         // 61: fluxmq.queue.v1.GetPendingResponse
+	(*GetQueueInfoRequest)(nil),        // 62: fluxmq.queue.v1.GetQueueInfoRequest
+	(*GetStatsRequest)(nil),            // 63: fluxmq.queue.v1.GetStatsRequest
+	(*QueueStats)(nil),                 // 64: fluxmq.queue.v1.QueueStats
+	(*ConsumerGroupSummary)(nil),       // 65: fluxmq.queue.v1.ConsumerGroupSummary
+	(*PurgeRequest)(nil),               // 66: fluxmq.queue.v1.PurgeRequest
+	(*PurgeResponse)(nil),              // 67: fluxmq.queue.v1.PurgeResponse
+	(*TruncateRequest)(nil),            // 68: fluxmq.queue.v1.TruncateRequest
+	nil,                                // 69: fluxmq.queue.v1.Message.HeadersEntry
+	nil,                                // 70: fluxmq.queue.v1.ConsumerInfo.MetadataEntry
+	nil,                                // 71: fluxmq.queue.v1.AppendRequest.HeadersEntry
+	nil,                                // 72: fluxmq.queue.v1.BatchMessage.HeadersEntry
+	nil,                                // 73: fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil),      // 74: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),        // 75: google.protobuf.Duration
+	(*fieldmaskpb.FieldMask)(nil),      // 76: google.protobuf.FieldMask
 	(*emptypb.Empty)(nil),              // 77: google.protobuf.Empty
 }
 var file_queue_v1_queue_proto_depIdxs = []int32{
-	75, // 0: fluxmq.queue.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
-	70, // 1: fluxmq.queue.v1.Message.headers:type_name -> fluxmq.queue.v1.Message.HeadersEntry
-	9,  // 2: fluxmq.queue.v1.Message.delivery_info:type_name -> fluxmq.queue.v1.DeliveryInfo
-	75, // 3: fluxmq.queue.v1.DeliveryInfo.first_delivered_at:type_name -> google.protobuf.Timestamp
-	75, // 4: fluxmq.queue.v1.DeliveryInfo.delivered_at:type_name -> google.protobuf.Timestamp
-	11, // 5: fluxmq.queue.v1.Queue.config:type_name -> fluxmq.queue.v1.QueueConfig
-	15, // 6: fluxmq.queue.v1.Queue.state:type_name -> fluxmq.queue.v1.QueueState
-	75, // 7: fluxmq.queue.v1.Queue.created_at:type_name -> google.protobuf.Timestamp
-	75, // 8: fluxmq.queue.v1.Queue.updated_at:type_name -> google.protobuf.Timestamp
-	12, // 9: fluxmq.queue.v1.QueueConfig.retention:type_name -> fluxmq.queue.v1.RetentionConfig
+	74, // 0: fluxmq.queue.v1.Message.timestamp:type_name -> google.protobuf.Timestamp
+	69, // 1: fluxmq.queue.v1.Message.headers:type_name -> fluxmq.queue.v1.Message.HeadersEntry
+	8,  // 2: fluxmq.queue.v1.Message.delivery_info:type_name -> fluxmq.queue.v1.DeliveryInfo
+	74, // 3: fluxmq.queue.v1.DeliveryInfo.first_delivered_at:type_name -> google.protobuf.Timestamp
+	74, // 4: fluxmq.queue.v1.DeliveryInfo.delivered_at:type_name -> google.protobuf.Timestamp
+	10, // 5: fluxmq.queue.v1.Queue.config:type_name -> fluxmq.queue.v1.QueueConfig
+	14, // 6: fluxmq.queue.v1.Queue.state:type_name -> fluxmq.queue.v1.QueueState
+	74, // 7: fluxmq.queue.v1.Queue.created_at:type_name -> google.protobuf.Timestamp
+	74, // 8: fluxmq.queue.v1.Queue.updated_at:type_name -> google.protobuf.Timestamp
+	11, // 9: fluxmq.queue.v1.QueueConfig.retention:type_name -> fluxmq.queue.v1.RetentionConfig
 	0,  // 10: fluxmq.queue.v1.QueueConfig.compression:type_name -> fluxmq.queue.v1.CompressionType
-	13, // 11: fluxmq.queue.v1.QueueConfig.segment:type_name -> fluxmq.queue.v1.SegmentConfig
-	14, // 12: fluxmq.queue.v1.QueueConfig.replication:type_name -> fluxmq.queue.v1.ReplicationConfig
-	76, // 13: fluxmq.queue.v1.RetentionConfig.max_age:type_name -> google.protobuf.Duration
-	76, // 14: fluxmq.queue.v1.SegmentConfig.max_age:type_name -> google.protobuf.Duration
-	1,  // 15: fluxmq.queue.v1.ReplicationConfig.mode:type_name -> fluxmq.queue.v1.ReplicationMode
-	76, // 16: fluxmq.queue.v1.ReplicationConfig.ack_timeout:type_name -> google.protobuf.Duration
-	76, // 17: fluxmq.queue.v1.ReplicationConfig.heartbeat_timeout:type_name -> google.protobuf.Duration
-	76, // 18: fluxmq.queue.v1.ReplicationConfig.election_timeout:type_name -> google.protobuf.Duration
-	76, // 19: fluxmq.queue.v1.ReplicationConfig.snapshot_interval:type_name -> google.protobuf.Duration
-	75, // 20: fluxmq.queue.v1.QueueState.oldest_message:type_name -> google.protobuf.Timestamp
-	75, // 21: fluxmq.queue.v1.QueueState.newest_message:type_name -> google.protobuf.Timestamp
-	2,  // 22: fluxmq.queue.v1.QueueErrorDetail.code:type_name -> fluxmq.queue.v1.QueueErrorCode
-	3,  // 23: fluxmq.queue.v1.QueueErrorDetail.ownership:type_name -> fluxmq.queue.v1.QueueOwnershipState
-	4,  // 24: fluxmq.queue.v1.QueueErrorDetail.leader:type_name -> fluxmq.queue.v1.QueueLeaderState
-	5,  // 25: fluxmq.queue.v1.QueueErrorDetail.durability:type_name -> fluxmq.queue.v1.QueueDurabilityState
-	17, // 26: fluxmq.queue.v1.QueueErrorDetail.append_progress:type_name -> fluxmq.queue.v1.AppendProgress
-	18, // 27: fluxmq.queue.v1.QueueErrorDetail.settlement_progress:type_name -> fluxmq.queue.v1.SettlementProgress
-	75, // 28: fluxmq.queue.v1.QueueInfo.oldest_timestamp:type_name -> google.protobuf.Timestamp
-	75, // 29: fluxmq.queue.v1.QueueInfo.newest_timestamp:type_name -> google.protobuf.Timestamp
-	21, // 30: fluxmq.queue.v1.ConsumerGroup.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
-	22, // 31: fluxmq.queue.v1.ConsumerGroup.cursor:type_name -> fluxmq.queue.v1.QueueCursor
-	23, // 32: fluxmq.queue.v1.ConsumerGroup.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
-	75, // 33: fluxmq.queue.v1.ConsumerGroup.created_at:type_name -> google.protobuf.Timestamp
-	76, // 34: fluxmq.queue.v1.ConsumerGroupConfig.ack_timeout:type_name -> google.protobuf.Duration
-	6,  // 35: fluxmq.queue.v1.ConsumerGroupConfig.initial_position:type_name -> fluxmq.queue.v1.InitialPosition
-	75, // 36: fluxmq.queue.v1.QueueCursor.updated_at:type_name -> google.protobuf.Timestamp
-	75, // 37: fluxmq.queue.v1.ConsumerInfo.last_heartbeat:type_name -> google.protobuf.Timestamp
-	71, // 38: fluxmq.queue.v1.ConsumerInfo.metadata:type_name -> fluxmq.queue.v1.ConsumerInfo.MetadataEntry
-	75, // 39: fluxmq.queue.v1.PendingEntry.delivered_at:type_name -> google.protobuf.Timestamp
-	76, // 40: fluxmq.queue.v1.PendingEntry.idle_time:type_name -> google.protobuf.Duration
-	11, // 41: fluxmq.queue.v1.CreateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
-	10, // 42: fluxmq.queue.v1.ListQueuesResponse.queues:type_name -> fluxmq.queue.v1.Queue
-	11, // 43: fluxmq.queue.v1.UpdateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
-	72, // 44: fluxmq.queue.v1.AppendRequest.headers:type_name -> fluxmq.queue.v1.AppendRequest.HeadersEntry
-	75, // 45: fluxmq.queue.v1.AppendResponse.timestamp:type_name -> google.protobuf.Timestamp
-	34, // 46: fluxmq.queue.v1.AppendBatchRequest.messages:type_name -> fluxmq.queue.v1.BatchMessage
-	73, // 47: fluxmq.queue.v1.BatchMessage.headers:type_name -> fluxmq.queue.v1.BatchMessage.HeadersEntry
-	75, // 48: fluxmq.queue.v1.AppendBatchResponse.timestamp:type_name -> google.protobuf.Timestamp
-	8,  // 49: fluxmq.queue.v1.ReadBatchResponse.messages:type_name -> fluxmq.queue.v1.Message
-	7,  // 50: fluxmq.queue.v1.TailRequest.start_from:type_name -> fluxmq.queue.v1.TailRequest.StartFrom
-	75, // 51: fluxmq.queue.v1.SeekToTimestampRequest.timestamp:type_name -> google.protobuf.Timestamp
-	75, // 52: fluxmq.queue.v1.SeekResponse.timestamp:type_name -> google.protobuf.Timestamp
-	21, // 53: fluxmq.queue.v1.CreateConsumerGroupRequest.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
-	20, // 54: fluxmq.queue.v1.ListConsumerGroupsResponse.groups:type_name -> fluxmq.queue.v1.ConsumerGroup
-	74, // 55: fluxmq.queue.v1.JoinGroupRequest.metadata:type_name -> fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
-	76, // 56: fluxmq.queue.v1.JoinGroupRequest.session_timeout:type_name -> google.protobuf.Duration
-	23, // 57: fluxmq.queue.v1.JoinGroupResponse.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
-	76, // 58: fluxmq.queue.v1.ConsumeRequest.wait_time:type_name -> google.protobuf.Duration
-	8,  // 59: fluxmq.queue.v1.ConsumeResponse.messages:type_name -> fluxmq.queue.v1.Message
-	22, // 60: fluxmq.queue.v1.AckResponse.committed:type_name -> fluxmq.queue.v1.QueueCursor
-	76, // 61: fluxmq.queue.v1.NackRequest.delay:type_name -> google.protobuf.Duration
-	76, // 62: fluxmq.queue.v1.ClaimRequest.min_idle_time:type_name -> google.protobuf.Duration
-	8,  // 63: fluxmq.queue.v1.ClaimResponse.messages:type_name -> fluxmq.queue.v1.Message
-	24, // 64: fluxmq.queue.v1.GetPendingResponse.entries:type_name -> fluxmq.queue.v1.PendingEntry
-	66, // 65: fluxmq.queue.v1.QueueStats.consumer_groups:type_name -> fluxmq.queue.v1.ConsumerGroupSummary
-	25, // 66: fluxmq.queue.v1.QueueService.CreateQueue:input_type -> fluxmq.queue.v1.CreateQueueRequest
-	26, // 67: fluxmq.queue.v1.QueueService.GetQueue:input_type -> fluxmq.queue.v1.GetQueueRequest
-	27, // 68: fluxmq.queue.v1.QueueService.ListQueues:input_type -> fluxmq.queue.v1.ListQueuesRequest
-	29, // 69: fluxmq.queue.v1.QueueService.DeleteQueue:input_type -> fluxmq.queue.v1.DeleteQueueRequest
-	30, // 70: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
-	31, // 71: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
-	33, // 72: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
-	31, // 73: fluxmq.queue.v1.QueueService.AppendQueue:input_type -> fluxmq.queue.v1.AppendRequest
-	36, // 74: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
-	37, // 75: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
-	39, // 76: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
-	40, // 77: fluxmq.queue.v1.QueueService.SeekToOffset:input_type -> fluxmq.queue.v1.SeekToOffsetRequest
-	41, // 78: fluxmq.queue.v1.QueueService.SeekToTimestamp:input_type -> fluxmq.queue.v1.SeekToTimestampRequest
-	43, // 79: fluxmq.queue.v1.QueueService.CreateConsumerGroup:input_type -> fluxmq.queue.v1.CreateConsumerGroupRequest
-	44, // 80: fluxmq.queue.v1.QueueService.GetConsumerGroup:input_type -> fluxmq.queue.v1.GetConsumerGroupRequest
-	45, // 81: fluxmq.queue.v1.QueueService.ListConsumerGroups:input_type -> fluxmq.queue.v1.ListConsumerGroupsRequest
-	47, // 82: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:input_type -> fluxmq.queue.v1.DeleteConsumerGroupRequest
-	48, // 83: fluxmq.queue.v1.QueueService.JoinGroup:input_type -> fluxmq.queue.v1.JoinGroupRequest
-	50, // 84: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
-	51, // 85: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
-	53, // 86: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
-	55, // 87: fluxmq.queue.v1.QueueService.ConsumeQueue:input_type -> fluxmq.queue.v1.ConsumeQueueRequest
-	56, // 88: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
-	58, // 89: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
-	59, // 90: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
-	61, // 91: fluxmq.queue.v1.QueueService.GetPending:input_type -> fluxmq.queue.v1.GetPendingRequest
-	63, // 92: fluxmq.queue.v1.QueueService.GetQueueInfo:input_type -> fluxmq.queue.v1.GetQueueInfoRequest
-	64, // 93: fluxmq.queue.v1.QueueService.GetStats:input_type -> fluxmq.queue.v1.GetStatsRequest
-	67, // 94: fluxmq.queue.v1.QueueService.Purge:input_type -> fluxmq.queue.v1.PurgeRequest
-	69, // 95: fluxmq.queue.v1.QueueService.Truncate:input_type -> fluxmq.queue.v1.TruncateRequest
-	10, // 96: fluxmq.queue.v1.QueueService.CreateQueue:output_type -> fluxmq.queue.v1.Queue
-	10, // 97: fluxmq.queue.v1.QueueService.GetQueue:output_type -> fluxmq.queue.v1.Queue
-	28, // 98: fluxmq.queue.v1.QueueService.ListQueues:output_type -> fluxmq.queue.v1.ListQueuesResponse
-	77, // 99: fluxmq.queue.v1.QueueService.DeleteQueue:output_type -> google.protobuf.Empty
-	10, // 100: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
-	32, // 101: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
-	35, // 102: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	35, // 103: fluxmq.queue.v1.QueueService.AppendQueue:output_type -> fluxmq.queue.v1.AppendBatchResponse
-	8,  // 104: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
-	38, // 105: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
-	8,  // 106: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
-	42, // 107: fluxmq.queue.v1.QueueService.SeekToOffset:output_type -> fluxmq.queue.v1.SeekResponse
-	42, // 108: fluxmq.queue.v1.QueueService.SeekToTimestamp:output_type -> fluxmq.queue.v1.SeekResponse
-	20, // 109: fluxmq.queue.v1.QueueService.CreateConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
-	20, // 110: fluxmq.queue.v1.QueueService.GetConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
-	46, // 111: fluxmq.queue.v1.QueueService.ListConsumerGroups:output_type -> fluxmq.queue.v1.ListConsumerGroupsResponse
-	77, // 112: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:output_type -> google.protobuf.Empty
-	49, // 113: fluxmq.queue.v1.QueueService.JoinGroup:output_type -> fluxmq.queue.v1.JoinGroupResponse
-	77, // 114: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
-	52, // 115: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
-	54, // 116: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
-	8,  // 117: fluxmq.queue.v1.QueueService.ConsumeQueue:output_type -> fluxmq.queue.v1.Message
-	57, // 118: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
-	77, // 119: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
-	60, // 120: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
-	62, // 121: fluxmq.queue.v1.QueueService.GetPending:output_type -> fluxmq.queue.v1.GetPendingResponse
-	19, // 122: fluxmq.queue.v1.QueueService.GetQueueInfo:output_type -> fluxmq.queue.v1.QueueInfo
-	65, // 123: fluxmq.queue.v1.QueueService.GetStats:output_type -> fluxmq.queue.v1.QueueStats
-	68, // 124: fluxmq.queue.v1.QueueService.Purge:output_type -> fluxmq.queue.v1.PurgeResponse
-	77, // 125: fluxmq.queue.v1.QueueService.Truncate:output_type -> google.protobuf.Empty
-	96, // [96:126] is the sub-list for method output_type
-	66, // [66:96] is the sub-list for method input_type
-	66, // [66:66] is the sub-list for extension type_name
-	66, // [66:66] is the sub-list for extension extendee
-	0,  // [0:66] is the sub-list for field type_name
+	12, // 11: fluxmq.queue.v1.QueueConfig.segment:type_name -> fluxmq.queue.v1.SegmentConfig
+	13, // 12: fluxmq.queue.v1.QueueConfig.replication:type_name -> fluxmq.queue.v1.ReplicationConfig
+	75, // 13: fluxmq.queue.v1.RetentionConfig.max_age:type_name -> google.protobuf.Duration
+	75, // 14: fluxmq.queue.v1.SegmentConfig.max_age:type_name -> google.protobuf.Duration
+	74, // 15: fluxmq.queue.v1.QueueState.oldest_message:type_name -> google.protobuf.Timestamp
+	74, // 16: fluxmq.queue.v1.QueueState.newest_message:type_name -> google.protobuf.Timestamp
+	1,  // 17: fluxmq.queue.v1.QueueErrorDetail.code:type_name -> fluxmq.queue.v1.QueueErrorCode
+	2,  // 18: fluxmq.queue.v1.QueueErrorDetail.ownership:type_name -> fluxmq.queue.v1.QueueOwnershipState
+	3,  // 19: fluxmq.queue.v1.QueueErrorDetail.leader:type_name -> fluxmq.queue.v1.QueueLeaderState
+	4,  // 20: fluxmq.queue.v1.QueueErrorDetail.durability:type_name -> fluxmq.queue.v1.QueueDurabilityState
+	16, // 21: fluxmq.queue.v1.QueueErrorDetail.append_progress:type_name -> fluxmq.queue.v1.AppendProgress
+	17, // 22: fluxmq.queue.v1.QueueErrorDetail.settlement_progress:type_name -> fluxmq.queue.v1.SettlementProgress
+	74, // 23: fluxmq.queue.v1.QueueInfo.oldest_timestamp:type_name -> google.protobuf.Timestamp
+	74, // 24: fluxmq.queue.v1.QueueInfo.newest_timestamp:type_name -> google.protobuf.Timestamp
+	20, // 25: fluxmq.queue.v1.ConsumerGroup.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
+	21, // 26: fluxmq.queue.v1.ConsumerGroup.cursor:type_name -> fluxmq.queue.v1.QueueCursor
+	22, // 27: fluxmq.queue.v1.ConsumerGroup.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
+	74, // 28: fluxmq.queue.v1.ConsumerGroup.created_at:type_name -> google.protobuf.Timestamp
+	75, // 29: fluxmq.queue.v1.ConsumerGroupConfig.ack_timeout:type_name -> google.protobuf.Duration
+	5,  // 30: fluxmq.queue.v1.ConsumerGroupConfig.initial_position:type_name -> fluxmq.queue.v1.InitialPosition
+	74, // 31: fluxmq.queue.v1.QueueCursor.updated_at:type_name -> google.protobuf.Timestamp
+	74, // 32: fluxmq.queue.v1.ConsumerInfo.last_heartbeat:type_name -> google.protobuf.Timestamp
+	70, // 33: fluxmq.queue.v1.ConsumerInfo.metadata:type_name -> fluxmq.queue.v1.ConsumerInfo.MetadataEntry
+	74, // 34: fluxmq.queue.v1.PendingEntry.delivered_at:type_name -> google.protobuf.Timestamp
+	75, // 35: fluxmq.queue.v1.PendingEntry.idle_time:type_name -> google.protobuf.Duration
+	10, // 36: fluxmq.queue.v1.CreateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
+	9,  // 37: fluxmq.queue.v1.ListQueuesResponse.queues:type_name -> fluxmq.queue.v1.Queue
+	10, // 38: fluxmq.queue.v1.UpdateQueueRequest.config:type_name -> fluxmq.queue.v1.QueueConfig
+	76, // 39: fluxmq.queue.v1.UpdateQueueRequest.update_mask:type_name -> google.protobuf.FieldMask
+	71, // 40: fluxmq.queue.v1.AppendRequest.headers:type_name -> fluxmq.queue.v1.AppendRequest.HeadersEntry
+	74, // 41: fluxmq.queue.v1.AppendResponse.timestamp:type_name -> google.protobuf.Timestamp
+	33, // 42: fluxmq.queue.v1.AppendBatchRequest.messages:type_name -> fluxmq.queue.v1.BatchMessage
+	72, // 43: fluxmq.queue.v1.BatchMessage.headers:type_name -> fluxmq.queue.v1.BatchMessage.HeadersEntry
+	74, // 44: fluxmq.queue.v1.AppendBatchResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7,  // 45: fluxmq.queue.v1.ReadBatchResponse.messages:type_name -> fluxmq.queue.v1.Message
+	6,  // 46: fluxmq.queue.v1.TailRequest.start_from:type_name -> fluxmq.queue.v1.TailRequest.StartFrom
+	74, // 47: fluxmq.queue.v1.SeekToTimestampRequest.timestamp:type_name -> google.protobuf.Timestamp
+	74, // 48: fluxmq.queue.v1.SeekResponse.timestamp:type_name -> google.protobuf.Timestamp
+	20, // 49: fluxmq.queue.v1.CreateConsumerGroupRequest.config:type_name -> fluxmq.queue.v1.ConsumerGroupConfig
+	19, // 50: fluxmq.queue.v1.ListConsumerGroupsResponse.groups:type_name -> fluxmq.queue.v1.ConsumerGroup
+	73, // 51: fluxmq.queue.v1.JoinGroupRequest.metadata:type_name -> fluxmq.queue.v1.JoinGroupRequest.MetadataEntry
+	75, // 52: fluxmq.queue.v1.JoinGroupRequest.session_timeout:type_name -> google.protobuf.Duration
+	22, // 53: fluxmq.queue.v1.JoinGroupResponse.consumers:type_name -> fluxmq.queue.v1.ConsumerInfo
+	75, // 54: fluxmq.queue.v1.ConsumeRequest.wait_time:type_name -> google.protobuf.Duration
+	7,  // 55: fluxmq.queue.v1.ConsumeResponse.messages:type_name -> fluxmq.queue.v1.Message
+	21, // 56: fluxmq.queue.v1.AckResponse.committed:type_name -> fluxmq.queue.v1.QueueCursor
+	75, // 57: fluxmq.queue.v1.NackRequest.delay:type_name -> google.protobuf.Duration
+	75, // 58: fluxmq.queue.v1.ClaimRequest.min_idle_time:type_name -> google.protobuf.Duration
+	7,  // 59: fluxmq.queue.v1.ClaimResponse.messages:type_name -> fluxmq.queue.v1.Message
+	23, // 60: fluxmq.queue.v1.GetPendingResponse.entries:type_name -> fluxmq.queue.v1.PendingEntry
+	65, // 61: fluxmq.queue.v1.QueueStats.consumer_groups:type_name -> fluxmq.queue.v1.ConsumerGroupSummary
+	24, // 62: fluxmq.queue.v1.QueueService.CreateQueue:input_type -> fluxmq.queue.v1.CreateQueueRequest
+	25, // 63: fluxmq.queue.v1.QueueService.GetQueue:input_type -> fluxmq.queue.v1.GetQueueRequest
+	26, // 64: fluxmq.queue.v1.QueueService.ListQueues:input_type -> fluxmq.queue.v1.ListQueuesRequest
+	28, // 65: fluxmq.queue.v1.QueueService.DeleteQueue:input_type -> fluxmq.queue.v1.DeleteQueueRequest
+	29, // 66: fluxmq.queue.v1.QueueService.UpdateQueue:input_type -> fluxmq.queue.v1.UpdateQueueRequest
+	30, // 67: fluxmq.queue.v1.QueueService.Append:input_type -> fluxmq.queue.v1.AppendRequest
+	32, // 68: fluxmq.queue.v1.QueueService.AppendBatch:input_type -> fluxmq.queue.v1.AppendBatchRequest
+	30, // 69: fluxmq.queue.v1.QueueService.AppendQueue:input_type -> fluxmq.queue.v1.AppendRequest
+	35, // 70: fluxmq.queue.v1.QueueService.Read:input_type -> fluxmq.queue.v1.ReadRequest
+	36, // 71: fluxmq.queue.v1.QueueService.ReadBatch:input_type -> fluxmq.queue.v1.ReadBatchRequest
+	38, // 72: fluxmq.queue.v1.QueueService.Tail:input_type -> fluxmq.queue.v1.TailRequest
+	39, // 73: fluxmq.queue.v1.QueueService.SeekToOffset:input_type -> fluxmq.queue.v1.SeekToOffsetRequest
+	40, // 74: fluxmq.queue.v1.QueueService.SeekToTimestamp:input_type -> fluxmq.queue.v1.SeekToTimestampRequest
+	42, // 75: fluxmq.queue.v1.QueueService.CreateConsumerGroup:input_type -> fluxmq.queue.v1.CreateConsumerGroupRequest
+	43, // 76: fluxmq.queue.v1.QueueService.GetConsumerGroup:input_type -> fluxmq.queue.v1.GetConsumerGroupRequest
+	44, // 77: fluxmq.queue.v1.QueueService.ListConsumerGroups:input_type -> fluxmq.queue.v1.ListConsumerGroupsRequest
+	46, // 78: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:input_type -> fluxmq.queue.v1.DeleteConsumerGroupRequest
+	47, // 79: fluxmq.queue.v1.QueueService.JoinGroup:input_type -> fluxmq.queue.v1.JoinGroupRequest
+	49, // 80: fluxmq.queue.v1.QueueService.LeaveGroup:input_type -> fluxmq.queue.v1.LeaveGroupRequest
+	50, // 81: fluxmq.queue.v1.QueueService.Heartbeat:input_type -> fluxmq.queue.v1.HeartbeatRequest
+	52, // 82: fluxmq.queue.v1.QueueService.Consume:input_type -> fluxmq.queue.v1.ConsumeRequest
+	54, // 83: fluxmq.queue.v1.QueueService.ConsumeQueue:input_type -> fluxmq.queue.v1.ConsumeQueueRequest
+	55, // 84: fluxmq.queue.v1.QueueService.Ack:input_type -> fluxmq.queue.v1.AckRequest
+	57, // 85: fluxmq.queue.v1.QueueService.Nack:input_type -> fluxmq.queue.v1.NackRequest
+	58, // 86: fluxmq.queue.v1.QueueService.Claim:input_type -> fluxmq.queue.v1.ClaimRequest
+	60, // 87: fluxmq.queue.v1.QueueService.GetPending:input_type -> fluxmq.queue.v1.GetPendingRequest
+	62, // 88: fluxmq.queue.v1.QueueService.GetQueueInfo:input_type -> fluxmq.queue.v1.GetQueueInfoRequest
+	63, // 89: fluxmq.queue.v1.QueueService.GetStats:input_type -> fluxmq.queue.v1.GetStatsRequest
+	66, // 90: fluxmq.queue.v1.QueueService.Purge:input_type -> fluxmq.queue.v1.PurgeRequest
+	68, // 91: fluxmq.queue.v1.QueueService.Truncate:input_type -> fluxmq.queue.v1.TruncateRequest
+	9,  // 92: fluxmq.queue.v1.QueueService.CreateQueue:output_type -> fluxmq.queue.v1.Queue
+	9,  // 93: fluxmq.queue.v1.QueueService.GetQueue:output_type -> fluxmq.queue.v1.Queue
+	27, // 94: fluxmq.queue.v1.QueueService.ListQueues:output_type -> fluxmq.queue.v1.ListQueuesResponse
+	77, // 95: fluxmq.queue.v1.QueueService.DeleteQueue:output_type -> google.protobuf.Empty
+	9,  // 96: fluxmq.queue.v1.QueueService.UpdateQueue:output_type -> fluxmq.queue.v1.Queue
+	31, // 97: fluxmq.queue.v1.QueueService.Append:output_type -> fluxmq.queue.v1.AppendResponse
+	34, // 98: fluxmq.queue.v1.QueueService.AppendBatch:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	34, // 99: fluxmq.queue.v1.QueueService.AppendQueue:output_type -> fluxmq.queue.v1.AppendBatchResponse
+	7,  // 100: fluxmq.queue.v1.QueueService.Read:output_type -> fluxmq.queue.v1.Message
+	37, // 101: fluxmq.queue.v1.QueueService.ReadBatch:output_type -> fluxmq.queue.v1.ReadBatchResponse
+	7,  // 102: fluxmq.queue.v1.QueueService.Tail:output_type -> fluxmq.queue.v1.Message
+	41, // 103: fluxmq.queue.v1.QueueService.SeekToOffset:output_type -> fluxmq.queue.v1.SeekResponse
+	41, // 104: fluxmq.queue.v1.QueueService.SeekToTimestamp:output_type -> fluxmq.queue.v1.SeekResponse
+	19, // 105: fluxmq.queue.v1.QueueService.CreateConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
+	19, // 106: fluxmq.queue.v1.QueueService.GetConsumerGroup:output_type -> fluxmq.queue.v1.ConsumerGroup
+	45, // 107: fluxmq.queue.v1.QueueService.ListConsumerGroups:output_type -> fluxmq.queue.v1.ListConsumerGroupsResponse
+	77, // 108: fluxmq.queue.v1.QueueService.DeleteConsumerGroup:output_type -> google.protobuf.Empty
+	48, // 109: fluxmq.queue.v1.QueueService.JoinGroup:output_type -> fluxmq.queue.v1.JoinGroupResponse
+	77, // 110: fluxmq.queue.v1.QueueService.LeaveGroup:output_type -> google.protobuf.Empty
+	51, // 111: fluxmq.queue.v1.QueueService.Heartbeat:output_type -> fluxmq.queue.v1.HeartbeatResponse
+	53, // 112: fluxmq.queue.v1.QueueService.Consume:output_type -> fluxmq.queue.v1.ConsumeResponse
+	7,  // 113: fluxmq.queue.v1.QueueService.ConsumeQueue:output_type -> fluxmq.queue.v1.Message
+	56, // 114: fluxmq.queue.v1.QueueService.Ack:output_type -> fluxmq.queue.v1.AckResponse
+	77, // 115: fluxmq.queue.v1.QueueService.Nack:output_type -> google.protobuf.Empty
+	59, // 116: fluxmq.queue.v1.QueueService.Claim:output_type -> fluxmq.queue.v1.ClaimResponse
+	61, // 117: fluxmq.queue.v1.QueueService.GetPending:output_type -> fluxmq.queue.v1.GetPendingResponse
+	18, // 118: fluxmq.queue.v1.QueueService.GetQueueInfo:output_type -> fluxmq.queue.v1.QueueInfo
+	64, // 119: fluxmq.queue.v1.QueueService.GetStats:output_type -> fluxmq.queue.v1.QueueStats
+	67, // 120: fluxmq.queue.v1.QueueService.Purge:output_type -> fluxmq.queue.v1.PurgeResponse
+	77, // 121: fluxmq.queue.v1.QueueService.Truncate:output_type -> google.protobuf.Empty
+	92, // [92:122] is the sub-list for method output_type
+	62, // [62:92] is the sub-list for method input_type
+	62, // [62:62] is the sub-list for extension type_name
+	62, // [62:62] is the sub-list for extension extendee
+	0,  // [0:62] is the sub-list for field type_name
 }
 
 func init() { file_queue_v1_queue_proto_init() }
@@ -5345,7 +5235,7 @@ func file_queue_v1_queue_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_queue_v1_queue_proto_rawDesc), len(file_queue_v1_queue_proto_rawDesc)),
-			NumEnums:      8,
+			NumEnums:      7,
 			NumMessages:   67,
 			NumExtensions: 0,
 			NumServices:   1,

@@ -24,6 +24,7 @@ import (
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -70,7 +71,7 @@ func (h *Handler) CreateQueue(ctx context.Context, req *connect.Request[queuev1.
 
 	config := types.DefaultQueueConfig(msg.Name, topics...)
 	if msg.Config != nil {
-		applyQueueConfigUpdateFromProto(&config, msg.Config)
+		applyQueueConfigCreateFromProto(&config, msg.Config)
 	}
 
 	if err := h.manager.CreateQueue(ctx, config); err != nil {
@@ -169,9 +170,27 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 		return nil, newConnectError(queue.ErrorCodeInternal, err)
 	}
 
+	paths, err := newUpdatePaths(req.Msg.UpdateMask)
+	if err != nil {
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, err)
+	}
+
+	// An update with no configuration cannot be a no-op: without a mask it asks
+	// for a full replacement, and with one it names paths whose values are not
+	// there. Accepting it silently changed nothing while reporting success.
+	if req.Msg.Config == nil {
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, errUpdateConfigRequired)
+	}
+
 	updated := *config
-	if req.Msg.Config != nil {
-		applyQueueConfigUpdateFromProto(&updated, req.Msg.Config)
+	if err := applyQueueConfigUpdateFromProto(&updated, req.Msg.Config, paths); err != nil {
+		// A placement change is well formed and conflicts with the queue's
+		// current state, which is a precondition rather than an argument fault.
+		// Anything else is the request itself being wrong.
+		if errors.Is(err, errReplicationPlacementImmutable) {
+			return nil, newConnectError(queue.ErrorCodeFailedPrecondition, err)
+		}
+		return nil, newConnectError(queue.ErrorCodeInvalidArgument, err)
 	}
 
 	if h.manager != nil {
@@ -977,24 +996,13 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 		retentionMaxAge = config.MessageTTL
 	}
 
-	replication := &queuev1.ReplicationConfig{
-		Enabled:           config.Replication.Enabled,
-		ReplicationFactor: clampIntToUint32(config.Replication.ReplicationFactor),
-		Mode:              replicationModeToProto(config.Replication.Mode),
-		MinInSyncReplicas: clampIntToUint32(config.Replication.MinInSyncReplicas),
-		AckTimeout:        durationpb.New(config.Replication.AckTimeout),
-		Group:             config.Replication.Group,
+	// Presence is the signal: a replicated queue carries the message, a local one
+	// omits it. The group is all it states; factor, membership and Raft timing
+	// belong to the group itself.
+	var replication *queuev1.ReplicationConfig
+	if config.Replication.Enabled {
+		replication = &queuev1.ReplicationConfig{Group: config.Replication.Group}
 	}
-	if config.Replication.HeartbeatTimeout > 0 {
-		replication.HeartbeatTimeout = durationpb.New(config.Replication.HeartbeatTimeout)
-	}
-	if config.Replication.ElectionTimeout > 0 {
-		replication.ElectionTimeout = durationpb.New(config.Replication.ElectionTimeout)
-	}
-	if config.Replication.SnapshotInterval > 0 {
-		replication.SnapshotInterval = durationpb.New(config.Replication.SnapshotInterval)
-	}
-	replication.SnapshotThreshold = config.Replication.SnapshotThreshold
 
 	return &queuev1.Queue{
 		Name:   config.Name,
@@ -1011,11 +1019,83 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 	}
 }
 
-func applyQueueConfigUpdateFromProto(config *types.QueueConfig, cfg *queuev1.QueueConfig) {
+// errUpdateConfigRequired reports an update carrying no configuration.
+var errUpdateConfigRequired = errors.New("update requires a config; an update without one cannot express a change")
+
+// errReplicationPlacementImmutable reports an update that would move a queue
+// into, out of, or between replication groups.
+var errReplicationPlacementImmutable = errors.New("queue replication placement is fixed at creation; moving a queue between groups is a migration, not a configuration update")
+
+// updatePaths selects the fields an update applies.
+//
+// An empty mask selects everything, which makes an update a full replacement:
+// a field the caller omits takes its zero value rather than being preserved.
+// That is what lets a zero mean what the schema says it means — max_bytes = 0
+// is unlimited, and without this it is indistinguishable from "not set".
+type updatePaths struct {
+	all      bool
+	selected map[string]struct{}
+}
+
+func newUpdatePaths(mask *fieldmaskpb.FieldMask) (updatePaths, error) {
+	if mask == nil || len(mask.Paths) == 0 {
+		return updatePaths{all: true}, nil
+	}
+
+	selected := make(map[string]struct{}, len(mask.Paths))
+	for _, path := range mask.Paths {
+		trimmed := strings.TrimSpace(path)
+		if !knownUpdatePaths[trimmed] {
+			return updatePaths{}, fmt.Errorf("update_mask path %q is not a known field", path)
+		}
+		selected[trimmed] = struct{}{}
+	}
+	return updatePaths{selected: selected}, nil
+}
+
+// knownUpdatePaths is closed rather than open: a path the server does not
+// recognise is a caller expecting a change that would silently not happen.
+var knownUpdatePaths = map[string]bool{
+	"config":                        true,
+	"config.retention":              true,
+	"config.retention.max_age":      true,
+	"config.retention.max_bytes":    true,
+	"config.retention.min_messages": true,
+	"config.max_message_size":       true,
+	"config.replication":            true,
+}
+
+// has reports whether path is selected, either directly or by a prefix.
+func (u updatePaths) has(path string) bool {
+	if u.all {
+		return true
+	}
+	for candidate := path; candidate != ""; candidate = parentPath(candidate) {
+		if _, ok := u.selected[candidate]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func parentPath(path string) string {
+	idx := strings.LastIndex(path, ".")
+	if idx < 0 {
+		return ""
+	}
+	return path[:idx]
+}
+
+// applyQueueConfigCreateFromProto fills in a new queue's configuration. Unlike
+// an update it accepts replication, because placement is chosen exactly once.
+func applyQueueConfigCreateFromProto(config *types.QueueConfig, cfg *queuev1.QueueConfig) {
 	if config == nil || cfg == nil {
 		return
 	}
 
+	// Create overlays a partial config onto the defaults, so an omitted field
+	// means "keep the default" rather than "zero". That is the opposite of an
+	// update, where omission is what lets a zero be stated at all.
 	if cfg.Retention != nil {
 		if cfg.Retention.MaxAge != nil {
 			maxAge := cfg.Retention.MaxAge.AsDuration()
@@ -1023,54 +1103,88 @@ func applyQueueConfigUpdateFromProto(config *types.QueueConfig, cfg *queuev1.Que
 			config.Retention.RetentionTime = maxAge
 		}
 		if cfg.Retention.MaxBytes > 0 {
-			config.Retention.RetentionBytes = int64(cfg.Retention.MaxBytes)
+			config.Retention.RetentionBytes = clampUint64ToInt64(cfg.Retention.MaxBytes)
 		}
 		if cfg.Retention.MinMessages > 0 {
-			config.Retention.RetentionMessages = int64(cfg.Retention.MinMessages)
+			config.Retention.RetentionMessages = clampUint64ToInt64(cfg.Retention.MinMessages)
 		}
 	}
-
 	if cfg.MaxMessageSize > 0 {
 		config.MaxMessageSize = int64(cfg.MaxMessageSize)
 	}
 
 	if cfg.Replication != nil {
-		replication := config.Replication
-		replication.Enabled = cfg.Replication.Enabled
-
-		if cfg.Replication.ReplicationFactor > 0 {
-			replication.ReplicationFactor = int(cfg.Replication.ReplicationFactor)
-		}
-		if cfg.Replication.MinInSyncReplicas > 0 {
-			replication.MinInSyncReplicas = int(cfg.Replication.MinInSyncReplicas)
-		}
-		if cfg.Replication.AckTimeout != nil {
-			replication.AckTimeout = cfg.Replication.AckTimeout.AsDuration()
-		}
-
-		switch cfg.Replication.Mode {
-		case queuev1.ReplicationMode_REPLICATION_MODE_ASYNC:
-			replication.Mode = types.ReplicationAsync
-		case queuev1.ReplicationMode_REPLICATION_MODE_SYNC:
-			replication.Mode = types.ReplicationSync
-		}
-
-		if cfg.Replication.HeartbeatTimeout != nil {
-			replication.HeartbeatTimeout = cfg.Replication.HeartbeatTimeout.AsDuration()
-		}
-		if cfg.Replication.ElectionTimeout != nil {
-			replication.ElectionTimeout = cfg.Replication.ElectionTimeout.AsDuration()
-		}
-		if cfg.Replication.SnapshotInterval != nil {
-			replication.SnapshotInterval = cfg.Replication.SnapshotInterval.AsDuration()
-		}
-		if cfg.Replication.SnapshotThreshold > 0 {
-			replication.SnapshotThreshold = cfg.Replication.SnapshotThreshold
-		}
-		replication.Group = strings.TrimSpace(cfg.Replication.Group)
-
-		config.Replication = replication
+		config.Replication.Enabled = true
+		config.Replication.Group = strings.TrimSpace(cfg.Replication.Group)
 	}
+}
+
+// applyQueueConfigUpdateFromProto applies the settings an update may change.
+func applyQueueConfigUpdateFromProto(config *types.QueueConfig, cfg *queuev1.QueueConfig, paths updatePaths) error {
+	if config == nil {
+		return nil
+	}
+	if cfg == nil {
+		return errUpdateConfigRequired
+	}
+
+	// Placement is fixed at creation. What the caller is asking for is read from
+	// the mask and the message together: selecting config.replication with no
+	// message asks for a local queue exactly as omitting it does under a full
+	// replacement, and both are a migration when the queue is replicated.
+	//
+	// Restating existing placement is accepted. Get returns the replication
+	// message for a replicated queue, so a client that read the queue and is
+	// sending it back must not be refused for repeating what is already true.
+	if paths.has("config.replication") {
+		wantReplicated := cfg.Replication != nil
+		wantGroup := ""
+		if wantReplicated {
+			wantGroup = strings.TrimSpace(cfg.Replication.Group)
+		}
+		if wantReplicated != config.Replication.Enabled || wantGroup != strings.TrimSpace(config.Replication.Group) {
+			return errReplicationPlacementImmutable
+		}
+	}
+
+	applyQueueSettingsFromProto(config, cfg, paths)
+	return nil
+}
+
+func applyQueueSettingsFromProto(config *types.QueueConfig, cfg *queuev1.QueueConfig, paths updatePaths) {
+	if config == nil || cfg == nil {
+		return
+	}
+
+	retention := cfg.Retention
+	if retention == nil {
+		retention = &queuev1.RetentionConfig{}
+	}
+
+	// A selected field is applied whatever its value. Skipping zeros is what
+	// made max_bytes = 0 mean "leave the limit alone" rather than "unlimited",
+	// which is the opposite of what the schema documents.
+	if paths.has("config.retention.max_age") {
+		maxAge := retention.MaxAge.AsDuration()
+		config.MessageTTL = maxAge
+		config.Retention.RetentionTime = maxAge
+	}
+	if paths.has("config.retention.max_bytes") {
+		config.Retention.RetentionBytes = clampUint64ToInt64(retention.MaxBytes)
+	}
+	if paths.has("config.retention.min_messages") {
+		config.Retention.RetentionMessages = clampUint64ToInt64(retention.MinMessages)
+	}
+	if paths.has("config.max_message_size") {
+		config.MaxMessageSize = int64(cfg.MaxMessageSize)
+	}
+}
+
+func clampUint64ToInt64(value uint64) int64 {
+	if value > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(value)
 }
 
 func clampInt64ToUint64(value int64) uint64 {
@@ -1088,27 +1202,6 @@ func clampInt64ToUint32(value int64) uint32 {
 		return math.MaxUint32
 	}
 	return uint32(value)
-}
-
-func clampIntToUint32(value int) uint32 {
-	if value <= 0 {
-		return 0
-	}
-	if value > math.MaxUint32 {
-		return math.MaxUint32
-	}
-	return uint32(value)
-}
-
-func replicationModeToProto(mode types.ReplicationMode) queuev1.ReplicationMode {
-	switch mode {
-	case types.ReplicationAsync:
-		return queuev1.ReplicationMode_REPLICATION_MODE_ASYNC
-	case types.ReplicationSync:
-		fallthrough
-	default:
-		return queuev1.ReplicationMode_REPLICATION_MODE_SYNC
-	}
 }
 
 func (h *Handler) messageToProto(msg *coremessage.Envelope) *queuev1.Message {

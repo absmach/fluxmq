@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,6 +34,7 @@ const (
 	testConsumer2     = "consumer-2"
 	testGroupWorkers  = "workers"
 	testQueueJobs     = "jobs"
+	testQueueOrders   = "orders"
 	testQueueEvents   = "events"
 	testQueuePrimary  = "primary"
 )
@@ -286,14 +289,14 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	store := memlog.New()
 	h := NewHandler(nil, store, nil, nil)
 
-	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
 	if err := store.CreateQueue(ctx, cfg); err != nil {
 		t.Fatalf("create queue: %v", err)
 	}
 
 	retention := 2 * time.Hour
 	updateResp, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
-		Name: "orders",
+		Name: testQueueOrders,
 		Config: &queuev1.QueueConfig{
 			Retention: &queuev1.RetentionConfig{
 				MaxAge:      durationpb.New(retention),
@@ -301,21 +304,13 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 				MinMessages: 10,
 			},
 			MaxMessageSize: 4096,
-			Replication: &queuev1.ReplicationConfig{
-				Enabled:           true,
-				ReplicationFactor: 3,
-				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_ASYNC,
-				MinInSyncReplicas: 2,
-				AckTimeout:        durationpb.New(2 * time.Second),
-				Group:             testGroupHotPath,
-			},
 		},
 	}))
 	if err != nil {
 		t.Fatalf("update queue: %v", err)
 	}
 
-	updated, err := store.GetQueue(ctx, "orders")
+	updated, err := store.GetQueue(ctx, testQueueOrders)
 	if err != nil {
 		t.Fatalf("read updated queue: %v", err)
 	}
@@ -335,36 +330,123 @@ func TestUpdateQueueAppliesConfig(t *testing.T) {
 	if updated.MaxMessageSize != 4096 {
 		t.Fatalf("unexpected max message size: got %d", updated.MaxMessageSize)
 	}
-	if !updated.Replication.Enabled {
-		t.Fatalf("expected replication enabled")
-	}
-	if updated.Replication.ReplicationFactor != 3 {
-		t.Fatalf("unexpected replication factor: got %d", updated.Replication.ReplicationFactor)
-	}
-	if updated.Replication.Mode != types.ReplicationAsync {
-		t.Fatalf("unexpected replication mode: got %s", updated.Replication.Mode)
-	}
-	if updated.Replication.MinInSyncReplicas != 2 {
-		t.Fatalf("unexpected min ISR: got %d", updated.Replication.MinInSyncReplicas)
-	}
-	if updated.Replication.AckTimeout != 2*time.Second {
-		t.Fatalf("unexpected ack timeout: got %s", updated.Replication.AckTimeout)
-	}
-	if updated.Replication.Group != testGroupHotPath {
-		t.Fatalf("unexpected replication group: got %q", updated.Replication.Group)
+	// Placement is not touched by an ordinary update; that it stayed local is
+	// asserted by TestUpdateQueueRefusesReplicationPlacement.
+	if updated.Replication.Enabled {
+		t.Fatalf("an update without replication must leave the queue local")
 	}
 
 	if got := updateResp.Msg.Config.GetRetention().GetMaxAge().AsDuration(); got != retention {
 		t.Fatalf("response retention mismatch: got %v want %v", got, retention)
 	}
-	if got := updateResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
-		t.Fatalf("expected replication in response")
+}
+
+// Moving a queue into, out of, or between replication groups relocates its
+// records and offsets. The previous shape assigned enabled and group
+// unconditionally, so an update meaning to change one unrelated setting could
+// disable replication and move the queue to the default group with it.
+// Get returns the replication message for a replicated queue, so a client that
+// reads a queue, changes retention and sends the config back must not be refused
+// for restating placement it did not touch. Only an actual move is a migration.
+func TestUpdateQueueAcceptsUnchangedReplicationPlacement(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	store := memlog.New()
+	h := NewHandler(nil, store, noopGroupStore{}, nil)
+
+	cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
+	cfg.Replication.Enabled = true
+	cfg.Replication.Group = testGroupHotPath
+	if err := store.CreateQueue(ctx, cfg); err != nil {
+		t.Fatalf("create queue: %v", err)
 	}
-	if got := updateResp.Msg.Config.GetReplication().GetMode(); got != queuev1.ReplicationMode_REPLICATION_MODE_ASYNC {
-		t.Fatalf("response replication mode mismatch: got %v", got)
+
+	readBack, err := h.GetQueue(ctx, connect.NewRequest(&queuev1.GetQueueRequest{Name: testQueueOrders}))
+	if err != nil {
+		t.Fatalf("get queue: %v", err)
 	}
-	if got := updateResp.Msg.Config.GetReplication().GetGroup(); got != testGroupHotPath {
-		t.Fatalf("response replication group mismatch: got %q", got)
+
+	// Exactly what a read-modify-write client sends: the config it was given,
+	// with one unrelated field changed.
+	config := readBack.Msg.Config
+	config.Retention.MaxAge = durationpb.New(3 * time.Hour)
+
+	if _, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
+		Name:   testQueueOrders,
+		Config: config,
+	})); err != nil {
+		t.Fatalf("round-tripping a replicated queue must be accepted: %v", err)
+	}
+
+	updated, err := store.GetQueue(ctx, testQueueOrders)
+	if err != nil {
+		t.Fatalf("read updated queue: %v", err)
+	}
+	if updated.Retention.RetentionTime != 3*time.Hour {
+		t.Fatalf("unexpected retention: %v", updated.Retention.RetentionTime)
+	}
+	if !updated.Replication.Enabled || updated.Replication.Group != testGroupHotPath {
+		t.Fatalf("placement must be unchanged: %+v", updated.Replication)
+	}
+}
+
+// Moving a queue into, out of, or between replication groups relocates its
+// records and offsets, so it is refused. The request is well formed and
+// conflicts with current state, which makes it a failed precondition.
+func TestUpdateQueueRefusesReplicationPlacementChange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		replicate bool
+		group     string
+		request   *queuev1.ReplicationConfig
+	}{
+		{
+			name:    "local to replicated",
+			request: &queuev1.ReplicationConfig{Group: testGroupHotPath},
+		},
+		{
+			name:      "replicated to another group",
+			replicate: true,
+			group:     testGroupHotPath,
+			request:   &queuev1.ReplicationConfig{Group: testGroupJobsRaft},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := memlog.New()
+			h := NewHandler(nil, store, noopGroupStore{}, nil)
+
+			cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
+			cfg.Replication.Enabled = tc.replicate
+			cfg.Replication.Group = tc.group
+			if err := store.CreateQueue(ctx, cfg); err != nil {
+				t.Fatalf("create queue: %v", err)
+			}
+
+			_, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
+				Name:   testQueueOrders,
+				Config: &queuev1.QueueConfig{Replication: tc.request},
+			}))
+			if err == nil {
+				t.Fatal("expected a placement change to be refused")
+			}
+			if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+				t.Fatalf("error code = %v, want FailedPrecondition", got)
+			}
+
+			stored, err := store.GetQueue(ctx, testQueueOrders)
+			if err != nil {
+				t.Fatalf("read queue: %v", err)
+			}
+			if stored.Replication.Enabled != tc.replicate || strings.TrimSpace(stored.Replication.Group) != tc.group {
+				t.Fatalf("a refused update must not change placement: %+v", stored.Replication)
+			}
+		})
 	}
 }
 
@@ -427,14 +509,7 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 		Name:   testQueueJobs,
 		Topics: []string{"$queue/jobs/#"},
 		Config: &queuev1.QueueConfig{
-			Replication: &queuev1.ReplicationConfig{
-				Enabled:           true,
-				ReplicationFactor: 5,
-				Mode:              queuev1.ReplicationMode_REPLICATION_MODE_SYNC,
-				MinInSyncReplicas: 3,
-				AckTimeout:        durationpb.New(4 * time.Second),
-				Group:             testGroupJobsRaft,
-			},
+			Replication: &queuev1.ReplicationConfig{Group: testGroupJobsRaft},
 		},
 	}))
 	if err != nil {
@@ -446,30 +521,17 @@ func TestCreateQueueAppliesReplicationConfig(t *testing.T) {
 		t.Fatalf("get queue: %v", err)
 	}
 
+	// Presence of the message is what marks the queue replicated; the group is
+	// the only thing it states.
 	if !stored.Replication.Enabled {
 		t.Fatalf("expected replication enabled")
-	}
-	if stored.Replication.ReplicationFactor != 5 {
-		t.Fatalf("unexpected replication factor: %d", stored.Replication.ReplicationFactor)
-	}
-	if stored.Replication.Mode != types.ReplicationSync {
-		t.Fatalf("unexpected replication mode: %s", stored.Replication.Mode)
-	}
-	if stored.Replication.MinInSyncReplicas != 3 {
-		t.Fatalf("unexpected min ISR: %d", stored.Replication.MinInSyncReplicas)
-	}
-	if stored.Replication.AckTimeout != 4*time.Second {
-		t.Fatalf("unexpected ack timeout: %s", stored.Replication.AckTimeout)
 	}
 	if stored.Replication.Group != testGroupJobsRaft {
 		t.Fatalf("unexpected replication group: %q", stored.Replication.Group)
 	}
 
-	if got := createResp.Msg.Config.GetReplication(); got == nil || !got.Enabled {
-		t.Fatalf("expected replication in create response")
-	}
-	if got := createResp.Msg.Config.GetReplication().GetReplicationFactor(); got != 5 {
-		t.Fatalf("unexpected response replication factor: %d", got)
+	if got := createResp.Msg.Config.GetReplication(); got == nil {
+		t.Fatal("expected replication in create response")
 	}
 	if got := createResp.Msg.Config.GetReplication().GetGroup(); got != testGroupJobsRaft {
 		t.Fatalf("unexpected response replication group: %q", got)
@@ -485,7 +547,7 @@ func TestHeartbeatUsesManagerPath(t *testing.T) {
 	manager := queuepkg.NewManager(queueStore, groupStore, nil, queuepkg.DefaultConfig(), nil, nil)
 	h := NewHandler(manager, nil, nil, nil)
 
-	cfg := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
 	if err := manager.CreateQueue(ctx, cfg); err != nil {
 		t.Fatalf("create queue: %v", err)
 	}
@@ -830,6 +892,163 @@ func TestQueueMutationErrorCodes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := newConnectError(queuepkg.ErrorCodeInternal, tt.err).Code(); got != tt.want {
 				t.Fatalf("newConnectError code = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// max_bytes = 0 is documented as unlimited, so an update that selects it has to
+// apply the zero. Skipping zeros made the documented way to say "unlimited" the
+// one value that meant "leave the limit alone".
+func TestUpdateQueueMaskAppliesZeroValues(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	store := memlog.New()
+	h := NewHandler(nil, store, noopGroupStore{}, nil)
+
+	cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
+	cfg.Retention.RetentionBytes = 4096
+	cfg.Retention.RetentionMessages = 100
+	if err := store.CreateQueue(ctx, cfg); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	if _, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
+		Name:       testQueueOrders,
+		Config:     &queuev1.QueueConfig{Retention: &queuev1.RetentionConfig{MaxBytes: 0}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"config.retention.max_bytes"}},
+	})); err != nil {
+		t.Fatalf("update queue: %v", err)
+	}
+
+	updated, err := store.GetQueue(ctx, testQueueOrders)
+	if err != nil {
+		t.Fatalf("read queue: %v", err)
+	}
+	if updated.Retention.RetentionBytes != 0 {
+		t.Fatalf("max_bytes = 0 must clear the limit, got %d", updated.Retention.RetentionBytes)
+	}
+	if updated.Retention.RetentionMessages != 100 {
+		t.Fatalf("a field outside the mask must be preserved, got %d", updated.Retention.RetentionMessages)
+	}
+}
+
+// Omitting replication under a full replacement, and naming it in the mask with
+// no message, are the same request: make this queue local. Both are a migration
+// on a replicated queue.
+func TestUpdateQueueRefusesImplicitAndExplicitLocalisation(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]*queuev1.UpdateQueueRequest{
+		"omitted under full replacement": {
+			Name:   testQueueOrders,
+			Config: &queuev1.QueueConfig{MaxMessageSize: 4096},
+		},
+		"named in mask with no message": {
+			Name:       testQueueOrders,
+			Config:     &queuev1.QueueConfig{},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"config.replication"}},
+		},
+	}
+
+	for name, req := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := memlog.New()
+			h := NewHandler(nil, store, noopGroupStore{}, nil)
+
+			cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
+			cfg.Replication.Enabled = true
+			cfg.Replication.Group = testGroupHotPath
+			if err := store.CreateQueue(ctx, cfg); err != nil {
+				t.Fatalf("create queue: %v", err)
+			}
+
+			_, err := h.UpdateQueue(ctx, connect.NewRequest(req))
+			if err == nil {
+				t.Fatal("expected localising a replicated queue to be refused")
+			}
+			if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+				t.Fatalf("error code = %v, want FailedPrecondition", got)
+			}
+
+			stored, err := store.GetQueue(ctx, testQueueOrders)
+			if err != nil {
+				t.Fatalf("read queue: %v", err)
+			}
+			if !stored.Replication.Enabled {
+				t.Fatal("a refused update must not localise the queue")
+			}
+		})
+	}
+}
+
+// A mask naming a field the server does not know is a caller expecting a change
+// that would silently not happen.
+func TestUpdateQueueRejectsUnknownMaskPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	store := memlog.New()
+	h := NewHandler(nil, store, noopGroupStore{}, nil)
+	if err := store.CreateQueue(ctx, types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	_, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
+		Name:       testQueueOrders,
+		Config:     &queuev1.QueueConfig{},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"config.retention.max_octets"}},
+	}))
+	if err == nil {
+		t.Fatal("expected an unknown mask path to be rejected")
+	}
+	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Fatalf("error code = %v, want InvalidArgument", got)
+	}
+}
+
+// An update carrying no config cannot be a no-op: without a mask it asks for a
+// full replacement, and with one it names paths whose values are not there.
+// Accepting it reported success while changing nothing.
+func TestUpdateQueueRequiresConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]*fieldmaskpb.FieldMask{
+		"no mask":            nil,
+		"mask naming a path": {Paths: []string{"config.retention.max_bytes"}},
+	}
+
+	for name, mask := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := memlog.New()
+			h := NewHandler(nil, store, noopGroupStore{}, nil)
+
+			cfg := types.DefaultQueueConfig(testQueueOrders, "$queue/orders/#")
+			cfg.Retention.RetentionBytes = 4096
+			if err := store.CreateQueue(ctx, cfg); err != nil {
+				t.Fatalf("create queue: %v", err)
+			}
+
+			_, err := h.UpdateQueue(ctx, connect.NewRequest(&queuev1.UpdateQueueRequest{
+				Name:       testQueueOrders,
+				UpdateMask: mask,
+			}))
+			if err == nil {
+				t.Fatal("expected an update without a config to be rejected")
+			}
+			if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+				t.Fatalf("error code = %v, want InvalidArgument", got)
+			}
+
+			stored, err := store.GetQueue(ctx, testQueueOrders)
+			if err != nil {
+				t.Fatalf("read queue: %v", err)
+			}
+			if stored.Retention.RetentionBytes != 4096 {
+				t.Fatalf("a rejected update must not change the queue, got %d", stored.Retention.RetentionBytes)
 			}
 		})
 	}
