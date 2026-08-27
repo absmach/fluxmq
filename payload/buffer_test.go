@@ -16,20 +16,36 @@ func TestBufferReferenceLifetime(t *testing.T) {
 	buf := pool.FromBytes([]byte("payload"))
 	buf.Retain()
 
+	doubleReleasesBefore := DoubleReleaseCount()
+
+	// The retaining holder still owns a reference, so the payload has to survive
+	// the first release intact.
 	buf.Release()
 	if got := string(buf.Bytes()); got != "payload" {
 		t.Fatalf("payload after first release = %q", got)
 	}
-	buf.Release()
 
-	// sync.Pool promises reuse, not identity: which buffer comes back is the
-	// runtime's decision, and it may drop the lot at any GC. What is
-	// observable, and what matters, is that the release reached the pool
-	// instead of dropping the buffer on the floor.
-	reused := pool.get(len("payload"))
-	defer reused.Release()
-	if pool.Stats().SmallHits == 0 {
-		t.Fatal("released buffer was not returned to its size-class pool")
+	// The second release balances the retain. It hands the buffer back; what is
+	// observable is that it was not counted as releasing an unowned buffer.
+	buf.Release()
+	if got := DoubleReleaseCount(); got != doubleReleasesBefore {
+		t.Fatalf("balanced retain/release counted %d double releases, want none", got-doubleReleasesBefore)
+	}
+}
+
+// Releasing a buffer nobody owns any more is the ownership bug the counter
+// exists to surface, so the balanced case above is only meaningful if the
+// unbalanced one is actually counted.
+func TestBufferOverReleaseIsCounted(t *testing.T) {
+	pool := NewPool()
+	buf := pool.FromBytes([]byte("payload"))
+
+	buf.Release()
+	before := DoubleReleaseCount()
+
+	buf.Release()
+	if got := DoubleReleaseCount(); got != before+1 {
+		t.Fatalf("double release count = %d, want %d", got, before+1)
 	}
 }
 
