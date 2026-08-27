@@ -232,11 +232,15 @@ func TestReplicatedQueueConfigurationFailsClosed(t *testing.T) {
 			wantError: "must match raft group factor",
 		},
 		{
-			name: "valid replicated queue",
+			// Every rule above still reports its own error; this is the case
+			// that reaches the end, where the release refuses the feature
+			// itself rather than anything about how it was configured.
+			name: "otherwise valid replicated queue is refused",
 			configure: func(c *Config) {
 				configureRaft(c)
 				enableQueueReplication(c)
 			},
+			wantError: "queue raft replication is not available in this release",
 		},
 	}
 
@@ -363,7 +367,11 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "valid raft groups config",
+			// The group configuration itself is still validated, so a
+			// configuration written for a release that ships replication is
+			// told what is wrong with it. Turning the feature on is what this
+			// release refuses.
+			name: "otherwise valid raft groups config is refused",
 			modify: func(c *Config) {
 				enableInsecureTestCluster(c)
 				c.Cluster.Raft.Enabled = true
@@ -380,7 +388,7 @@ func TestValidate(t *testing.T) {
 					},
 				}
 			},
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "invalid raft group missing bind addr",

@@ -56,7 +56,8 @@ merely undocumented gets depended on anyway, and the configuration bullet above
 would otherwise read as freezing every key the schema accepts.
 
 - The HTTP-MQTT and CoAP bridges.
-- Queue Raft replication, which is disabled by default and covers:
+- Queue Raft replication, which this release does not ship at all —
+  `cluster.raft.enabled: true` is refused at startup — and which covers:
   - the `cluster.raft` configuration subtree — `auto_provision_groups`,
     `replication_factor`, `sync_mode`, `min_in_sync_replicas`, `ack_timeout`,
     `write_policy`, `distribution_mode`, `bind_addr`, `data_dir`, `peers`, the

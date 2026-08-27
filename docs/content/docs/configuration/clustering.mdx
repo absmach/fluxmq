@@ -63,7 +63,13 @@ cluster:
 
 ## Raft (Queue Replication)
 
-Raft affects durable queues only. If `cluster.raft.enabled` is true, FluxMQ starts one or more Raft replication groups. Queues can be assigned to a specific group (sharding), otherwise they use the default group.
+Raft affects durable queues only.
+
+> **Not available in this release.** `cluster.raft.enabled: true` is refused at
+> startup in FluxMQ 1.0. The keys parse so a configuration prepared for a later
+> release still loads; the rest of this section describes the reserved shape.
+
+If `cluster.raft.enabled` is true, FluxMQ starts one or more Raft replication groups. Queues can be assigned to a specific group (sharding), otherwise they use the default group.
 
 Two settings determine cluster queue behavior:
 

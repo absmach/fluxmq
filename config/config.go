@@ -1361,6 +1361,11 @@ func Default() *Config {
 	}
 }
 
+// ErrRaftUnavailable reports a configuration that turns on queue Raft
+// replication, which this release does not ship. The feature is documented as
+// experimental and its configuration is accepted but inert.
+var ErrRaftUnavailable = errors.New("queue raft replication is not available in this release")
+
 // ErrConfigNotFound reports a config file that was named but does not exist.
 // Callers that genuinely want defaults on a missing file use LoadOptional.
 var ErrConfigNotFound = errors.New("config file not found")
@@ -2269,6 +2274,25 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("queues[%d].replication.ack_timeout must be > 0", i)
 			}
 		}
+	}
+
+	// Queue Raft replication is not available in this release.
+	//
+	// The refusal comes last so every other rule still reports first: a
+	// configuration written for a release that ships replication is told what is
+	// actually wrong with it, and only an otherwise valid one is turned away for
+	// the feature being unavailable.
+	//
+	// Refusing rather than warning is deliberate. The implementation is reachable
+	// through this one flag and is not yet safe to reach: a follower installing a
+	// snapshot can lose queue state it already holds, and enabling replication on
+	// a queue that already has records has no migration path.
+	//
+	// The keys still parse. That is what leaves the schema forward-compatible
+	// under strict decoding, so a configuration prepared for a later release
+	// loads here and fails only on the attempt to turn the feature on.
+	if c.Cluster.Raft.Enabled {
+		return fmt.Errorf("%w: set cluster.raft.enabled to false", ErrRaftUnavailable)
 	}
 
 	return nil

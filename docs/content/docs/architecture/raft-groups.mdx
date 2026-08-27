@@ -7,6 +7,12 @@ description: How queues map to Raft groups, what guarantees you get, and how to 
 
 **Last Updated:** 12th February 2026
 
+> **Not available in this release.** Queue Raft replication is not shipped in
+> FluxMQ 1.0. The configuration keys below still parse, so a file prepared for a
+> later release loads, but setting `cluster.raft.enabled: true` is refused at
+> startup. This page describes the intended shape of the feature and the
+> configuration reserved for it.
+
 FluxMQ can replicate durable and stream queues using Raft. Replication is not “one big cluster toggle” for all queues. Instead, each queue can be assigned to a **replication group**.
 
 A replication group is a shard: an independent Raft domain with its own leader election, log, snapshots, and timing knobs.

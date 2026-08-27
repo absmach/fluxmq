@@ -915,8 +915,12 @@ queues:
 		assert.Contains(t, err.Error(), "cannot be fsync when replication is enabled")
 	})
 
-	t.Run("replicated queue can override fsync default to buffered", func(t *testing.T) {
-		cfg, err := Load(write(t, `
+	// There is no longer a configuration path to a running replicated queue, so
+	// what this pins is the refusal rather than the durability override. The
+	// override rule itself is enforced in queue/control.go, where it is reached
+	// by callers that construct a queue config directly.
+	t.Run("replicated queue is refused while replication is unavailable", func(t *testing.T) {
+		_, err := Load(write(t, `
 storage:
   queue_ack_durability: fsync
 cluster:
@@ -941,7 +945,53 @@ queues:
       min_in_sync_replicas: 2
       ack_timeout: "5s"
 `))
-		require.NoError(t, err)
-		assert.Equal(t, QueueAckDurabilityBuffered, cfg.Queues[0].AckDurability)
+		require.ErrorIs(t, err, ErrRaftUnavailable)
+	})
+}
+
+// The keys have to keep parsing even though the feature does not run. Strict
+// decoding rejects an unknown key outright, so removing them would mean a
+// configuration prepared for a release that ships replication could not be
+// loaded at all — it has to load, and fail only on the attempt to turn the
+// feature on.
+func TestRaftKeysParseWhileReplicationIsUnavailable(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
+	}
+
+	raftYAML := `
+cluster:
+  enabled: true
+  allow_insecure: true
+  etcd:
+    initial_cluster: "broker-1=http://127.0.0.1:2380"
+  raft:
+    enabled: %t
+    write_policy: forward
+    bind_addr: "127.0.0.1:7100"
+    data_dir: "/tmp/fluxmq/raft"
+    replication_factor: 3
+    min_in_sync_replicas: 2
+    sync_mode: true
+    ack_timeout: "5s"
+    peers:
+      broker-2: "127.0.0.1:7101"
+      broker-3: "127.0.0.1:7102"
+`
+
+	t.Run("disabled loads", func(t *testing.T) {
+		cfg, err := Load(write(t, fmt.Sprintf(raftYAML, false)))
+		require.NoError(t, err, "raft keys must remain decodable")
+		assert.False(t, cfg.Cluster.Raft.Enabled)
+		assert.Equal(t, "127.0.0.1:7100", cfg.Cluster.Raft.BindAddr,
+			"the values must survive decoding so a later release can use them")
+	})
+
+	t.Run("enabled is refused", func(t *testing.T) {
+		_, err := Load(write(t, fmt.Sprintf(raftYAML, true)))
+		require.ErrorIs(t, err, ErrRaftUnavailable)
 	})
 }
