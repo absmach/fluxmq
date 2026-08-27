@@ -166,14 +166,6 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		return err
 	}
 
-	if !s.CanUseExternalIdentity(externalID, boundMTLS) {
-		h.broker.telemetry.stats.IncrementAuthErrors()
-		sendV5ConnAck(conn, false, v5.ConnAckNotAuthorized, nil) //nolint:errcheck // best-effort rejection reply before closing
-		conn.Close()
-		return ErrNotAuthorized
-	}
-	s.SetExternalIdentity(externalID)
-
 	// Apply the negotiated options and take over any existing connection. On a
 	// persistent reconnect this replaces the previous connection's version,
 	// keep-alive, Will, Receive Maximum, and topic-alias maximum.

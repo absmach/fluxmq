@@ -153,7 +153,11 @@ auth:
 #    client_auth: "require"
 #
 # 3. Clients connect using:
-#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -t test -m "hello"
+#    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -u entity-id -P api-key -t test -m "hello"
+#
+#    The auth callout below covers every MQTT listener, not only the mTLS one,
+#    so the TLS listener authenticates with credentials too. Only the mTLS
+#    listener additionally binds the identity to the client certificate.
 #
 # 4. For mutual TLS (mTLS), the username must resolve to the identity in the
 #    verified certificate CN and the password must pass external authentication:

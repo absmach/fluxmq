@@ -491,6 +491,48 @@ There is no prefix removal or configurable template. If authentication returns
 external identity `345b23ea-3263-4592-bb60-b49df57aa5ac`, the certificate CN
 must be exactly `345b23ea-3263-4592-bb60-b49df57aa5ac`.
 
+`client_auth` is checked by effective TLS mode, not by spelling. `require`,
+`require_and_verify`, `require-and-verify`, and `requireandverify` all select
+`RequireAndVerifyClientCert`, as does leaving it unset when `ca_file` is
+present. Modes that do not verify the peer, such as `require_any` and
+`verify_if_given`, are refused on an MQTT `mtls` listener.
+
+### The binding is enforced per listener
+
+The certificate factor is applied where the certificate is verified. Enabling
+an MQTT `mtls` listener turns on `auth.external` for MQTT as a whole, so every
+other MQTT listener that is enabled at the same time authenticates the same
+principals with credentials alone. A principal required to present a
+certificate on `server.mqtt.tcp.mtls` can still reach the broker over
+`server.mqtt.tcp.v5` if that listener is also configured. The broker logs a
+warning naming those listeners at startup. Where the certificate must be
+mandatory, expose only the `mtls` listeners, or keep the others on a network
+the clients in question cannot reach.
+
+### Sessions and identity
+
+The resolved identity is stored on the session. A persistent session bound to
+one principal refuses a reconnect that resolves the same client ID to another
+principal, including a reconnect arriving on a different listener and a
+cross-node takeover. Clean Start establishes a session for another principal
+deliberately and behaves the same on every node.
+
+A session persisted before its client had a resolved identity is bound to no
+principal. Reconnecting to it over a plain or TLS listener adopts it. An mTLS
+connection instead discards it and starts fresh, logging
+`mqtt_unbound_session_discarded`: inheriting subscriptions made before the
+identity was bound would hand them to the certificate-bound principal, and
+refusing the connect would lock a client out of its own client ID. This holds
+wherever the session is: in memory on this node, in local storage, or on the
+node that currently owns it.
+
+In a cluster the node that owns a session checks the identity before it hands
+any state over, so a refused takeover leaves the owner's session connected and
+untouched. That check refuses only a session bound to a different principal.
+Whether an unbound session may be adopted is the arriving node's decision, made
+after the transfer, because that is the node that knows which listener the
+CONNECT arrived on.
+
 ## Inter-Broker TLS
 
 ```yaml

@@ -160,7 +160,7 @@ surrounding whitespace. Any other value is a hook error.
 | `qos`         | Supported for MQTT subscribe QoS. Do not mutate publish QoS; MQTT rejects publish QoS changes.                                                   |
 | `retain`      | Publish-only mutation for protocols with retained-message semantics.                                                                             |
 | `properties`  | Merged into the current message properties map. Existing keys can be overwritten; broker-reserved origin keys may be reset by protocol handlers. |
-| `external_id` | `auth_on_register` may set or override the session external identity.                                                                            |
+| `external_id` | `auth_on_register` may set or override the session external identity, except on an MQTT mTLS listener (see below).                               |
 | `reason_code` | Optional machine-readable reason for denials or errors.                                                                                          |
 | `reason`      | Optional human-readable reason for denials or logs.                                                                                              |
 
@@ -168,6 +168,14 @@ The response schema is shared across protocols, but every protocol applies only
 the fields that are safe for its state machine. For example, MQTT publish topic
 mutations are revalidated before publish, and MQTT publish QoS mutations are
 rejected because they would desynchronize packet acknowledgments.
+
+On an MQTT mTLS listener, `auth_on_register` may not rewrite `external_id`. The
+identity there is bound to the verified client certificate, so a hook that
+returns a different one would undo the binding the listener exists to enforce.
+Such a rewrite fails the CONNECT rather than being applied, and is logged as
+`mqtt_mtls_register_identity_rewrite_rejected`. A hook may still deny the
+registration on those listeners, and may still rewrite the identity on every
+other listener.
 
 ## Auth Interaction
 

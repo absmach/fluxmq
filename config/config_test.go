@@ -717,6 +717,25 @@ func TestMQTTMTLSTwoFactorValidation(t *testing.T) {
 				require.ErrorContains(t, cfg.Validate(), "requires auth.external with mqtt enabled")
 			})
 
+			t.Run("equivalent client auth spellings accepted", func(t *testing.T) {
+				for _, mode := range []string{"require", "require_and_verify", "require-and-verify", "requireandverify", ""} {
+					name := mode
+					if name == "" {
+						name = "unset with client CA"
+					}
+					t.Run(name, func(t *testing.T) {
+						cfg := Default()
+						configure(cfg, websocket)
+						if websocket {
+							cfg.Server.MQTT.WebSocket.MTLS.TLS.ClientAuth = mode
+						} else {
+							cfg.Server.MQTT.TCP.MTLS.TLS.ClientAuth = mode
+						}
+						require.NoError(t, cfg.Validate())
+					})
+				}
+			})
+
 			t.Run("weak client auth rejected", func(t *testing.T) {
 				cfg := Default()
 				configure(cfg, websocket)
@@ -725,7 +744,7 @@ func TestMQTTMTLSTwoFactorValidation(t *testing.T) {
 				} else {
 					cfg.Server.MQTT.TCP.MTLS.TLS.ClientAuth = "verify_if_given"
 				}
-				require.ErrorContains(t, cfg.Validate(), "client_auth must be \"require\"")
+				require.ErrorContains(t, cfg.Validate(), "client_auth must verify the client certificate")
 			})
 		})
 	}

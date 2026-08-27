@@ -141,14 +141,6 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		return err
 	}
 
-	if !s.CanUseExternalIdentity(externalID, boundMTLS) {
-		h.broker.telemetry.stats.IncrementAuthErrors()
-		sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
-		conn.Close()
-		return ErrNotAuthorized
-	}
-	s.SetExternalIdentity(externalID)
-
 	// Apply the negotiated options and take over any existing connection. v3
 	// has no session expiry, Receive Maximum, or topic aliases.
 	// The maximum QoS in force when the connection is accepted is applied with

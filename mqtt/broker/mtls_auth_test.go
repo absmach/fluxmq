@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
+	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/require"
 )
@@ -75,7 +77,7 @@ func runMTLSConnect(t *testing.T, b *Broker, version int, ctx context.Context, c
 
 func TestMQTTMTLSTwoFactorConnect(t *testing.T) {
 	for _, version := range []int{4, 5} {
-		t.Run(string(rune('0'+version)), func(t *testing.T) {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			tests := []struct {
 				name          string
 				certificate   string
@@ -257,4 +259,35 @@ func TestMQTTPlainCleanStartCanEstablishDifferentIdentity(t *testing.T) {
 	err = runMTLSConnect(t, b, 5, context.Background(), "persistent-client", mtlsEntityB, mtlsAPIKey, true, true, true)
 	require.True(t, err == nil || errors.Is(err, io.EOF), "unexpected connect error: %v", err)
 	require.Equal(t, mtlsEntityB, b.Get("persistent-client").ExternalIdentity())
+}
+
+func TestMQTTMTLSResumesClientIDWithLegacyUnboundSession(t *testing.T) {
+	// A session persisted before identities were resolved is bound to no
+	// principal. An mTLS client must neither inherit it nor be locked out of
+	// its own client ID by it.
+	store := memory.New()
+	require.NoError(t, store.Sessions().Save(&storage.Session{
+		ClientID:       "legacy-client",
+		Version:        5,
+		ExpiryInterval: 300,
+	}))
+	require.NoError(t, store.Subscriptions().Add(&storage.Subscription{
+		ClientID: "legacy-client",
+		Filter:   "legacy/topic",
+		QoS:      1,
+	}))
+
+	b := NewBroker(store, nil)
+	defer b.Close()
+	b.SetAuthEngine(corebroker.NewAuthEngine(&externalIDAuthenticator{
+		result: &corebroker.AuthnResult{Authenticated: true, ID: mtlsEntityA},
+	}, nil))
+
+	err := runMTLSConnect(t, b, 5, mqttMTLSContext(t, mtlsEntityA), "legacy-client", mtlsEntityA, mtlsAPIKey, true, true, false)
+	require.True(t, err == nil || errors.Is(err, io.EOF), "unexpected connect error: %v", err)
+
+	s := b.Get("legacy-client")
+	require.NotNil(t, s)
+	require.Equal(t, mtlsEntityA, s.ExternalIdentity())
+	require.Empty(t, s.GetSubscriptions(), "subscriptions made before binding must not be inherited")
 }

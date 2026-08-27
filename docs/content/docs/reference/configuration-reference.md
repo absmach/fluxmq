@@ -179,10 +179,13 @@ TLS fields are shared across `tls`, `mtls`, `dtls`, and `mdtls` blocks via `pkg/
 - `cipher_suites`, `prefer_server_cipher_suites`
 - `ocsp`, `crl` (advanced verification)
 
-For MQTT, an enabled `mtls` listener additionally requires
-`client_auth: require`, `auth.external` with MQTT enabled, and successful
-certificate identity binding. Other protocols retain their existing mTLS
-authentication behavior.
+For MQTT, an enabled `mtls` listener additionally requires a `client_auth`
+value that verifies the client certificate (`require` and its equivalent
+spellings, or unset with a `ca_file`), `auth.external` with MQTT enabled, and
+successful certificate identity binding. Enabling it turns on external MQTT
+authentication for every MQTT listener, and the certificate factor itself is
+enforced only on the `mtls` listeners. Other protocols retain their existing
+mTLS authentication behavior.
 
 ## Broker
 

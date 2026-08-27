@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	errMQTTCredentialsRejected = errors.New("MQTT credentials rejected")
-	errMQTTTwoFactorRejected   = errors.New("MQTT mTLS two-factor authentication rejected")
+	errMQTTCredentialsRejected  = errors.New("MQTT credentials rejected")
+	errMQTTTwoFactorRejected    = errors.New("MQTT mTLS two-factor authentication rejected")
+	errMQTTRegisterHookRejected = errors.New("MQTT registration rejected by hook")
 )
 
 type mqttConnectCredentials struct {
@@ -62,7 +63,7 @@ func (b *Broker) authenticateMQTTConnect(ctx context.Context, credentials mqttCo
 		Password:   credentials.password,
 	})
 	if !ok {
-		return "", boundMTLS, errMQTTTwoFactorRejected
+		return "", boundMTLS, errMQTTRegisterHookRejected
 	}
 	if boundMTLS && hookReq.ExternalID != externalID {
 		b.telemetry.logger.Warn("mqtt_mtls_register_identity_rewrite_rejected",

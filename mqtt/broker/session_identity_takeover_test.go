@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	corebroker "github.com/absmach/fluxmq/broker"
@@ -92,7 +93,7 @@ func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 
 func TestMQTTMTLSClusterTakeoverPropagatesIdentityGuard(t *testing.T) {
 	for _, version := range []int{4, 5} {
-		t.Run(string(rune('0'+version)), func(t *testing.T) {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			cl := &identityRejectingCluster{}
 			b := NewBroker(memory.New(), cl)
 			t.Cleanup(func() { require.NoError(t, b.Close()) })

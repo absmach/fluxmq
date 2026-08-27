@@ -54,9 +54,13 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	// stranded on a node that never finished creating it. Reading the outcome
 	// from the returned error rather than from a second flag means every early
 	// return is covered without having to remember to mark one.
+	// keepOwnership marks the one failure that must not hand ownership back:
+	// a migrated session this CONNECT was not authorized to use still lives on
+	// this node, and its real owner has to be able to find it here.
 	ownershipAcquired := false
+	keepOwnership := false
 	defer func() {
-		if err == nil || !ownershipAcquired || b.cluster == nil {
+		if err == nil || !ownershipAcquired || keepOwnership || b.cluster == nil {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -86,7 +90,17 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 				slog.String("from_node", ownerNode),
 				slog.String("to_node", b.cluster.NodeID()))
 
-			takeoverState, err = b.cluster.TakeoverSession(ctx, clientID, ownerNode, b.cluster.NodeID(), identity)
+			// Clean Start inherits nothing, so there is no state for the
+			// owner to protect and no identity for it to check. Guarding it
+			// would refuse a principal that the same-node path lets start a
+			// fresh session, which is the documented way to take a client ID
+			// over deliberately.
+			takeoverGuard := identity
+			if opts.CleanStart {
+				takeoverGuard = nil
+			}
+
+			takeoverState, err = b.cluster.TakeoverSession(ctx, clientID, ownerNode, b.cluster.NodeID(), takeoverGuard)
 			if err != nil {
 				b.logError("takeover_session", err, slog.String("client_id", clientID))
 				return nil, false, fmt.Errorf("session takeover failed: %w", err)
@@ -114,8 +128,28 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		existing = nil
 	}
 
+	if existing != nil && identity != nil && identity.RequireBound && existing.ExternalIdentity() == "" {
+		// Same rule as the persisted and migrated paths: a session bound to no
+		// principal predates certificate binding, so it is discarded rather
+		// than inherited by a bound client or used to lock that client out of
+		// its own client ID.
+		b.telemetry.logger.Warn("mqtt_unbound_session_discarded",
+			slog.String("client_id", clientID),
+			slog.String("source", "memory"),
+			slog.String("external_id", identity.ExternalID))
+		if err := b.destroySessionLocked(ctx, existing); err != nil {
+			return nil, false, err
+		}
+		existing = nil
+	}
+
 	if existing != nil {
-		if identity != nil && !existing.CanUseExternalIdentity(identity.ExternalID, identity.RequireBound) {
+		// Checking and binding in one step, before ownership is claimed, keeps
+		// a rejected principal from moving the session and keeps two
+		// concurrent CONNECTs from both adopting an unbound one and then
+		// interleaving their writes.
+		if identity != nil && !existing.BindExternalIdentity(identity.ExternalID, identity.RequireBound) {
+			b.logIdentityRejected("mqtt_session_identity_mismatch", clientID, existing.ExternalIdentity(), identity.ExternalID)
 			return nil, false, cluster.ErrSessionIdentityMismatch
 		}
 		if b.cluster != nil {
@@ -124,9 +158,7 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 			}
 		}
 		ownershipAcquired = true
-		if identity != nil {
-			existing.SetExternalIdentity(identity.ExternalID)
-		}
+
 		return existing, false, nil
 	}
 
@@ -157,16 +189,23 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	inflight := messages.NewInflightTracker(serverReceiveMax)
 	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == config.OfflineQueuePolicyEvict)
 
-	// Restore from takeover state if present
+	// Which state this CONNECT may inherit is decided before any of it is
+	// loaded, so an unauthorized client never reaches another principal's
+	// inflight, queued, or subscribed messages.
+	restore, err := b.resolveSessionRestore(ctx, clientID, &opts, takeoverState, identity)
+	if err != nil {
+		return nil, false, err
+	}
+	takeoverState = restore.takeover
+
 	if takeoverState != nil {
-		opts.ExternalID = takeoverState.ExternalId
 		if err := b.restoreInflightFromTakeover(takeoverState, inflight); err != nil {
 			return nil, false, fmt.Errorf("failed to restore inflight from takeover: %w", err)
 		}
 		if err := b.restoreQueueFromTakeover(takeoverState, offlineQueue); err != nil {
 			return nil, false, fmt.Errorf("failed to restore queue from takeover: %w", err)
 		}
-	} else if !opts.CleanStart {
+	} else if restore.local {
 		if err := b.restoreInflightFromStorage(clientID, inflight); err != nil {
 			return nil, false, err
 		}
@@ -213,8 +252,10 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		if err := b.restoreSubscriptionsFromTakeover(s, takeoverState); err != nil {
 			return nil, false, fmt.Errorf("failed to restore subscriptions from takeover: %w", err)
 		}
-	} else if err := b.restoreSessionFromStorage(s, clientID, opts); err != nil {
-		return nil, false, err
+	} else if restore.local {
+		if err := b.restoreSessionFromStorage(s, clientID, opts, restore.stored, identity); err != nil {
+			return nil, false, err
+		}
 	}
 
 	s.SetOnDisconnect(func(s *session.Session, graceful bool) {
@@ -236,7 +277,164 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 
 	b.sessionsMap.Set(clientID, s)
 
+	// The migrated session belongs to another principal. It is registered and
+	// owned here because the previous node has already closed its copy, and
+	// dropping it now would lose that principal's state; the expiry sweep
+	// reclaims it from this point if its owner never comes back.
+	if restore.preserveForOwner {
+		s.MarkOffline()
+		keepOwnership = true
+
+		return nil, false, cluster.ErrSessionIdentityMismatch
+	}
+
 	return s, true, nil
+}
+
+// sessionRestore is the decision about which persisted or migrated state a
+// CONNECT may inherit, taken before any of that state is loaded.
+type sessionRestore struct {
+	// takeover is the migrated state to restore, nil when there is none or
+	// when this CONNECT must not inherit it.
+	takeover *clusterv1.SessionState
+	// stored is the persisted session record backing a local restore.
+	stored *storage.Session
+	// local reports whether local storage may be restored.
+	local bool
+	// preserveForOwner marks a migrated session that belongs to a different
+	// principal: it is kept for that principal and this CONNECT is rejected.
+	preserveForOwner bool
+}
+
+// resolveSessionRestore decides what a CONNECT may inherit and binds the
+// identity the new session will carry.
+func (b *Broker) resolveSessionRestore(ctx context.Context, clientID string, opts *session.Options, takeoverState *clusterv1.SessionState, identity *cluster.SessionIdentityGuard) (sessionRestore, error) {
+	// Clean Start asked for a fresh session. Discarding the migrated state
+	// keeps the cross-node path identical to the same-node one, which destroys
+	// the existing session outright instead of restoring it.
+	if takeoverState != nil && opts.CleanStart {
+		takeoverState = nil
+	}
+
+	if takeoverState != nil && identity != nil {
+		if identity.RequireBound && takeoverState.ExternalId == "" {
+			// A session bound to no principal predates certificate binding.
+			// Adopting it would hand its subscriptions to a bound client, so
+			// it is discarded rather than inherited or used to lock the
+			// client out of its own client ID.
+			b.telemetry.logger.Warn("mqtt_unbound_session_discarded",
+				slog.String("client_id", clientID),
+				slog.String("source", "takeover"),
+				slog.String("external_id", opts.ExternalID))
+			if err := b.purgeSessionState(ctx, clientID); err != nil {
+				return sessionRestore{}, err
+			}
+
+			return sessionRestore{}, nil
+		}
+		if !session.IdentityAllows(takeoverState.ExternalId, identity.ExternalID, identity.RequireBound) {
+			b.logIdentityRejected("mqtt_takeover_identity_mismatch", clientID, takeoverState.ExternalId, opts.ExternalID)
+			// A migrated session with no expiry of its own dies with the
+			// connection the previous node has already closed, so there is
+			// nothing left to keep for its owner. Keeping it would also mean
+			// holding it for the expiry this CONNECT asked for, which is not
+			// its owner's to set.
+			if takeoverState.ExpiryInterval == 0 {
+				if err := b.purgeSessionState(ctx, clientID); err != nil {
+					return sessionRestore{}, err
+				}
+
+				return sessionRestore{}, nil
+			}
+			opts.ExternalID = takeoverState.ExternalId
+
+			return sessionRestore{takeover: takeoverState, preserveForOwner: true}, nil
+		}
+	}
+
+	if takeoverState != nil {
+		if takeoverState.ExternalId != "" {
+			opts.ExternalID = takeoverState.ExternalId
+		}
+
+		return sessionRestore{takeover: takeoverState}, nil
+	}
+
+	if opts.CleanStart || b.stores.sessions == nil {
+		return sessionRestore{local: !opts.CleanStart}, nil
+	}
+
+	stored, err := b.stores.sessions.Get(clientID)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return sessionRestore{}, fmt.Errorf("failed to get session: %w", err)
+	}
+	if stored == nil {
+		return sessionRestore{local: true}, nil
+	}
+
+	if identity == nil {
+		return sessionRestore{stored: stored, local: true}, nil
+	}
+
+	if identity.RequireBound && stored.ExternalID == "" {
+		b.telemetry.logger.Warn("mqtt_unbound_session_discarded",
+			slog.String("client_id", clientID),
+			slog.String("source", "storage"),
+			slog.String("external_id", opts.ExternalID))
+		if err := b.purgeSessionState(ctx, clientID); err != nil {
+			return sessionRestore{}, err
+		}
+
+		return sessionRestore{}, nil
+	}
+	if !session.IdentityAllows(stored.ExternalID, identity.ExternalID, identity.RequireBound) {
+		b.logIdentityRejected("mqtt_persistent_session_identity_mismatch", clientID, stored.ExternalID, identity.ExternalID)
+		return sessionRestore{}, cluster.ErrSessionIdentityMismatch
+	}
+
+	return sessionRestore{stored: stored, local: true}, nil
+}
+
+// purgeSessionState removes every trace of a persisted session that will not
+// be restored, so a session started fresh cannot resurrect it later.
+func (b *Broker) purgeSessionState(ctx context.Context, clientID string) error {
+	if b.stores.sessions != nil {
+		if err := b.stores.sessions.Delete(clientID); err != nil {
+			return fmt.Errorf("failed to delete session: %w", err)
+		}
+	}
+	if b.stores.subscriptions != nil {
+		if err := b.stores.subscriptions.RemoveAll(clientID); err != nil {
+			return fmt.Errorf("failed to remove subscriptions: %w", err)
+		}
+	}
+	if b.stores.messages != nil {
+		if err := b.stores.messages.DeleteByPrefix(clientID + "/"); err != nil {
+			return fmt.Errorf("failed to delete messages: %w", err)
+		}
+	}
+	if b.stores.wills != nil {
+		if err := b.stores.wills.Delete(ctx, clientID); err != nil {
+			return fmt.Errorf("failed to delete will: %w", err)
+		}
+	}
+	if b.cluster != nil {
+		if err := b.cluster.RemoveAllSubscriptions(ctx, clientID); err != nil {
+			b.logError("cluster_remove_all_subscriptions", err, slog.String("client_id", clientID))
+		}
+	}
+
+	return nil
+}
+
+// logIdentityRejected records a CONNECT refused because the session it named
+// belongs to another principal. The bound identity is logged so an operator
+// can tell a misconfigured client from a client ID collision.
+func (b *Broker) logIdentityRejected(event, clientID, bound, incoming string) {
+	b.telemetry.logger.Warn(event,
+		slog.String("client_id", clientID),
+		slog.String("bound_external_id", bound),
+		slog.String("connect_external_id", incoming))
 }
 
 // DestroySession removes a session completely.
@@ -505,17 +703,24 @@ func (b *Broker) restoreQueueFromStorage(clientID string, queue messages.Queue) 
 }
 
 // restoreSessionFromStorage restores session metadata and subscriptions.
-func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, opts session.Options) error {
-	if opts.CleanStart || b.stores.sessions == nil {
+// stored is the persisted record resolved by resolveSessionRestore, already
+// checked against the CONNECT identity; nil means there is nothing to restore
+// beyond the subscriptions.
+func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, opts session.Options, stored *storage.Session, identity *cluster.SessionIdentityGuard) error {
+	if opts.CleanStart {
 		return nil
 	}
 
-	stored, err := b.stores.sessions.Get(clientID)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		return fmt.Errorf("failed to get session: %w", err)
-	}
+	var err error
 	if stored != nil {
+		// RestoreFrom replays the persisted identity, which is empty for a
+		// session written before identities were resolved. Re-binding puts the
+		// identity this CONNECT authenticated as back on the session.
 		s.RestoreFrom(stored)
+		if identity != nil && !s.BindExternalIdentity(identity.ExternalID, identity.RequireBound) {
+			b.logIdentityRejected("mqtt_persistent_session_identity_mismatch", clientID, stored.ExternalID, identity.ExternalID)
+			return cluster.ErrSessionIdentityMismatch
+		}
 	}
 
 	// Restore subscriptions from cluster if available, otherwise from local storage
@@ -650,7 +855,11 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, i
 	if s == nil {
 		return nil, nil // Session not found
 	}
-	if identity != nil && !s.CanUseExternalIdentity(identity.ExternalID, identity.RequireBound) {
+	// RequireBound is deliberately not applied here. It is the requesting
+	// node's policy for what it will adopt, and that node discards an unbound
+	// session and starts fresh. Enforcing it on this side would instead refuse
+	// the transfer and lock the client out of its own client ID.
+	if identity != nil && !s.CanUseExternalIdentity(identity.ExternalID, false) {
 		return nil, cluster.ErrSessionIdentityMismatch
 	}
 
