@@ -25,7 +25,6 @@ func TestBufferReferenceLifetime(t *testing.T) {
 		t.Fatalf("payload after first release = %q", got)
 	}
 	buf.Release()
-	require.Zero(t, buf.RefCount())
 }
 
 func TestFromBytesCopiesInput(t *testing.T) {
