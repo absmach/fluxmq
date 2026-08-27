@@ -67,6 +67,20 @@ func TestAuthEngine_Authenticate_Success_StoresIdentity(t *testing.T) {
 	assert.Equal(t, testExternalID, authz.receivedClientID)
 }
 
+func TestAuthEngine_ValidateCredentials_DoesNotStoreIdentity(t *testing.T) {
+	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: testExternalID}}
+	e := NewAuthEngine(authn, nil)
+
+	ok, externalID, err := e.ValidateCredentials(context.Background(), "mqtt-client-1", "user", "pass")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, testExternalID, externalID)
+	assert.Empty(t, e.ExternalID("mqtt-client-1"))
+
+	e.SetExternalID("mqtt-client-1", externalID)
+	assert.Equal(t, testExternalID, e.ExternalID("mqtt-client-1"))
+}
+
 func TestAuthEngine_ExternalID_ReturnsStoredIdentity(t *testing.T) {
 	authn := &stubAuthenticator{result: &AuthnResult{Authenticated: true, ID: testExternalID}}
 	e := NewAuthEngine(authn, nil)

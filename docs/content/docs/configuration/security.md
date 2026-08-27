@@ -458,6 +458,12 @@ See [Blocking Hooks](/architecture/hooks) for request and response details.
 
 Listeners share TLS fields across `tls` and `mtls` blocks.
 
+MQTT mTLS listeners use bound two-factor authentication. The TLS handshake
+must verify a client certificate, MQTT CONNECT must carry non-empty username
+and password credentials, the external MQTT authenticator must accept them,
+and the identity it returns must match the configured certificate field. The
+password is never stored in or compared with the certificate.
+
 ```yaml
 server:
   mqtt:
@@ -472,7 +478,23 @@ server:
         key_file: "/path/server.key"
         ca_file: "/path/clients-ca.crt"
         client_auth: "require"
+        certificate_identity:
+          source: "common_name"
+          template: "fun_{external_id}"
+
+auth:
+  external:
+    url: "https://identity.internal:7016"
+    protocols:
+      mqtt: true
 ```
+
+The default is the same `common_name` template shown above. It matches a CN such as
+`fun_345b23ea-3263-4592-bb60-b49df57aa5ac` to an authentication response whose
+external identity is `345b23ea-3263-4592-bb60-b49df57aa5ac`. Use
+`template: "{external_id}"` only when the CN is the bare external ID. The
+optional `uri_san` source remains available for PKIs that put identity in a URI
+SAN.
 
 ## Inter-Broker TLS
 

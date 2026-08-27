@@ -81,28 +81,23 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		}
 	}
 
-	externalID := ""
-	if h.broker.auth != nil {
-		username := p.Username
-		password := string(p.Password)
-
-		authenticated, resolvedID, err := h.broker.auth.Authenticate(ctx, clientID, username, password)
-		if err != nil || !authenticated {
-			h.broker.telemetry.stats.IncrementAuthErrors()
-			sendV5ConnAck(conn, false, v5.ConnAckBadUsernameOrPassword, nil) //nolint:errcheck // best-effort rejection reply before closing
-			conn.Close()
-			return ErrNotAuthorized
-		}
-		externalID = resolvedID
-	}
-	hookExternalID, ok := h.broker.ApplyRegisterHooks(ctx, clientID, externalID, p.Username, string(p.Password), corebroker.HookProtocolMQTT)
-	if !ok {
+	externalID, boundMTLS, err := h.broker.authenticateMQTTConnect(ctx, mqttConnectCredentials{
+		clientID:     clientID,
+		username:     p.Username,
+		password:     string(p.Password),
+		usernameFlag: p.UsernameFlag,
+		passwordFlag: p.PasswordFlag,
+	})
+	if err != nil {
 		h.broker.telemetry.stats.IncrementAuthErrors()
-		sendV5ConnAck(conn, false, v5.ConnAckNotAuthorized, nil) //nolint:errcheck // best-effort rejection reply before closing
+		code := byte(v5.ConnAckNotAuthorized)
+		if errors.Is(err, errMQTTCredentialsRejected) {
+			code = v5.ConnAckBadUsernameOrPassword
+		}
+		sendV5ConnAck(conn, false, code, nil) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return ErrNotAuthorized
 	}
-	externalID = hookExternalID
 
 	var will *storage.WillMessage
 	if p.WillFlag {
@@ -144,6 +139,7 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	}
 
 	opts := session.Options{
+		ExternalID:     externalID,
 		CleanStart:     cleanStart,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		ReceiveMaximum: receiveMax,
@@ -163,7 +159,13 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		return err
 	}
 
-	s.ExternalID = externalID
+	if !s.CanUseExternalIdentity(externalID, boundMTLS) {
+		h.broker.telemetry.stats.IncrementAuthErrors()
+		sendV5ConnAck(conn, false, v5.ConnAckNotAuthorized, nil) //nolint:errcheck // best-effort rejection reply before closing
+		conn.Close()
+		return ErrNotAuthorized
+	}
+	s.SetExternalIdentity(externalID)
 
 	// Apply the negotiated options and take over any existing connection. On a
 	// persistent reconnect this replaces the previous connection's version,
@@ -190,6 +192,7 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	if superseded != nil {
 		go h.broker.drainSuperseded(context.WithoutCancel(ctx), superseded)
 	}
+	h.broker.BindExternalID(clientID, externalID)
 	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
@@ -323,7 +326,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	requestedTopic := topic
 	hookReq, ok := h.broker.ApplyPublishHooks(context.Background(), corebroker.BlockingHookRequest{
 		ClientID:   s.ID,
-		ExternalID: s.ExternalID,
+		ExternalID: s.ExternalIdentity(),
 		Protocol:   corebroker.HookProtocolMQTT,
 		Topic:      topic,
 		Payload:    payload,
@@ -365,7 +368,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 			return sendV5PublishError(s, qos, packetID, v5.PubAckTopicNameInvalid, "Topic name invalid", ErrTopicInvalid)
 		}
 	}
-	if h.broker.auth != nil && !h.broker.CanPublish(s.ctx, s.ID, topic) {
+	if h.broker.auth != nil && !h.broker.CanPublishIdentity(s.ctx, s.AuthorizationIdentity(), topic) {
 		h.broker.telemetry.stats.IncrementAuthzErrors()
 		return sendV5PublishError(s, qos, packetID, v5.PubAckNotAuthorized, "Not authorized", nil)
 	}
@@ -519,7 +522,7 @@ func (h *v5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 
 		filter := t.Topic
 		subQoS := t.MaxQoS
-		filter, subQoS, ok = h.broker.ApplySubscribeHooks(context.Background(), s.ID, s.ExternalID, corebroker.HookProtocolMQTT, filter, subQoS)
+		filter, subQoS, ok = h.broker.ApplySubscribeHooks(context.Background(), s.ID, s.ExternalIdentity(), corebroker.HookProtocolMQTT, filter, subQoS)
 		if !ok {
 			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v5.SubAckNotAuthorized
@@ -536,7 +539,7 @@ func (h *v5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 			}
 			s.AddSubscriptionAlias(t.Topic, filter)
 		}
-		if h.broker.auth != nil && !h.broker.CanSubscribe(s.ctx, s.ID, filter) {
+		if h.broker.auth != nil && !h.broker.CanSubscribeIdentity(s.ctx, s.AuthorizationIdentity(), filter) {
 			h.broker.telemetry.stats.IncrementAuthzErrors()
 			reasonCodes[i] = v5.SubAckNotAuthorized
 			continue
@@ -639,7 +642,7 @@ func (h *v5Handler) HandleUnsubscribe(s *connCtx, pkt packets.ControlPacket) err
 		if resolved := s.ResolveSubscriptionAlias(filter); resolved != filter {
 			filter = resolved
 		} else {
-			filter, ok = h.broker.ApplyUnsubscribeHooks(context.Background(), s.ID, s.ExternalID, corebroker.HookProtocolMQTT, filter)
+			filter, ok = h.broker.ApplyUnsubscribeHooks(context.Background(), s.ID, s.ExternalIdentity(), corebroker.HookProtocolMQTT, filter)
 			if !ok {
 				h.broker.telemetry.stats.IncrementAuthzErrors()
 				reasonCodes[i] = v5.UnsubAckNotAuthorized

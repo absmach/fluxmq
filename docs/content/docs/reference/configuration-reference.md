@@ -151,6 +151,7 @@ These apply to listener blocks (for example `server.mqtt.tcp.v3`, `server.mqtt.w
 | `protocol`          | MQTT parser mode. For TCP, use `v3` on `server.mqtt.tcp.v3` and `v5` on `server.mqtt.tcp.v5`; for WebSocket listeners you can use `auto`, `v3`, or `v5`.                                                                                                                                                                                                                                |
 | `path`              | HTTP path for MQTT-over-WebSocket endpoint.                                                                                                                                                                                                                                                                                                                                             |
 | `allowed_origins`   | WebSocket origin allow-list. Empty list allows all origins; use explicit origins for production.                                                                                                                                                                                                                                                                                        |
+| `certificate_identity` | MQTT mTLS only. Binds the external identity returned after CONNECT authentication to the verified client certificate. `source` is `common_name` (default) or `uri_san`; `template` contains exactly one `{external_id}` placeholder. The default CN template is `fun_{external_id}`. |
 
 ### Server Runtime / Telemetry Fields
 
@@ -178,6 +179,11 @@ TLS fields are shared across `tls`, `mtls`, `dtls`, and `mdtls` blocks via `pkg/
 - `min_version` (`tls1.0`, `tls1.1`, `tls1.2`, `tls1.3`)
 - `cipher_suites`, `prefer_server_cipher_suites`
 - `ocsp`, `crl` (advanced verification)
+
+For MQTT, an enabled `mtls` listener additionally requires
+`client_auth: require`, `auth.external` with MQTT enabled, and successful
+certificate identity binding. Other protocols retain their existing mTLS
+authentication behavior.
 
 ## Broker
 

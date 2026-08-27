@@ -106,6 +106,9 @@ message SessionState {
   repeated QueuedMessage queued_messages = 4;
   repeated Subscription subscriptions = 5;
   WillMessage will = 6;
+  // Canonical external principal bound during MQTT authentication. A takeover
+  // must not let another principal inherit this session's state.
+  string external_id = 7;
 }
 
 message InflightMessage {

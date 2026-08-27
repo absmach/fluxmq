@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/internal/connguard"
+	"github.com/absmach/fluxmq/internal/mqttsecurity"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 )
@@ -50,7 +51,10 @@ type Config struct {
 	// is applied from the fixed header, before the body is buffered, so an
 	// unauthenticated peer cannot reserve memory by advertising a large length.
 	// 0 leaves packets unbounded (the protocol ceiling of ~256 MiB).
-	MaxPacketSize int
+	MaxPacketSize               int
+	RequireMQTTTwoFactor        bool
+	CertificateIdentitySource   string
+	CertificateIdentityTemplate string
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
@@ -278,12 +282,27 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	// from the TLS listener, but we need to ensure it's complete before using
 	// the connection. HandshakeContext aborts it when the server is shutting
 	// down rather than waiting out the read deadline.
+	handlerCtx := connCtx
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		if err := tlsConn.HandshakeContext(connCtx); err != nil {
 			s.config.Logger.Error("TLS handshake failed", slog.String("error", err.Error()))
 			return
 		}
 		s.config.Logger.Debug("TLS handshake successful")
+		if s.config.RequireMQTTTwoFactor {
+			security, err := mqttsecurity.FromTLSState(tlsConn.ConnectionState(), mqttsecurity.Policy{
+				IdentitySource:   s.config.CertificateIdentitySource,
+				IdentityTemplate: s.config.CertificateIdentityTemplate,
+			})
+			if err != nil {
+				s.config.Logger.Warn("mqtt_mtls_verified_identity_missing", slog.String("error", err.Error()))
+				return
+			}
+			handlerCtx = mqttsecurity.WithConnection(handlerCtx, security)
+		}
+	} else if s.config.RequireMQTTTwoFactor {
+		s.config.Logger.Error("mqtt mTLS two-factor listener accepted a non-TLS connection")
+		return
 	}
 
 	// core.NewConnection accepts any net.Conn (TCP or TLS). The session replaces
@@ -292,7 +311,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion,
 		core.WithMaxPacketSize(s.config.MaxPacketSize),
 		core.WithWriteTimeout(s.config.WriteTimeout))
-	broker.HandleConnection(connCtx, s.handler, hc)
+	broker.HandleConnection(handlerCtx, s.handler, hc)
 
 	s.config.Logger.Debug("connection closed",
 		slog.String("remote", conn.RemoteAddr().String()))

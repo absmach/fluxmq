@@ -75,6 +75,21 @@ reviewed contract change even though they are not interfaces.
 For YAML, new optional keys with backward-compatible defaults are additive.
 Existing keys and absent-versus-zero semantics remain stable.
 
+One pre-1.0 security hardening is intentionally stronger than the previous
+absent behavior: enabling `server.mqtt.tcp.mtls` or
+`server.mqtt.websocket.mtls` now requires external MQTT credentials and binds
+the returned identity to the verified client certificate. Certificate-only
+MQTT mTLS configurations must add the external auth callout and, when the
+certificate identity is not exactly the returned ID, an explicit
+`certificate_identity` template. The broker fails startup instead of silently
+running with one factor.
+
+A persistent MQTT session with a resolved external identity also refuses a
+reconnect that resolves the same client ID to a different principal, including
+reconnects through another listener. Use a new MQTT client ID or Clean Start to
+deliberately establish a session for another principal. This prevents an
+otherwise-valid account from inheriting another account's queued session data.
+
 ## Queue failure contract
 
 `queue.Failure` is the protocol-independent failure. Its stable fields are:

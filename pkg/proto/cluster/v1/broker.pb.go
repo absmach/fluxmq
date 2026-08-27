@@ -433,8 +433,11 @@ type SessionState struct {
 	QueuedMessages   []*QueuedMessage       `protobuf:"bytes,4,rep,name=queued_messages,json=queuedMessages,proto3" json:"queued_messages,omitempty"`
 	Subscriptions    []*Subscription        `protobuf:"bytes,5,rep,name=subscriptions,proto3" json:"subscriptions,omitempty"`
 	Will             *WillMessage           `protobuf:"bytes,6,opt,name=will,proto3" json:"will,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Canonical external principal bound during MQTT authentication. A takeover
+	// must not let another principal inherit this session's state.
+	ExternalId    string `protobuf:"bytes,7,opt,name=external_id,json=externalId,proto3" json:"external_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SessionState) Reset() {
@@ -507,6 +510,13 @@ func (x *SessionState) GetWill() *WillMessage {
 		return x.Will
 	}
 	return nil
+}
+
+func (x *SessionState) GetExternalId() string {
+	if x != nil {
+		return x.ExternalId
+	}
+	return ""
 }
 
 type InflightMessage struct {
@@ -2865,7 +2875,7 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x10TakeoverResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12D\n" +
-	"\rsession_state\x18\x03 \x01(\v2\x1f.fluxmq.cluster.v1.SessionStateR\fsessionState\"\xef\x02\n" +
+	"\rsession_state\x18\x03 \x01(\v2\x1f.fluxmq.cluster.v1.SessionStateR\fsessionState\"\x90\x03\n" +
 	"\fSessionState\x12'\n" +
 	"\x0fexpiry_interval\x18\x01 \x01(\rR\x0eexpiryInterval\x12\x1f\n" +
 	"\vclean_start\x18\x02 \x01(\bR\n" +
@@ -2873,7 +2883,9 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x11inflight_messages\x18\x03 \x03(\v2\".fluxmq.cluster.v1.InflightMessageR\x10inflightMessages\x12I\n" +
 	"\x0fqueued_messages\x18\x04 \x03(\v2 .fluxmq.cluster.v1.QueuedMessageR\x0equeuedMessages\x12E\n" +
 	"\rsubscriptions\x18\x05 \x03(\v2\x1f.fluxmq.cluster.v1.SubscriptionR\rsubscriptions\x122\n" +
-	"\x04will\x18\x06 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\x04will\"\xe3\x01\n" +
+	"\x04will\x18\x06 \x01(\v2\x1e.fluxmq.cluster.v1.WillMessageR\x04will\x12\x1f\n" +
+	"\vexternal_id\x18\a \x01(\tR\n" +
+	"externalId\"\xe3\x01\n" +
 	"\x0fInflightMessage\x12\x1b\n" +
 	"\tpacket_id\x18\x01 \x01(\rR\bpacketId\x12\x1c\n" +
 	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12\x1c\n" +

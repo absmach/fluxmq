@@ -113,6 +113,7 @@ type Session struct {
 
 // Options holds options for creating a new session.
 type Options struct {
+	ExternalID     string
 	KeepAlive      time.Duration
 	Will           *storage.WillMessage
 	ExpiryInterval uint32
@@ -159,6 +160,7 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 
 	s := &Session{
 		ID:                   clientID,
+		ExternalID:           opts.ExternalID,
 		Version:              version,
 		state:                StateNew,
 		msgHandler:           msgHandler,
@@ -203,6 +205,45 @@ func New(clientID string, version byte, opts Options, inflight messages.Inflight
 	}
 
 	return s
+}
+
+// CanUseExternalIdentity reports whether a CONNECT identity may use this
+// session. An mTLS-bound connection requires an exact non-empty match. Other
+// listeners may bind a legacy unbound session, but may not transfer a bound
+// persistent session to a different principal.
+func (s *Session) CanUseExternalIdentity(externalID string, requireBound bool) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if requireBound {
+		return externalID != "" && s.ExternalID == externalID
+	}
+	return s.ExternalID == "" || s.ExternalID == externalID
+}
+
+// SetExternalIdentity stores the resolved identity for listeners that do not
+// require certificate binding.
+func (s *Session) SetExternalIdentity(externalID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ExternalID = externalID
+}
+
+// ExternalIdentity returns the session's authenticated external principal.
+func (s *Session) ExternalIdentity() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ExternalID
+}
+
+// AuthorizationIdentity returns the external principal when one was resolved,
+// otherwise the MQTT client ID for backward-compatible unauthenticated paths.
+func (s *Session) AuthorizationIdentity() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ExternalID != "" {
+		return s.ExternalID
+	}
+	return s.ID
 }
 
 // ConnectOptions carries the per-connection settings negotiated by a CONNECT.

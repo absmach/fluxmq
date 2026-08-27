@@ -136,6 +136,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 
 	// Restore from takeover state if present
 	if takeoverState != nil {
+		opts.ExternalID = takeoverState.ExternalId
 		if err := b.restoreInflightFromTakeover(takeoverState, inflight); err != nil {
 			return nil, false, fmt.Errorf("failed to restore inflight from takeover: %w", err)
 		}
@@ -631,6 +632,7 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	state := &clusterv1.SessionState{
 		ExpiryInterval: uint32(s.ExpiryInterval),
 		CleanStart:     s.CleanStart,
+		ExternalId:     s.ExternalIdentity(),
 	}
 
 	// Capture subscriptions from storage (includes QoS)

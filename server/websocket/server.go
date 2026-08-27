@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/internal/connguard"
+	"github.com/absmach/fluxmq/internal/mqttsecurity"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -65,7 +66,10 @@ type Config struct {
 	// WriteTimeout bounds a single socket write for the life of the connection.
 	WriteTimeout time.Duration
 	// MaxConnections caps concurrently upgraded connections. 0 means unlimited.
-	MaxConnections int
+	MaxConnections              int
+	RequireMQTTTwoFactor        bool
+	CertificateIdentitySource   string
+	CertificateIdentityTemplate string
 }
 
 type Server struct {
@@ -297,6 +301,25 @@ func (s *Server) closeActiveConns() int {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	handlerCtx := r.Context()
+	if s.config.RequireMQTTTwoFactor {
+		if r.TLS == nil {
+			s.logger.Warn("mqtt websocket two-factor listener received a non-TLS request")
+			http.Error(w, "mTLS required", http.StatusForbidden)
+			return
+		}
+		security, err := mqttsecurity.FromTLSState(*r.TLS, mqttsecurity.Policy{
+			IdentitySource:   s.config.CertificateIdentitySource,
+			IdentityTemplate: s.config.CertificateIdentityTemplate,
+		})
+		if err != nil {
+			s.logger.Warn("mqtt_websocket_mtls_verified_identity_missing", slog.String("error", err.Error()))
+			http.Error(w, "mTLS required", http.StatusForbidden)
+			return
+		}
+		handlerCtx = mqttsecurity.WithConnection(handlerCtx, security)
+	}
+
 	// Check IP rate limit before upgrade
 	if s.ipRateLimiter != nil {
 		// Create a temporary addr for rate limiting
@@ -332,7 +355,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer connguard.Recover(s.logger, "mqtt-ws", r.RemoteAddr)
-	broker.HandleConnection(r.Context(), s.broker, conn)
+	broker.HandleConnection(handlerCtx, s.broker, conn)
 }
 
 // wsConnection implements core.Connection for WebSocket transport.
