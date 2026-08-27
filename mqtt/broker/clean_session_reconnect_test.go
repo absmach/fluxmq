@@ -7,9 +7,9 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/cluster"
-	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/stretchr/testify/require"
@@ -17,11 +17,11 @@ import (
 
 type cleanupSpyCluster struct {
 	cluster.Cluster
-	mu         sync.Mutex
-	owner      bool
-	acquires   int
-	releases   int
-	removeAlls int
+	mu                          sync.Mutex
+	owner                       bool
+	acquires                    int
+	releases                    int
+	removeAllSubscriptionsCalls int
 }
 
 func (c *cleanupSpyCluster) NodeID() string { return "node-a" }
@@ -54,25 +54,20 @@ func (c *cleanupSpyCluster) ReleaseSession(context.Context, string) error {
 func (c *cleanupSpyCluster) RemoveAllSubscriptions(context.Context, string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.removeAlls++
+	c.removeAllSubscriptionsCalls++
 	return nil
 }
 
-func (c *cleanupSpyCluster) snapshot() (owner bool, acquires, releases, removeAlls int) {
+func (c *cleanupSpyCluster) snapshot() (owner bool, acquires, releases, removeAllSubscriptionsCalls int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.owner, c.acquires, c.releases, c.removeAlls
+	return c.owner, c.acquires, c.releases, c.removeAllSubscriptionsCalls
 }
 
 func cleanV3Connect(clientID string) *v3.Connect {
-	return &v3.Connect{
-		FixedHeader:     packets.FixedHeader{PacketType: packets.ConnectType},
-		ProtocolName:    protocolNameMQTT,
-		ProtocolVersion: 4,
-		ClientID:        clientID,
-		CleanSession:    true,
-		KeepAlive:       60,
-	}
+	connect := v3Connect(clientID)
+	connect.CleanSession = true
+	return connect
 }
 
 func TestHandleConnect_CleanSessionReconnectKeepsReplacement(t *testing.T) {
@@ -94,6 +89,13 @@ func TestHandleConnect_CleanSessionReconnectKeepsReplacement(t *testing.T) {
 		s := b.sessionsMap.Get(clientID)
 		return s != nil && s.IsConnected()
 	}, "old clean session connected")
+	oldSession := b.sessionsMap.Get(clientID)
+	require.NotNil(t, oldSession)
+	oldDisconnectHandled := make(chan struct{})
+	oldSession.SetOnDisconnect(func(s *session.Session, graceful bool) {
+		b.handleDisconnect(s, graceful)
+		close(oldDisconnectHandled)
+	})
 
 	newConn := newBlockingConn()
 	var newWG sync.WaitGroup
@@ -104,6 +106,11 @@ func TestHandleConnect_CleanSessionReconnectKeepsReplacement(t *testing.T) {
 	}()
 
 	oldWG.Wait()
+	select {
+	case <-oldDisconnectHandled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for old clean session disconnect callback")
+	}
 	<-newConn.reading
 	waitFor(t, func() bool {
 		s := b.sessionsMap.Get(clientID)
@@ -129,20 +136,20 @@ func TestHandleDisconnect_StaleCleanSessionDoesNotDeleteReplacementClusterState(
 	require.NotSame(t, oldSession, replacement)
 	require.Same(t, replacement, b.sessionsMap.Get(clientID))
 
-	owner, acquires, releases, removeAlls := cl.snapshot()
+	owner, acquires, releases, removeAllSubscriptionsCalls := cl.snapshot()
 	require.True(t, owner)
 	require.Equal(t, 2, acquires)
 	require.Equal(t, 1, releases)
-	require.Equal(t, 1, removeAlls)
+	require.Equal(t, 1, removeAllSubscriptionsCalls)
 
 	// Model the old Session.Disconnect callback starting after the replacement
 	// was installed. It must not touch client-ID-scoped cluster state.
 	b.handleDisconnect(oldSession, false)
 
 	require.Same(t, replacement, b.sessionsMap.Get(clientID))
-	owner, acquires, releases, removeAlls = cl.snapshot()
+	owner, acquires, releases, removeAllSubscriptionsCalls = cl.snapshot()
 	require.True(t, owner)
 	require.Equal(t, 2, acquires)
 	require.Equal(t, 1, releases)
-	require.Equal(t, 1, removeAlls)
+	require.Equal(t, 1, removeAllSubscriptionsCalls)
 }
