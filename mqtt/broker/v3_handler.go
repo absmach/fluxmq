@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corebroker "github.com/absmach/fluxmq/broker"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
@@ -126,8 +127,14 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		Will:           will,
 	}
 
-	s, isNew, err := h.broker.CreateSession(clientID, p.ProtocolVersion, opts) //nolint:contextcheck // CreateSession has no context parameter yet; 73 call sites, tracked separately
+	s, isNew, err := h.broker.CreateSessionForIdentity(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // CreateSession has no context parameter yet; 73 call sites, tracked separately
 	if err != nil {
+		if errors.Is(err, cluster.ErrSessionIdentityMismatch) {
+			h.broker.telemetry.stats.IncrementAuthErrors()
+			sendV3ConnAck(conn, false, v3.ConnAckNotAuthorized) //nolint:errcheck // best-effort rejection reply before closing
+			conn.Close()
+			return ErrNotAuthorized
+		}
 		h.broker.telemetry.stats.IncrementProtocolErrors()
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()

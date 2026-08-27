@@ -132,7 +132,7 @@ func (c *testCluster) RoutePublish(_ context.Context, _ *message.Envelope) error
 	return nil
 }
 
-func (c *testCluster) TakeoverSession(_ context.Context, _, _, _ string) (*clusterv1.SessionState, error) {
+func (c *testCluster) TakeoverSession(_ context.Context, _, _, _ string, _ *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
 

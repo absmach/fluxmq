@@ -337,11 +337,16 @@ func (t *Transport) TakeoverSession(ctx context.Context, req *TakeoverReq) (*Tak
 		}), nil
 	}
 
-	sessionState, err := t.handler.GetSessionStateAndClose(ctx, req.Msg.ClientId)
+	sessionState, err := t.handler.GetSessionStateAndClose(ctx, req.Msg.ClientId, sessionIdentityGuardFromProto(req.Msg.IdentityGuard))
 	if err != nil {
+		failureReason := clusterv1.TakeoverFailureReason_TAKEOVER_FAILURE_REASON_UNSPECIFIED
+		if errors.Is(err, ErrSessionIdentityMismatch) {
+			failureReason = clusterv1.TakeoverFailureReason_TAKEOVER_FAILURE_REASON_IDENTITY_MISMATCH
+		}
 		return connect.NewResponse(&clusterv1.TakeoverResponse{
-			Success: false,
-			Error:   err.Error(),
+			Success:       false,
+			Error:         err.Error(),
+			FailureReason: failureReason,
 		}), nil
 	}
 
@@ -712,8 +717,9 @@ func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID string, ms
 }
 
 // SendTakeover sends a session takeover request to a peer node with retry and circuit breaker.
-func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
+func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode, toNode string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	var state *clusterv1.SessionState
+	var rejection error
 	err := retryWithBreaker(ctx, t.breakers, nodeID, func() error {
 		client, err := t.GetPeerClient(nodeID)
 		if err != nil {
@@ -721,9 +727,10 @@ func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode
 		}
 
 		req := connect.NewRequest(&clusterv1.TakeoverRequest{
-			ClientId: clientID,
-			FromNode: fromNode,
-			ToNode:   toNode,
+			ClientId:      clientID,
+			FromNode:      fromNode,
+			ToNode:        toNode,
+			IdentityGuard: sessionIdentityGuardToProto(identity),
 		})
 
 		resp, err := client.TakeoverSession(ctx, req)
@@ -732,13 +739,23 @@ func (t *Transport) SendTakeover(ctx context.Context, nodeID, clientID, fromNode
 		}
 
 		if !resp.Msg.Success {
+			if resp.Msg.FailureReason == clusterv1.TakeoverFailureReason_TAKEOVER_FAILURE_REASON_IDENTITY_MISMATCH {
+				rejection = ErrSessionIdentityMismatch
+				return nil
+			}
 			return fmt.Errorf("takeover failed: %s", resp.Msg.Error)
 		}
 
 		state = resp.Msg.SessionState
 		return nil
 	})
-	return state, err
+	if err != nil {
+		return nil, err
+	}
+	if rejection != nil {
+		return nil, rejection
+	}
+	return state, nil
 }
 
 // SendFetchRetained fetches a retained message from a peer node with retry and circuit breaker.

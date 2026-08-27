@@ -91,12 +91,26 @@ message TakeoverRequest {
   string client_id = 1;
   string from_node = 2;
   string to_node = 3;
+  // identity_guard must be checked by the current owner before it disconnects
+  // the session or transfers any state.
+  SessionIdentityGuard identity_guard = 4;
+}
+
+message SessionIdentityGuard {
+  string expected_external_id = 1;
+  bool require_bound = 2;
+}
+
+enum TakeoverFailureReason {
+  TAKEOVER_FAILURE_REASON_UNSPECIFIED = 0;
+  TAKEOVER_FAILURE_REASON_IDENTITY_MISMATCH = 1;
 }
 
 message TakeoverResponse {
   bool success = 1;
   string error = 2;
   SessionState session_state = 3;
+  TakeoverFailureReason failure_reason = 4;
 }
 
 message SessionState {

@@ -114,7 +114,7 @@ func (m *mockCluster) RoutePublish(ctx context.Context, msg *message.Envelope) e
 	return nil
 }
 
-func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string) (*clusterv1.SessionState, error) {
+func (m *mockCluster) TakeoverSession(ctx context.Context, clientID, fromNode, toNode string, identity *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	return nil, nil
 }
 

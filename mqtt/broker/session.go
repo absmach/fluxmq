@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/message"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -26,6 +27,22 @@ import (
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
 func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (sess *session.Session, created bool, err error) {
+	return b.createSession(clientID, version, opts, nil)
+}
+
+// CreateSessionForIdentity creates or resumes an MQTT session while ensuring
+// that any existing local or clustered session belongs to the authenticated
+// external principal. The current owner evaluates the guard before a remote
+// takeover performs any destructive work.
+func (b *Broker) CreateSessionForIdentity(clientID string, version byte, opts session.Options, requireBound bool) (sess *session.Session, created bool, err error) {
+	identity := &cluster.SessionIdentityGuard{
+		ExternalID:   opts.ExternalID,
+		RequireBound: requireBound,
+	}
+	return b.createSession(clientID, version, opts, identity)
+}
+
+func (b *Broker) createSession(clientID string, version byte, opts session.Options, identity *cluster.SessionIdentityGuard) (sess *session.Session, created bool, err error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
 	defer sessionLock.Unlock()
@@ -69,7 +86,7 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 				slog.String("from_node", ownerNode),
 				slog.String("to_node", b.cluster.NodeID()))
 
-			takeoverState, err = b.cluster.TakeoverSession(ctx, clientID, ownerNode, b.cluster.NodeID())
+			takeoverState, err = b.cluster.TakeoverSession(ctx, clientID, ownerNode, b.cluster.NodeID(), identity)
 			if err != nil {
 				b.logError("takeover_session", err, slog.String("client_id", clientID))
 				return nil, false, fmt.Errorf("session takeover failed: %w", err)
@@ -98,12 +115,18 @@ func (b *Broker) CreateSession(clientID string, version byte, opts session.Optio
 	}
 
 	if existing != nil {
+		if identity != nil && !existing.CanUseExternalIdentity(identity.ExternalID, identity.RequireBound) {
+			return nil, false, cluster.ErrSessionIdentityMismatch
+		}
 		if b.cluster != nil {
 			if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
 				return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
 			}
 		}
 		ownershipAcquired = true
+		if identity != nil {
+			existing.SetExternalIdentity(identity.ExternalID)
+		}
 		return existing, false, nil
 	}
 
@@ -618,7 +641,7 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 
 // GetSessionStateAndClose disconnects a session, retrieves its state, and returns it.
 // This is used during session takeover.
-func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (*clusterv1.SessionState, error) {
+func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, identity *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
 	defer sessionLock.Unlock()
@@ -626,6 +649,9 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string) (
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {
 		return nil, nil // Session not found
+	}
+	if identity != nil && !s.CanUseExternalIdentity(identity.ExternalID, identity.RequireBound) {
+		return nil, cluster.ErrSessionIdentityMismatch
 	}
 
 	// Capture state before destroying
