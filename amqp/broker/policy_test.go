@@ -1502,3 +1502,65 @@ func TestRecordLocalPrincipalReload(t *testing.T) {
 		t.Fatalf("reload failures = %d, want 1", got)
 	}
 }
+
+// Trace context is broker-owned in the same way identity is: a consumer reading
+// it has to be able to rely on it having come from the broker or from a relaying
+// service, not from whoever published the message. A publisher that could set
+// _flux.traceparent would graft its publication onto a trace the broker never
+// observed.
+func TestCompletePublishRejectsClientSuppliedTraceContext(t *testing.T) {
+	const forgedParent = "00-11111111111111111111111111111111-2222222222222222-01"
+
+	publishWithTrace := func(t *testing.T, role LocalPrincipalRole) *message.Envelope {
+		t.Helper()
+
+		authz := &localAuthorizerStub{allowRoutingKey: testAuditQueue}
+		conn, _ := newPolicyTestConnection(t, NewLocalConnectionPolicy(nil, authz, authz, 0))
+		bindLocalIdentityAs(conn, role)
+		qm := &mockChannelQueueManager{queueCfg: &qtypes.QueueConfig{Name: testAuditQueue, Type: qtypes.QueueTypeStream}}
+		conn.broker.queueManager = qm
+
+		ch := newChannel(conn, 1)
+		ch.pendingMethod = &codec.BasicPublish{RoutingKey: testAuditQueue}
+		ch.pendingHeader = &codec.ContentHeader{
+			ClassID:  codec.ClassBasic,
+			BodySize: 2,
+			Properties: codec.BasicProperties{
+				Headers: map[string]any{
+					message.PropertyTraceParent: forgedParent,
+					message.PropertyTraceState:  "vendor=forged",
+					message.PropertyTraceID:     "11111111111111111111111111111111",
+				},
+			},
+		}
+		ch.pendingBody = []byte("{}")
+		ch.completePublish()
+
+		if qm.exactPublishCalls != 1 {
+			t.Fatalf("exact stream publish calls = %d, want 1", qm.exactPublishCalls)
+		}
+		return qm.exactPublish
+	}
+
+	t.Run("publisher role", func(t *testing.T) {
+		envelope := publishWithTrace(t, LocalRolePublisher)
+
+		if got := envelope.BrokerMeta.Trace.TraceParent; got != "" {
+			t.Fatalf("traceparent = %q, want it dropped from an untrusted publisher", got)
+		}
+		if got := envelope.BrokerMeta.Trace.TraceState; got != "" {
+			t.Fatalf("tracestate = %q, want it dropped", got)
+		}
+		if got := envelope.BrokerMeta.Trace.TraceID; got != "" {
+			t.Fatalf("trace_id = %q, want it dropped", got)
+		}
+	})
+
+	t.Run("relaying service role", func(t *testing.T) {
+		envelope := publishWithTrace(t, LocalRoleService)
+
+		if got := envelope.BrokerMeta.Trace.TraceParent; got != forgedParent {
+			t.Fatalf("traceparent = %q, want a trusted relay's context preserved", got)
+		}
+	})
+}

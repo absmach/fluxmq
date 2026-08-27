@@ -593,11 +593,12 @@ func (ch *Channel) completePublish() {
 			if !message.IsReservedProperty(key) {
 				continue
 			}
-			if !ch.conn.propagatesOriginIdentity() {
-				switch key {
-				case message.PropertyClientID, message.PropertyExternalID, message.PropertyProtocol:
-					continue
-				}
+			// Trace context is broker-owned for the same reason identity is,
+			// so an untrusted publisher may supply neither. Without this a
+			// client could set _flux.traceparent and have the broker treat its
+			// value as trace context it had established itself.
+			if !ch.conn.propagatesOriginIdentity() && message.IsRelayOnlyProperty(key) {
+				continue
 			}
 			if v, ok := value.(string); ok {
 				props[key] = v

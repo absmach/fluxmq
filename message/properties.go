@@ -79,6 +79,28 @@ func IsReservedProperty(key string) bool {
 	}
 }
 
+// IsRelayOnlyProperty reports whether a reserved property may be supplied only
+// by a trusted relay.
+//
+// Identity says who published a message; trace context says the broker observed
+// it as part of a larger operation. Both are broker-owned: a consumer reading
+// either one has to be able to rely on it having come from the broker or from
+// another service, not from whoever published the message. A publisher that
+// could set them could attribute its message to another principal or graft its
+// publication onto someone else's trace.
+//
+// Public ingress must drop these. A boundary that has authenticated the peer as
+// a relaying service may pass them through.
+func IsRelayOnlyProperty(key string) bool {
+	switch key {
+	case PropertyClientID, PropertyExternalID, PropertyProtocol,
+		PropertyTraceParent, PropertyTraceState, PropertyTraceID:
+		return true
+	default:
+		return false
+	}
+}
+
 // FilterUserProperties copies publisher-owned properties into an immutable map.
 func FilterUserProperties(properties map[string]string) PropertyMap {
 	if len(properties) == 0 {
