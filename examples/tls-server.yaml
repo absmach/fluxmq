@@ -39,11 +39,8 @@ server:
         key_file: "/etc/fluxmq/certs/server.key"
         ca_file: "/etc/fluxmq/certs/ca.crt"
         client_auth: "require"
-        # The external auth service below returns an entity ID. Require the
-        # verified leaf certificate CN to contain that exact ID.
-        certificate_identity:
-          source: "common_name"
-          template: "fun_{external_id}"
+        # The verified leaf certificate CN must exactly equal the external
+        # entity ID returned by the auth service below.
         min_version: "TLS1.2"
         prefer_server_cipher_suites: true
         cipher_suites:
@@ -73,9 +70,6 @@ server:
         key_file: "/etc/fluxmq/certs/server.key"
         ca_file: "/etc/fluxmq/certs/ca.crt"
         client_auth: "require"
-        certificate_identity:
-          source: "common_name"
-          template: "fun_{external_id}"
 
   http:
     plain:
@@ -162,7 +156,7 @@ auth:
 #    mosquitto_pub -h localhost -p 8883 --cafile ca.crt -t test -m "hello"
 #
 # 4. For mutual TLS (mTLS), the username must resolve to the identity in the
-#    verified certificate and the password must pass external authentication:
+#    verified certificate CN and the password must pass external authentication:
 #    mosquitto_pub -h localhost -p 8884 --cafile ca.crt --cert client.crt --key client.key -u entity-id -P api-key -t test -m "hello"
 #
 # 5. For CoAP DTLS, configure coap.dtls or coap.mdtls with cert/key (and ca_file for mdtls).

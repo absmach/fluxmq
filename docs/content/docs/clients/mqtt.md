@@ -107,8 +107,8 @@ settlement sent that way never reached the broker. Use `x-group-id` and
 - TLS and mTLS listeners are configured via `server.mqtt.tcp.tls` and `server.mqtt.tcp.mtls`.
 - MQTT mTLS requires two bound factors on every connection: a CA-verified
   client certificate plus CONNECT username/password accepted by the external
-  MQTT authenticator. The returned external identity must match the configured
-  certificate CN or URI SAN template.
+  MQTT authenticator. The returned external identity must exactly equal the
+  verified leaf certificate CN.
 - Username and password are sent only in CONNECT. FluxMQ stores the resolved
   external identity on the session and uses it for later PUBLISH and SUBSCRIBE
   authorization calls.

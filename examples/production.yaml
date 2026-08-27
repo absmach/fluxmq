@@ -60,9 +60,6 @@ server:
         key_file: "/etc/fluxmq/certs/server.key"
         ca_file: "/etc/fluxmq/certs/clients-ca.crt"
         client_auth: "require"
-        certificate_identity:
-          source: "common_name"
-          template: "fun_{external_id}"
         min_version: "TLS1.2"
 
     websocket:

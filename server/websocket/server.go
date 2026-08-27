@@ -66,10 +66,8 @@ type Config struct {
 	// WriteTimeout bounds a single socket write for the life of the connection.
 	WriteTimeout time.Duration
 	// MaxConnections caps concurrently upgraded connections. 0 means unlimited.
-	MaxConnections              int
-	RequireMQTTTwoFactor        bool
-	CertificateIdentitySource   string
-	CertificateIdentityTemplate string
+	MaxConnections       int
+	RequireMQTTTwoFactor bool
 }
 
 type Server struct {
@@ -308,10 +306,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "mTLS required", http.StatusForbidden)
 			return
 		}
-		security, err := mqttsecurity.FromTLSState(*r.TLS, mqttsecurity.Policy{
-			IdentitySource:   s.config.CertificateIdentitySource,
-			IdentityTemplate: s.config.CertificateIdentityTemplate,
-		})
+		security, err := mqttsecurity.FromTLSState(*r.TLS)
 		if err != nil {
 			s.logger.Warn("mqtt_websocket_mtls_verified_identity_missing", slog.String("error", err.Error()))
 			http.Error(w, "mTLS required", http.StatusForbidden)

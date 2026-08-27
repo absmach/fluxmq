@@ -414,8 +414,6 @@ func TestSchemaKeysAreStable(t *testing.T) {
 		"server.mqtt.tcp.v3.addr",
 		"server.mqtt.tcp.v5.addr",
 		"server.mqtt.websocket.v3.addr",
-		"server.mqtt.tcp.mtls.certificate_identity.source",
-		"server.mqtt.tcp.mtls.certificate_identity.template",
 		"server.http.plain.addr",
 		testAuthCalloutKey,
 		"cluster.raft.enabled",

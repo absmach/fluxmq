@@ -31,10 +31,7 @@ func mqttMTLSContext(t *testing.T, externalID string) context.Context {
 	t.Helper()
 	security, err := mqttsecurity.FromVerifiedCertificate(&x509.Certificate{
 		Raw:     []byte("verified-" + externalID),
-		Subject: pkix.Name{CommonName: "fun_" + externalID},
-	}, mqttsecurity.Policy{
-		IdentitySource:   "common_name",
-		IdentityTemplate: "fun_{external_id}",
+		Subject: pkix.Name{CommonName: externalID},
 	})
 	require.NoError(t, err)
 	return mqttsecurity.WithConnection(context.Background(), security)
@@ -107,6 +104,16 @@ func TestMQTTMTLSTwoFactorConnect(t *testing.T) {
 					authResult:    &corebroker.AuthnResult{Authenticated: true, ID: mtlsEntityB},
 					configureAuth: true,
 					username:      mtlsEntityB,
+					password:      mtlsAPIKey,
+					usernameFlag:  true,
+					passwordFlag:  true,
+				},
+				{
+					name:          "prefixed common name rejected",
+					certificate:   "fun_" + mtlsEntityA,
+					authResult:    &corebroker.AuthnResult{Authenticated: true, ID: mtlsEntityA},
+					configureAuth: true,
+					username:      mtlsEntityA,
 					password:      mtlsAPIKey,
 					usernameFlag:  true,
 					passwordFlag:  true,

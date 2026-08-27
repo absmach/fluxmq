@@ -78,11 +78,10 @@ Existing keys and absent-versus-zero semantics remain stable.
 One pre-1.0 security hardening is intentionally stronger than the previous
 absent behavior: enabling `server.mqtt.tcp.mtls` or
 `server.mqtt.websocket.mtls` now requires external MQTT credentials and binds
-the returned identity to the verified client certificate. Certificate-only
-MQTT mTLS configurations must add the external auth callout and, when the
-certificate identity is not exactly the returned ID, an explicit
-`certificate_identity` template. The broker fails startup instead of silently
-running with one factor.
+the returned identity to the verified client certificate CN. Certificate-only
+MQTT mTLS configurations must add the external auth callout, and certificates
+whose CN is not exactly the returned external ID must be reissued. The broker
+fails startup instead of silently running with one factor.
 
 A persistent MQTT session with a resolved external identity also refuses a
 reconnect that resolves the same client ID to a different principal, including

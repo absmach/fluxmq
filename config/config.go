@@ -83,26 +83,14 @@ const (
 	distributionModeForward   = "forward"
 	distributionModeReplicate = "replicate"
 
-	authURLField                   = "url"
-	authTransportField             = "transport"
-	authTimeoutField               = "timeout"
-	authProtocolsField             = "protocols"
-	authIdentityCacheSizeField     = "identity_cache_size"
-	authIdentityCacheTTLField      = "identity_cache_ttl"
-	authTLSField                   = "tls"
-	clientAuthRequire              = "require"
-	mqttCertificateIDPlaceholder   = "{external_id}"
-	mqttCertificateIDDefaultSource = MQTTCertificateIdentityCommonName
-	mqttCertificateIDDefaultTmpl   = "fun_" + mqttCertificateIDPlaceholder
-)
-
-const (
-	// MQTTCertificateIdentityCommonName matches the verified leaf certificate's
-	// subject common name against the configured identity template.
-	MQTTCertificateIdentityCommonName = "common_name"
-	// MQTTCertificateIdentityURISAN matches one verified leaf URI SAN against
-	// the configured identity template.
-	MQTTCertificateIdentityURISAN = "uri_san"
+	authURLField               = "url"
+	authTransportField         = "transport"
+	authTimeoutField           = "timeout"
+	authProtocolsField         = "protocols"
+	authIdentityCacheSizeField = "identity_cache_size"
+	authIdentityCacheTTLField  = "identity_cache_ttl"
+	authTLSField               = "tls"
+	clientAuthRequire          = "require"
 )
 
 // Config holds all configuration for the MQTT broker.
@@ -668,41 +656,14 @@ type ServerConfig struct {
 	AdminAPIAddr string `yaml:"admin_api_addr"`
 }
 
-// MQTTCertificateIdentityConfig binds the identity returned by external MQTT
-// authentication to the verified client certificate on an mTLS listener.
-// Template must contain exactly one {external_id} placeholder.
-type MQTTCertificateIdentityConfig struct {
-	Source   string `yaml:"source"`
-	Template string `yaml:"template"`
-}
-
-// EffectiveSource returns the configured certificate field, defaulting to the
-// subject common name for compatibility with existing client certificates.
-func (c *MQTTCertificateIdentityConfig) EffectiveSource() string {
-	if c == nil || strings.TrimSpace(c.Source) == "" {
-		return mqttCertificateIDDefaultSource
-	}
-	return strings.ToLower(strings.TrimSpace(c.Source))
-}
-
-// EffectiveTemplate returns the exact certificate identity template. An
-// omitted block binds the Atom/Propeller common-name form fun_{external_id}.
-func (c *MQTTCertificateIdentityConfig) EffectiveTemplate() string {
-	if c == nil || c.Template == "" {
-		return mqttCertificateIDDefaultTmpl
-	}
-	return c.Template
-}
-
 // MQTTTCPListenerConfig holds TCP listener configuration.
 type MQTTTCPListenerConfig struct {
-	Addr                string                         `yaml:"addr"`
-	MaxConnections      int                            `yaml:"max_connections"`
-	ReadTimeout         time.Duration                  `yaml:"read_timeout"`
-	WriteTimeout        time.Duration                  `yaml:"write_timeout"`
-	Protocol            string                         `yaml:"protocol"`
-	CertificateIdentity *MQTTCertificateIdentityConfig `yaml:"certificate_identity,omitempty"`
-	TLS                 mqtttls.Config                 `yaml:",inline"`
+	Addr           string         `yaml:"addr"`
+	MaxConnections int            `yaml:"max_connections"`
+	ReadTimeout    time.Duration  `yaml:"read_timeout"`
+	WriteTimeout   time.Duration  `yaml:"write_timeout"`
+	Protocol       string         `yaml:"protocol"`
+	TLS            mqtttls.Config `yaml:",inline"`
 }
 
 // MQTTConfig groups every MQTT listener, by transport. AMQP 0.9.1 and AMQP 1.0
@@ -724,15 +685,14 @@ type MQTTTCPConfig struct {
 
 // MQTTWebSocketListenerConfig holds WebSocket listener configuration.
 type MQTTWebSocketListenerConfig struct {
-	Addr                string                         `yaml:"addr"`
-	Path                string                         `yaml:"path"`
-	Protocol            string                         `yaml:"protocol"`
-	MaxConnections      int                            `yaml:"max_connections"`
-	ReadTimeout         time.Duration                  `yaml:"read_timeout"`
-	WriteTimeout        time.Duration                  `yaml:"write_timeout"`
-	AllowedOrigins      []string                       `yaml:"allowed_origins"`
-	CertificateIdentity *MQTTCertificateIdentityConfig `yaml:"certificate_identity,omitempty"`
-	TLS                 mqtttls.Config                 `yaml:",inline"`
+	Addr           string         `yaml:"addr"`
+	Path           string         `yaml:"path"`
+	Protocol       string         `yaml:"protocol"`
+	MaxConnections int            `yaml:"max_connections"`
+	ReadTimeout    time.Duration  `yaml:"read_timeout"`
+	WriteTimeout   time.Duration  `yaml:"write_timeout"`
+	AllowedOrigins []string       `yaml:"allowed_origins"`
+	TLS            mqtttls.Config `yaml:",inline"`
 }
 
 // MQTTWebSocketConfig groups WebSocket listeners by mode.
@@ -1693,11 +1653,6 @@ func (c *Config) Validate() error {
 			if !c.Auth.External.EnabledFor(protocolMQTT) {
 				return fmt.Errorf("server.mqtt.tcp.%s requires auth.external with mqtt enabled", slot.name)
 			}
-			if err := validateMQTTCertificateIdentity("server.mqtt.tcp."+slot.name+".certificate_identity", slot.cfg.CertificateIdentity); err != nil {
-				return err
-			}
-		} else if slot.cfg.CertificateIdentity != nil {
-			return fmt.Errorf("server.mqtt.tcp.%s.certificate_identity is supported only on the mtls listener", slot.name)
 		}
 	}
 
@@ -1740,11 +1695,6 @@ func (c *Config) Validate() error {
 			if !c.Auth.External.EnabledFor(protocolMQTT) {
 				return fmt.Errorf("server.mqtt.websocket.%s requires auth.external with mqtt enabled", slot.name)
 			}
-			if err := validateMQTTCertificateIdentity("server.mqtt.websocket."+slot.name+".certificate_identity", slot.cfg.CertificateIdentity); err != nil {
-				return err
-			}
-		} else if slot.cfg.CertificateIdentity != nil {
-			return fmt.Errorf("server.mqtt.websocket.%s.certificate_identity is supported only on the mtls listener", slot.name)
 		}
 	}
 
@@ -2339,31 +2289,6 @@ func validateListenerTLS(prefix string, cfg mqtttls.Config, requireCA bool) erro
 	}
 	if requireCA && cfg.ClientCAFile == "" {
 		return fmt.Errorf("%s.ca_file required", prefix)
-	}
-	return nil
-}
-
-func validateMQTTCertificateIdentity(path string, cfg *MQTTCertificateIdentityConfig) error {
-	source := cfg.EffectiveSource()
-	template := cfg.EffectiveTemplate()
-
-	switch source {
-	case MQTTCertificateIdentityCommonName:
-	case MQTTCertificateIdentityURISAN:
-		if cfg == nil || cfg.Template == "" {
-			return fmt.Errorf("%s.template required for uri_san", path)
-		}
-		rendered := strings.Replace(template, mqttCertificateIDPlaceholder, "00000000-0000-0000-0000-000000000000", 1)
-		parsed, err := url.Parse(rendered)
-		if err != nil || !parsed.IsAbs() {
-			return fmt.Errorf("%s.template must render an absolute URI", path)
-		}
-	default:
-		return fmt.Errorf("%s.source must be one of: %s, %s", path, MQTTCertificateIdentityCommonName, MQTTCertificateIdentityURISAN)
-	}
-
-	if strings.Count(template, mqttCertificateIDPlaceholder) != 1 {
-		return fmt.Errorf("%s.template must contain exactly one %s placeholder", path, mqttCertificateIDPlaceholder)
 	}
 	return nil
 }

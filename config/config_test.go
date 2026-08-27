@@ -708,7 +708,6 @@ func TestMQTTMTLSTwoFactorValidation(t *testing.T) {
 				cfg := Default()
 				configure(cfg, websocket)
 				require.NoError(t, cfg.Validate())
-				require.Equal(t, "fun_{external_id}", (*MQTTCertificateIdentityConfig)(nil).EffectiveTemplate())
 			})
 
 			t.Run("external MQTT auth required", func(t *testing.T) {
@@ -727,30 +726,6 @@ func TestMQTTMTLSTwoFactorValidation(t *testing.T) {
 					cfg.Server.MQTT.TCP.MTLS.TLS.ClientAuth = "verify_if_given"
 				}
 				require.ErrorContains(t, cfg.Validate(), "client_auth must be \"require\"")
-			})
-
-			t.Run("identity template must bind external ID", func(t *testing.T) {
-				cfg := Default()
-				configure(cfg, websocket)
-				identity := &MQTTCertificateIdentityConfig{Source: MQTTCertificateIdentityCommonName, Template: "fixed-principal"}
-				if websocket {
-					cfg.Server.MQTT.WebSocket.MTLS.CertificateIdentity = identity
-				} else {
-					cfg.Server.MQTT.TCP.MTLS.CertificateIdentity = identity
-				}
-				require.ErrorContains(t, cfg.Validate(), "must contain exactly one {external_id} placeholder")
-			})
-
-			t.Run("URI SAN requires an absolute template", func(t *testing.T) {
-				cfg := Default()
-				configure(cfg, websocket)
-				identity := &MQTTCertificateIdentityConfig{Source: MQTTCertificateIdentityURISAN, Template: "entity/{external_id}"}
-				if websocket {
-					cfg.Server.MQTT.WebSocket.MTLS.CertificateIdentity = identity
-				} else {
-					cfg.Server.MQTT.TCP.MTLS.CertificateIdentity = identity
-				}
-				require.ErrorContains(t, cfg.Validate(), "must render an absolute URI")
 			})
 		})
 	}

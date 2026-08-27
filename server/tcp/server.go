@@ -51,10 +51,8 @@ type Config struct {
 	// is applied from the fixed header, before the body is buffered, so an
 	// unauthenticated peer cannot reserve memory by advertising a large length.
 	// 0 leaves packets unbounded (the protocol ceiling of ~256 MiB).
-	MaxPacketSize               int
-	RequireMQTTTwoFactor        bool
-	CertificateIdentitySource   string
-	CertificateIdentityTemplate string
+	MaxPacketSize        int
+	RequireMQTTTwoFactor bool
 }
 
 // Server is a TCP server that accepts connections and delegates them to a broker.
@@ -290,10 +288,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 		}
 		s.config.Logger.Debug("TLS handshake successful")
 		if s.config.RequireMQTTTwoFactor {
-			security, err := mqttsecurity.FromTLSState(tlsConn.ConnectionState(), mqttsecurity.Policy{
-				IdentitySource:   s.config.CertificateIdentitySource,
-				IdentityTemplate: s.config.CertificateIdentityTemplate,
-			})
+			security, err := mqttsecurity.FromTLSState(tlsConn.ConnectionState())
 			if err != nil {
 				s.config.Logger.Warn("mqtt_mtls_verified_identity_missing", slog.String("error", err.Error()))
 				return
