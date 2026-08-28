@@ -582,7 +582,18 @@ func (b *Broker) resolveSessionRestore(ctx context.Context, clientID string, opt
 // The cluster routing table is cleared too, but only where an entry is actually
 // found, so a cold CONNECT to a client ID nothing has used costs a read and no
 // write.
+//
+// The cluster goes first because it is the part that can fail on its own — a
+// remote call, against state this node does not hold. Deleting the local
+// records ahead of it would mean a failed claim had already dropped the Will it
+// never got to return, silently, with nothing left to publish it from. Failing
+// before the local purge leaves the whole claim to be made again by the next
+// CONNECT, which is the only caller that can act on it.
 func (b *Broker) claimOrphanedSessionState(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+	if err := b.removeOrphanedClusterSubscriptions(ctx, clientID); err != nil {
+		return nil, err
+	}
+
 	var will *storage.WillMessage
 	if b.stores.wills != nil {
 		stored, err := b.stores.wills.Get(ctx, clientID)
@@ -593,9 +604,6 @@ func (b *Broker) claimOrphanedSessionState(ctx context.Context, clientID string)
 	}
 
 	if err := b.deleteDurableSessionState(ctx, clientID); err != nil {
-		return nil, err
-	}
-	if err := b.removeOrphanedClusterSubscriptions(ctx, clientID); err != nil {
 		return nil, err
 	}
 
@@ -625,7 +633,7 @@ func (b *Broker) removeOrphanedClusterSubscriptions(ctx context.Context, clientI
 	switch {
 	case errors.Is(err, cluster.ErrClusterNotEnabled):
 		// A single node keeps no cluster routing table, so its local state is
-		// the whole story and deleteDurableSessionState has already cleared it.
+		// the whole story and the purge that follows is the whole claim.
 		return nil
 	case err != nil:
 		return fmt.Errorf("failed to load cluster subscriptions: %w", err)

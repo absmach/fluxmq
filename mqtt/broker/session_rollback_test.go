@@ -476,9 +476,11 @@ func TestFreshSessionPublishesOrphanedWill(t *testing.T) {
 // session is gone from this node, and counts the writes made to clear them.
 type orphanSubscriptionCluster struct {
 	cluster.Cluster
-	mu       sync.Mutex
-	subs     []*storage.Subscription
-	removals int
+	mu        sync.Mutex
+	subs      []*storage.Subscription
+	removals  int
+	getErr    error
+	removeErr error
 }
 
 func (c *orphanSubscriptionCluster) NodeID() string { return testNodeID }
@@ -496,6 +498,9 @@ func (c *orphanSubscriptionCluster) ReleaseSession(context.Context, string) erro
 func (c *orphanSubscriptionCluster) GetSubscriptionsForClient(context.Context, string) ([]*storage.Subscription, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.getErr != nil {
+		return nil, c.getErr
+	}
 
 	return c.subs, nil
 }
@@ -503,8 +508,11 @@ func (c *orphanSubscriptionCluster) GetSubscriptionsForClient(context.Context, s
 func (c *orphanSubscriptionCluster) RemoveAllSubscriptions(context.Context, string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.subs = nil
 	c.removals++
+	if c.removeErr != nil {
+		return c.removeErr
+	}
+	c.subs = nil
 
 	return nil
 }
@@ -538,6 +546,68 @@ func TestFreshSessionPurgesOrphanedClusterSubscriptions(t *testing.T) {
 	subs, removals := cl.snapshot()
 	require.Empty(t, subs, "the orphaned cluster subscriptions must be removed")
 	require.Equal(t, 1, removals)
+}
+
+var errClusterUnreachable = errors.New("cluster unreachable")
+
+// Claiming the orphaned state is one operation with a remote half that can fail
+// on its own. Purging the local records first would mean a claim that then
+// failed had already dropped the Will it never returned, with nothing left to
+// publish it from, so the local state must still be there for the next CONNECT
+// to claim.
+func TestOrphanClaimKeepsLocalStateWhenClusterFails(t *testing.T) {
+	const clientID = "orphan-cluster-failure"
+	const filter = "legacy/#"
+
+	for _, tc := range []struct {
+		name    string
+		cluster *orphanSubscriptionCluster
+	}{
+		{
+			name:    "read fails",
+			cluster: &orphanSubscriptionCluster{getErr: errClusterUnreachable},
+		},
+		{
+			name: "removal fails",
+			cluster: &orphanSubscriptionCluster{
+				subs:      []*storage.Subscription{{ClientID: clientID, Filter: filter, QoS: 1}},
+				removeErr: errClusterUnreachable,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := memory.New()
+			b := NewBroker(store, tc.cluster)
+			defer b.Close()
+
+			orphan := &storage.WillMessage{
+				ClientID: clientID,
+				Topic:    "clients/orphan-cluster-failure/status",
+				Payload:  []byte(willPayloadOffline),
+				Delay:    3600,
+			}
+			require.NoError(t, store.Wills().Set(context.Background(), clientID, orphan))
+			require.NoError(t, store.Subscriptions().Add(&storage.Subscription{
+				ClientID: clientID,
+				Filter:   filter,
+				QoS:      1,
+			}))
+
+			s, created, err := b.CreateSession(clientID, 5, session.Options{ExpiryInterval: 300})
+			require.ErrorIs(t, err, errClusterUnreachable)
+			require.Nil(t, s)
+			require.False(t, created)
+			require.Nil(t, b.sessionsMap.Get(clientID), "the failed CONNECT installs no session")
+
+			kept, err := store.Wills().Get(context.Background(), clientID)
+			require.NoError(t, err, "the Will must survive for the next CONNECT to claim")
+			require.Equal(t, orphan.Topic, kept.Topic)
+
+			subs, err := store.Subscriptions().GetForClient(clientID)
+			require.NoError(t, err)
+			require.Len(t, subs, 1, "the local state must survive a claim that failed")
+		})
+	}
 }
 
 // The counterpart: nothing to detect means no write. An unconditional removal
