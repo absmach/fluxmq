@@ -242,13 +242,28 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	inflight := messages.NewInflightTracker(serverReceiveMax)
 	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == config.OfflineQueuePolicyEvict)
 
-	// Ownership is taken before any client-ID-scoped state is read or written,
-	// because it is what makes this node's answer to those questions binding.
-	// The ownership check above is a read: another node can acquire the client
-	// ID between it and this line, and everything below — the orphan claim's
-	// cluster deletion above all — would then be acting on a session that is
-	// live somewhere else. Losing the race here costs a rejected CONNECT;
-	// losing it after the cleanup would cost the winner its routes.
+	// Which state this CONNECT may inherit is decided before any of it is
+	// loaded, so an unauthorized client never reaches another principal's
+	// inflight, queued, or subscribed messages.
+	restore, err := b.resolveSessionRestore(ctx, clientID, &opts, takeoverState, identity)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Ownership is taken before any client-ID-scoped state is written, because
+	// it is what makes this node's answer binding. The ownership check above is
+	// a read: another node can acquire the client ID between it and this line,
+	// and the purges below — the orphan claim's cluster deletion above all —
+	// would then be acting on a session that is live somewhere else. Losing the
+	// race here costs a rejected CONNECT; losing it after the cleanup would
+	// cost the winner its routes.
+	//
+	// It is taken no earlier than this because announcing ownership is itself
+	// visible: a CONNECT rejected while resolving what it may inherit would
+	// have advertised this node as the owner and then withdrawn it, and a
+	// takeover that latched onto that announcement finds no session here and
+	// completes with nothing, stranding the durable state it was after.
+	// Resolving is all reads, so it costs nothing to do it first.
 	//
 	// Failing past this point hands ownership back through the deferred
 	// rollback above, except where keepOwnership marks a session deliberately
@@ -260,14 +275,6 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		ownershipAcquired = true
 	}
 
-	// Which state this CONNECT may inherit is decided before any of it is
-	// loaded, so an unauthorized client never reaches another principal's
-	// inflight, queued, or subscribed messages.
-	restore, err := b.resolveSessionRestore(ctx, clientID, &opts, takeoverState, identity)
-	if err != nil {
-		return nil, false, err
-	}
-
 	// Inheriting neither a migrated session nor a persisted record means this
 	// CONNECT starts a fresh session under a recycled client ID. Whatever the
 	// previous session left behind is not this one's, and that session has ended,
@@ -276,7 +283,11 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	// The resolved restore decides this, not the migrated state this CONNECT
 	// arrived with: Clean Start discards a takeover, and the fresh session it
 	// asks for must not inherit what that session left under the client ID
-	// either.
+	// either. State that resolving actively discarded — a session bound to no
+	// principal, a migrated one whose owner has nothing left to keep — reaches
+	// this same point and is cleared by this one pass. Clearing it in resolve as
+	// well would delete the Will before the read below could capture it, and
+	// would put a local delete ahead of the cluster call that can fail.
 	//
 	// This has to run before anything is restored: the restores below key off the
 	// client ID alone and would otherwise hand the old subscriptions and messages
@@ -511,10 +522,9 @@ func (b *Broker) resolveSessionRestore(ctx context.Context, clientID string, opt
 				slog.String("client_id", clientID),
 				slog.String("source", "takeover"),
 				slog.String("external_id", opts.ExternalID))
-			if err := b.purgeSessionState(ctx, clientID); err != nil {
-				return sessionRestore{}, err
-			}
 
+			// Inheriting nothing, so the caller's orphan claim clears what is
+			// left under the client ID and publishes the Will it makes due.
 			return sessionRestore{}, nil
 		}
 		if !session.IdentityAllows(takeoverState.ExternalId, identity.ExternalID, identity.RequireBound) {
@@ -525,10 +535,6 @@ func (b *Broker) resolveSessionRestore(ctx context.Context, clientID string, opt
 			// holding it for the expiry this CONNECT asked for, which is not
 			// its owner's to set.
 			if takeoverState.ExpiryInterval == 0 {
-				if err := b.purgeSessionState(ctx, clientID); err != nil {
-					return sessionRestore{}, err
-				}
-
 				return sessionRestore{}, nil
 			}
 			opts.ExternalID = takeoverState.ExternalId
@@ -566,10 +572,9 @@ func (b *Broker) resolveSessionRestore(ctx context.Context, clientID string, opt
 			slog.String("client_id", clientID),
 			slog.String("source", "storage"),
 			slog.String("external_id", opts.ExternalID))
-		if err := b.purgeSessionState(ctx, clientID); err != nil {
-			return sessionRestore{}, err
-		}
 
+		// As above: the caller's orphan claim is the single pass that clears
+		// the discarded session and publishes its due Will.
 		return sessionRestore{}, nil
 	}
 	if !session.IdentityAllows(stored.ExternalID, identity.ExternalID, identity.RequireBound) {
@@ -655,21 +660,6 @@ func (b *Broker) removeOrphanedClusterSubscriptions(ctx context.Context, clientI
 
 	if err := b.cluster.RemoveAllSubscriptions(ctx, clientID); err != nil {
 		return fmt.Errorf("failed to remove cluster subscriptions: %w", err)
-	}
-
-	return nil
-}
-
-// purgeSessionState removes every trace of a persisted session that will not
-// be restored, so a session started fresh cannot resurrect it later.
-func (b *Broker) purgeSessionState(ctx context.Context, clientID string) error {
-	if err := b.deleteDurableSessionState(ctx, clientID); err != nil {
-		return err
-	}
-	if b.cluster != nil {
-		if err := b.cluster.RemoveAllSubscriptions(ctx, clientID); err != nil {
-			b.logError("cluster_remove_all_subscriptions", err, slog.String("client_id", clientID))
-		}
 	}
 
 	return nil

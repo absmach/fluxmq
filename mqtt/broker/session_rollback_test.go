@@ -701,3 +701,57 @@ func TestResumedSessionCancelsPendingWill(t *testing.T) {
 	_, err = store.Wills().Get(context.Background(), clientID)
 	require.ErrorIs(t, err, storage.ErrNotFound)
 }
+
+// A session discarded for being bound to no principal has ended, so its delayed
+// Will is due [MQTT-3.1.2-8]. Deleting the discarded state as part of resolving
+// what may be inherited would drop the Will before the claim could read it, and
+// the Will would never be published.
+func TestDiscardedUnboundSessionPublishesDueWill(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+
+	const clientID = "unbound-discarded-will"
+	const willTopic = "clients/unbound-discarded-will/status"
+
+	sub, _, err := b.CreateSession("unbound-discarded-will-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	// A session written before identities were resolved, with a Will still
+	// waiting on its delay.
+	require.NoError(t, store.Sessions().Save(&storage.Session{
+		ClientID:       clientID,
+		Version:        5,
+		ExpiryInterval: 300,
+	}))
+	require.NoError(t, store.Wills().Set(context.Background(), clientID, &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    willTopic,
+		Payload:  []byte(willPayloadOffline),
+		Delay:    3600,
+	}))
+
+	s, created, err := b.CreateSessionForIdentity(clientID, 5, session.Options{
+		ExternalID:     identityA,
+		ExpiryInterval: 300,
+	}, true)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, identityA, s.ExternalIdentity(), "the bound client gets its own session")
+
+	waitFor(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return string(pub.Payload) == willPayloadOffline
+			}
+		}
+		return false
+	}, "discarding an unbound session publishes its due Will")
+
+	_, err = store.Wills().Get(context.Background(), clientID)
+	require.ErrorIs(t, err, storage.ErrNotFound)
+}
