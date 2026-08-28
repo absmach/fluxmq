@@ -36,7 +36,7 @@ type cleanupSpyCluster struct {
 	removeAllSubscriptionsCalls int
 }
 
-func (c *cleanupSpyCluster) NodeID() string { return "node-a" }
+func (c *cleanupSpyCluster) NodeID() string { return testNodeID }
 
 func (c *cleanupSpyCluster) GetSessionOwner(context.Context, string) (string, bool, error) {
 	c.mu.Lock()
@@ -61,6 +61,10 @@ func (c *cleanupSpyCluster) ReleaseSession(context.Context, string) error {
 	c.owner = false
 	c.releases++
 	return nil
+}
+
+func (c *cleanupSpyCluster) GetSubscriptionsForClient(context.Context, string) ([]*storage.Subscription, error) {
+	return nil, nil
 }
 
 func (c *cleanupSpyCluster) RemoveAllSubscriptions(context.Context, string) error {

@@ -17,6 +17,10 @@ import (
 	"github.com/absmach/fluxmq/mqtt/session"
 )
 
+// testNodeID names the local node in the cluster stubs across this package's
+// tests.
+const testNodeID = "node-a"
+
 // mockAddr implements net.Addr for testing.
 type mockAddr struct{}
 

@@ -760,6 +760,27 @@ func (s *Session) IsConnected() bool {
 	return s.state == StateConnected && s.conn != nil
 }
 
+// HasExpired reports whether the session has been disconnected for longer than
+// its expiry interval as of now. Connection state, expiry interval, and
+// disconnect timestamp are read together under one lock: read separately they
+// can come from either side of a reconnect or a SetExpiryInterval.
+//
+// A session that has never held a connection has no disconnect timestamp, and a
+// zero one is not an expiry that elapsed in 1970. That is the state a CONNECT
+// leaves behind between installing the session and attaching to it, so treating
+// it as overdue would let the expiry sweep destroy a session — and the durable
+// state it restored — out from under a connection still being set up.
+func (s *Session) HasExpired(now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if (s.state == StateConnected && s.conn != nil) || s.ExpiryInterval == 0 || s.disconnectedAt.IsZero() {
+		return false
+	}
+
+	return now.After(s.disconnectedAt.Add(time.Duration(s.ExpiryInterval) * time.Second))
+}
+
 // GetDisconnectedAt returns when the session was disconnected.
 // Cheaper than Info() when only the disconnect timestamp is needed.
 func (s *Session) GetDisconnectedAt() time.Time {

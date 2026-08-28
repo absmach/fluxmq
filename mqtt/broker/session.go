@@ -152,59 +152,29 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	}
 
 	existing := b.sessionsMap.Get(clientID)
-	if opts.CleanStart {
-		switch {
-		case existing != nil:
-			retired := existing.DetachForTakeover()
-			// If the network callback already scheduled the Will, it consumed the
-			// in-memory copy. Ending the old session makes any stored delayed Will
-			// due now, while an already-published Will is absent from the store.
-			if retired.Conn == nil && retired.Will == nil && b.stores.wills != nil {
-				storedWill, err := b.stores.wills.Get(ctx, clientID)
-				if err != nil && !errors.Is(err, storage.ErrNotFound) {
-					return nil, false, fmt.Errorf("failed to load replaced session will: %w", err)
-				}
-				retired.Will = storedWill
+	if opts.CleanStart && existing != nil {
+		retired := existing.DetachForTakeover()
+		// If the network callback already scheduled the Will, it consumed the
+		// in-memory copy. Ending the old session makes any stored delayed Will
+		// due now, while an already-published Will is absent from the store.
+		if retired.Conn == nil && retired.Will == nil && b.stores.wills != nil {
+			storedWill, err := b.stores.wills.Get(ctx, clientID)
+			if err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return nil, false, fmt.Errorf("failed to load replaced session will: %w", err)
 			}
-			retirements = append(retirements, &sessionRetirement{
-				clientID:    clientID,
-				superseded:  retired,
-				sessionEnds: true,
-			})
-			// destroySessionLocked removes the stored record under this lock, so
-			// the sweep cannot publish the same Will a second time.
-			if err := b.destroySessionLocked(ctx, existing); err != nil {
-				return nil, false, err
-			}
-			existing = nil
-
-		default:
-			// Clean Start ends the previous session even when no session object
-			// survives to detach it — a restart outlives the session map while
-			// the records it wrote remain. Ending the session makes a pending
-			// delayed Will due [MQTT-3.1.2-8], and leaves nothing for the fresh
-			// session to inherit, so the Will is claimed and the rest purged.
-			// Without this the Will is never published (attachSession would
-			// cancel it as though the session had resumed) and the old
-			// subscriptions and queued messages survive to be restored into a
-			// later persistent reconnect, possibly under another identity.
-			storedWill, purge, err := b.orphanedSessionState(ctx, clientID)
-			if err != nil {
-				return nil, false, err
-			}
-			if purge {
-				if err := b.purgeSessionState(ctx, clientID); err != nil {
-					return nil, false, err
-				}
-			}
-			if storedWill != nil {
-				retirements = append(retirements, &sessionRetirement{
-					clientID:    clientID,
-					superseded:  &session.Superseded{Will: storedWill},
-					sessionEnds: true,
-				})
-			}
+			retired.Will = storedWill
 		}
+		retirements = append(retirements, &sessionRetirement{
+			clientID:    clientID,
+			superseded:  retired,
+			sessionEnds: true,
+		})
+		// destroySessionLocked removes the stored record under this lock, so
+		// the sweep cannot publish the same Will a second time.
+		if err := b.destroySessionLocked(ctx, existing); err != nil {
+			return nil, false, err
+		}
+		existing = nil
 	}
 
 	if existing != nil && identity != nil && identity.RequireBound && existing.ExternalIdentity() == "" {
@@ -279,6 +249,36 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	if err != nil {
 		return nil, false, err
 	}
+
+	// Inheriting neither a migrated session nor a persisted record means this
+	// CONNECT starts a fresh session under a recycled client ID. Whatever the
+	// previous session left behind is not this one's, and that session has ended,
+	// so its delayed Will is due now [MQTT-3.1.2-8].
+	//
+	// The resolved restore decides this, not the migrated state this CONNECT
+	// arrived with: Clean Start discards a takeover, and the fresh session it
+	// asks for must not inherit what that session left under the client ID
+	// either.
+	//
+	// This has to run before anything is restored: the restores below key off the
+	// client ID alone and would otherwise hand the old subscriptions and messages
+	// to the new session, possibly under a different principal. It also has to
+	// claim the Will rather than merely decline to cancel it, because the sweep
+	// drops a pending Will once a session is connected under that client ID.
+	if restore.takeover == nil && restore.stored == nil {
+		orphanWill, err := b.claimOrphanedSessionState(ctx, clientID)
+		if err != nil {
+			return nil, false, err
+		}
+		if orphanWill != nil {
+			retirements = append(retirements, &sessionRetirement{
+				clientID:    clientID,
+				superseded:  &session.Superseded{Will: orphanWill},
+				sessionEnds: true,
+			})
+		}
+	}
+
 	takeoverWill := willFromTakeover(clientID, takeoverState)
 	takeoverState = restore.takeover
 	if takeoverWill != nil {
@@ -569,34 +569,76 @@ func (b *Broker) resolveSessionRestore(ctx context.Context, clientID string, opt
 	return sessionRestore{stored: stored, local: true}, nil
 }
 
-// orphanedSessionState reports what a client ID left behind in storage when no
-// session object holds it any more: the Will that a Clean Start makes due, and
-// whether anything at all is there to purge.
+// claimOrphanedSessionState takes over whatever a previous session left in
+// storage under this client ID, clearing it and returning a delayed Will that
+// the end of that session makes due.
 //
-// The two reads keep the common cold connect cheap. Most Clean Start clients
-// have no persisted state, and answering that with two lookups is worth avoiding
-// four unconditional deletes on the CONNECT path.
-func (b *Broker) orphanedSessionState(ctx context.Context, clientID string) (will *storage.WillMessage, purge bool, err error) {
+// The purge is unconditional. The four key spaces expire independently — badger
+// gives the session record a TTL of its own expiry interval
+// (storage/badger/session.go) while the subscriptions and messages keyed by the
+// same client ID stay — so the presence of any one record says nothing about the
+// others, and a probe would have to read all four to save the writes.
+//
+// The cluster routing table is cleared too, but only where an entry is actually
+// found, so a cold CONNECT to a client ID nothing has used costs a read and no
+// write.
+func (b *Broker) claimOrphanedSessionState(ctx context.Context, clientID string) (*storage.WillMessage, error) {
+	var will *storage.WillMessage
 	if b.stores.wills != nil {
-		storedWill, err := b.stores.wills.Get(ctx, clientID)
+		stored, err := b.stores.wills.Get(ctx, clientID)
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
-			return nil, false, fmt.Errorf("failed to load replaced session will: %w", err)
+			return nil, fmt.Errorf("failed to load replaced session will: %w", err)
 		}
-		will = storedWill
-	}
-	if will != nil {
-		return will, true, nil
+		will = stored
 	}
 
-	if b.stores.sessions != nil {
-		stored, err := b.stores.sessions.Get(clientID)
-		if err != nil && !errors.Is(err, storage.ErrNotFound) {
-			return nil, false, fmt.Errorf("failed to load replaced session: %w", err)
-		}
-		purge = stored != nil
+	if err := b.deleteDurableSessionState(ctx, clientID); err != nil {
+		return nil, err
+	}
+	if err := b.removeOrphanedClusterSubscriptions(ctx, clientID); err != nil {
+		return nil, err
 	}
 
-	return nil, purge, nil
+	return will, nil
+}
+
+// removeOrphanedClusterSubscriptions clears the cluster routing entries a
+// previous session left under this client ID.
+//
+// They outlive the local records they were written beside — a badger session
+// record carries a TTL the subscriptions do not, and a node that crashes leaves
+// its entries for the lease to reclaim — and restoreSessionFromStorage reads
+// subscriptions from the cluster in preference to local storage. An entry left
+// here is therefore restored into the next persistent session under this client
+// ID, whoever it now belongs to.
+//
+// Reaching this path means no session was inherited, so the cluster resolved no
+// live owner and nothing found here is another node's. The removal is still
+// conditional on finding an entry: an unconditional delete would put an etcd
+// write on every cold CONNECT.
+func (b *Broker) removeOrphanedClusterSubscriptions(ctx context.Context, clientID string) error {
+	if b.cluster == nil {
+		return nil
+	}
+
+	subs, err := b.cluster.GetSubscriptionsForClient(ctx, clientID)
+	switch {
+	case errors.Is(err, cluster.ErrClusterNotEnabled):
+		// A single node keeps no cluster routing table, so its local state is
+		// the whole story and deleteDurableSessionState has already cleared it.
+		return nil
+	case err != nil:
+		return fmt.Errorf("failed to load cluster subscriptions: %w", err)
+	}
+	if len(subs) == 0 {
+		return nil
+	}
+
+	if err := b.cluster.RemoveAllSubscriptions(ctx, clientID); err != nil {
+		return fmt.Errorf("failed to remove cluster subscriptions: %w", err)
+	}
+
+	return nil
 }
 
 // purgeSessionState removes every trace of a persisted session that will not
@@ -658,6 +700,10 @@ func (b *Broker) releaseUnattachedSession(ctx context.Context, s *session.Sessio
 		return
 	}
 
+	// Restoring a session moved its queued and inflight messages out of storage
+	// and into this object, and dropping it releases them. Write them back first
+	// or a failed CONNECT silently consumes the client's undelivered messages.
+	b.persistSessionMessages(s)
 	b.dropSessionLocked(ctx, s, true)
 }
 
@@ -824,24 +870,7 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool, disconnectE
 	} else if graceful && b.stores.wills != nil {
 		b.stores.wills.Delete(context.Background(), s.ID) //nolint:errcheck // best-effort Will cleanup on graceful disconnect
 	}
-	if b.stores.messages != nil {
-		msgs := s.OfflineQueue().Drain()
-		for i, msg := range msgs {
-			key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
-			b.stores.messages.Store(key, msg) //nolint:errcheck // best-effort offline message persistence
-			message.Release(msg)
-		}
-
-		for _, inf := range s.Inflight().GetAll() {
-			// Key by direction so an inbound and outbound entry sharing a packet
-			// ID do not overwrite each other, and carry the direction and state
-			// on the message so they survive a restore.
-			key := fmt.Sprintf("%s%s%d/%d", s.ID, inflightPrefix, inf.Direction, inf.PacketID)
-			inf.Message.BrokerMeta.Delivery.InflightDirection = byte(inf.Direction)
-			inf.Message.BrokerMeta.Delivery.InflightState = byte(inf.State)
-			b.stores.messages.Store(key, inf.Message) //nolint:errcheck // best-effort inflight message persistence
-		}
-	}
+	b.persistSessionMessages(s)
 
 	if sessionEnds {
 		b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
@@ -867,6 +896,33 @@ func (b *Broker) emitClientDisconnected(ctx context.Context, clientID, reason st
 		if err := b.eventHook.OnDisconnect(ctx, clientID, reason); err != nil {
 			b.logError("event_hook_disconnect", err, slog.String("client_id", clientID))
 		}
+	}
+}
+
+// persistSessionMessages writes a session's offline queue and inflight entries
+// back to storage and empties the queue. Restoring a session moves these
+// messages out of storage and into memory, so anything that gives up a session
+// object has to write them back or they are gone.
+func (b *Broker) persistSessionMessages(s *session.Session) {
+	if b.stores.messages == nil {
+		return
+	}
+
+	msgs := s.OfflineQueue().Drain()
+	for i, msg := range msgs {
+		key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
+		b.stores.messages.Store(key, msg) //nolint:errcheck // best-effort offline message persistence
+		message.Release(msg)
+	}
+
+	for _, inf := range s.Inflight().GetAll() {
+		// Key by direction so an inbound and outbound entry sharing a packet
+		// ID do not overwrite each other, and carry the direction and state
+		// on the message so they survive a restore.
+		key := fmt.Sprintf("%s%s%d/%d", s.ID, inflightPrefix, inf.Direction, inf.PacketID)
+		inf.Message.BrokerMeta.Delivery.InflightDirection = byte(inf.Direction)
+		inf.Message.BrokerMeta.Delivery.InflightState = byte(inf.State)
+		b.stores.messages.Store(key, inf.Message) //nolint:errcheck // best-effort inflight message persistence
 	}
 }
 

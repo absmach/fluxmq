@@ -33,56 +33,60 @@ func (b *Broker) expiryLoop() {
 	}
 }
 
-// expireSessions removes expired sessions.
+// expireSessions removes expired sessions. Session.HasExpired is evaluated
+// twice: once here to pick candidates without the client-ID lock, and again
+// under that lock, because a reconnect in between makes the first answer stale.
 func (b *Broker) expireSessions() {
 	now := time.Now()
-	var toDelete []string
+	var expired []*session.Session
 
 	b.sessionsMap.ForEach(func(s *session.Session) {
-		if s.IsConnected() {
-			return
-		}
-
-		if s.ExpiryInterval > 0 {
-			expiryTime := s.GetDisconnectedAt().Add(time.Duration(s.ExpiryInterval) * time.Second)
-			if now.After(expiryTime) {
-				toDelete = append(toDelete, s.ID)
-			}
+		if s.HasExpired(now) {
+			expired = append(expired, s)
 		}
 	})
 
-	for _, clientID := range toDelete {
-		b.expireSession(context.Background(), clientID)
+	for _, s := range expired {
+		b.expireSession(context.Background(), s, now)
 	}
 }
 
-// expireSession retires a session whose expiry interval has elapsed. Expiry ends
-// the session, and a Will still waiting on its delay is due when the session ends
-// or the delay passes, whichever comes first [MQTT-3.1.2-8], so the record is
-// captured before destruction deletes it and published after the lock is
-// released.
-func (b *Broker) expireSession(ctx context.Context, clientID string) {
+// expireSession retires s if it is still the session registered for its client
+// ID and still expired once the lock is held. The scan runs without that lock,
+// so a reconnect or a Clean Start replacement can land in between; destroying
+// whatever currently answers to the client ID would take out a live connection.
+//
+// Expiry ends the session, and a Will waiting on its delay is due when the
+// session ends or the delay passes, whichever comes first [MQTT-3.1.2-8]. The
+// record is captured before destruction deletes it and published afterwards,
+// outside the lock and only once the teardown that removed it succeeded.
+func (b *Broker) expireSession(ctx context.Context, s *session.Session, now time.Time) {
 	var dueWill *storage.WillMessage
 
-	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock := b.sessionLocks.Key(s.ID)
 	sessionLock.Lock()
-	if s := b.sessionsMap.Get(clientID); s != nil {
+	if b.sessionsMap.Get(s.ID) == s && s.HasExpired(now) {
 		if b.stores.wills != nil {
-			will, err := b.stores.wills.Get(ctx, clientID)
+			will, err := b.stores.wills.Get(ctx, s.ID)
 			switch {
 			case err == nil:
 				dueWill = will
 			case !errors.Is(err, storage.ErrNotFound):
-				b.logError("load_expiring_session_will", err, slog.String("client_id", clientID))
+				b.logError("load_expiring_session_will", err, slog.String("client_id", s.ID))
 			}
 		}
-		b.destroySessionLocked(ctx, s) //nolint:errcheck // best-effort session cleanup during expired session sweep
+		if err := b.destroySessionLocked(ctx, s); err != nil {
+			// The record the Will was read from may still be there, so leave it
+			// for the sweep rather than publishing a copy it can publish again.
+			b.logError("destroy_expired_session", err, slog.String("client_id", s.ID))
+			dueWill = nil
+		}
 	}
 	sessionLock.Unlock()
 
 	if dueWill != nil {
 		if err := b.publishWillMessage(ctx, dueWill); err != nil {
-			b.logError("publish_expired_session_will", err, slog.String("client_id", clientID))
+			b.logError("publish_expired_session_will", err, slog.String("client_id", s.ID))
 		}
 	}
 }

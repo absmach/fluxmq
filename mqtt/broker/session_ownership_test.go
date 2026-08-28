@@ -10,6 +10,7 @@ import (
 
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/mqtt/session"
+	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +20,7 @@ type ownershipFailCluster struct {
 	err error
 }
 
-func (c *ownershipFailCluster) NodeID() string { return "node-a" }
+func (c *ownershipFailCluster) NodeID() string { return testNodeID }
 
 func (c *ownershipFailCluster) GetSessionOwner(context.Context, string) (string, bool, error) {
 	return "", false, nil
@@ -27,6 +28,10 @@ func (c *ownershipFailCluster) GetSessionOwner(context.Context, string) (string,
 
 func (c *ownershipFailCluster) AcquireSession(context.Context, string, string) error {
 	return c.err
+}
+
+func (c *ownershipFailCluster) GetSubscriptionsForClient(context.Context, string) ([]*storage.Subscription, error) {
+	return nil, nil
 }
 
 func TestCreateSessionRejectsFailedOwnershipClaim(t *testing.T) {
