@@ -127,7 +127,7 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		Will:           will,
 	}
 
-	s, isNew, expectedEpoch, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // createSession has no context parameter yet; 73 call sites, tracked separately
+	s, isNew, claim, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // createSession has no context parameter yet; 73 call sites, tracked separately
 	if err != nil {
 		if errors.Is(err, cluster.ErrSessionIdentityMismatch) {
 			h.broker.telemetry.stats.IncrementAuthErrors()
@@ -148,7 +148,7 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	// connection enforcing a different limit than it was admitted under. MQTT
 	// 3.1.1 cannot advertise the value, so a client has no way to learn about a
 	// later change.
-	epoch, err := h.broker.attachSession(ctx, s, expectedEpoch, conn, session.ConnectOptions{
+	epoch, err := h.broker.attachSession(ctx, s, claim, conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		Will:           will,
@@ -164,7 +164,7 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		if !errors.Is(err, errSessionReplacedBeforeAttach) {
 			h.broker.telemetry.stats.IncrementProtocolErrors()
 			if isNew {
-				h.broker.destroyIfCurrent(context.WithoutCancel(ctx), s) //nolint:errcheck // best-effort cleanup of a session that never attached
+				h.broker.releaseUnattachedSession(context.WithoutCancel(ctx), s, claim.epoch)
 			}
 		}
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing

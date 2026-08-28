@@ -5,11 +5,14 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
+	"github.com/absmach/fluxmq/storage"
 )
 
 // expiryLoop periodically checks for expired sessions.
@@ -49,13 +52,38 @@ func (b *Broker) expireSessions() {
 	})
 
 	for _, clientID := range toDelete {
-		sessionLock := b.sessionLocks.Key(clientID)
-		sessionLock.Lock()
-		s := b.sessionsMap.Get(clientID)
-		if s != nil {
-			b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup during expired session sweep
+		b.expireSession(context.Background(), clientID)
+	}
+}
+
+// expireSession retires a session whose expiry interval has elapsed. Expiry ends
+// the session, and a Will still waiting on its delay is due when the session ends
+// or the delay passes, whichever comes first [MQTT-3.1.2-8], so the record is
+// captured before destruction deletes it and published after the lock is
+// released.
+func (b *Broker) expireSession(ctx context.Context, clientID string) {
+	var dueWill *storage.WillMessage
+
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	if s := b.sessionsMap.Get(clientID); s != nil {
+		if b.stores.wills != nil {
+			will, err := b.stores.wills.Get(ctx, clientID)
+			switch {
+			case err == nil:
+				dueWill = will
+			case !errors.Is(err, storage.ErrNotFound):
+				b.logError("load_expiring_session_will", err, slog.String("client_id", clientID))
+			}
 		}
-		sessionLock.Unlock()
+		b.destroySessionLocked(ctx, s) //nolint:errcheck // best-effort session cleanup during expired session sweep
+	}
+	sessionLock.Unlock()
+
+	if dueWill != nil {
+		if err := b.publishWillMessage(ctx, dueWill); err != nil {
+			b.logError("publish_expired_session_will", err, slog.String("client_id", clientID))
+		}
 	}
 }
 

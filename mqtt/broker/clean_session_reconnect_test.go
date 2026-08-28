@@ -397,12 +397,12 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 		Payload:  []byte("old"),
 		Delay:    60,
 	}
-	s, _, expectedEpoch, err := b.createSessionForConnection(clientID, 5, session.Options{
+	s, _, claim, err := b.createSessionForConnection(clientID, 5, session.Options{
 		ExpiryInterval: 300,
 		Will:           oldWill,
 	}, false)
 	require.NoError(t, err)
-	oldEpoch, err := b.attachSession(context.Background(), s, expectedEpoch, newSyncConn(), session.ConnectOptions{
+	oldEpoch, err := b.attachSession(context.Background(), s, claim, newSyncConn(), session.ConnectOptions{
 		Version:        5,
 		KeepAlive:      time.Minute,
 		Will:           oldWill,
@@ -422,13 +422,13 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
 	<-callbackStarted
 
-	claimed, created, replacementEpoch, err := b.createSessionForConnection(clientID, 5, session.Options{
+	claimed, created, replacementClaim, err := b.createSessionForConnection(clientID, 5, session.Options{
 		ExpiryInterval: 300,
 	}, false)
 	require.NoError(t, err)
 	require.False(t, created)
 	require.Same(t, s, claimed, "persistent reconnect must reuse the session pointer")
-	require.Equal(t, oldEpoch, replacementEpoch)
+	require.Equal(t, oldEpoch, replacementClaim.epoch)
 
 	newWill := &storage.WillMessage{
 		ClientID: clientID,
@@ -436,7 +436,7 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 		Payload:  []byte("new"),
 		Delay:    120,
 	}
-	newEpoch, err := b.attachSession(context.Background(), s, replacementEpoch, newSyncConn(), session.ConnectOptions{
+	newEpoch, err := b.attachSession(context.Background(), s, replacementClaim, newSyncConn(), session.ConnectOptions{
 		Version:        5,
 		KeepAlive:      time.Minute,
 		Will:           newWill,
@@ -470,13 +470,13 @@ func TestAttachSessionRejectsClaimReplacedByCleanStart(t *testing.T) {
 	defer b.Close()
 
 	const clientID = "replaced-before-attach"
-	stale, _, expectedEpoch, err := b.createSessionForConnection(clientID, 4, session.Options{}, false)
+	stale, _, staleClaim, err := b.createSessionForConnection(clientID, 4, session.Options{}, false)
 	require.NoError(t, err)
 	replacement, _, err := b.CreateSession(clientID, 4, session.Options{CleanStart: true})
 	require.NoError(t, err)
 	require.NotSame(t, stale, replacement)
 
-	_, err = b.attachSession(context.Background(), stale, expectedEpoch, newSyncConn(), session.ConnectOptions{
+	_, err = b.attachSession(context.Background(), stale, staleClaim, newSyncConn(), session.ConnectOptions{
 		Version:        4,
 		ReceiveMaximum: 16,
 	}, nil)
@@ -557,12 +557,12 @@ func TestAttachSessionCancelsStoredDelayedWillBeforeLaterCleanStart(t *testing.T
 		return err == nil
 	}, "delayed Will stored after disconnect")
 
-	claimed, created, expectedEpoch, err := b.createSessionForConnection(clientID, 5, session.Options{
+	claimed, created, claim, err := b.createSessionForConnection(clientID, 5, session.Options{
 		ExpiryInterval: 300,
 	}, false)
 	require.NoError(t, err)
 	require.False(t, created)
-	_, err = b.attachSession(context.Background(), claimed, expectedEpoch, newSyncConn(), session.ConnectOptions{
+	_, err = b.attachSession(context.Background(), claimed, claim, newSyncConn(), session.ConnectOptions{
 		Version:        5,
 		KeepAlive:      time.Minute,
 		ReceiveMaximum: 16,
@@ -818,9 +818,13 @@ func TestRetireSession_NotifiesEveryRetiredConnection(t *testing.T) {
 }
 
 // A Clean Start CONNECT ends the previous session even when no session object
-// survives to detach it — after an expiry sweep, a lost lease, or a restart that
-// outlived only the Will record. Ending the session makes a pending delayed Will
-// due, so it must be published rather than cancelled as if the session resumed.
+// survives to detach it: a restart empties the session map while the records it
+// wrote remain. Ending the session makes a pending delayed Will due, so it must
+// be published rather than cancelled as if the session had resumed.
+//
+// A sweep or a lost lease cannot leave this state — the sweep publishes the Will
+// and deletes the record (TestExpireSessionPublishesDueWill), and lease loss
+// keeps the session in memory.
 func TestCreateSession_CleanStartPublishesStoredWillWithoutLocalSession(t *testing.T) {
 	store := memory.New()
 	b := NewBroker(store, nil)
