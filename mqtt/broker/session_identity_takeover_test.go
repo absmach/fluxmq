@@ -10,6 +10,7 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -70,6 +71,8 @@ func TestSessionTakeoverIdentityMismatchLeavesOwnerUntouched(t *testing.T) {
 func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 	b := NewBroker(memory.New(), nil)
 	t.Cleanup(func() { require.NoError(t, b.Close()) })
+	hook := &disconnectSpyHook{}
+	b.SetEventHook(hook)
 
 	s, _, err := b.CreateSession("bound-client", 5, session.Options{
 		ExternalID:     mtlsEntityA,
@@ -77,7 +80,8 @@ func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 		ExpiryInterval: 300,
 	})
 	require.NoError(t, err)
-	_, err = s.Connect(&mockConnection{})
+	conn := newSyncConn()
+	_, err = s.Connect(conn)
 	require.NoError(t, err)
 
 	state, err := b.GetSessionStateAndClose(context.Background(), s.ID, &cluster.SessionIdentityGuard{
@@ -89,6 +93,16 @@ func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 	require.Equal(t, mtlsEntityA, state.ExternalId)
 	require.Nil(t, b.Get(s.ID))
 	require.False(t, s.IsConnected())
+	waitFor(t, func() bool {
+		for _, p := range conn.writtenPackets() {
+			if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == v5.DisconnectSessionTakenOver {
+				return true
+			}
+		}
+		return false
+	}, "transferred v5 client receives DISCONNECT 0x8E")
+	waitFor(t, func() bool { return len(hook.snapshot()) == 1 }, "cross-node retirement emits its disconnect event")
+	require.Equal(t, []string{reasonTakeover}, hook.snapshot())
 }
 
 func TestMQTTMTLSClusterTakeoverPropagatesIdentityGuard(t *testing.T) {

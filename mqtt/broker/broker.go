@@ -27,6 +27,12 @@ const (
 	queuePrefix    = "/queue/"
 )
 
+// Reasons carried by a client-disconnected event.
+const (
+	disconnectReasonNormal = "normal"
+	disconnectReasonError  = "error"
+)
+
 type queueManager interface {
 	broker.QueueLifecycle
 	broker.QueuePublisher

@@ -68,13 +68,13 @@ type Session struct {
 	subscriptions       map[string]storage.SubscribeOptions
 	subscriptionAliases map[string]string
 	subscriptionIDs     map[string][]uint32
-	onDisconnect        func(s *Session, graceful bool)
+	onDisconnect        func(s *Session, graceful bool, epoch uint64)
 	KeepAlive           time.Duration
 	state               State
-	// epoch is bumped on every Connect. It identifies the current connection
-	// generation so a stale runSession goroutine (from a superseded connection)
-	// can detect that the session has moved on and avoid tearing down the new
-	// connection. Guarded by mu.
+	// epoch is bumped on every attach and explicit detachment. It identifies the
+	// current connection generation so a stale runSession goroutine (from a
+	// superseded connection) can detect that the session has moved on and avoid
+	// tearing down the new connection. Guarded by mu.
 	epoch                uint64
 	ExpiryInterval       uint32
 	MaxPacketSize        uint32
@@ -304,13 +304,64 @@ type ConnectOptions struct {
 	MaxQoS byte
 }
 
-// Superseded describes a connection displaced by a takeover, so the broker can
-// drain it outside the session lock: notify the displaced MQTT 5 client with a
-// DISCONNECT (DisconnectSessionTakenOver), close the socket, and publish its Will if required.
+// Superseded describes connection-scoped state displaced by a takeover. The
+// caller owns the returned connection and Will and decides how to retire them.
 type Superseded struct {
 	Conn    core.Connection
 	Version byte
 	Will    *storage.WillMessage
+}
+
+// DetachForTakeover ends this session's current network connection without
+// closing the socket or invoking the asynchronous disconnect callback. The
+// caller must retire the returned connection after releasing any broker-level
+// session lock. Detaching advances the epoch immediately, fencing packet
+// processing and callbacks from the detached connection.
+func (s *Session) DetachForTakeover() *Superseded {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	superseded := &Superseded{
+		Version: s.Version,
+	}
+
+	// Detachment is a generation transition even when the connection already
+	// disappeared. A runSession or disconnect callback holding the previous
+	// epoch must become stale before broker-owned cleanup starts.
+	s.epoch++
+
+	// A session installed in the broker map but not yet attached to a network
+	// connection has not completed CONNECT, so its proposed Will is not active.
+	if s.state == StateNew || s.state == StateConnecting {
+		s.Will = nil
+		return superseded
+	}
+
+	// Transfer ownership of the old connection's Will to the retirement path.
+	// Clearing it here prevents a previously queued callback from scheduling the
+	// same Will if session destruction later fails.
+	superseded.Will = s.Will
+	s.Will = nil
+
+	if s.state != StateConnected {
+		return superseded
+	}
+
+	s.state = StateDisconnecting
+	select {
+	case <-s.deliverStop:
+	default:
+		close(s.deliverStop)
+	}
+
+	s.disconnectedAt = time.Now()
+	superseded.Conn = s.conn
+	s.conn = nil
+	s.state = StateDisconnected
+	s.drainPendingToOffline()
+	s.msgHandler.ClearAliases()
+
+	return superseded
 }
 
 // Connect attaches a connection using the session's existing options. The
@@ -345,6 +396,21 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 	var superseded *Superseded
 	if s.conn != nil {
 		superseded = &Superseded{Conn: s.conn, Version: s.Version, Will: s.Will}
+		if applyOpts {
+			// The Will belongs to the generation being replaced. Transfer it
+			// before applying the new connection's options.
+			s.Will = nil
+		}
+		// Without applyOpts the session keeps its Will, so the returned value
+		// aliases it rather than owning it. Connect is the only such caller and
+		// retires nothing but the socket; a caller that publishes this Will
+		// would publish the live session's Will twice.
+	} else if s.state == StateDisconnected && s.Will != nil {
+		// A disconnect callback may still be queued. Transfer its generation's
+		// outstanding Will before installing the replacement so that callback
+		// cannot consume or overwrite the replacement Will.
+		superseded = &Superseded{Version: s.Version, Will: s.Will}
+		s.Will = nil
 	}
 
 	if applyOpts {
@@ -672,8 +738,9 @@ func (s *Session) disconnectLocked(graceful bool, reasonCode byte) error {
 	s.msgHandler.ClearAliases()
 
 	callback := s.onDisconnect
+	epoch := s.epoch
 	if callback != nil {
-		go callback(s, graceful)
+		go callback(s, graceful, epoch)
 	}
 
 	return nil
@@ -691,6 +758,27 @@ func (s *Session) IsConnected() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state == StateConnected && s.conn != nil
+}
+
+// HasExpired reports whether the session has been disconnected for longer than
+// its expiry interval as of now. Connection state, expiry interval, and
+// disconnect timestamp are read together under one lock: read separately they
+// can come from either side of a reconnect or a SetExpiryInterval.
+//
+// A session that has never held a connection has no disconnect timestamp, and a
+// zero one is not an expiry that elapsed in 1970. That is the state a CONNECT
+// leaves behind between installing the session and attaching to it, so treating
+// it as overdue would let the expiry sweep destroy a session — and the durable
+// state it restored — out from under a connection still being set up.
+func (s *Session) HasExpired(now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if (s.state == StateConnected && s.conn != nil) || s.ExpiryInterval == 0 || s.disconnectedAt.IsZero() {
+		return false
+	}
+
+	return now.After(s.disconnectedAt.Add(time.Duration(s.ExpiryInterval) * time.Second))
 }
 
 // GetDisconnectedAt returns when the session was disconnected.
@@ -842,8 +930,22 @@ func (s *Session) Touch() {
 	}
 }
 
-// SetOnDisconnect sets the disconnect callback.
+// SetOnDisconnect sets a disconnect callback without exposing the connection
+// epoch. It is retained for callers that do not need generation-aware cleanup.
 func (s *Session) SetOnDisconnect(fn func(*Session, bool)) {
+	if fn == nil {
+		s.SetOnDisconnectWithEpoch(nil)
+		return
+	}
+	s.SetOnDisconnectWithEpoch(func(s *Session, graceful bool, _ uint64) {
+		fn(s, graceful)
+	})
+}
+
+// SetOnDisconnectWithEpoch sets a disconnect callback that receives the epoch
+// of the physical connection that disconnected. Broker cleanup uses the epoch
+// together with session identity to fence callbacks delayed past a reconnect.
+func (s *Session) SetOnDisconnectWithEpoch(fn func(*Session, bool, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onDisconnect = fn
@@ -972,6 +1074,18 @@ func (s *Session) GetWill() *storage.WillMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Will
+}
+
+// TakeWill transfers ownership of the current Will to the caller. Consuming it
+// prevents a later clean replacement or stale disconnect callback from
+// publishing the same Will a second time.
+func (s *Session) TakeWill() *storage.WillMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	will := s.Will
+	s.Will = nil
+	return will
 }
 
 // Info returns session info for persistence.

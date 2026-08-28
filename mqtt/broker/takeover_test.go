@@ -171,6 +171,19 @@ type syncConn struct {
 	readOnce  sync.Once
 }
 
+type failingNotifyConn struct {
+	*blockingConn
+}
+
+func newFailingNotifyConn() *failingNotifyConn {
+	return &failingNotifyConn{blockingConn: newBlockingConn()}
+}
+
+func (c *failingNotifyConn) WriteControlPacket(pkt packets.ControlPacket, _ func()) error {
+	pkt.Release()
+	return io.ErrClosedPipe
+}
+
 func newSyncConn() *syncConn {
 	return &syncConn{closeCh: make(chan struct{}), reading: make(chan struct{})}
 }
@@ -272,6 +285,25 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for: %s", msg)
+}
+
+func TestRetireSession_WriteFailureClosesWithoutGraceDelay(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+	conn := newFailingNotifyConn()
+
+	start := time.Now()
+	b.retireSession(context.Background(), &sessionRetirement{
+		clientID: "notify-write-failure",
+		superseded: &session.Superseded{
+			Conn:    conn,
+			Version: 5,
+		},
+	})
+
+	require.True(t, conn.closed.Load())
+	require.Less(t, time.Since(start), supersededNotifyGrace/2,
+		"an immediate notification write failure must not wait for the grace timeout")
 }
 
 // TestHandleConnect_LocalTakeoverHighLatencyReconnect reproduces propeller#241:
@@ -718,7 +750,7 @@ func TestHandleConnect_V5TakeoverDelayedWillNotPublished(t *testing.T) {
 	// must not be published.
 	waitFor(t, func() bool { return oldConn.closed.Load() }, "old connection closed by takeover")
 
-	// The Will is published (if at all) by the asynchronous drainSuperseded
+	// The Will is published (if at all) by the asynchronous retirement
 	// goroutine, which the test cannot join. require.Never polls the subscriber
 	// throughout a settle window, asserting the delayed Will never arrives —
 	// deterministic where a single sleep+check would only sample one instant.
