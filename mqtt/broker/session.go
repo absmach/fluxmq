@@ -141,27 +141,54 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	}
 
 	existing := b.sessionsMap.Get(clientID)
-	if opts.CleanStart && existing != nil {
-		retired := existing.DetachForTakeover()
-		// If the network callback already scheduled the Will, it consumed the
-		// in-memory copy. Ending the old session makes any stored delayed Will
-		// due now, while an already-published Will is absent from the store.
-		if retired.Conn == nil && retired.Will == nil && b.stores.wills != nil {
+	if opts.CleanStart {
+		switch {
+		case existing != nil:
+			retired := existing.DetachForTakeover()
+			// If the network callback already scheduled the Will, it consumed the
+			// in-memory copy. Ending the old session makes any stored delayed Will
+			// due now, while an already-published Will is absent from the store.
+			if retired.Conn == nil && retired.Will == nil && b.stores.wills != nil {
+				storedWill, err := b.stores.wills.Get(ctx, clientID)
+				if err != nil && !errors.Is(err, storage.ErrNotFound) {
+					return nil, false, fmt.Errorf("failed to load replaced session will: %w", err)
+				}
+				retired.Will = storedWill
+			}
+			retirements = append(retirements, &sessionRetirement{
+				clientID:    clientID,
+				superseded:  retired,
+				sessionEnds: true,
+			})
+			// destroySessionLocked removes the stored record under this lock, so
+			// the sweep cannot publish the same Will a second time.
+			if err := b.destroySessionLocked(ctx, existing); err != nil {
+				return nil, false, err
+			}
+			existing = nil
+
+		case b.stores.wills != nil:
+			// Clean Start ends the previous session even when no session object
+			// survives to detach: it expired, its lease was lost, or a restart
+			// outlived only the Will record. Ending the session still makes a
+			// pending delayed Will due [MQTT-3.1.2-8], so it is claimed here.
+			// Without this, attachSession would cancel the record as if the
+			// session had resumed, and the Will would never be published.
 			storedWill, err := b.stores.wills.Get(ctx, clientID)
-			if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			switch {
+			case err == nil:
+				if err := b.stores.wills.Delete(ctx, clientID); err != nil {
+					return nil, false, fmt.Errorf("failed to claim replaced session will: %w", err)
+				}
+				retirements = append(retirements, &sessionRetirement{
+					clientID:    clientID,
+					superseded:  &session.Superseded{Will: storedWill},
+					sessionEnds: true,
+				})
+			case !errors.Is(err, storage.ErrNotFound):
 				return nil, false, fmt.Errorf("failed to load replaced session will: %w", err)
 			}
-			retired.Will = storedWill
 		}
-		retirements = append(retirements, &sessionRetirement{
-			clientID:    clientID,
-			superseded:  retired,
-			sessionEnds: true,
-		})
-		if err := b.destroySessionLocked(ctx, existing); err != nil {
-			return nil, false, err
-		}
-		existing = nil
 	}
 
 	if existing != nil && identity != nil && identity.RequireBound && existing.ExternalIdentity() == "" {
@@ -357,9 +384,10 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 var errSessionReplacedBeforeAttach = errors.New("session replaced before connection attachment")
 
 // attachSession commits a CONNECT to the session claim returned by
-// createSessionForConnection. Identity, epoch verification, stored delayed-Will
-// cancellation, connection attachment, auth binding, and persistence happen
-// under the same client-ID lock. A callback or Clean Start replacement can
+// createSessionForConnection. Verifying that the claim still names the current
+// session and generation, cancelling a stored delayed Will, attaching the
+// connection, binding the external identity, and persisting the session all
+// happen under the same client-ID lock. A callback or Clean Start replacement can
 // therefore run either before this operation or after it, but cannot interleave
 // client-ID-scoped state with the new connection generation.
 func (b *Broker) attachSession(ctx context.Context, s *session.Session, expectedEpoch uint64, conn core.Connection, opts session.ConnectOptions, expiryInterval *uint32) (epoch uint64, err error) {
@@ -571,6 +599,22 @@ func (b *Broker) DestroySession(clientID string) error {
 	}
 
 	return b.destroySessionLocked(context.Background(), s)
+}
+
+// destroyIfCurrent removes s only while it is still the session installed for
+// its client ID. A CONNECT that fails after createSession installed the session
+// hands it back this way, together with its cluster ownership, without
+// disturbing a replacement that arrived in between.
+func (b *Broker) destroyIfCurrent(ctx context.Context, s *session.Session) error {
+	sessionLock := b.sessionLocks.Key(s.ID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
+
+	if b.sessionsMap.Get(s.ID) != s {
+		return nil
+	}
+
+	return b.destroySessionLocked(ctx, s)
 }
 
 // destroySessionLocked destroys a session. Must be called with the session's key lock held.

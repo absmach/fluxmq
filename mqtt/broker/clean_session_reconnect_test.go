@@ -20,6 +20,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	// reasonTakeover is the ClientDisconnected reason a retired connection reports.
+	reasonTakeover = "takeover"
+	// willPayloadOffline is the Will payload these tests watch for on the wire.
+	willPayloadOffline = "offline"
+)
+
 type cleanupSpyCluster struct {
 	cluster.Cluster
 	mu                          sync.Mutex
@@ -134,7 +141,7 @@ func TestHandleConnect_CleanV3ReplacementPublishesOldWill(t *testing.T) {
 	oldConnect := cleanV3Connect(clientID)
 	oldConnect.WillFlag = true
 	oldConnect.WillTopic = willTopic
-	oldConnect.WillMessage = []byte("offline")
+	oldConnect.WillMessage = []byte(willPayloadOffline)
 	oldConn := newSyncConn()
 	var oldWG sync.WaitGroup
 	oldWG.Add(1)
@@ -191,7 +198,7 @@ func TestHandleConnect_CleanV5ReplacementNotifiesAndPublishesDelayedWill(t *test
 	require.NoError(t, err)
 	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
 
-	oldConnect := v5ConnectWillDelay(clientID, willTopic, []byte("offline"), 60)
+	oldConnect := v5ConnectWillDelay(clientID, willTopic, []byte(willPayloadOffline), 60)
 	oldConnect.CleanStart = true
 	oldConn := newSyncConn()
 	var oldWG sync.WaitGroup
@@ -263,7 +270,7 @@ func TestHandleDisconnect_CleanSessionPublishesWillBeforeDestroy(t *testing.T) {
 		Will: &storage.WillMessage{
 			ClientID: clientID,
 			Topic:    willTopic,
-			Payload:  []byte("offline"),
+			Payload:  []byte(willPayloadOffline),
 		},
 	})
 	require.NoError(t, err)
@@ -289,7 +296,7 @@ func TestHandleDisconnect_CleanSessionPublishesWillBeforeDestroy(t *testing.T) {
 	waitFor(t, func() bool {
 		for _, p := range subConn.writtenPackets() {
 			if pub, ok := p.(*v3.Publish); ok && pub.TopicName == willTopic {
-				return string(pub.Payload) == "offline"
+				return string(pub.Payload) == willPayloadOffline
 			}
 		}
 		return false
@@ -316,7 +323,7 @@ func TestCreateSession_CleanStartPublishesStoredDelayedWill(t *testing.T) {
 		Will: &storage.WillMessage{
 			ClientID: clientID,
 			Topic:    willTopic,
-			Payload:  []byte("offline"),
+			Payload:  []byte(willPayloadOffline),
 			Delay:    60,
 		},
 	})
@@ -336,7 +343,7 @@ func TestCreateSession_CleanStartPublishesStoredDelayedWill(t *testing.T) {
 	waitFor(t, func() bool {
 		for _, p := range subConn.writtenPackets() {
 			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
-				return string(pub.Payload) == "offline"
+				return string(pub.Payload) == willPayloadOffline
 			}
 		}
 		return false
@@ -497,7 +504,7 @@ func TestHandleDisconnect_PersistentZeroDelayWillPublishesWithoutStorage(t *test
 		Will: &storage.WillMessage{
 			ClientID: clientID,
 			Topic:    willTopic,
-			Payload:  []byte("offline"),
+			Payload:  []byte(willPayloadOffline),
 		},
 	})
 	require.NoError(t, err)
@@ -508,7 +515,7 @@ func TestHandleDisconnect_PersistentZeroDelayWillPublishesWithoutStorage(t *test
 	waitFor(t, func() bool {
 		for _, p := range subConn.writtenPackets() {
 			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
-				return string(pub.Payload) == "offline"
+				return string(pub.Payload) == willPayloadOffline
 			}
 		}
 		return false
@@ -585,7 +592,7 @@ func TestClaimPendingWillRejectsNewerIdenticalGeneration(t *testing.T) {
 	will := &storage.WillMessage{
 		ClientID: clientID,
 		Topic:    "clients/identical-will-generation/status",
-		Payload:  []byte("offline"),
+		Payload:  []byte(willPayloadOffline),
 	}
 	ctx := context.Background()
 	require.NoError(t, store.Wills().Set(ctx, clientID, will))
@@ -713,7 +720,7 @@ func TestHandleConnect_CleanReplacementEmitsClientDisconnected(t *testing.T) {
 	waitFor(t, func() bool {
 		return len(hook.snapshot()) == 1
 	}, "replaced connection reports its disconnect")
-	require.Equal(t, []string{"takeover"}, hook.snapshot())
+	require.Equal(t, []string{reasonTakeover}, hook.snapshot())
 
 	newConn.Close()
 	oldWG.Wait()
@@ -752,7 +759,7 @@ func TestHandleConnect_PersistentReplacementEmitsOneTakeoverDisconnect(t *testin
 	oldWG.Wait()
 
 	waitFor(t, func() bool { return len(hook.snapshot()) == 1 }, "persistent takeover reports the retired socket")
-	require.Equal(t, []string{"takeover"}, hook.snapshot())
+	require.Equal(t, []string{reasonTakeover}, hook.snapshot())
 
 	newConn.Close()
 	newWG.Wait()
@@ -775,7 +782,7 @@ func TestRetireSession_NotifiesEveryRetiredConnection(t *testing.T) {
 				superseded:  &session.Superseded{Conn: newBlockingConn()},
 				sessionEnds: true,
 			},
-			want: []string{"takeover"},
+			want: []string{reasonTakeover},
 		},
 		{
 			name: "takeover/session_continues",
@@ -783,7 +790,7 @@ func TestRetireSession_NotifiesEveryRetiredConnection(t *testing.T) {
 				clientID:   clientID,
 				superseded: &session.Superseded{Conn: newBlockingConn()},
 			},
-			want: []string{"takeover"},
+			want: []string{reasonTakeover},
 		},
 		{
 			name: "clean_replacement/no_connection",
@@ -808,4 +815,52 @@ func TestRetireSession_NotifiesEveryRetiredConnection(t *testing.T) {
 			require.Equal(t, tc.want, hook.snapshot())
 		})
 	}
+}
+
+// A Clean Start CONNECT ends the previous session even when no session object
+// survives to detach it — after an expiry sweep, a lost lease, or a restart that
+// outlived only the Will record. Ending the session makes a pending delayed Will
+// due, so it must be published rather than cancelled as if the session resumed.
+func TestCreateSession_CleanStartPublishesStoredWillWithoutLocalSession(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+
+	const clientID = "orphaned-delayed-will"
+	const willTopic = "clients/orphaned-delayed-will/status"
+
+	sub, _, err := b.CreateSession("orphaned-delayed-will-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	// Model the record a previous broker generation left behind: the Will is in
+	// the store, but the session it belonged to is gone from memory.
+	require.NoError(t, store.Wills().Set(context.Background(), clientID, &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    willTopic,
+		Payload:  []byte(willPayloadOffline),
+		Delay:    60,
+	}))
+	require.Nil(t, b.sessionsMap.Get(clientID))
+
+	_, created, err := b.CreateSession(clientID, 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	waitFor(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return string(pub.Payload) == willPayloadOffline
+			}
+		}
+		return false
+	}, "Clean Start publishes a stored Will left without a local session")
+
+	// The claim is exclusive: the record is gone, so neither the sweep nor a
+	// later attach can publish or cancel it again.
+	_, err = store.Wills().Get(context.Background(), clientID)
+	require.ErrorIs(t, err, storage.ErrNotFound)
 }

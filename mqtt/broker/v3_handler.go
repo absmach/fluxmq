@@ -127,7 +127,7 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		Will:           will,
 	}
 
-	s, isNew, expectedEpoch, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS)
+	s, isNew, expectedEpoch, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // createSession has no context parameter yet; 73 call sites, tracked separately
 	if err != nil {
 		if errors.Is(err, cluster.ErrSessionIdentityMismatch) {
 			h.broker.telemetry.stats.IncrementAuthErrors()
@@ -156,8 +156,16 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		MaxQoS:         h.broker.MaxQoS(),
 	}, nil)
 	if err != nil {
+		// A lost epoch race is not a fault: the CONNECT that won owns the
+		// session, which may be the very one this call created. Any other
+		// failure leaves a session nothing will ever attach to, so hand it back
+		// along with its cluster ownership. MQTT 3.1.1 has no code that
+		// distinguishes the two cases.
 		if !errors.Is(err, errSessionReplacedBeforeAttach) {
 			h.broker.telemetry.stats.IncrementProtocolErrors()
+			if isNew {
+				h.broker.destroyIfCurrent(context.WithoutCancel(ctx), s) //nolint:errcheck // best-effort cleanup of a session that never attached
+			}
 		}
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()

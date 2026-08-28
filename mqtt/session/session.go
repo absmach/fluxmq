@@ -401,6 +401,10 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 			// before applying the new connection's options.
 			s.Will = nil
 		}
+		// Without applyOpts the session keeps its Will, so the returned value
+		// aliases it rather than owning it. Connect is the only such caller and
+		// retires nothing but the socket; a caller that publishes this Will
+		// would publish the live session's Will twice.
 	} else if s.state == StateDisconnected && s.Will != nil {
 		// A disconnect callback may still be queued. Transfer its generation's
 		// outstanding Will before installing the replacement so that callback

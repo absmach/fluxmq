@@ -102,7 +102,7 @@ func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 		return false
 	}, "transferred v5 client receives DISCONNECT 0x8E")
 	waitFor(t, func() bool { return len(hook.snapshot()) == 1 }, "cross-node retirement emits its disconnect event")
-	require.Equal(t, []string{"takeover"}, hook.snapshot())
+	require.Equal(t, []string{reasonTakeover}, hook.snapshot())
 }
 
 func TestMQTTMTLSClusterTakeoverPropagatesIdentityGuard(t *testing.T) {

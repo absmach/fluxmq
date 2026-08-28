@@ -148,7 +148,7 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		Will:           will,
 	}
 
-	s, isNew, expectedEpoch, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS)
+	s, isNew, expectedEpoch, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // createSession has no context parameter yet; 73 call sites, tracked separately
 	if err != nil {
 		if errors.Is(err, cluster.ErrSessionIdentityMismatch) {
 			h.broker.telemetry.stats.IncrementAuthErrors()
@@ -186,10 +186,20 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		MaxQoS:         sessionMaxQoS,
 	}, expiryInterval)
 	if err != nil {
+		// A lost epoch race is not a fault: the CONNECT that won owns the
+		// session, which may be the very one this call created. Server busy
+		// tells the client to retry, and separates the race from a real fault.
+		// Any other failure leaves a session nothing will ever attach to, so
+		// hand it back along with its cluster ownership.
+		connAckCode := byte(v5.ConnAckServerBusy)
 		if !errors.Is(err, errSessionReplacedBeforeAttach) {
+			connAckCode = v5.ConnAckUnspecifiedError
 			h.broker.telemetry.stats.IncrementProtocolErrors()
+			if isNew {
+				h.broker.destroyIfCurrent(context.WithoutCancel(ctx), s) //nolint:errcheck // best-effort cleanup of a session that never attached
+			}
 		}
-		sendV5ConnAck(conn, false, v5.ConnAckUnspecifiedError, nil) //nolint:errcheck // best-effort rejection reply before closing
+		sendV5ConnAck(conn, false, connAckCode, nil) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err
 	}
