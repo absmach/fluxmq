@@ -242,6 +242,24 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	inflight := messages.NewInflightTracker(serverReceiveMax)
 	offlineQueue := messages.NewMessageQueue(sessionCfg.MaxOfflineQueueSize, sessionCfg.OfflineQueuePolicy == config.OfflineQueuePolicyEvict)
 
+	// Ownership is taken before any client-ID-scoped state is read or written,
+	// because it is what makes this node's answer to those questions binding.
+	// The ownership check above is a read: another node can acquire the client
+	// ID between it and this line, and everything below — the orphan claim's
+	// cluster deletion above all — would then be acting on a session that is
+	// live somewhere else. Losing the race here costs a rejected CONNECT;
+	// losing it after the cleanup would cost the winner its routes.
+	//
+	// Failing past this point hands ownership back through the deferred
+	// rollback above, except where keepOwnership marks a session deliberately
+	// retained for its own principal.
+	if b.cluster != nil {
+		if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
+			return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
+		}
+		ownershipAcquired = true
+	}
+
 	// Which state this CONNECT may inherit is decided before any of it is
 	// loaded, so an unauthorized client never reaches another principal's
 	// inflight, queued, or subscribed messages.
@@ -365,13 +383,6 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
 		b.handleDisconnect(s, graceful, epoch)
 	})
-
-	if b.cluster != nil {
-		if err := b.cluster.AcquireSession(ctx, clientID, b.cluster.NodeID()); err != nil {
-			return nil, false, fmt.Errorf("failed to acquire session ownership: %w", err)
-		}
-		ownershipAcquired = true
-	}
 
 	if b.stores.sessions != nil {
 		if err := b.stores.sessions.Save(s.Info()); err != nil {
