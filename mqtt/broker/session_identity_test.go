@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -28,13 +30,17 @@ const (
 type takeoverCluster struct {
 	cluster.Cluster
 	state     *clusterv1.SessionState
+	remoteID  string
 	takeovers int
 	released  int
 }
 
 func (c *takeoverCluster) NodeID() string { return "node-local" }
 
-func (c *takeoverCluster) GetSessionOwner(context.Context, string) (string, bool, error) {
+func (c *takeoverCluster) GetSessionOwner(_ context.Context, clientID string) (string, bool, error) {
+	if c.remoteID != "" && clientID != c.remoteID {
+		return "", false, nil
+	}
 	return "node-remote", true, nil
 }
 
@@ -58,6 +64,8 @@ func (c *takeoverCluster) AddSubscription(context.Context, string, string, byte,
 }
 
 func (c *takeoverCluster) RemoveAllSubscriptions(context.Context, string) error { return nil }
+
+func (c *takeoverCluster) RoutePublish(context.Context, *message.Envelope) error { return nil }
 
 func (c *takeoverCluster) GetSubscriptionsForClient(context.Context, string) ([]*storage.Subscription, error) {
 	return nil, nil
@@ -186,6 +194,55 @@ func TestCreateSessionTakeoverIdentity(t *testing.T) {
 		assert.Equal(t, identityA, s.ExternalIdentity())
 		assert.Empty(t, s.GetSubscriptions(), "state bound to no principal is not inherited")
 	})
+}
+
+func TestCreateSessionRemoteCleanStartRetiresTransferredWill(t *testing.T) {
+	const clientID = "remote-clean-start"
+	const oldWillTopic = "clients/remote-clean-start/old"
+	const newWillTopic = "clients/remote-clean-start/new"
+
+	cl := &takeoverCluster{
+		remoteID: clientID,
+		state: &clusterv1.SessionState{
+			ExpiryInterval: 300,
+			Will: &clusterv1.WillMessage{
+				Topic:   oldWillTopic,
+				Payload: []byte("old-offline"),
+				Delay:   60,
+			},
+		},
+	}
+	b := NewBroker(memory.New(), cl)
+	t.Cleanup(func() { _ = b.Close() })
+
+	sub, _, err := b.CreateSession("remote-clean-start-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, oldWillTopic, 0, storage.SubscribeOptions{}))
+
+	incomingWill := &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    newWillTopic,
+		Payload:  []byte("new-offline"),
+	}
+	s, created, err := b.CreateSession(clientID, 5, session.Options{
+		CleanStart: true,
+		Will:       incomingWill,
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, newWillTopic, s.GetWill().Topic, "the transferred Will must not replace the new CONNECT's Will")
+
+	waitFor(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == oldWillTopic {
+				return string(pub.Payload) == "old-offline"
+			}
+		}
+		return false
+	}, "Clean Start publishes the transferred delayed Will immediately")
 }
 
 func TestCreateSessionPersistedIdentity(t *testing.T) {

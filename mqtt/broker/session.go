@@ -45,7 +45,13 @@ func (b *Broker) CreateSessionForIdentity(clientID string, version byte, opts se
 func (b *Broker) createSession(clientID string, version byte, opts session.Options, identity *cluster.SessionIdentityGuard) (sess *session.Session, created bool, err error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
-	defer sessionLock.Unlock()
+	var superseded []*session.Superseded
+	defer func() {
+		sessionLock.Unlock()
+		for _, retired := range superseded {
+			go b.drainSuperseded(context.Background(), retired)
+		}
+	}()
 
 	ctx := context.Background()
 
@@ -122,6 +128,18 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 
 	existing := b.sessionsMap.Get(clientID)
 	if opts.CleanStart && existing != nil {
+		retired := existing.DetachForTakeover(true)
+		// If the network callback already scheduled the Will, it consumed the
+		// in-memory copy. Ending the old session makes any stored delayed Will
+		// due now, while an already-published Will is absent from the store.
+		if retired.Conn == nil && retired.Will == nil && b.stores.wills != nil {
+			storedWill, err := b.stores.wills.Get(ctx, clientID)
+			if err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return nil, false, fmt.Errorf("failed to load replaced session will: %w", err)
+			}
+			retired.Will = storedWill
+		}
+		superseded = append(superseded, retired)
 		if err := b.destroySessionLocked(ctx, existing); err != nil {
 			return nil, false, err
 		}
@@ -196,7 +214,37 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	if err != nil {
 		return nil, false, err
 	}
+	takeoverWill := willFromTakeover(clientID, takeoverState)
 	takeoverState = restore.takeover
+	if takeoverWill != nil {
+		switch {
+		case restore.preserveForOwner:
+			// The attempted reconnect was rejected after the previous owner had
+			// already transferred and closed the session. Keep a delayed Will
+			// pending for the real owner; a zero-delay Will is due now.
+			if takeoverWill.Delay == 0 {
+				superseded = append(superseded, &session.Superseded{ClientID: clientID, Will: takeoverWill})
+			} else if b.stores.wills != nil {
+				if err := b.stores.wills.Set(ctx, clientID, takeoverWill); err != nil {
+					return nil, false, fmt.Errorf("failed to preserve takeover will: %w", err)
+				}
+			}
+		default:
+			// The old connection's Will belongs to that connection, not to the
+			// new CONNECT. A continued session cancels only a delayed Will; when
+			// the old session was discarded, every Will is due immediately.
+			superseded = append(superseded, &session.Superseded{
+				ClientID:    clientID,
+				Will:        takeoverWill,
+				SessionEnds: takeoverState == nil,
+			})
+		}
+	}
+	if restore.preserveForOwner {
+		// This CONNECT is rejected below, so its proposed Will must never become
+		// part of the migrated session retained for another principal.
+		opts.Will = nil
+	}
 
 	if takeoverState != nil {
 		if err := b.restoreInflightFromTakeover(takeoverState, inflight); err != nil {
@@ -214,19 +262,7 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		}
 	}
 
-	// Handle will message from takeover or from opts
-	if takeoverState != nil && takeoverState.Will != nil {
-		// Restore will from takeover state
-		opts.Will = &storage.WillMessage{
-			ClientID:   clientID,
-			Topic:      takeoverState.Will.Topic,
-			Payload:    takeoverState.Will.Payload,
-			QoS:        byte(takeoverState.Will.Qos),
-			Retain:     takeoverState.Will.Retain,
-			Delay:      takeoverState.Will.Delay,
-			Properties: nil,
-		}
-	} else if opts.Will != nil {
+	if opts.Will != nil {
 		// Ensure ClientID is set
 		opts.Will.ClientID = clientID
 	}
@@ -540,7 +576,29 @@ func (b *Broker) HandleSessionLeaseLost(_ context.Context, clientIDs []string) {
 func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	sessionLock := b.sessionLocks.Key(s.ID)
 	sessionLock.Lock()
-	defer sessionLock.Unlock()
+	var publishWill *storage.WillMessage
+	notifyDisconnect := false
+	disconnectReason := "normal"
+	if !graceful {
+		disconnectReason = "error"
+	}
+	defer func() {
+		sessionLock.Unlock()
+		if publishWill != nil {
+			if err := b.publishWillMessage(context.Background(), publishWill); err != nil {
+				b.logError("publish_disconnected_will", err, slog.String("client_id", publishWill.ClientID))
+			}
+		}
+		if notifyDisconnect {
+			b.emitClientDisconnected(context.Background(), s.ID, disconnectReason)
+		}
+	}()
+
+	// The connection really did drop, so the notification is owed regardless of
+	// which session currently holds the client ID. Everything past the identity
+	// check writes state keyed by that ID instead, and must not run on behalf of
+	// a session that has already been replaced.
+	notifyDisconnect = true
 
 	// Disconnect callbacks run asynchronously. A clean reconnect can replace
 	// the session before the old callback starts; that stale callback must not
@@ -553,35 +611,22 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		b.auth.Forget(s.ID)
 	}
 
-	// Webhook: client disconnected
-	disconnectReason := "normal"
-	if !graceful {
-		disconnectReason = "error"
-	}
-	if b.telemetry.webhooks != nil {
-		b.telemetry.webhooks.Notify(context.Background(), events.ClientDisconnected{ //nolint:errcheck // fire-and-forget webhook notification
-			ClientID:   s.ID,
-			Reason:     disconnectReason,
-			RemoteAddr: "", // Not available at broker level
-		})
-	}
-
-	// Event hook: client disconnected
-	if b.eventHook != nil {
-		if err := b.eventHook.OnDisconnect(context.Background(), s.ID, disconnectReason); err != nil {
-			b.logError("event_hook_disconnect", err, slog.String("client_id", s.ID))
-		}
-	}
-
 	b.persistSessionInfo(s)
+	sessionEnds := s.CleanStart && s.ExpiryInterval == 0
+	will := s.TakeWill()
 	if b.stores.wills != nil {
 		ctx := context.Background()
-		will := s.GetWill()
 		if !graceful && will != nil {
-			b.stores.wills.Set(ctx, s.ID, will) //nolint:errcheck // best-effort will persistence on disconnect
+			if sessionEnds {
+				publishWill = will
+			} else {
+				b.stores.wills.Set(ctx, s.ID, will) //nolint:errcheck // best-effort will persistence on disconnect
+			}
 		} else if graceful {
 			b.stores.wills.Delete(ctx, s.ID) //nolint:errcheck // best-effort will cleanup on graceful disconnect
 		}
+	} else if !graceful && sessionEnds {
+		publishWill = will
 	}
 	if b.stores.messages != nil {
 		msgs := s.OfflineQueue().Drain()
@@ -602,12 +647,31 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 		}
 	}
 
-	if s.CleanStart && s.ExpiryInterval == 0 {
+	if sessionEnds {
 		b.destroySessionLocked(context.Background(), s) //nolint:errcheck // best-effort session cleanup for clean-start sessions
 	}
 	// For persistent sessions, DON'T release ownership immediately
 	// Keep ownership so messages can still be routed to this node
 	// Ownership will expire naturally after TTL (30s)
+}
+
+// emitClientDisconnected runs external notifications without holding the
+// client-ID shard lock. Event hooks are user-supplied and webhooks may perform
+// network I/O, so neither may delay CONNECT or cleanup for colliding keys.
+func (b *Broker) emitClientDisconnected(ctx context.Context, clientID, reason string) {
+	if b.telemetry.webhooks != nil {
+		b.telemetry.webhooks.Notify(ctx, events.ClientDisconnected{ //nolint:errcheck // fire-and-forget webhook notification
+			ClientID:   clientID,
+			Reason:     reason,
+			RemoteAddr: "", // Not available at broker level
+		})
+	}
+
+	if b.eventHook != nil {
+		if err := b.eventHook.OnDisconnect(ctx, clientID, reason); err != nil {
+			b.logError("event_hook_disconnect", err, slog.String("client_id", clientID))
+		}
+	}
 }
 
 func (b *Broker) persistSessionInfo(s *session.Session) {
@@ -777,6 +841,21 @@ func (b *Broker) restoreInflightFromTakeover(state *clusterv1.SessionState, trac
 	return nil
 }
 
+func willFromTakeover(clientID string, state *clusterv1.SessionState) *storage.WillMessage {
+	if state == nil || state.Will == nil {
+		return nil
+	}
+
+	return &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    state.Will.Topic,
+		Payload:  bytes.Clone(state.Will.Payload),
+		QoS:      byte(state.Will.Qos),
+		Retain:   state.Will.Retain,
+		Delay:    state.Will.Delay,
+	}
+}
+
 // restoreQueueFromTakeover restores offline queue from takeover state.
 func (b *Broker) restoreQueueFromTakeover(state *clusterv1.SessionState, queue messages.Queue) error {
 	if state == nil || state.QueuedMessages == nil {
@@ -849,7 +928,13 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, identity *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
-	defer sessionLock.Unlock()
+	var superseded *session.Superseded
+	defer func() {
+		sessionLock.Unlock()
+		if superseded != nil {
+			go b.drainSuperseded(context.WithoutCancel(ctx), superseded)
+		}
+	}()
 
 	s := b.sessionsMap.Get(clientID)
 	if s == nil {
@@ -914,8 +999,17 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, i
 		message.Release(msg)
 	}
 
-	// Capture will message
-	if will := s.GetWill(); will != nil {
+	// Capture the active Will, or a delayed Will already scheduled by a
+	// completed disconnect callback. Destruction below removes the old store.
+	will := s.GetWill()
+	if will == nil && b.stores.wills != nil {
+		storedWill, err := b.stores.wills.Get(ctx, s.ID)
+		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("failed to capture session will: %w", err)
+		}
+		will = storedWill
+	}
+	if will != nil {
 		state.Will = &clusterv1.WillMessage{
 			Topic:   will.Topic,
 			Payload: bytes.Clone(will.Payload),
@@ -925,9 +1019,12 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, i
 		}
 	}
 
-	// The takeover caller owns the distributed handoff. Suppress the ordinary
-	// disconnect callback and retain the old owner key until its final CAS.
-	s.SetOnDisconnect(nil)
+	// Detach while the client-ID lock still protects the old owner, then notify
+	// and close after unlocking. The Will travels in state so the new owner can
+	// decide whether Clean Start ends the session or a reconnect cancels its
+	// delay; the old owner must not publish it independently.
+	superseded = s.DetachForTakeover(false)
+	superseded.Will = nil
 	if err := b.destroySessionForTakeoverLocked(ctx, s); err != nil {
 		return nil, fmt.Errorf("failed to destroy session: %w", err)
 	}

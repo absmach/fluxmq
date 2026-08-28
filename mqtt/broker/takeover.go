@@ -27,42 +27,52 @@ const supersededNotifyGrace = time.Second
 // References: OASIS MQTT 5.0, sections 3.1.4 (session takeover) and 3.1.2.5
 // (Will lifecycle).
 func (b *Broker) drainSuperseded(ctx context.Context, sc *session.Superseded) {
-	if sc == nil || sc.Conn == nil {
+	if sc == nil {
 		return
 	}
 
-	// Notify a displaced MQTT 5 client before closing the connection. Wait for
-	// the packet to actually be transmitted (the onSent callback fires after
-	// the send loop writes it to the socket), not merely enqueued, so an
-	// asynchronous send queue does not observe the close before flushing the
-	// DISCONNECT.
-	if sc.Version == core.ProtocolV5 {
-		d := &v5.Disconnect{
-			FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
-			ReasonCode:  v5.DisconnectSessionTakenOver,
+	if sc.Conn != nil {
+		// Notify a displaced MQTT 5 client before closing the connection. Wait for
+		// the packet to actually be transmitted (the onSent callback fires after
+		// the send loop writes it to the socket), not merely enqueued, so an
+		// asynchronous send queue does not observe the close before flushing the
+		// DISCONNECT.
+		if sc.Version == core.ProtocolV5 {
+			d := &v5.Disconnect{
+				FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
+				ReasonCode:  v5.DisconnectSessionTakenOver,
+			}
+			sent := make(chan struct{})
+			go func() {
+				// WriteControlPacket may block enqueueing on a stalled client.
+				sc.Conn.WriteControlPacket(d, func() { close(sent) }) //nolint:errcheck // best-effort takeover notification
+			}()
+			// Bounded: a stalled client must not delay the close indefinitely.
+			select {
+			case <-sent:
+			case <-time.After(supersededNotifyGrace):
+			}
 		}
-		sent := make(chan struct{})
-		go func() {
-			// WriteControlPacket may block enqueueing on a stalled client.
-			sc.Conn.WriteControlPacket(d, func() { close(sent) }) //nolint:errcheck // best-effort takeover notification
-		}()
-		// Bounded: a stalled client must not delay the close indefinitely.
-		select {
-		case <-sent:
-		case <-time.After(supersededNotifyGrace):
-		}
+
+		// Closing unblocks any pending notify write and lets the displaced
+		// connection's runSession goroutine observe the closed socket and exit.
+		sc.Conn.Close() //nolint:errcheck // idempotent close of superseded connection
 	}
 
-	// Closing unblocks any pending notify write and lets the displaced
-	// connection's runSession goroutine observe the closed socket and exit.
-	sc.Conn.Close() //nolint:errcheck // idempotent close of superseded connection
-
-	// Publish the displaced connection's Will if it has no delay. A Will with a
-	// delay is cancelled because the session continues under the new
-	// connection (a takeover is a reconnect of the same session).
-	if sc.Will != nil && sc.Will.Delay == 0 {
+	// A zero-delay Will is always published when the old connection closes. A
+	// delayed Will is cancelled only when the same session continues; Clean Start
+	// ends the old session, so its delayed Will is due immediately.
+	if sc.Will != nil && (sc.SessionEnds || sc.Will.Delay == 0) {
 		if err := b.publishWillMessage(ctx, sc.Will); err != nil {
 			b.logError("publish_superseded_will", err, slog.String("client_id", sc.Will.ClientID))
 		}
+	}
+
+	// Ending the old session retires its connection for good, so the disconnect
+	// is owed to hooks and webhooks. A takeover that continues the same session
+	// owes nothing: the client ID stays connected under the replacement socket,
+	// and the handler reports the new connection through NotifyConnect.
+	if sc.SessionEnds && sc.Conn != nil {
+		b.emitClientDisconnected(ctx, sc.ClientID, "takeover")
 	}
 }

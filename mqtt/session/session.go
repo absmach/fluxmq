@@ -308,9 +308,61 @@ type ConnectOptions struct {
 // drain it outside the session lock: notify the displaced MQTT 5 client with a
 // DISCONNECT (DisconnectSessionTakenOver), close the socket, and publish its Will if required.
 type Superseded struct {
-	Conn    core.Connection
-	Version byte
-	Will    *storage.WillMessage
+	ClientID    string
+	Conn        core.Connection
+	Version     byte
+	Will        *storage.WillMessage
+	SessionEnds bool
+}
+
+// DetachForTakeover ends this session's current network connection without
+// closing the socket or invoking the asynchronous disconnect callback. The
+// caller must retire the returned connection after releasing any broker-level
+// session lock. sessionEnds distinguishes a Clean Start replacement, where a
+// delayed Will is published immediately, from a reconnect that continues the
+// same session and cancels a delayed Will.
+func (s *Session) DetachForTakeover(sessionEnds bool) *Superseded {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	superseded := &Superseded{
+		ClientID:    s.ID,
+		Version:     s.Version,
+		SessionEnds: sessionEnds,
+	}
+
+	// A session installed in the broker map but not yet attached to a network
+	// connection has not completed CONNECT, so its proposed Will is not active.
+	if s.state == StateNew || s.state == StateConnecting {
+		s.Will = nil
+		return superseded
+	}
+
+	// Transfer ownership of the old connection's Will to the retirement path.
+	// Clearing it here prevents a previously queued callback from scheduling the
+	// same Will if session destruction later fails.
+	superseded.Will = s.Will
+	s.Will = nil
+
+	if s.state != StateConnected {
+		return superseded
+	}
+
+	s.state = StateDisconnecting
+	select {
+	case <-s.deliverStop:
+	default:
+		close(s.deliverStop)
+	}
+
+	s.disconnectedAt = time.Now()
+	superseded.Conn = s.conn
+	s.conn = nil
+	s.state = StateDisconnected
+	s.drainPendingToOffline()
+	s.msgHandler.ClearAliases()
+
+	return superseded
 }
 
 // Connect attaches a connection using the session's existing options. The
@@ -344,7 +396,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 
 	var superseded *Superseded
 	if s.conn != nil {
-		superseded = &Superseded{Conn: s.conn, Version: s.Version, Will: s.Will}
+		superseded = &Superseded{ClientID: s.ID, Conn: s.conn, Version: s.Version, Will: s.Will}
 	}
 
 	if applyOpts {
@@ -972,6 +1024,18 @@ func (s *Session) GetWill() *storage.WillMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Will
+}
+
+// TakeWill transfers ownership of the current Will to the caller. Consuming it
+// prevents a later clean replacement or stale disconnect callback from
+// publishing the same Will a second time.
+func (s *Session) TakeWill() *storage.WillMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	will := s.Will
+	s.Will = nil
+	return will
 }
 
 // Info returns session info for persistence.
