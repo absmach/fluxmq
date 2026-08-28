@@ -444,15 +444,15 @@ func (b *Broker) triggerWills() {
 	}
 
 	ctx := context.Background()
-	pending, err := b.stores.wills.GetPending(ctx, time.Now())
+	now := time.Now()
+	pending, err := b.stores.wills.GetPending(ctx, now)
 	if err != nil {
 		return
 	}
 
-	for _, will := range pending {
-		s := b.Get(will.ClientID)
-		if s != nil && s.IsConnected() {
-			b.stores.wills.Delete(ctx, will.ClientID) //nolint:errcheck // best-effort will cleanup for connected client
+	for _, candidate := range pending {
+		will := b.claimPendingWill(ctx, candidate.ClientID, now)
+		if will == nil {
 			continue
 		}
 
@@ -466,9 +466,58 @@ func (b *Broker) triggerWills() {
 		b.distribute(ctx, msg) //nolint:errcheck // fire-and-forget will message distribution
 
 		message.Release(msg)
-
-		b.stores.wills.Delete(ctx, will.ClientID) //nolint:errcheck // best-effort will cleanup after distribution
 	}
+}
+
+// claimPendingWill revalidates a delayed-Will snapshot under the same client-ID
+// lock used by disconnect, reconnect, and Clean Start. GetPending carries the
+// store's disconnect timestamp, so re-querying here distinguishes an older
+// pending generation from a newer identical Will whose delay has not elapsed.
+// The record is deleted before unlocking; a reconnect that follows cannot
+// cancel a Will whose deadline already won the lock, while a reconnect that
+// wins first removes the record and this claim returns nil.
+func (b *Broker) claimPendingWill(ctx context.Context, clientID string, now time.Time) *storage.WillMessage {
+	sessionLock := b.sessionLocks.Key(clientID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
+
+	current, err := pendingWillForClient(ctx, b.stores.wills, clientID, now)
+	if err != nil {
+		return nil
+	}
+
+	s := b.sessionsMap.Get(clientID)
+	if s != nil && s.IsConnected() {
+		b.stores.wills.Delete(ctx, clientID) //nolint:errcheck // best-effort delayed-Will cancellation for connected client
+		return nil
+	}
+
+	if err := b.stores.wills.Delete(ctx, clientID); err != nil {
+		return nil
+	}
+	return current
+}
+
+type clientPendingWillStore interface {
+	GetPendingForClient(ctx context.Context, clientID string, before time.Time) (*storage.WillMessage, error)
+}
+
+// pendingWillForClient uses the built-in stores' keyed fast path while keeping
+// the public WillStore interface source-compatible for custom implementations.
+func pendingWillForClient(ctx context.Context, store storage.WillStore, clientID string, before time.Time) (*storage.WillMessage, error) {
+	if keyed, ok := store.(clientPendingWillStore); ok {
+		return keyed.GetPendingForClient(ctx, clientID, before)
+	}
+	pending, err := store.GetPending(ctx, before)
+	if err != nil {
+		return nil, err
+	}
+	for _, will := range pending {
+		if will.ClientID == clientID {
+			return will, nil
+		}
+	}
+	return nil, storage.ErrNotFound
 }
 
 // GetRetainedMessage implements cluster.MessageHandler.GetRetainedMessage.

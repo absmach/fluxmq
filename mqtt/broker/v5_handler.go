@@ -148,7 +148,7 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		Will:           will,
 	}
 
-	s, isNew, err := h.broker.CreateSessionForIdentity(clientID, p.ProtocolVersion, opts, boundMTLS) //nolint:contextcheck // CreateSession has no context parameter yet; 73 call sites, tracked separately
+	s, isNew, expectedEpoch, err := h.broker.createSessionForConnection(clientID, p.ProtocolVersion, opts, boundMTLS)
 	if err != nil {
 		if errors.Is(err, cluster.ErrSessionIdentityMismatch) {
 			h.broker.telemetry.stats.IncrementAuthErrors()
@@ -173,26 +173,30 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	// a configuration reload cannot leave the connection enforcing a limit other
 	// than the one its CONNACK announced.
 	sessionMaxQoS := h.broker.MaxQoS()
-	epoch, superseded := s.ConnectWithOptions(conn, session.ConnectOptions{
+	var expiryInterval *uint32
+	if !isNew {
+		expiryInterval = &sessionExpiry
+	}
+	epoch, err := h.broker.attachSession(ctx, s, expectedEpoch, conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
 		Will:           will,
 		ReceiveMaximum: receiveMax,
 		TopicAliasMax:  topicAliasMax,
 		MaxQoS:         sessionMaxQoS,
-	})
+	}, expiryInterval)
+	if err != nil {
+		if !errors.Is(err, errSessionReplacedBeforeAttach) {
+			h.broker.telemetry.stats.IncrementProtocolErrors()
+		}
+		sendV5ConnAck(conn, false, v5.ConnAckUnspecifiedError, nil) //nolint:errcheck // best-effort rejection reply before closing
+		conn.Close()
+		return err
+	}
 	// Session expiry is applied verbatim on reconnect so a new value of 0
 	// (expire on disconnect) replaces a previous positive one. A new session's
 	// expiry, including the server default policy, was already set in
 	// CreateSession.
-	if !isNew {
-		s.SetExpiryInterval(sessionExpiry)
-	}
-	if superseded != nil {
-		go h.broker.drainSuperseded(context.WithoutCancel(ctx), superseded)
-	}
-	h.broker.BindExternalID(clientID, externalID)
-	h.broker.persistSessionInfo(s)
 
 	sessionPresent := !isNew && !cleanStart
 	if err := sendV5ConnAckWithProperties(conn, s, sessionPresent, v5.ConnAckSuccess, sessionMaxQoS); err != nil {

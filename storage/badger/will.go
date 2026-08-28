@@ -137,3 +137,35 @@ func (w *WillStore) GetPending(ctx context.Context, before time.Time) ([]*storag
 
 	return pending, err
 }
+
+// GetPendingForClient returns the client's current Will only when its delay has
+// elapsed by before. It is an optional fast path used by the MQTT broker to
+// revalidate a pending snapshot without scanning every stored Will.
+func (w *WillStore) GetPendingForClient(ctx context.Context, clientID string, before time.Time) (*storage.WillMessage, error) {
+	key := []byte("will:" + clientID)
+	var entry willEntry
+
+	err := w.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(key)
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return storage.ErrNotFound
+			}
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			return json.Unmarshal(val, &entry)
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	if entry.DisconnectedAt.IsZero() {
+		return nil, storage.ErrNotFound
+	}
+	triggerTime := entry.DisconnectedAt.Add(time.Duration(entry.Will.Delay) * time.Second)
+	if triggerTime.After(before) {
+		return nil, storage.ErrNotFound
+	}
+	return entry.Will, nil
+}

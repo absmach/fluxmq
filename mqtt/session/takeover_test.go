@@ -135,6 +135,45 @@ func TestConnect_OnDisconnectCallbackScopedToEpoch(t *testing.T) {
 	require.False(t, newConn.closed.Load())
 }
 
+func TestDetachForTakeoverAdvancesEpochBeforeClosingConnection(t *testing.T) {
+	s := newTakeoverSession(t)
+
+	callbackEpoch := make(chan uint64, 1)
+	s.SetOnDisconnectWithEpoch(func(_ *Session, _ bool, epoch uint64) {
+		callbackEpoch <- epoch
+	})
+	oldConn := &wsLikeConn{}
+	oldEpoch, err := s.Connect(oldConn)
+	require.NoError(t, err)
+
+	superseded := s.DetachForTakeover()
+	require.Same(t, oldConn, superseded.Conn)
+	require.Greater(t, s.Epoch(), oldEpoch, "detachment must fence the old runSession immediately")
+
+	require.NoError(t, superseded.Conn.Close())
+	require.Never(t, func() bool {
+		select {
+		case <-callbackEpoch:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, time.Millisecond, "detached connection callback must be stale")
+}
+
+func TestDisconnectCallbackReportsDisconnectedEpoch(t *testing.T) {
+	s := newTakeoverSession(t)
+	epochCh := make(chan uint64, 1)
+	s.SetOnDisconnectWithEpoch(func(_ *Session, _ bool, epoch uint64) {
+		epochCh <- epoch
+	})
+
+	epoch, err := s.Connect(&recordingConn{})
+	require.NoError(t, err)
+	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
+	require.Equal(t, epoch, <-epochCh)
+}
+
 // TestConnect_WebSocketStyleSyncOnDisconnectNoDeadlock verifies that a takeover
 // of a connection whose Close() synchronously calls onDisconnect (WebSocket)
 // does not deadlock by re-entering the session lock.
@@ -192,6 +231,29 @@ func TestConnectWithOptions_AppliesNewOptionsOnReconnect(t *testing.T) {
 	require.Equal(t, uint16(8), s.ReceiveMaximum, "reconnect must adopt the new Receive Maximum")
 	require.NotNil(t, superseded)
 	require.Equal(t, byte(4), superseded.Version, "superseded carries the old version")
+}
+
+func TestConnectWithOptions_TransfersDisconnectedGenerationWill(t *testing.T) {
+	s := newTakeoverSession(t)
+	oldWill := &storage.WillMessage{Topic: "will/old", Payload: []byte("old")}
+	s.UpdateConnectionOptions(4, time.Minute, oldWill)
+
+	_, err := s.Connect(&recordingConn{})
+	require.NoError(t, err)
+	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
+
+	newWill := &storage.WillMessage{Topic: "will/new", Payload: []byte("new")}
+	_, superseded := s.ConnectWithOptions(&recordingConn{}, ConnectOptions{
+		Version:        5,
+		KeepAlive:      time.Minute,
+		Will:           newWill,
+		ReceiveMaximum: 16,
+	})
+
+	require.NotNil(t, superseded)
+	require.Nil(t, superseded.Conn, "the old physical connection already disconnected")
+	require.Same(t, oldWill, superseded.Will)
+	require.Same(t, newWill, s.GetWill())
 }
 
 // TestSetExpiryInterval_ZeroReplacesPositive guards finding #3: a reconnect

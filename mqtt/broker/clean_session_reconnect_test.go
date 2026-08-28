@@ -8,8 +8,10 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -269,8 +271,8 @@ func TestHandleDisconnect_CleanSessionPublishesWillBeforeDestroy(t *testing.T) {
 	require.NoError(t, err)
 
 	disconnected := make(chan struct{})
-	s.SetOnDisconnect(func(s *session.Session, graceful bool) {
-		b.handleDisconnect(s, graceful)
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
+		b.handleDisconnect(s, graceful, epoch)
 		close(disconnected)
 	})
 	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
@@ -349,6 +351,7 @@ func TestHandleDisconnect_StaleCleanSessionDoesNotDeleteReplacementClusterState(
 	const clientID = "cluster-clean-reconnect"
 	oldSession, _, err := b.CreateSession(clientID, 4, session.Options{CleanStart: true})
 	require.NoError(t, err)
+	oldEpoch := oldSession.Epoch()
 
 	replacement, _, err := b.CreateSession(clientID, 4, session.Options{CleanStart: true})
 	require.NoError(t, err)
@@ -363,7 +366,7 @@ func TestHandleDisconnect_StaleCleanSessionDoesNotDeleteReplacementClusterState(
 
 	// Model the old Session.Disconnect callback starting after the replacement
 	// was installed. It must not touch client-ID-scoped cluster state.
-	b.handleDisconnect(oldSession, false)
+	b.handleDisconnect(oldSession, false, oldEpoch)
 
 	require.Same(t, replacement, b.sessionsMap.Get(clientID))
 	owner, acquires, releases, removeAllSubscriptionsCalls = cl.snapshot()
@@ -371,6 +374,234 @@ func TestHandleDisconnect_StaleCleanSessionDoesNotDeleteReplacementClusterState(
 	require.Equal(t, 2, acquires)
 	require.Equal(t, 1, releases)
 	require.Equal(t, 1, removeAllSubscriptionsCalls)
+}
+
+func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGeneration(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+	hook := &disconnectSpyHook{}
+	b.SetEventHook(hook)
+
+	const clientID = "persistent-stale-callback"
+	oldWill := &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    "clients/persistent-stale-callback/old",
+		Payload:  []byte("old"),
+		Delay:    60,
+	}
+	s, _, expectedEpoch, err := b.createSessionForConnection(clientID, 5, session.Options{
+		ExpiryInterval: 300,
+		Will:           oldWill,
+	}, false)
+	require.NoError(t, err)
+	oldEpoch, err := b.attachSession(context.Background(), s, expectedEpoch, newSyncConn(), session.ConnectOptions{
+		Version:        5,
+		KeepAlive:      time.Minute,
+		Will:           oldWill,
+		ReceiveMaximum: 16,
+	}, nil)
+	require.NoError(t, err)
+
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbackDone := make(chan struct{})
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
+		close(callbackStarted)
+		<-releaseCallback
+		b.handleDisconnect(s, graceful, epoch)
+		close(callbackDone)
+	})
+	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
+	<-callbackStarted
+
+	claimed, created, replacementEpoch, err := b.createSessionForConnection(clientID, 5, session.Options{
+		ExpiryInterval: 300,
+	}, false)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Same(t, s, claimed, "persistent reconnect must reuse the session pointer")
+	require.Equal(t, oldEpoch, replacementEpoch)
+
+	newWill := &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    "clients/persistent-stale-callback/new",
+		Payload:  []byte("new"),
+		Delay:    120,
+	}
+	newEpoch, err := b.attachSession(context.Background(), s, replacementEpoch, newSyncConn(), session.ConnectOptions{
+		Version:        5,
+		KeepAlive:      time.Minute,
+		Will:           newWill,
+		ReceiveMaximum: 16,
+	}, nil)
+	require.NoError(t, err)
+	require.Greater(t, newEpoch, oldEpoch)
+
+	queued := message.NewDelivery("replacement/queued", []byte("replacement"), 1, false)
+	require.NoError(t, s.OfflineQueue().Enqueue(queued))
+	message.Release(queued)
+
+	close(releaseCallback)
+	<-callbackDone
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
+		b.handleDisconnect(s, graceful, epoch)
+	})
+
+	require.Same(t, newWill, s.GetWill(), "stale callback must not consume the replacement Will")
+	require.Equal(t, 1, s.OfflineQueue().Len(), "stale callback must not persist and drain replacement queue state")
+	_, err = store.Wills().Get(context.Background(), clientID)
+	require.ErrorIs(t, err, storage.ErrNotFound, "stale callback must not persist the replacement Will")
+	stored, err := store.Sessions().Get(clientID)
+	require.NoError(t, err)
+	require.True(t, stored.Connected, "stale callback must not persist the replacement as disconnected")
+	require.Equal(t, []string{"error"}, hook.snapshot(), "the old physical disconnect is still reported exactly once")
+}
+
+func TestAttachSessionRejectsClaimReplacedByCleanStart(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+
+	const clientID = "replaced-before-attach"
+	stale, _, expectedEpoch, err := b.createSessionForConnection(clientID, 4, session.Options{}, false)
+	require.NoError(t, err)
+	replacement, _, err := b.CreateSession(clientID, 4, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	require.NotSame(t, stale, replacement)
+
+	_, err = b.attachSession(context.Background(), stale, expectedEpoch, newSyncConn(), session.ConnectOptions{
+		Version:        4,
+		ReceiveMaximum: 16,
+	}, nil)
+	require.ErrorIs(t, err, errSessionReplacedBeforeAttach)
+	require.Same(t, replacement, b.Get(clientID))
+	require.False(t, stale.IsConnected())
+}
+
+func TestHandleDisconnect_PersistentZeroDelayWillPublishesWithoutStorage(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+
+	const clientID = "persistent-zero-delay"
+	const willTopic = "clients/persistent-zero-delay/status"
+	sub, _, err := b.CreateSession("persistent-zero-delay-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	s, _, err := b.CreateSession(clientID, 5, session.Options{
+		ExpiryInterval: 300,
+		Will: &storage.WillMessage{
+			ClientID: clientID,
+			Topic:    willTopic,
+			Payload:  []byte("offline"),
+		},
+	})
+	require.NoError(t, err)
+	_, err = s.Connect(newSyncConn())
+	require.NoError(t, err)
+	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
+
+	waitFor(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return string(pub.Payload) == "offline"
+			}
+		}
+		return false
+	}, "persistent zero-delay Will is published directly")
+	_, err = store.Wills().Get(context.Background(), clientID)
+	require.ErrorIs(t, err, storage.ErrNotFound, "zero-delay Wills must never enter delayed-Will storage")
+}
+
+func TestAttachSessionCancelsStoredDelayedWillBeforeLaterCleanStart(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+
+	const clientID = "cancel-stored-delayed-will"
+	const willTopic = "clients/cancel-stored-delayed-will/status"
+	sub, _, err := b.CreateSession("cancel-stored-delayed-will-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	oldWill := &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    willTopic,
+		Payload:  []byte("obsolete"),
+		Delay:    60,
+	}
+	s, _, err := b.CreateSession(clientID, 5, session.Options{
+		ExpiryInterval: 300,
+		Will:           oldWill,
+	})
+	require.NoError(t, err)
+	_, err = s.Connect(newSyncConn())
+	require.NoError(t, err)
+	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
+	waitFor(t, func() bool {
+		_, err := store.Wills().Get(context.Background(), clientID)
+		return err == nil
+	}, "delayed Will stored after disconnect")
+
+	claimed, created, expectedEpoch, err := b.createSessionForConnection(clientID, 5, session.Options{
+		ExpiryInterval: 300,
+	}, false)
+	require.NoError(t, err)
+	require.False(t, created)
+	_, err = b.attachSession(context.Background(), claimed, expectedEpoch, newSyncConn(), session.ConnectOptions{
+		Version:        5,
+		KeepAlive:      time.Minute,
+		ReceiveMaximum: 16,
+	}, nil)
+	require.NoError(t, err)
+	_, err = store.Wills().Get(context.Background(), clientID)
+	require.ErrorIs(t, err, storage.ErrNotFound, "persistent reconnect cancels the previous delayed Will")
+
+	_, _, err = b.CreateSession(clientID, 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	require.Never(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return true
+			}
+		}
+		return false
+	}, 100*time.Millisecond, 5*time.Millisecond, "a later Clean Start must not resurrect a cancelled delayed Will")
+}
+
+func TestClaimPendingWillRejectsNewerIdenticalGeneration(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+
+	const clientID = "identical-will-generation"
+	will := &storage.WillMessage{
+		ClientID: clientID,
+		Topic:    "clients/identical-will-generation/status",
+		Payload:  []byte("offline"),
+	}
+	ctx := context.Background()
+	require.NoError(t, store.Wills().Set(ctx, clientID, will))
+	snapshotTime := time.Now()
+	pending, err := store.Wills().GetPending(ctx, snapshotTime)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the first generation supplies triggerWills' stale snapshot")
+
+	require.NoError(t, store.Wills().Delete(ctx, clientID))
+	require.NoError(t, store.Wills().Set(ctx, clientID, will), "store an identical Will for a newer disconnect generation")
+
+	require.Nil(t, b.claimPendingWill(ctx, clientID, snapshotTime),
+		"the old snapshot must not claim an identical newer generation before its deadline")
+	current, err := store.Wills().Get(ctx, clientID)
+	require.NoError(t, err)
+	require.Equal(t, will, current, "rejecting the stale snapshot must preserve the newer generation")
 }
 
 // disconnectSpyHook records the reason of every OnDisconnect the broker emits.
@@ -489,31 +720,79 @@ func TestHandleConnect_CleanReplacementEmitsClientDisconnected(t *testing.T) {
 	newWG.Wait()
 }
 
-// drainSuperseded owns the notification for a connection it retires, and only
-// when the session behind it ended. A takeover that continues the same session
-// keeps the client ID connected under the replacement socket and owes nothing.
-func TestDrainSuperseded_NotifiesOnlyForEndedSessions(t *testing.T) {
+func TestHandleConnect_PersistentReplacementEmitsOneTakeoverDisconnect(t *testing.T) {
+	b := NewBroker(nil, nil)
+	defer b.Close()
+	hook := &disconnectSpyHook{}
+	b.SetEventHook(hook)
+	h := newV3Handler(b)
+
+	const clientID = "persistent-replacement-notifies"
+	oldConn := newBlockingConn()
+	var oldWG sync.WaitGroup
+	oldWG.Add(1)
+	go func() {
+		defer oldWG.Done()
+		_ = h.HandleConnect(context.Background(), oldConn, v3Connect(clientID))
+	}()
+	<-oldConn.reading
+
+	newConn := newBlockingConn()
+	var newWG sync.WaitGroup
+	newWG.Add(1)
+	go func() {
+		defer newWG.Done()
+		_ = h.HandleConnect(context.Background(), newConn, v3Connect(clientID))
+	}()
+	<-newConn.reading
+	waitFor(t, func() bool {
+		s := b.Get(clientID)
+		return s != nil && s.Conn() == newConn && oldConn.closed.Load()
+	}, "persistent replacement retires the old socket")
+	oldWG.Wait()
+
+	waitFor(t, func() bool { return len(hook.snapshot()) == 1 }, "persistent takeover reports the retired socket")
+	require.Equal(t, []string{"takeover"}, hook.snapshot())
+
+	newConn.Close()
+	newWG.Wait()
+}
+
+// retireSession owns the notification for every physical connection it retires,
+// whether the MQTT session ends or continues on another socket.
+func TestRetireSession_NotifiesEveryRetiredConnection(t *testing.T) {
 	const clientID = "spy"
 
 	cases := []struct {
 		name       string
-		superseded *session.Superseded
+		retirement *sessionRetirement
 		want       []string
 	}{
 		{
-			name:       "clean_replacement/retired_connection",
-			superseded: &session.Superseded{ClientID: clientID, Conn: newBlockingConn(), SessionEnds: true},
-			want:       []string{"takeover"},
+			name: "clean_replacement/retired_connection",
+			retirement: &sessionRetirement{
+				clientID:    clientID,
+				superseded:  &session.Superseded{Conn: newBlockingConn()},
+				sessionEnds: true,
+			},
+			want: []string{"takeover"},
 		},
 		{
-			name:       "takeover/session_continues",
-			superseded: &session.Superseded{ClientID: clientID, Conn: newBlockingConn(), SessionEnds: false},
-			want:       nil,
+			name: "takeover/session_continues",
+			retirement: &sessionRetirement{
+				clientID:   clientID,
+				superseded: &session.Superseded{Conn: newBlockingConn()},
+			},
+			want: []string{"takeover"},
 		},
 		{
-			name:       "clean_replacement/no_connection",
-			superseded: &session.Superseded{ClientID: clientID, SessionEnds: true},
-			want:       nil,
+			name: "clean_replacement/no_connection",
+			retirement: &sessionRetirement{
+				clientID:    clientID,
+				superseded:  &session.Superseded{},
+				sessionEnds: true,
+			},
+			want: nil,
 		},
 	}
 
@@ -524,7 +803,7 @@ func TestDrainSuperseded_NotifiesOnlyForEndedSessions(t *testing.T) {
 			hook := &disconnectSpyHook{}
 			b.SetEventHook(hook)
 
-			b.drainSuperseded(context.Background(), tc.superseded)
+			b.retireSession(context.Background(), tc.retirement)
 
 			require.Equal(t, tc.want, hook.snapshot())
 		})

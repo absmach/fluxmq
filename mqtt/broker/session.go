@@ -15,6 +15,7 @@ import (
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/message"
+	core "github.com/absmach/fluxmq/mqtt"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
@@ -27,7 +28,7 @@ import (
 // If opts.CleanStart is true and a session exists, it is destroyed first.
 // Returns the session and whether it was newly created.
 func (b *Broker) CreateSession(clientID string, version byte, opts session.Options) (sess *session.Session, created bool, err error) {
-	return b.createSession(clientID, version, opts, nil)
+	return b.createSession(clientID, version, opts, nil, nil)
 }
 
 // CreateSessionForIdentity creates or resumes an MQTT session while ensuring
@@ -39,17 +40,30 @@ func (b *Broker) CreateSessionForIdentity(clientID string, version byte, opts se
 		ExternalID:   opts.ExternalID,
 		RequireBound: requireBound,
 	}
-	return b.createSession(clientID, version, opts, identity)
+	return b.createSession(clientID, version, opts, identity, nil)
 }
 
-func (b *Broker) createSession(clientID string, version byte, opts session.Options, identity *cluster.SessionIdentityGuard) (sess *session.Session, created bool, err error) {
+// createSessionForConnection returns the session epoch observed while the
+// client-ID lock is still held. The protocol handler must present that epoch to
+// attachSession; a Clean Start replacement or another completed attachment in
+// between makes the claim stale and the connection is rejected.
+func (b *Broker) createSessionForConnection(clientID string, version byte, opts session.Options, requireBound bool) (sess *session.Session, created bool, expectedEpoch uint64, err error) {
+	identity := &cluster.SessionIdentityGuard{
+		ExternalID:   opts.ExternalID,
+		RequireBound: requireBound,
+	}
+	sess, created, err = b.createSession(clientID, version, opts, identity, &expectedEpoch)
+	return
+}
+
+func (b *Broker) createSession(clientID string, version byte, opts session.Options, identity *cluster.SessionIdentityGuard, expectedEpoch *uint64) (sess *session.Session, created bool, err error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
-	var superseded []*session.Superseded
+	var retirements []*sessionRetirement
 	defer func() {
 		sessionLock.Unlock()
-		for _, retired := range superseded {
-			go b.drainSuperseded(context.Background(), retired)
+		for _, retired := range retirements {
+			go b.retireSession(context.Background(), retired)
 		}
 	}()
 
@@ -128,7 +142,7 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 
 	existing := b.sessionsMap.Get(clientID)
 	if opts.CleanStart && existing != nil {
-		retired := existing.DetachForTakeover(true)
+		retired := existing.DetachForTakeover()
 		// If the network callback already scheduled the Will, it consumed the
 		// in-memory copy. Ending the old session makes any stored delayed Will
 		// due now, while an already-published Will is absent from the store.
@@ -139,7 +153,11 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 			}
 			retired.Will = storedWill
 		}
-		superseded = append(superseded, retired)
+		retirements = append(retirements, &sessionRetirement{
+			clientID:    clientID,
+			superseded:  retired,
+			sessionEnds: true,
+		})
 		if err := b.destroySessionLocked(ctx, existing); err != nil {
 			return nil, false, err
 		}
@@ -176,6 +194,9 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 			}
 		}
 		ownershipAcquired = true
+		if expectedEpoch != nil {
+			*expectedEpoch = existing.Epoch()
+		}
 
 		return existing, false, nil
 	}
@@ -223,7 +244,10 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 			// already transferred and closed the session. Keep a delayed Will
 			// pending for the real owner; a zero-delay Will is due now.
 			if takeoverWill.Delay == 0 {
-				superseded = append(superseded, &session.Superseded{ClientID: clientID, Will: takeoverWill})
+				retirements = append(retirements, &sessionRetirement{
+					clientID:   clientID,
+					superseded: &session.Superseded{Will: takeoverWill},
+				})
 			} else if b.stores.wills != nil {
 				if err := b.stores.wills.Set(ctx, clientID, takeoverWill); err != nil {
 					return nil, false, fmt.Errorf("failed to preserve takeover will: %w", err)
@@ -233,10 +257,10 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 			// The old connection's Will belongs to that connection, not to the
 			// new CONNECT. A continued session cancels only a delayed Will; when
 			// the old session was discarded, every Will is due immediately.
-			superseded = append(superseded, &session.Superseded{
-				ClientID:    clientID,
-				Will:        takeoverWill,
-				SessionEnds: takeoverState == nil,
+			retirements = append(retirements, &sessionRetirement{
+				clientID:    clientID,
+				superseded:  &session.Superseded{Will: takeoverWill},
+				sessionEnds: takeoverState == nil,
 			})
 		}
 	}
@@ -294,8 +318,8 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		}
 	}
 
-	s.SetOnDisconnect(func(s *session.Session, graceful bool) {
-		b.handleDisconnect(s, graceful)
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
+		b.handleDisconnect(s, graceful, epoch)
 	})
 
 	if b.cluster != nil {
@@ -323,8 +347,70 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 
 		return nil, false, cluster.ErrSessionIdentityMismatch
 	}
+	if expectedEpoch != nil {
+		*expectedEpoch = s.Epoch()
+	}
 
 	return s, true, nil
+}
+
+var errSessionReplacedBeforeAttach = errors.New("session replaced before connection attachment")
+
+// attachSession commits a CONNECT to the session claim returned by
+// createSessionForConnection. Identity, epoch verification, stored delayed-Will
+// cancellation, connection attachment, auth binding, and persistence happen
+// under the same client-ID lock. A callback or Clean Start replacement can
+// therefore run either before this operation or after it, but cannot interleave
+// client-ID-scoped state with the new connection generation.
+func (b *Broker) attachSession(ctx context.Context, s *session.Session, expectedEpoch uint64, conn core.Connection, opts session.ConnectOptions, expiryInterval *uint32) (epoch uint64, err error) {
+	if s == nil {
+		return 0, errSessionReplacedBeforeAttach
+	}
+
+	sessionLock := b.sessionLocks.Key(s.ID)
+	sessionLock.Lock()
+	var retirement *sessionRetirement
+	defer func() {
+		sessionLock.Unlock()
+		if retirement != nil {
+			go b.retireSession(context.WithoutCancel(ctx), retirement)
+		}
+	}()
+
+	if b.sessionsMap.Get(s.ID) != s || s.Epoch() != expectedEpoch {
+		return 0, errSessionReplacedBeforeAttach
+	}
+
+	// Only delayed Wills are persisted. Reconnecting before their deadline
+	// cancels the previous generation's Will while the disconnect callback is
+	// fenced by this same lock and the epoch transition below.
+	if b.stores.wills != nil {
+		_, getErr := b.stores.wills.Get(ctx, s.ID)
+		switch {
+		case getErr == nil:
+			if err := b.stores.wills.Delete(ctx, s.ID); err != nil {
+				return 0, fmt.Errorf("failed to cancel previous session will: %w", err)
+			}
+		case !errors.Is(getErr, storage.ErrNotFound):
+			return 0, fmt.Errorf("failed to load previous session will: %w", getErr)
+		}
+	}
+
+	epoch, superseded := s.ConnectWithOptions(conn, opts)
+	if expiryInterval != nil {
+		s.SetExpiryInterval(*expiryInterval)
+	}
+	b.BindExternalID(s.ID, s.ExternalIdentity())
+	b.persistSessionInfo(s)
+
+	if superseded != nil {
+		retirement = &sessionRetirement{
+			clientID:   s.ID,
+			superseded: superseded,
+		}
+	}
+
+	return epoch, nil
 }
 
 // sessionRestore is the decision about which persisted or migrated state a
@@ -572,8 +658,11 @@ func (b *Broker) HandleSessionLeaseLost(_ context.Context, clientIDs []string) {
 	}
 }
 
-// handleDisconnect handles session disconnect.
-func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
+// handleDisconnect handles one physical connection disconnect. Notifications
+// describe the socket and are always emitted; client-ID-scoped cleanup is
+// allowed only while both the session identity and disconnected epoch remain
+// current.
+func (b *Broker) handleDisconnect(s *session.Session, graceful bool, disconnectEpoch uint64) {
 	sessionLock := b.sessionLocks.Key(s.ID)
 	sessionLock.Lock()
 	var publishWill *storage.WillMessage
@@ -600,10 +689,10 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	// a session that has already been replaced.
 	notifyDisconnect = true
 
-	// Disconnect callbacks run asynchronously. A clean reconnect can replace
-	// the session before the old callback starts; that stale callback must not
-	// delete or persist state belonging to the replacement session.
-	if b.sessionsMap.Get(s.ID) != s {
+	// Disconnect callbacks run asynchronously. A Clean Start may replace the
+	// session pointer, while a persistent reconnect reuses it with a new epoch.
+	// Neither stale generation may delete or persist replacement state.
+	if b.sessionsMap.Get(s.ID) != s || s.Epoch() != disconnectEpoch {
 		return
 	}
 
@@ -614,19 +703,19 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool) {
 	b.persistSessionInfo(s)
 	sessionEnds := s.CleanStart && s.ExpiryInterval == 0
 	will := s.TakeWill()
-	if b.stores.wills != nil {
-		ctx := context.Background()
-		if !graceful && will != nil {
-			if sessionEnds {
-				publishWill = will
-			} else {
-				b.stores.wills.Set(ctx, s.ID, will) //nolint:errcheck // best-effort will persistence on disconnect
-			}
-		} else if graceful {
-			b.stores.wills.Delete(ctx, s.ID) //nolint:errcheck // best-effort will cleanup on graceful disconnect
+	if !graceful && will != nil {
+		switch {
+		case will.Delay == 0 || sessionEnds:
+			// A zero-delay Will is due at the physical disconnect. Clean Start
+			// also ends the session, so MQTT requires a delayed Will immediately.
+			publishWill = will
+		case b.stores.wills != nil:
+			// Only delayed Wills survive in storage. attachSession cancels this
+			// record atomically if the persistent session reconnects in time.
+			b.stores.wills.Set(context.Background(), s.ID, will) //nolint:errcheck // best-effort delayed-Will persistence
 		}
-	} else if !graceful && sessionEnds {
-		publishWill = will
+	} else if graceful && b.stores.wills != nil {
+		b.stores.wills.Delete(context.Background(), s.ID) //nolint:errcheck // best-effort Will cleanup on graceful disconnect
 	}
 	if b.stores.messages != nil {
 		msgs := s.OfflineQueue().Drain()
@@ -928,11 +1017,11 @@ func (b *Broker) restoreSubscriptionsFromTakeover(s *session.Session, state *clu
 func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, identity *cluster.SessionIdentityGuard) (*clusterv1.SessionState, error) {
 	sessionLock := b.sessionLocks.Key(clientID)
 	sessionLock.Lock()
-	var superseded *session.Superseded
+	var retirement *sessionRetirement
 	defer func() {
 		sessionLock.Unlock()
-		if superseded != nil {
-			go b.drainSuperseded(context.WithoutCancel(ctx), superseded)
+		if retirement != nil {
+			go b.retireSession(context.WithoutCancel(ctx), retirement)
 		}
 	}()
 
@@ -1023,8 +1112,9 @@ func (b *Broker) GetSessionStateAndClose(ctx context.Context, clientID string, i
 	// and close after unlocking. The Will travels in state so the new owner can
 	// decide whether Clean Start ends the session or a reconnect cancels its
 	// delay; the old owner must not publish it independently.
-	superseded = s.DetachForTakeover(false)
+	superseded := s.DetachForTakeover()
 	superseded.Will = nil
+	retirement = &sessionRetirement{clientID: clientID, superseded: superseded}
 	if err := b.destroySessionForTakeoverLocked(ctx, s); err != nil {
 		return nil, fmt.Errorf("failed to destroy session: %w", err)
 	}

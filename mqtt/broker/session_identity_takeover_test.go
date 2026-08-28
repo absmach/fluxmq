@@ -71,6 +71,8 @@ func TestSessionTakeoverIdentityMismatchLeavesOwnerUntouched(t *testing.T) {
 func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 	b := NewBroker(memory.New(), nil)
 	t.Cleanup(func() { require.NoError(t, b.Close()) })
+	hook := &disconnectSpyHook{}
+	b.SetEventHook(hook)
 
 	s, _, err := b.CreateSession("bound-client", 5, session.Options{
 		ExternalID:     mtlsEntityA,
@@ -99,6 +101,8 @@ func TestSessionTakeoverMatchingIdentityTransfersState(t *testing.T) {
 		}
 		return false
 	}, "transferred v5 client receives DISCONNECT 0x8E")
+	waitFor(t, func() bool { return len(hook.snapshot()) == 1 }, "cross-node retirement emits its disconnect event")
+	require.Equal(t, []string{"takeover"}, hook.snapshot())
 }
 
 func TestMQTTMTLSClusterTakeoverPropagatesIdentityGuard(t *testing.T) {
