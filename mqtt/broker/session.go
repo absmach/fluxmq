@@ -829,9 +829,9 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool, disconnectE
 	sessionLock.Lock()
 	var publishWill *storage.WillMessage
 	notifyDisconnect := false
-	disconnectReason := "normal"
+	disconnectReason := disconnectReasonNormal
 	if !graceful {
-		disconnectReason = "error"
+		disconnectReason = disconnectReasonError
 	}
 	defer func() {
 		sessionLock.Unlock()

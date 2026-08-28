@@ -466,7 +466,7 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 	stored, err := store.Sessions().Get(clientID)
 	require.NoError(t, err)
 	require.True(t, stored.Connected, "stale callback must not persist the replacement as disconnected")
-	require.Equal(t, []string{"error"}, hook.snapshot(), "the old physical disconnect is still reported exactly once")
+	require.Equal(t, []string{disconnectReasonError}, hook.snapshot(), "the old physical disconnect is still reported exactly once")
 }
 
 func TestAttachSessionRejectsClaimReplacedByCleanStart(t *testing.T) {
@@ -678,7 +678,7 @@ func TestDestroySession_EmitsClientDisconnected(t *testing.T) {
 	waitFor(t, func() bool {
 		return len(hook.snapshot()) == 1
 	}, "destroyed session reports its disconnect")
-	require.Equal(t, []string{"error"}, hook.snapshot())
+	require.Equal(t, []string{disconnectReasonError}, hook.snapshot())
 
 	wg.Wait()
 }
