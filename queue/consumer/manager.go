@@ -194,6 +194,19 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 
 // GetOrCreateGroup retrieves or creates a consumer group.
 func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool) (*types.ConsumerGroup, error) {
+	group, _, err := m.getOrCreateGroup(ctx, queueName, groupID, pattern, mode, autoCommit, false)
+	return group, err
+}
+
+// GetOrCreateConfiguredGroup retrieves or creates a consumer group and applies
+// an explicitly requested stream auto-commit policy. The returned bool reports
+// whether this call created the group, so subscription delivery policies can
+// initialize a durable cursor without resetting it on reconnect.
+func (m *Manager) GetOrCreateConfiguredGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool, configureAutoCommit bool) (*types.ConsumerGroup, bool, error) {
+	return m.getOrCreateGroup(ctx, queueName, groupID, pattern, mode, autoCommit, configureAutoCommit)
+}
+
+func (m *Manager) getOrCreateGroup(ctx context.Context, queueName, groupID, pattern string, mode types.ConsumerGroupMode, autoCommit bool, configureAutoCommit bool) (*types.ConsumerGroup, bool, error) {
 	// Same serialization as every other transition on this group. Without it,
 	// two subscribers arriving together can both find no group and both create
 	// one, and a mode negotiated by one can be overwritten by the other.
@@ -204,26 +217,36 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 	// Try to get existing group
 	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
 	if err == nil {
-		if mode == "" {
-			return group, nil
-		}
-		if group.Mode == "" {
+		if mode != "" && group.Mode == "" {
+			// Naming the mode for the first time settles nothing and migrates
+			// nothing: the group has not been running under either contract, so
+			// only the policy itself is recorded.
 			group.Mode = mode
-			group.AutoCommit = autoCommit
+			group.SetAutoCommit(autoCommit)
 			if err := m.groupStore.UpdateConsumerGroup(ctx, group); err != nil {
-				return nil, err
+				return nil, false, err
 			}
-			return group, nil
+			return group, false, nil
 		}
-		if group.Mode != mode {
-			return nil, ErrGroupModeMismatch
+		if mode != "" && group.Mode != mode {
+			return nil, false, ErrGroupModeMismatch
 		}
-		return group, nil
+		// Checked even when the caller named no mode: an explicit auto-commit
+		// policy is a property of the subscription, and dropping it because the
+		// mode was left to the stored group silently gave the caller the
+		// opposite settlement contract to the one it asked for.
+		if configureAutoCommit && group.AutoCommitEnabled() != autoCommit {
+			m.applyAutoCommitLocked(group, autoCommit)
+			if err := m.groupStore.UpdateConsumerGroup(ctx, group); err != nil {
+				return nil, false, err
+			}
+		}
+		return group, false, nil
 	}
 
 	// Check for "not found" errors from various storage implementations
 	if !errors.Is(err, storage.ErrConsumerNotFound) && !errors.Is(err, logstorage.ErrGroupNotFound) {
-		return nil, err
+		return nil, false, err
 	}
 
 	// Create new group
@@ -231,17 +254,55 @@ func (m *Manager) GetOrCreateGroup(ctx context.Context, queueName, groupID, patt
 	if mode != "" {
 		group.Mode = mode
 	}
-	group.AutoCommit = autoCommit
+	group.SetAutoCommit(autoCommit)
 
 	if err := m.groupStore.CreateConsumerGroup(ctx, group); err != nil {
 		// Handle race condition - another process might have created it
 		if errors.Is(err, storage.ErrConsumerGroupExists) {
-			return m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+			group, getErr := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+			return group, false, getErr
 		}
-		return nil, err
+		return nil, false, err
 	}
 
-	return group, nil
+	return group, true, nil
+}
+
+// applyAutoCommitLocked moves an established stream group from one settlement
+// contract to the other. The caller holds the group lock and performs the
+// single write that persists it: UpdateConsumerGroup replicates the whole
+// group, so a separate cursor write either side of it is replayed away on any
+// store that does not hand back the live group pointer.
+func (m *Manager) applyAutoCommitLocked(group *types.ConsumerGroup, autoCommit bool) {
+	if group.Mode != types.GroupModeStream {
+		// Auto-commit describes a stream cursor. A queue group settles through
+		// its pending list either way, and migrating it here would drop entries
+		// its consumers still hold.
+		group.SetAutoCommit(autoCommit)
+		return
+	}
+
+	// Everything read under the old contract was already exposed to the
+	// consumer, and neither contract can settle it now: under auto-commit
+	// delivery was the commit, and after the switch to explicit settlement only
+	// later deliveries enter the pending list. Either way that boundary is the
+	// safe point.
+	if cursor := group.CursorView(); cursor.Committed < cursor.Cursor {
+		group.SetCommitted(cursor.Cursor)
+	}
+	if autoCommit {
+		// Nothing settles a pending entry once delivery commits on its own, so
+		// entries carried over from manual settlement would never leave the
+		// group: leaked state, a pending count that never returns to zero, and
+		// stale attempt counts if the group is ever switched back.
+		if cleared := group.ClearPending(); cleared > 0 {
+			m.config.Logger.Warn("dropped unsettled deliveries on switch to auto-commit",
+				slog.String("queue", group.QueueName),
+				slog.String("group", group.ID),
+				slog.Int("entries", cleared))
+		}
+	}
+	group.SetAutoCommit(autoCommit)
 }
 
 // RegisterConsumer adds a consumer to a group.
@@ -344,6 +405,114 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 	}
 
 	return messages, nil
+}
+
+// ClaimManualStream retrieves one explicitly settled stream delivery.
+//
+// A consumer holds at most one unsettled delivery at a time, whatever batch
+// size the caller asked for. The stream is ordered and settlement is explicit,
+// so handing out the next record while the current one is unsettled would leave
+// a nack of the current one unable to redeliver ahead of a record the consumer
+// already has. Consumers in the group progress independently.
+//
+// A delivery the consumer already owns is redelivered before any new record is
+// claimed, so a reconnecting consumer resumes on the message it left unsettled.
+func (m *Manager) ClaimManualStream(ctx context.Context, queueName, groupID, consumerID string, filter *Filter) (*message.Envelope, error) {
+	groupLock := m.groupLocks.KeyPair(queueName, groupID)
+	groupLock.Lock()
+	defer groupLock.Unlock()
+
+	group, err := m.groupStore.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if group.Mode != types.GroupModeStream || group.AutoCommitEnabled() {
+		return nil, ErrGroupModeMismatch
+	}
+
+	if msg := m.redeliverOwnLocked(ctx, group, consumerID, filter); msg != nil {
+		return msg, nil
+	}
+	// An entry the consumer still owns but could not be handed back — its
+	// record is gone, or it is mid dead-letter transfer — must not fall through
+	// to a new record, or the group would hold two unsettled deliveries for one
+	// consumer and lose the ordering the manual contract rests on.
+	if group.PendingCountFor(consumerID) > 0 {
+		return nil, ErrNoMessages
+	}
+
+	msg, err := m.stealWork(ctx, group, consumerID, filter)
+	if err == nil {
+		return msg, nil
+	}
+	if !errors.Is(err, ErrNoMessages) {
+		return nil, err
+	}
+
+	return m.claimFromCursor(ctx, group, consumerID, filter)
+}
+
+// redeliverOwnLocked hands back the oldest entry consumerID still holds,
+// renewing its visibility lease and counting the delivery attempt. It returns
+// nil when the consumer holds nothing redeliverable. The caller holds the group
+// lock.
+//
+// The visibility timeout is deliberately not consulted. It exists to stop one
+// consumer stealing from another that is still working, which is not what a
+// consumer asking for its own unsettled entry back is doing; making the owner
+// wait it out stalled every reconnect for the full timeout.
+//
+// An entry whose record cannot be read is left pending rather than settled:
+// only the consumer settles a manual delivery.
+func (m *Manager) redeliverOwnLocked(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) *message.Envelope {
+	queueRoot := "$queue/" + group.QueueName
+	for _, entry := range group.OwnedPending(consumerID) {
+		if m.transferring(group.QueueName, group.ID, entry.Offset) {
+			// A dead-letter transfer is writing this entry to its destination
+			// with the group lock released. Redelivering it now would put the
+			// same message in two places.
+			continue
+		}
+		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
+			// Same rule as work stealing: an exhausted entry goes to the
+			// dead-letter queue rather than being handed back.
+			// deferPoisonTransfer reports false only when the queue has no
+			// dead-letter destination, where redelivering beats holding a
+			// pending slot for a transfer that can never happen.
+			if m.deferPoisonTransfer(group, &entry) {
+				continue
+			}
+		}
+		msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
+		if err != nil {
+			continue // Message might be truncated
+		}
+		if msg.IsExpired() {
+			if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, consumerID, entry.Offset); err != nil {
+				m.config.Logger.Warn("failed to drop expired pending entry",
+					slog.String("queue", group.QueueName),
+					slog.String("group", group.ID),
+					slog.Uint64("offset", entry.Offset),
+					slog.String("error", err.Error()))
+			}
+			message.Release(msg)
+			continue
+		}
+		if filter != nil && !filter.Matches(types.ExtractRoutingKey(msg.Topic, queueRoot)) {
+			message.Release(msg)
+			continue
+		}
+		// A transfer to the current owner, which is what renews the lease and
+		// records the attempt. Handing the record back without it would leave
+		// the entry stealable by another consumer while this one works on it.
+		if err := m.groupStore.TransferPendingEntry(ctx, group.QueueName, group.ID, entry.Offset, consumerID, consumerID); err != nil {
+			message.Release(msg)
+			continue
+		}
+		return msg
+	}
+
+	return nil
 }
 
 // ClaimPendingBatch transfers pending messages idle for at least minIdle to a
@@ -527,7 +696,7 @@ func (m *Manager) updateStreamCursorLocked(ctx context.Context, group *types.Con
 		return err
 	}
 
-	if !group.AutoCommit {
+	if !group.AutoCommitEnabled() {
 		return nil
 	}
 	if m.config.AutoCommitInterval <= 0 {
@@ -1455,6 +1624,21 @@ func (m *Manager) CommitOffset(ctx context.Context, queueName, groupID string, o
 		// commit move the safe point backwards silently redelivers settled
 		// messages; a rewind should be its own named operation if it is wanted.
 		return ErrCommitOffsetNotMonotonic
+	}
+	if !group.AutoCommitEnabled() {
+		// Manual stream delivery is represented in the existing PEL. An
+		// offset commit settles every delivery before the committed position,
+		// preserving the client API that predates per-delivery AMQP ACKs.
+		for owner, entries := range group.Snapshot().PEL {
+			for _, entry := range entries {
+				if entry == nil || entry.Offset >= offset {
+					continue
+				}
+				if err := m.groupStore.RemovePendingEntry(ctx, queueName, groupID, owner, entry.Offset); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	return m.groupStore.UpdateCommitted(ctx, queueName, groupID, offset)

@@ -310,6 +310,24 @@ func (s *stateMachine) Consume(ctx context.Context, command ConsumeCommand) (Con
 		filter = consumer.NewFilter(command.Filter)
 	}
 	if group.Mode == types.GroupModeStream {
+		if !group.AutoCommitEnabled() {
+			// command.Limit does not apply: an ordered stream settled by hand
+			// hands out one unsettled delivery per consumer at a time, so that a
+			// nack can redeliver ahead of the next record. See ClaimManualStream.
+			msg, err := s.consumers.ClaimManualStream(ctx, command.QueueName, command.GroupID, command.ConsumerID, filter)
+			if err != nil {
+				return ConsumeOutcome{Mode: types.GroupModeStream}, err
+			}
+			messages := []*message.Envelope{msg}
+			// Re-read: the claim advanced the cursor, so the copy fetched above
+			// reports where the group stood before this call.
+			fresh, err := s.groupStore.GetConsumerGroup(ctx, command.QueueName, command.GroupID)
+			if err != nil {
+				releaseEnvelopes(messages)
+				return ConsumeOutcome{}, err
+			}
+			return ConsumeOutcome{Messages: messages, Mode: types.GroupModeStream, NextOffset: fresh.CursorView().Cursor}, nil
+		}
 		messages, next, err := s.consumers.PeekBatchStream(ctx, command.QueueName, command.GroupID, command.ConsumerID, filter, command.Limit)
 		if err != nil {
 			return ConsumeOutcome{}, err
@@ -358,10 +376,10 @@ func (s *stateMachine) Ack(ctx context.Context, command AckCommand) (SettlementO
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, err))
 		}
-		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
+		if command.ConsumerID != "" && owner != "" && owner != command.ConsumerID {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("ack offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
-		if group.Mode == types.GroupModeStream {
+		if group.Mode == types.GroupModeStream && group.AutoCommitEnabled() {
 			err = s.ackStream(ctx, group, offset)
 		} else {
 			err = s.consumers.Ack(ctx, command.QueueName, group.ID, owner, offset)
@@ -399,13 +417,10 @@ func (s *stateMachine) Nack(ctx context.Context, command NackCommand) (Settlemen
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, err))
 		}
-		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
+		if command.ConsumerID != "" && owner != "" && owner != command.ConsumerID {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("nack offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
-		if group.Mode == types.GroupModeStream {
-			// A stream group has no pending entry to return, so there is no
-			// transition to perform. Reporting the offset settled told the
-			// caller a redelivery had been arranged when nothing had happened.
+		if group.Mode == types.GroupModeStream && group.AutoCommitEnabled() {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome,
 				fmt.Errorf("nack offset %d: %w", offset, consumer.ErrNackNotSupportedForStream))
 		}
@@ -433,10 +448,10 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
-		if command.ConsumerID != "" && group.Mode != types.GroupModeStream && owner != command.ConsumerID {
+		if command.ConsumerID != "" && owner != "" && owner != command.ConsumerID {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, consumer.ErrConsumerNotFound))
 		}
-		if group.Mode == types.GroupModeStream {
+		if group.Mode == types.GroupModeStream && group.AutoCommitEnabled() {
 			err = s.records.rejectStream(ctx, command.QueueName, group, offset, command.Reason)
 		} else {
 			err = s.consumers.Reject(ctx, command.QueueName, group.ID, owner, offset, command.Reason)
@@ -600,6 +615,13 @@ func (s *stateMachine) newSettlementResolver(ctx context.Context, queueName, gro
 func (r *settlementResolver) resolve(offset uint64) (*types.ConsumerGroup, string, error) {
 	if r.group != nil {
 		if r.group.Mode == types.GroupModeStream {
+			if !r.group.AutoCommitEnabled() {
+				_, owner := r.group.FindPending(offset)
+				if owner == "" {
+					return nil, "", consumer.ErrMessageNotPending
+				}
+				return r.group, owner, nil
+			}
 			return r.group, "", nil
 		}
 		_, owner := r.group.FindPending(offset)
@@ -609,10 +631,10 @@ func (r *settlementResolver) resolve(offset uint64) (*types.ConsumerGroup, strin
 		return r.group, owner, nil
 	}
 
+	// Pending lookup first, and across stream groups too: a manual-commit stream
+	// group settles through its pending list like a queue group does, so
+	// skipping stream groups here hid the one group actually holding the offset.
 	for _, group := range r.candidates {
-		if group.Mode == types.GroupModeStream {
-			continue
-		}
 		if _, owner := group.FindPending(offset); owner != "" {
 			return group, owner, nil
 		}
@@ -624,13 +646,6 @@ func (r *settlementResolver) resolve(offset uint64) (*types.ConsumerGroup, strin
 }
 
 func (s *stateMachine) ackStream(ctx context.Context, group *types.ConsumerGroup, offset uint64) error {
-	if !group.AutoCommit {
-		// Acking a manual-commit stream group would move nothing. Reporting
-		// success would tell the caller its offset is durable when the group
-		// still holds the old committed position; CommitOffset is the call
-		// that does what they meant.
-		return ErrAckOnlyForAutoCommitStream
-	}
 	// Through the consumer manager, which owns the group lock. Reading the
 	// cursor here and writing the store directly is a read-modify-write with
 	// nothing serialising it: two acknowledgements both read the old position

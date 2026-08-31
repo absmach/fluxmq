@@ -74,10 +74,6 @@ var (
 	// ErrDLQDisabled leaves the source delivery pending instead of dropping it.
 	ErrDLQDisabled = errors.New("dead-letter queue is disabled")
 
-	// ErrAckOnlyForAutoCommitStream reports an Ack against a stream group that
-	// commits manually. The mirror of consumer.ErrCommitOffsetOnlyForStreamMode:
-	// each names the call the caller should have made instead.
-	ErrAckOnlyForAutoCommitStream = errors.New("ack only supported for auto-commit stream groups; use commit offset")
 	// ErrReplicationUnavailable prevents a replicated queue from degrading to a
 	// local-only write when its Raft group or leader cannot be used.
 	ErrReplicationUnavailable = errors.New("queue replication unavailable")
@@ -1496,22 +1492,49 @@ func (m *Manager) subscribeWithCursor(ctx context.Context, queueName, pattern st
 		autoCommit = *cursor.AutoCommit
 	}
 
-	group, err := m.consumerManager.GetOrCreateGroup(ctx, queueName, patternGroupID, pattern, mode, autoCommit)
+	configureAutoCommit := cursor != nil && cursor.AutoCommit != nil
+	group, created, err := m.consumerManager.GetOrCreateConfiguredGroup(ctx, queueName, patternGroupID, pattern, mode, autoCommit, configureAutoCommit)
 	if err != nil {
 		return err
 	}
 
-	// Apply cursor positioning
+	// Cursor and committed move together because a seek names the group's whole
+	// position: leaving committed behind a forward seek pins retention on a
+	// range the group has decided to skip and reports it as unsettled forever,
+	// and leaving it ahead of a replay claims records the group is about to
+	// deliver again are already settled.
+	//
+	// Two targeted writes rather than one UpdateConsumerGroup: cursor placement
+	// is replicated as its own operation, and a whole-group write would carry
+	// PEL and membership a subscribe has no business republishing.
+	seek := func(offset uint64) error {
+		if err := m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset); err != nil {
+			return err
+		}
+		return m.groupStore.UpdateCommitted(ctx, queueName, group.ID, offset)
+	}
+
+	// first and last are creation policies, not reconnect-time seek commands: an
+	// existing durable group resumes its stored cursor. An explicit offset or
+	// timestamp is a seek and is applied every time it is asked for.
 	switch cursor.Position {
 	case types.CursorEarliest:
-		head, err := m.queueStore.Head(ctx, queueName)
-		if err == nil {
-			m.groupStore.UpdateCursor(ctx, queueName, group.ID, head) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
+		if created {
+			head, err := m.queueStore.Head(ctx, queueName)
+			if err == nil {
+				if err := seek(head); err != nil {
+					return err
+				}
+			}
 		}
 	case types.CursorLatest:
-		tail, err := m.queueStore.Tail(ctx, queueName)
-		if err == nil {
-			m.groupStore.UpdateCursor(ctx, queueName, group.ID, tail) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
+		if created {
+			tail, err := m.queueStore.Tail(ctx, queueName)
+			if err == nil {
+				if err := seek(tail); err != nil {
+					return err
+				}
+			}
 		}
 	case types.CursorOffset:
 		head, _ := m.queueStore.Head(ctx, queueName)
@@ -1523,11 +1546,15 @@ func (m *Manager) subscribeWithCursor(ctx context.Context, queueName, pattern st
 		if offset > tail {
 			offset = tail
 		}
-		m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
+		if err := seek(offset); err != nil {
+			return err
+		}
 	case types.CursorTimestamp:
 		if !cursor.Timestamp.IsZero() {
 			if offset, err := m.offsetByTime(ctx, queueName, cursor.Timestamp); err == nil {
-				m.groupStore.UpdateCursor(ctx, queueName, group.ID, offset) //nolint:errcheck // cursor positioning; consumer will start from default offset on failure
+				if err := seek(offset); err != nil {
+					return err
+				}
 			}
 		}
 	}

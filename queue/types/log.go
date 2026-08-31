@@ -4,7 +4,9 @@
 package types
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -149,6 +151,82 @@ func (g *ConsumerGroup) SetCommitted(committed uint64) {
 	}
 	g.Cursor.Committed = committed
 	g.UpdatedAt = time.Now()
+}
+
+// SetAutoCommit changes whether delivery advances the committed stream
+// position. Explicit acknowledgements still settle manual stream deliveries.
+func (g *ConsumerGroup) SetAutoCommit(autoCommit bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.AutoCommit = autoCommit
+	g.UpdatedAt = time.Now()
+}
+
+// AutoCommitEnabled reports whether delivery advances the committed stream
+// position without waiting for settlement.
+func (g *ConsumerGroup) AutoCommitEnabled() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	return g.AutoCommit
+}
+
+// ClearPending drops every pending entry the group holds and reports how many
+// were removed.
+//
+// For the switch to auto-commit, where delivery is itself the commit: nothing
+// settles a pending entry once that contract is in force, so entries left
+// behind are unreachable state that still inflates the pending count and the
+// group's persisted size.
+func (g *ConsumerGroup) ClearPending() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	cleared := 0
+	for _, entries := range g.PEL {
+		cleared += len(entries)
+	}
+	if cleared == 0 {
+		return 0
+	}
+	g.PEL = make(map[string][]*PendingEntry)
+	g.UpdatedAt = time.Now()
+
+	return cleared
+}
+
+// PendingCountFor reports how many entries consumerID currently holds.
+func (g *ConsumerGroup) PendingCountFor(consumerID string) int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	return len(g.PEL[consumerID])
+}
+
+// OwnedPending returns copies of the entries consumerID currently holds,
+// oldest offset first.
+//
+// Copies for the same reason FindPending returns one: the live pointers let
+// callers write group state outside the group's lock.
+func (g *ConsumerGroup) OwnedPending(consumerID string) []PendingEntry {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	entries := g.PEL[consumerID]
+	if len(entries) == 0 {
+		return nil
+	}
+	owned := make([]PendingEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		owned = append(owned, *entry)
+	}
+	slices.SortFunc(owned, func(a, b PendingEntry) int { return cmp.Compare(a.Offset, b.Offset) })
+
+	return owned
 }
 
 // AdvanceCommitted records committed as the safe point, pulling the cursor up

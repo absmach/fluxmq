@@ -310,7 +310,7 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 				}
 				continue
 			}
-			if group.Mode == types.GroupModeStream {
+			if outcome.CommitRequired {
 				e.commitStreamCursor(ctx, config.Name, group.ID, nextCursor)
 			}
 			e.touchConsumerHeartbeat(ctx, config.Name, group.ID, consumerID)
@@ -347,14 +347,14 @@ func (e *DeliveryEngine) deliverToGroup(ctx context.Context, config *types.Queue
 				}
 				deliveredAny = true
 				delivered = true
-				if group.Mode == types.GroupModeStream {
+				if outcome.CommitRequired {
 					committedCursor = msg.BrokerMeta.Queue.Offset + 1
 				}
 			}
 		}
 		releaseDeliverySources(msgs)
 
-		if group.Mode == types.GroupModeStream && deliveredAny {
+		if outcome.CommitRequired && deliveredAny {
 			if allDelivered {
 				committedCursor = nextCursor
 			}
@@ -455,7 +455,7 @@ func (e *DeliveryEngine) deliverToRemoteConsumers(ctx context.Context, config *t
 				continue
 			}
 
-			if group.Mode == types.GroupModeStream {
+			if outcome.CommitRequired {
 				e.commitStreamCursor(ctx, config.Name, groupID, nextCursor)
 			}
 			delivered = true
