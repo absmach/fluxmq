@@ -158,6 +158,13 @@ func encodeOperation(op *Operation) (*raftv1.Operation, error) {
 			GroupId:    op.GroupID,
 			ConsumerId: op.ConsumerID,
 		}}
+	case OpRequeuePending:
+		wire.Command = &raftv1.Operation_RequeuePending{RequeuePending: &raftv1.RequeuePendingOperation{
+			QueueName:  op.QueueName,
+			GroupId:    op.GroupID,
+			ConsumerId: op.ConsumerID,
+			Offset:     op.Offset,
+		}}
 	case OpCreateQueue:
 		if op.QueueConfig == nil {
 			return nil, fmt.Errorf("%w: create queue config is missing", errMalformedOperation)
@@ -292,6 +299,12 @@ func decodeOperation(wire *raftv1.Operation) (*Operation, error) {
 		}
 		op.Type, op.QueueName, op.GroupID = OpUnregisterConsumer, payload.UnregisterConsumer.QueueName, payload.UnregisterConsumer.GroupId
 		op.ConsumerID = payload.UnregisterConsumer.ConsumerId
+	case *raftv1.Operation_RequeuePending:
+		if payload.RequeuePending == nil {
+			return nil, missingCommand("requeue pending")
+		}
+		op.Type, op.QueueName, op.GroupID = OpRequeuePending, payload.RequeuePending.QueueName, payload.RequeuePending.GroupId
+		op.ConsumerID, op.Offset = payload.RequeuePending.ConsumerId, payload.RequeuePending.Offset
 	case *raftv1.Operation_CreateQueue:
 		if payload.CreateQueue == nil || payload.CreateQueue.Config == nil {
 			return nil, missingCommand("create queue")

@@ -253,6 +253,12 @@ const (
 	// Appended last so the values of the operations above stay stable in op
 	// logs already on disk.
 	OpRestorePending
+
+	// OpRelease changes only redelivery eligibility. It is distinct from the
+	// legacy OpNack, which counts an attempt immediately; the queue manager
+	// counts an attempt when the released entry is actually claimed instead.
+	// Appended so persisted operation values remain stable.
+	OpRelease
 )
 
 // Operation represents an operation in the log.
@@ -325,6 +331,8 @@ func (cs *ConsumerState) applyOp(op *Operation) {
 		cs.applySetCursor(op.Offset, op.Timestamp)
 	case OpRestorePending:
 		cs.applyRestorePending(op.Offset, op.ConsumerID, op.Timestamp, op.DeliveryCount)
+	case OpRelease:
+		cs.applyRelease(op.Offset, op.Timestamp)
 	}
 }
 
@@ -418,6 +426,20 @@ func (cs *ConsumerState) applyNack(offset uint64, ts int64) {
 	}
 
 	entry.DeliveryCount++
+	entry.LastAttempt = ts
+	shard.dirty = true
+}
+
+// applyRelease updates redelivery eligibility without charging an attempt.
+// The following claim is the observable delivery and increments the counter.
+func (cs *ConsumerState) applyRelease(offset uint64, ts int64) {
+	shard := cs.pelShards[cs.ShardKey(offset)]
+
+	entry, ok := shard.entries[offset]
+	if !ok {
+		return
+	}
+
 	entry.LastAttempt = ts
 	shard.dirty = true
 }
@@ -634,6 +656,22 @@ func (cs *ConsumerState) NackAt(offset uint64, attemptedAt time.Time) error {
 
 	return cs.writeOp(&Operation{
 		Type:      OpNack,
+		Offset:    offset,
+		Timestamp: ts,
+	})
+}
+
+// ReleaseAt makes a pending message eligible at attemptedAt without counting
+// another delivery. Claim records the attempt if and when redelivery occurs.
+func (cs *ConsumerState) ReleaseAt(offset uint64, attemptedAt time.Time) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	ts := attemptedAt.UnixMilli()
+	cs.applyRelease(offset, ts)
+
+	return cs.writeOp(&Operation{
+		Type:      OpRelease,
 		Offset:    offset,
 		Timestamp: ts,
 	})

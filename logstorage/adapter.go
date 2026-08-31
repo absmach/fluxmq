@@ -703,7 +703,7 @@ func (a *Adapter) RequeuePendingEntry(ctx context.Context, queueName, groupID, c
 	if owner != consumerID {
 		return storage.ErrConsumerNotFound
 	}
-	if err := a.store.NackAt(queueName, groupID, offset, attemptedAt); err != nil {
+	if err := a.store.ReleaseAt(queueName, groupID, offset, attemptedAt); err != nil {
 		if errors.Is(err, ErrPELEntryNotFound) {
 			return storage.ErrPendingEntryNotFound
 		}

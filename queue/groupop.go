@@ -91,6 +91,10 @@ func encodeGroupOperation(op *raft.Operation) (*clusterv1.GroupOperation, error)
 		wire.Operation = &clusterv1.GroupOperation_UnregisterConsumer{
 			UnregisterConsumer: &clusterv1.UnregisterConsumerOp{ConsumerId: op.ConsumerID},
 		}
+	case raft.OpRequeuePending:
+		wire.Operation = &clusterv1.GroupOperation_RequeuePending{
+			RequeuePending: &clusterv1.RequeuePendingOp{ConsumerId: op.ConsumerID, Offset: op.Offset},
+		}
 	default:
 		return nil, fmt.Errorf("%w: type %d", ErrUnsupportedGroupOp, op.Type)
 	}
@@ -170,6 +174,10 @@ func decodeGroupOperation(wire *clusterv1.GroupOperation) (*raft.Operation, erro
 	case *clusterv1.GroupOperation_UnregisterConsumer:
 		op.Type = raft.OpUnregisterConsumer
 		op.ConsumerID = payload.UnregisterConsumer.GetConsumerId()
+	case *clusterv1.GroupOperation_RequeuePending:
+		op.Type = raft.OpRequeuePending
+		op.ConsumerID = payload.RequeuePending.GetConsumerId()
+		op.Offset = payload.RequeuePending.GetOffset()
 	default:
 		if wire.Operation == nil {
 			return nil, fmt.Errorf("%w: operation payload is required", ErrMalformedGroupOp)
@@ -196,7 +204,7 @@ func validateGroupOperation(op *raft.Operation) error {
 	case raft.OpCreateGroup, raft.OpUpdateGroup, raft.OpDeleteGroup,
 		raft.OpUpdateCursor, raft.OpUpdateCommitted, raft.OpAddPending,
 		raft.OpRemovePending, raft.OpTransferPending, raft.OpRegisterConsumer,
-		raft.OpUnregisterConsumer:
+		raft.OpUnregisterConsumer, raft.OpRequeuePending:
 	default:
 		return fmt.Errorf("%w: type %d", ErrUnsupportedGroupOp, op.Type)
 	}
@@ -229,6 +237,10 @@ func validateGroupOperation(op *raft.Operation) error {
 	case raft.OpUnregisterConsumer:
 		if op.ConsumerID == "" {
 			return fmt.Errorf("%w: unregister consumer requires a consumer id", ErrMalformedGroupOp)
+		}
+	case raft.OpRequeuePending:
+		if op.ConsumerID == "" {
+			return fmt.Errorf("%w: requeue pending requires a consumer id", ErrMalformedGroupOp)
 		}
 	}
 

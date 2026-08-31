@@ -900,6 +900,31 @@ func (m *Manager) ApplyTransferPending(ctx context.Context, queueName, groupID s
 	return nil
 }
 
+// ApplyRequeuePending submits a pending-entry release operation to Raft.
+func (m *Manager) ApplyRequeuePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	if !m.IsEnabled() {
+		return ErrRaftDisabled
+	}
+
+	op := &Operation{
+		Type:       OpRequeuePending,
+		Timestamp:  attemptedAt,
+		QueueName:  queueName,
+		GroupID:    groupID,
+		ConsumerID: consumerID,
+		Offset:     offset,
+	}
+
+	result, err := m.Apply(ctx, op)
+	if err != nil {
+		return err
+	}
+	if result != nil && result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
 // ApplyRegisterConsumer submits a register consumer operation to Raft.
 func (m *Manager) ApplyRegisterConsumer(ctx context.Context, queueName string, groupID string, consumer *types.ConsumerInfo) error {
 	if !m.IsEnabled() {

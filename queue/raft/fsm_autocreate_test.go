@@ -62,6 +62,10 @@ func (noopGroupStore) TransferPendingEntry(context.Context, string, string, uint
 	return nil
 }
 
+func (noopGroupStore) RequeuePendingEntry(context.Context, string, string, string, uint64, time.Time) error {
+	return nil
+}
+
 func (noopGroupStore) UpdateCursor(context.Context, string, string, uint64) error {
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/storage"
@@ -53,6 +54,7 @@ type GroupStateReplicator interface {
 	ApplyAddPending(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error
 	ApplyRemovePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error
 	ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
+	ApplyRequeuePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error
 	ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error
 	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 }
@@ -98,6 +100,7 @@ type GroupReplicator interface {
 	ApplyAddPending(ctx context.Context, queueName, groupID string, entry *types.PendingEntry) error
 	ApplyRemovePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64) error
 	ApplyTransferPending(ctx context.Context, queueName, groupID string, offset uint64, fromConsumer, toConsumer string) error
+	ApplyRequeuePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error
 	ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error
 	ApplyUnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error
 }
@@ -512,6 +515,14 @@ func (c *LogicalGroupCoordinator) ApplyTransferPending(ctx context.Context, queu
 		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
 	}
 	return replicator.ApplyTransferPending(ctx, queueName, groupID, offset, fromConsumer, toConsumer)
+}
+
+func (c *LogicalGroupCoordinator) ApplyRequeuePending(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	replicator := c.replicatorForQueue(queueName)
+	if replicator == nil {
+		return fmt.Errorf("no raft replicator configured for queue %q", queueName)
+	}
+	return replicator.ApplyRequeuePending(ctx, queueName, groupID, consumerID, offset, attemptedAt)
 }
 
 func (c *LogicalGroupCoordinator) ApplyRegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {

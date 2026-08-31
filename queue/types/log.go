@@ -4,9 +4,7 @@
 package types
 
 import (
-	"cmp"
 	"encoding/json"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -204,31 +202,6 @@ func (g *ConsumerGroup) PendingCountFor(consumerID string) int {
 	return len(g.PEL[consumerID])
 }
 
-// OwnedPending returns copies of the entries consumerID currently holds,
-// oldest offset first.
-//
-// Copies for the same reason FindPending returns one: the live pointers let
-// callers write group state outside the group's lock.
-func (g *ConsumerGroup) OwnedPending(consumerID string) []PendingEntry {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	entries := g.PEL[consumerID]
-	if len(entries) == 0 {
-		return nil
-	}
-	owned := make([]PendingEntry, 0, len(entries))
-	for _, entry := range entries {
-		if entry == nil {
-			continue
-		}
-		owned = append(owned, *entry)
-	}
-	slices.SortFunc(owned, func(a, b PendingEntry) int { return cmp.Compare(a.Offset, b.Offset) })
-
-	return owned
-}
-
 // AdvanceCommitted records committed as the safe point, pulling the cursor up
 // to meet it when a caller has committed past where the group had read.
 func (g *ConsumerGroup) AdvanceCommitted(committed uint64) {
@@ -399,8 +372,9 @@ func (g *ConsumerGroup) FindPending(offset uint64) (PendingEntry, string) {
 	return PendingEntry{}, ""
 }
 
-// RequeuePending records a redelivery attempt for one entry: it becomes
-// stealable again at attemptedAt and its delivery count rises.
+// RequeuePending makes one entry eligible for redelivery at attemptedAt. It
+// does not count another delivery yet; TransferPending records the attempt when
+// the broker actually hands the entry to a consumer.
 //
 // This is the mutation FindPending used to permit by handing out a pointer.
 // Performing it here keeps it under the group's lock, where the encoder and
@@ -414,7 +388,6 @@ func (g *ConsumerGroup) RequeuePending(offset uint64, consumerID string, attempt
 			continue
 		}
 		entry.ClaimedAt = attemptedAt
-		entry.DeliveryCount++
 		g.UpdatedAt = time.Now()
 		return true
 	}
@@ -497,9 +470,11 @@ func (g *ConsumerGroup) PendingOffsets() map[uint64]struct{} {
 	return offsets
 }
 
-// StealableEntries returns entries that are older than the visibility timeout.
-// StealableEntries returns the entries whose visibility timeout has elapsed,
-// excluding one consumer's own.
+// StealableEntries returns entries whose visibility timeout has elapsed,
+// excluding one consumer's own. Entries owned by a consumer that is no longer
+// registered are available immediately: disconnect is a stronger signal than
+// waiting for the lease to expire, and the group lock keeps registration and
+// selection atomic within the manager.
 //
 // Unlike FindPending and GetConsumer this returns the live entries rather than
 // copies, and deliberately: a sweep walks the whole pending list, and copying
@@ -522,8 +497,9 @@ func (g *ConsumerGroup) StealableEntries(visibilityTimeout time.Duration, exclud
 		if consumerID == excludeConsumer {
 			continue
 		}
+		_, registered := g.Consumers[consumerID]
 		for _, e := range entries {
-			if e != nil && e.ClaimedAt.Before(cutoff) {
+			if e != nil && (!registered || e.ClaimedAt.Before(cutoff)) {
 				stealable = append(stealable, e)
 			}
 		}

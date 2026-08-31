@@ -46,6 +46,7 @@ func TestOperationCodecRoundTripsEveryCommand(t *testing.T) {
 		"transfer pending":    {Type: OpTransferPending, Timestamp: now, QueueName: testOperationQueue, GroupID: testOperationGroup, Offset: 20, FromConsumer: testOperationConsumerA, ToConsumer: testOperationConsumerB},
 		"register consumer":   {Type: OpRegisterConsumer, Timestamp: now, QueueName: testOperationQueue, GroupID: testOperationGroup, ConsumerInfo: &types.ConsumerInfo{ID: "consumer-c", ClientID: "client-c", ProxyNodeID: "node-c", RegisteredAt: now, LastHeartbeat: now}},
 		"unregister consumer": {Type: OpUnregisterConsumer, Timestamp: now, QueueName: testOperationQueue, GroupID: testOperationGroup, ConsumerID: "consumer-c"},
+		"requeue pending":     {Type: OpRequeuePending, Timestamp: now, QueueName: testOperationQueue, GroupID: testOperationGroup, ConsumerID: testOperationConsumerA, Offset: 20},
 		"create queue":        {Type: OpCreateQueue, Timestamp: now, QueueName: testOperationQueue, QueueConfig: &queueConfig},
 		"update queue":        {Type: OpUpdateQueue, Timestamp: now, QueueName: testOperationQueue, QueueConfig: &queueConfig},
 		"delete queue":        {Type: OpDeleteQueue, Timestamp: now, QueueName: testOperationQueue},

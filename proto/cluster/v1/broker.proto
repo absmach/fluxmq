@@ -309,6 +309,7 @@ message GroupOperation {
     TransferPendingOp transfer_pending = 11;
     RegisterConsumerOp register_consumer = 12;
     UnregisterConsumerOp unregister_consumer = 13;
+    RequeuePendingOp requeue_pending = 14;
   }
 }
 
@@ -352,6 +353,11 @@ message RegisterConsumerOp {
 
 message UnregisterConsumerOp {
   string consumer_id = 1;
+}
+
+message RequeuePendingOp {
+  string consumer_id = 1;
+  uint64 offset = 2;
 }
 
 // ConsumerGroupState is the replicated state of one consumer group.

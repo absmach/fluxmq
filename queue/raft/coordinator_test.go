@@ -6,6 +6,7 @@ package raft
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
@@ -93,6 +94,10 @@ func (m *mockReplicator) ApplyRemovePending(context.Context, string, string, str
 }
 
 func (m *mockReplicator) ApplyTransferPending(context.Context, string, string, uint64, string, string) error {
+	return nil
+}
+
+func (m *mockReplicator) ApplyRequeuePending(context.Context, string, string, string, uint64, time.Time) error {
 	return nil
 }
 

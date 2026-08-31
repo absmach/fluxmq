@@ -145,15 +145,15 @@ func newManualStreamFixture(t *testing.T, records int) (*Manager, *groupStore, *
 		ClaimBatchSize:    10,
 		MaxPELSize:        1000,
 	})
+	require.NoError(t, manager.RegisterConsumer(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, testStreamConsumer, ""))
 
 	return manager, store, group
 }
 
-// A consumer asking for its own unsettled entry back must not wait out the
-// visibility timeout. That timeout stops one consumer stealing from another
-// that is still working; applied to the owner it stalled every reconnect for
-// its full duration.
-func TestClaimManualStreamRedeliversOwnEntryWithoutWaitingVisibility(t *testing.T) {
+// The delivery engine polls a group while its handler is still running. An
+// owner must not receive the same unsettled entry again until the lease expires
+// or a nack explicitly releases it.
+func TestClaimManualStreamDoesNotRedeliverActiveOwnEntry(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newManualStreamFixture(t, 2)
 
@@ -162,13 +162,52 @@ func TestClaimManualStreamRedeliversOwnEntryWithoutWaitingVisibility(t *testing.
 	require.Equal(t, uint64(0), first.BrokerMeta.Queue.Offset)
 
 	// Well inside the one-minute visibility timeout.
-	again, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(0), again.BrokerMeta.Queue.Offset, "unsettled entry must be redelivered before the next record")
+	_, err = manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
+	assert.ErrorIs(t, err, ErrNoMessages)
 
 	group, err := store.GetConsumerGroup(ctx, testStreamQueue, testStreamGroup)
 	require.NoError(t, err)
-	assert.Equal(t, 1, group.PendingCountFor(testStreamConsumer), "redelivery must not add a second pending entry")
+	assert.Equal(t, 1, group.PendingCountFor(testStreamConsumer), "polling must not add a second pending entry")
+}
+
+func TestClaimManualStreamRedeliversNackedOwnEntry(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _ := newManualStreamFixture(t, 2)
+
+	first, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
+	require.NoError(t, err)
+	require.NoError(t, manager.Nack(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, first.BrokerMeta.Queue.Offset))
+
+	again, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
+	require.NoError(t, err)
+	assert.Equal(t, first.BrokerMeta.Queue.Offset, again.BrokerMeta.Queue.Offset)
+
+	group, err := store.GetConsumerGroup(ctx, testStreamQueue, testStreamGroup)
+	require.NoError(t, err)
+	entry, owner := group.FindPending(first.BrokerMeta.Queue.Offset)
+	require.Equal(t, testStreamConsumer, owner)
+	assert.Equal(t, 2, entry.DeliveryCount, "two deliveries must cost two attempts")
+}
+
+func TestClaimManualStreamRedeliversOrphanImmediately(t *testing.T) {
+	ctx := context.Background()
+	manager, store, _ := newManualStreamFixture(t, 1)
+
+	first, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
+	require.NoError(t, err)
+	require.NoError(t, manager.UnregisterConsumer(ctx, testStreamQueue, testStreamGroup, testStreamConsumer))
+
+	const reconnectConsumer = "consumer-2"
+	require.NoError(t, manager.RegisterConsumer(ctx, testStreamQueue, testStreamGroup, reconnectConsumer, reconnectConsumer, ""))
+	again, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, reconnectConsumer, nil)
+	require.NoError(t, err)
+	assert.Equal(t, first.BrokerMeta.Queue.Offset, again.BrokerMeta.Queue.Offset)
+
+	group, err := store.GetConsumerGroup(ctx, testStreamQueue, testStreamGroup)
+	require.NoError(t, err)
+	entry, owner := group.FindPending(first.BrokerMeta.Queue.Offset)
+	assert.Equal(t, reconnectConsumer, owner)
+	assert.Equal(t, 2, entry.DeliveryCount)
 }
 
 // Reconnect cycles must not walk an entry to the dead-letter queue on their
@@ -177,17 +216,23 @@ func TestClaimManualStreamCountsOneAttemptPerRedelivery(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newManualStreamFixture(t, 1)
 
-	for range 3 {
-		require.NoError(t, manager.UnregisterConsumer(ctx, testStreamQueue, testStreamGroup, testStreamConsumer))
-		msg, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
+	currentConsumer := testStreamConsumer
+	msg, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, currentConsumer, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), msg.BrokerMeta.Queue.Offset)
+	for _, nextConsumer := range []string{"consumer-2", "consumer-3"} {
+		require.NoError(t, manager.UnregisterConsumer(ctx, testStreamQueue, testStreamGroup, currentConsumer))
+		require.NoError(t, manager.RegisterConsumer(ctx, testStreamQueue, testStreamGroup, nextConsumer, nextConsumer, ""))
+		msg, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, nextConsumer, nil)
 		require.NoError(t, err)
 		require.Equal(t, uint64(0), msg.BrokerMeta.Queue.Offset)
+		currentConsumer = nextConsumer
 	}
 
 	group, err := store.GetConsumerGroup(ctx, testStreamQueue, testStreamGroup)
 	require.NoError(t, err)
 	entry, owner := group.FindPending(0)
-	require.Equal(t, testStreamConsumer, owner)
+	require.Equal(t, currentConsumer, owner)
 	assert.Equal(t, 3, entry.DeliveryCount, "three deliveries must cost three attempts")
 }
 
@@ -200,6 +245,8 @@ func TestClaimManualStreamHoldsOneUnsettledDelivery(t *testing.T) {
 	first, err := manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), first.BrokerMeta.Queue.Offset)
+	_, err = manager.ClaimManualStream(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, nil)
+	assert.ErrorIs(t, err, ErrNoMessages)
 
 	require.NoError(t, manager.Ack(ctx, testStreamQueue, testStreamGroup, testStreamConsumer, 0))
 

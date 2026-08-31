@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/message"
+	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
@@ -40,13 +41,44 @@ type groupStore struct {
 	*memlog.Store
 }
 
-// RegisterConsumer and UnregisterConsumer differ in shape too; the poison branch
-// touches neither, so they are satisfied without behaviour.
-func (s *groupStore) RegisterConsumer(context.Context, string, string, *types.ConsumerInfo) error {
-	return nil
+// RegisterConsumer and UnregisterConsumer differ in shape, and they record
+// membership on the group itself the way logstorage.Adapter does. Stubbing them
+// out left group.Consumers empty, so every pending entry looked orphaned and
+// StealableEntries handed back deliveries whose visibility lease was still held.
+func (s *groupStore) RegisterConsumer(ctx context.Context, queueName, groupID string, consumer *types.ConsumerInfo) error {
+	group, err := s.Store.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+	group.SetConsumer(consumer.ID, consumer)
+
+	return s.Store.UpdateConsumerGroup(ctx, group)
 }
 
-func (s *groupStore) UnregisterConsumer(context.Context, string, string, string) error { return nil }
+func (s *groupStore) UnregisterConsumer(ctx context.Context, queueName, groupID, consumerID string) error {
+	group, err := s.Store.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+	group.DeleteConsumer(consumerID)
+
+	return s.Store.UpdateConsumerGroup(ctx, group)
+}
+
+// RequeuePendingEntry is the optional capability nack uses to release a
+// delivery ahead of its visibility lease. The in-memory log
+// store does not provide it, so the double supplies it over the group state.
+func (s *groupStore) RequeuePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	group, err := s.Store.GetConsumerGroup(ctx, queueName, groupID)
+	if err != nil {
+		return err
+	}
+	if !group.RequeuePending(offset, consumerID, attemptedAt) {
+		return storage.ErrPendingEntryNotFound
+	}
+
+	return s.Store.UpdateConsumerGroup(ctx, group)
+}
 
 func (s *groupStore) ListConsumers(ctx context.Context, queueName, groupID string) ([]*types.ConsumerInfo, error) {
 	consumers, err := s.Store.ListConsumers(ctx, queueName, groupID)

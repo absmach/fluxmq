@@ -145,6 +145,32 @@ func TestConsumerState_Nack(t *testing.T) {
 	assert.Equal(t, uint16(2), entry.DeliveryCount)
 }
 
+func TestConsumerState_ReleaseCountsOnlyActualRedelivery(t *testing.T) {
+	dir := t.TempDir()
+	config := DefaultConsumerStateConfig()
+	cs, err := NewConsumerState(dir, "test-group", config)
+	require.NoError(t, err)
+
+	require.NoError(t, cs.Deliver(1, "consumer-1"))
+	releasedAt := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	require.NoError(t, cs.ReleaseAt(1, releasedAt))
+	require.NoError(t, cs.Close())
+
+	cs, err = NewConsumerState(dir, "test-group", config)
+	require.NoError(t, err)
+	defer cs.Close()
+
+	entry, ok := cs.GetPending(1)
+	require.True(t, ok)
+	assert.Equal(t, uint16(1), entry.DeliveryCount, "release itself is not a delivery")
+	assert.Equal(t, releasedAt.UnixMilli(), entry.LastAttempt)
+
+	require.NoError(t, cs.Claim(1, "consumer-1"))
+	entry, ok = cs.GetPending(1)
+	require.True(t, ok)
+	assert.Equal(t, uint16(2), entry.DeliveryCount, "claim records the redelivery attempt")
+}
+
 func TestConsumerState_Claim(t *testing.T) {
 	dir := t.TempDir()
 	config := DefaultConsumerStateConfig()

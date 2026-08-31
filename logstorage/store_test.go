@@ -125,6 +125,29 @@ func TestStore_Persistence(t *testing.T) {
 	assert.Equal(t, []byte("v1"), msg.Value)
 }
 
+func TestStorePersistenceWithNestedQueueName(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultStoreConfig()
+
+	store, err := NewStore(dir, cfg)
+	require.NoError(t, err)
+
+	const queueName = "$dlq/mqtt"
+	_, err = store.Append(queueName, []byte("poison"), nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.Sync())
+	require.NoError(t, store.Close())
+
+	reopened, err := NewStore(dir, cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+
+	assert.Contains(t, reopened.ListQueues(), queueName)
+	msg, err := reopened.Read(queueName, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("poison"), msg.Value)
+}
+
 func TestStore_DeleteQueue(t *testing.T) {
 	dir := t.TempDir()
 	cfg := DefaultStoreConfig()

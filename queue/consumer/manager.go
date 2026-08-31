@@ -328,6 +328,12 @@ func (m *Manager) UnregisterConsumer(ctx context.Context, queueName, groupID, co
 	groupLock.Lock()
 	defer groupLock.Unlock()
 
+	// No pending-entry bookkeeping here. Dropping the consumer from the group
+	// is itself what releases what it held: StealableEntries treats an entry
+	// whose owner is no longer registered as immediately claimable, so the
+	// redelivery costs the one attempt it actually makes. Backdating the entry
+	// as well spent a second attempt on a delivery nobody received, and a few
+	// reconnects walked a message to the dead-letter queue on their own.
 	return m.groupStore.UnregisterConsumer(ctx, queueName, groupID, consumerID)
 }
 
@@ -413,10 +419,15 @@ func (m *Manager) ClaimBatch(ctx context.Context, queueName, groupID, consumerID
 // size the caller asked for. The stream is ordered and settlement is explicit,
 // so handing out the next record while the current one is unsettled would leave
 // a nack of the current one unable to redeliver ahead of a record the consumer
-// already has. Consumers in the group progress independently.
+// already has.
 //
-// A delivery the consumer already owns is redelivered before any new record is
-// claimed, so a reconnecting consumer resumes on the message it left unsettled.
+// A delivery the consumer still owns is retried before any new record is
+// claimed, but only once its visibility lease has lapsed. That lease is what
+// separates a consumer still working on a message from one that nacked it or
+// went away: redelivering while the lease holds would replay a message into a
+// handler that is currently running it. Nack backdates the lease; consumer
+// departure removes the old owner from the membership map. Both make the entry
+// immediately eligible without charging a delivery nobody received.
 func (m *Manager) ClaimManualStream(ctx context.Context, queueName, groupID, consumerID string, filter *Filter) (*message.Envelope, error) {
 	groupLock := m.groupLocks.KeyPair(queueName, groupID)
 	groupLock.Lock()
@@ -430,15 +441,11 @@ func (m *Manager) ClaimManualStream(ctx context.Context, queueName, groupID, con
 		return nil, ErrGroupModeMismatch
 	}
 
-	if msg := m.redeliverOwnLocked(ctx, group, consumerID, filter); msg != nil {
-		return msg, nil
-	}
-	// An entry the consumer still owns but could not be handed back — its
-	// record is gone, or it is mid dead-letter transfer — must not fall through
-	// to a new record, or the group would hold two unsettled deliveries for one
-	// consumer and lose the ordering the manual contract rests on.
+	// Work stealing excludes the calling consumer, so a group with a single
+	// consumer could never take its own entry back. Retrying the consumer's own
+	// lapsed entries is that path.
 	if group.PendingCountFor(consumerID) > 0 {
-		return nil, ErrNoMessages
+		return m.stealWorkFrom(ctx, group, consumerID, filter, "", consumerID)
 	}
 
 	msg, err := m.stealWork(ctx, group, consumerID, filter)
@@ -450,69 +457,6 @@ func (m *Manager) ClaimManualStream(ctx context.Context, queueName, groupID, con
 	}
 
 	return m.claimFromCursor(ctx, group, consumerID, filter)
-}
-
-// redeliverOwnLocked hands back the oldest entry consumerID still holds,
-// renewing its visibility lease and counting the delivery attempt. It returns
-// nil when the consumer holds nothing redeliverable. The caller holds the group
-// lock.
-//
-// The visibility timeout is deliberately not consulted. It exists to stop one
-// consumer stealing from another that is still working, which is not what a
-// consumer asking for its own unsettled entry back is doing; making the owner
-// wait it out stalled every reconnect for the full timeout.
-//
-// An entry whose record cannot be read is left pending rather than settled:
-// only the consumer settles a manual delivery.
-func (m *Manager) redeliverOwnLocked(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) *message.Envelope {
-	queueRoot := "$queue/" + group.QueueName
-	for _, entry := range group.OwnedPending(consumerID) {
-		if m.transferring(group.QueueName, group.ID, entry.Offset) {
-			// A dead-letter transfer is writing this entry to its destination
-			// with the group lock released. Redelivering it now would put the
-			// same message in two places.
-			continue
-		}
-		if entry.DeliveryCount >= m.config.MaxDeliveryCount {
-			// Same rule as work stealing: an exhausted entry goes to the
-			// dead-letter queue rather than being handed back.
-			// deferPoisonTransfer reports false only when the queue has no
-			// dead-letter destination, where redelivering beats holding a
-			// pending slot for a transfer that can never happen.
-			if m.deferPoisonTransfer(group, &entry) {
-				continue
-			}
-		}
-		msg, err := m.queueStore.Read(ctx, group.QueueName, entry.Offset)
-		if err != nil {
-			continue // Message might be truncated
-		}
-		if msg.IsExpired() {
-			if err := m.groupStore.RemovePendingEntry(ctx, group.QueueName, group.ID, consumerID, entry.Offset); err != nil {
-				m.config.Logger.Warn("failed to drop expired pending entry",
-					slog.String("queue", group.QueueName),
-					slog.String("group", group.ID),
-					slog.Uint64("offset", entry.Offset),
-					slog.String("error", err.Error()))
-			}
-			message.Release(msg)
-			continue
-		}
-		if filter != nil && !filter.Matches(types.ExtractRoutingKey(msg.Topic, queueRoot)) {
-			message.Release(msg)
-			continue
-		}
-		// A transfer to the current owner, which is what renews the lease and
-		// records the attempt. Handing the record back without it would leave
-		// the entry stealable by another consumer while this one works on it.
-		if err := m.groupStore.TransferPendingEntry(ctx, group.QueueName, group.ID, entry.Offset, consumerID, consumerID); err != nil {
-			message.Release(msg)
-			continue
-		}
-		return msg
-	}
-
-	return nil
 }
 
 // ClaimPendingBatch transfers pending messages idle for at least minIdle to a
@@ -813,8 +757,15 @@ func (m *Manager) claimFromCursor(ctx context.Context, group *types.ConsumerGrou
 
 // stealWork tries to steal a message from another consumer's PEL.
 func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter) (*message.Envelope, error) {
+	return m.stealWorkFrom(ctx, group, consumerID, filter, consumerID, "")
+}
+
+// stealWorkFrom claims one lapsed pending entry. excludeConsumer skips a
+// consumer's own entries, ownerOnly restricts the search to them; they are the
+// two directions of the same walk and exactly one is set.
+func (m *Manager) stealWorkFrom(ctx context.Context, group *types.ConsumerGroup, consumerID string, filter *Filter, excludeConsumer, ownerOnly string) (*message.Envelope, error) {
 	// Get stealable entries
-	stealable := group.StealableEntries(m.config.VisibilityTimeout, consumerID)
+	stealable := group.StealableEntries(m.config.VisibilityTimeout, excludeConsumer)
 
 	// Drop tracked poison entries this group no longer holds. An entry settled
 	// by an ordinary ack leaves no other signal, so without this the gauge only
@@ -827,6 +778,9 @@ func (m *Manager) stealWork(ctx context.Context, group *types.ConsumerGroup, con
 
 	// Try to steal the oldest entry
 	for _, entry := range stealable {
+		if ownerOnly != "" && entry.ConsumerID != ownerOnly {
+			continue
+		}
 		if m.transferring(group.QueueName, group.ID, entry.Offset) {
 			// A dead-letter transfer is writing this entry to its destination
 			// with the group lock released. Redelivering it now would put the

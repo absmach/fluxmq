@@ -1942,10 +1942,11 @@ type mockQueueCoordinator struct {
 	leaderAddrByQueue map[string]string
 	leaderIDByQueue   map[string]string
 
-	appendCalls []string
-	createCalls []string
-	cursorCalls []string
-	commitCalls []string
+	appendCalls  []string
+	createCalls  []string
+	cursorCalls  []string
+	commitCalls  []string
+	requeueCalls []string
 
 	// appendOnceKeys stands in for a replica's store, so a repeated key is
 	// answered the way a real FSM would answer it.
@@ -2052,6 +2053,11 @@ func (m *mockQueueCoordinator) ApplyRemovePending(_ context.Context, _ string, _
 }
 
 func (m *mockQueueCoordinator) ApplyTransferPending(_ context.Context, _ string, _ string, _ uint64, _ string, _ string) error {
+	return nil
+}
+
+func (m *mockQueueCoordinator) ApplyRequeuePending(_ context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
+	m.requeueCalls = append(m.requeueCalls, fmt.Sprintf("%s/%s/%s/%d/%d", queueName, groupID, consumerID, offset, attemptedAt.UnixNano()))
 	return nil
 }
 

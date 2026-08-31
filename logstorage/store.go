@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,22 +80,14 @@ func recoverAllQueues(baseDir string, logFn func(string, ...any)) {
 		logFn = func(string, ...any) {}
 	}
 
-	queuesDir := filepath.Join(baseDir, "queues")
-	entries, err := os.ReadDir(queuesDir)
+	queueNames, err := discoverQueueNames(baseDir)
 	if err != nil {
-		return // No queues directory yet
+		logFn("queue discovery failed during segment recovery", "error", err)
+		return
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		queueName := entry.Name()
-		segDir := filepath.Join(queuesDir, queueName, "segments")
-		if _, err := os.Stat(segDir); os.IsNotExist(err) {
-			continue
-		}
+	for _, queueName := range queueNames {
+		segDir := filepath.Join(baseDir, "queues", filepath.FromSlash(queueName), "segments")
 
 		result, err := RecoverSegments(segDir)
 		if err != nil {
@@ -117,28 +111,71 @@ func recoverAllQueues(baseDir string, logFn func(string, ...any)) {
 
 // loadQueues discovers and loads existing queues from disk.
 func (s *Store) loadQueues() error {
-	queuesDir := filepath.Join(s.baseDir, "queues")
-	if _, err := os.Stat(queuesDir); os.IsNotExist(err) {
-		return nil
-	}
-
-	entries, err := os.ReadDir(queuesDir)
+	queueNames, err := discoverQueueNames(s.baseDir)
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		queueName := entry.Name()
+	for _, queueName := range queueNames {
 		if err := s.loadQueue(queueName); err != nil {
 			return fmt.Errorf("failed to load queue %s: %w", queueName, err)
 		}
 	}
 
 	return nil
+}
+
+// discoverQueueNames finds queue roots by their segment files instead of by
+// the first directory below queues/. Queue names are allowed to contain '/'
+// (dead-letter queues use "$dlq/<source>"), so those queue roots can be nested.
+// Looking for valid segment files also avoids mistaking an intermediate path
+// component named "segments" for a queue root.
+func discoverQueueNames(baseDir string) ([]string, error) {
+	queuesDir := filepath.Join(baseDir, "queues")
+	if _, err := os.Stat(queuesDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	names := make(map[string]struct{})
+	err := filepath.WalkDir(queuesDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != SegmentExtension {
+			return nil
+		}
+		if _, err := ParseSegmentName(entry.Name()); err != nil {
+			return nil
+		}
+
+		segmentsDir := filepath.Dir(path)
+		if filepath.Base(segmentsDir) != "segments" {
+			return nil
+		}
+		queueDir := filepath.Dir(segmentsDir)
+		rel, err := filepath.Rel(queuesDir, queueDir)
+		if err != nil {
+			return err
+		}
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil
+		}
+		names[filepath.ToSlash(rel)] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	queueNames := make([]string, 0, len(names))
+	for name := range names {
+		queueNames = append(queueNames, name)
+	}
+	sort.Strings(queueNames)
+	return queueNames, nil
 }
 
 // loadQueue loads a queue's segment manager.
@@ -446,6 +483,21 @@ func (s *Store) NackAt(queueName, groupID string, offset uint64, attemptedAt tim
 	}
 
 	return state.NackAt(offset, attemptedAt)
+}
+
+// ReleaseAt updates redelivery timing without counting a delivery attempt.
+func (s *Store) ReleaseAt(queueName, groupID string, offset uint64, attemptedAt time.Time) error {
+	cm, err := s.getConsumerManager(queueName)
+	if err != nil {
+		return err
+	}
+
+	state := cm.Get(groupID)
+	if state == nil {
+		return ErrGroupNotFound
+	}
+
+	return state.ReleaseAt(offset, attemptedAt)
 }
 
 // Claim transfers a pending message to a new consumer (work stealing).

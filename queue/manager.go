@@ -2190,6 +2190,8 @@ func (m *Manager) applyGroupOp(ctx context.Context, op *raft.Operation) error {
 		return m.groupReplicator.ApplyRegisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerInfo)
 	case raft.OpUnregisterConsumer:
 		return m.groupReplicator.ApplyUnregisterConsumer(ctx, op.QueueName, op.GroupID, op.ConsumerID)
+	case raft.OpRequeuePending:
+		return m.groupReplicator.ApplyRequeuePending(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset, op.Timestamp)
 	default:
 		return fmt.Errorf("unsupported forwarded group op type: %d", op.Type)
 	}

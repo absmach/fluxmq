@@ -77,6 +77,13 @@ func TestGroupOperationRoundTrip(t *testing.T) {
 				Type: raft.OpUnregisterConsumer, QueueName: testQueueJobs, GroupID: testGroupWorkers, ConsumerID: testGroupConsumerA,
 			},
 		},
+		{
+			name: "requeue pending",
+			op: &raft.Operation{
+				Type: raft.OpRequeuePending, Timestamp: claimedAt, QueueName: testQueueJobs, GroupID: testGroupWorkers,
+				ConsumerID: testGroupConsumerA, Offset: 42,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -99,6 +106,7 @@ func TestGroupOperationRoundTrip(t *testing.T) {
 			assert.Equal(t, tt.op.ToConsumer, decoded.ToConsumer)
 			assert.Equal(t, tt.op.PendingEntry, decoded.PendingEntry)
 			assert.Equal(t, tt.op.ConsumerInfo, decoded.ConsumerInfo)
+			assert.True(t, tt.op.Timestamp.Equal(decoded.Timestamp))
 		})
 	}
 }
@@ -403,6 +411,13 @@ func TestGroupOperationRejectsSemanticallyEmptyPayloads(t *testing.T) {
 			wire: &clusterv1.GroupOperation{
 				QueueName: testQueueJobs, GroupId: testGroupWorkers,
 				Operation: &clusterv1.GroupOperation_UnregisterConsumer{UnregisterConsumer: &clusterv1.UnregisterConsumerOp{}},
+			},
+		},
+		{
+			name: "requeue pending without an id",
+			wire: &clusterv1.GroupOperation{
+				QueueName: testQueueJobs, GroupId: testGroupWorkers,
+				Operation: &clusterv1.GroupOperation_RequeuePending{RequeuePending: &clusterv1.RequeuePendingOp{Offset: 1}},
 			},
 		},
 		{

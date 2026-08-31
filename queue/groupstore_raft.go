@@ -281,14 +281,27 @@ func (s *raftGroupStore) TransferPendingEntry(ctx context.Context, queueName, gr
 }
 
 func (s *raftGroupStore) RequeuePendingEntry(ctx context.Context, queueName, groupID, consumerID string, offset uint64, attemptedAt time.Time) error {
-	if s.isReplicatedFollower(queueName) || s.leaderCoordinatorForQueue(queueName) != nil {
-		return consumer.ErrDelayedNackUnsupported
+	op := &raft.Operation{
+		Type:       raft.OpRequeuePending,
+		Timestamp:  attemptedAt,
+		QueueName:  queueName,
+		GroupID:    groupID,
+		ConsumerID: consumerID,
+		Offset:     offset,
 	}
-	requeuer, ok := s.base.(storage.PendingEntryRequeuer)
-	if !ok {
-		return consumer.ErrDelayedNackUnsupported
-	}
-	return requeuer.RequeuePendingEntry(ctx, queueName, groupID, consumerID, offset, attemptedAt)
+	return s.applyOrForward(ctx, queueName,
+		func(c groupCoordinator) error {
+			return c.ApplyRequeuePending(ctx, queueName, groupID, consumerID, offset, attemptedAt)
+		},
+		op,
+		func() error {
+			requeuer, ok := s.base.(storage.PendingEntryRequeuer)
+			if !ok {
+				return consumer.ErrDelayedNackUnsupported
+			}
+			return requeuer.RequeuePendingEntry(ctx, queueName, groupID, consumerID, offset, attemptedAt)
+		},
+	)
 }
 
 func (s *raftGroupStore) UpdateCursor(ctx context.Context, queueName, groupID string, cursor uint64) error {

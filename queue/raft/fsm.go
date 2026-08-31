@@ -42,6 +42,10 @@ const (
 	OpCreateQueue
 	OpUpdateQueue
 	OpDeleteQueue
+
+	// OpRequeuePending is appended to preserve the persisted numeric values of
+	// every operation above it.
+	OpRequeuePending
 )
 
 // Operation is the in-process form of a queue mutation replicated via Raft.
@@ -77,7 +81,7 @@ type Operation struct {
 	Cursor    uint64
 	Committed uint64
 
-	// For OpAddPending, OpRemovePending, OpTransferPending
+	// For OpAddPending, OpRemovePending, OpTransferPending, OpRequeuePending
 	PendingEntry *types.PendingEntry
 	Offset       uint64
 	FromConsumer string
@@ -200,6 +204,8 @@ func (f *LogFSM) Apply(l *raft.Log) any {
 		return f.applyRegisterConsumer(ctx, op)
 	case OpUnregisterConsumer:
 		return f.applyUnregisterConsumer(ctx, op)
+	case OpRequeuePending:
+		return f.applyRequeuePending(ctx, op)
 	default:
 		// Same divergence as an undecodable entry: the operation committed,
 		// the peers applied it, and this binary has no case for it.
@@ -533,6 +539,24 @@ func (f *LogFSM) applyTransferPending(ctx context.Context, op *Operation) *Apply
 			slog.String("to", op.ToConsumer),
 			slog.String("error", err.Error()))
 		return stopLocalFailure("transfer pending", op, err)
+	}
+
+	return &ApplyResult{}
+}
+
+func (f *LogFSM) applyRequeuePending(ctx context.Context, op *Operation) *ApplyResult {
+	requeuer, ok := f.groupStore.(storage.PendingEntryRequeuer)
+	if !ok {
+		return stopLocalFailure("requeue pending", op, storage.ErrPendingEntryNotFound)
+	}
+	if err := requeuer.RequeuePendingEntry(ctx, op.QueueName, op.GroupID, op.ConsumerID, op.Offset, op.Timestamp); err != nil {
+		f.logger.Error("failed to apply requeue pending",
+			slog.String("queue", op.QueueName),
+			slog.String("group", op.GroupID),
+			slog.String("consumer", op.ConsumerID),
+			slog.Uint64("offset", op.Offset),
+			slog.String("error", err.Error()))
+		return stopLocalFailure("requeue pending", op, err)
 	}
 
 	return &ApplyResult{}
