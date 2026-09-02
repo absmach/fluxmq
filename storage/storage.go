@@ -95,6 +95,13 @@ type SubscribeOptions struct {
 	RetainAsPublished bool   // Keep original retain flag
 	RetainHandling    byte   // 0=send, 1=new only, 2=none
 	ConsumerGroup     string // Queue consumer group (MQTT v5 User Property)
+
+	// ShareName is the MQTT shared-subscription group this subscription joined,
+	// empty for an ordinary subscription. A shared subscription is indexed
+	// under its bare topic filter so that a publish matches it at all; the
+	// group name is what lets a matched member be attributed back to the group
+	// it shares with, and only one member of a group receives each message.
+	ShareName string
 }
 
 // WillMessage represents a stored will message.

@@ -36,7 +36,7 @@ func queueDelivery() *message.Envelope {
 	msg := message.NewDelivery("$queue/m/acme/temp", []byte("reading"), 1, false)
 	msg.BrokerMeta.Queue.Name = "m"
 	msg.PublisherMeta.MessageID = "m:42"
-	msg.BrokerMeta.Queue.GroupID = "workers"
+	msg.BrokerMeta.Queue.GroupID = testGroupWorkers
 	msg.BrokerMeta.Queue.Offset = 42
 	return msg
 }

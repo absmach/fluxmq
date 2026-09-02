@@ -625,3 +625,13 @@ func TestCountPeers(t *testing.T) {
 		})
 	}
 }
+
+// ShareGroupMembers reports no share group members on other nodes; this stub
+// stands in for cluster paths this package does not exercise.
+func (*mockCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*mockCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
+}

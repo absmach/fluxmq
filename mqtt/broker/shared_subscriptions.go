@@ -15,13 +15,26 @@ import (
 type SharedSubscriptionManager struct {
 	// key: "shareName/topicFilter"
 	groups map[string]*topics.ShareGroup
-	mu     sync.RWMutex
+
+	// cursors is the round-robin position per group, kept apart from the group
+	// itself because a group can have members on other nodes and none here: a
+	// cursor that lived on the local membership would have nowhere to live for
+	// such a group, and this node still has to take its turn choosing one of
+	// its remote members.
+	//
+	// The cursor is deliberately node-local. Nodes do not agree on whose turn
+	// it is; each spreads its own publishes across the whole group, which
+	// balances the group without a round trip per message.
+	cursors map[string]uint64
+
+	mu sync.RWMutex
 }
 
 // NewSharedSubscriptionManager creates a new shared subscription manager.
 func NewSharedSubscriptionManager() *SharedSubscriptionManager {
 	return &SharedSubscriptionManager{
-		groups: make(map[string]*topics.ShareGroup),
+		groups:  make(map[string]*topics.ShareGroup),
+		cursors: make(map[string]uint64),
 	}
 }
 
@@ -74,46 +87,56 @@ func (sm *SharedSubscriptionManager) Unsubscribe(clientID, filter string) bool {
 
 	if group.IsEmpty() {
 		delete(sm.groups, groupKey)
+		delete(sm.cursors, groupKey)
 		return true
 	}
 
 	return false
 }
 
-// SelectSubscriber selects the next subscriber in the group (round-robin) and
-// reports the rotation it came from, so a caller that cannot deliver to the
-// selected member can walk the rest of the group with SubscriberAt.
-func (sm *SharedSubscriptionManager) SelectSubscriber(filter string) (clientID string, rotation int, ok bool) {
-	// Pre-compute group key outside the lock
-	groupKey := shareGroupKey(filter)
+// NextRotation reserves this node's next position in a group of size members
+// and reports it. Callers walk the group from there, so consecutive publishes
+// from this node start at consecutive members.
+func (sm *SharedSubscriptionManager) NextRotation(groupKey string, size int) int {
+	if size <= 0 {
+		return 0
+	}
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	group, exists := sm.groups[groupKey]
-	if !exists {
-		return "", 0, false
-	}
+	cursor := sm.cursors[groupKey]
+	sm.cursors[groupKey] = cursor + 1
 
-	return group.Select()
+	return int(cursor % uint64(size))
 }
 
-// SubscriberAt returns the group member offset positions after rotation, for a
-// caller retrying a delivery the selected member could not take. ok is false
-// once offset reaches the group size, which is what bounds the retry walk.
-func (sm *SharedSubscriptionManager) SubscriberAt(filter string, rotation, offset int) (string, bool) {
-	// Pre-compute group key outside the lock
-	groupKey := shareGroupKey(filter)
-
+// LocalMemberCount reports how many of a group's members are connected to this
+// node.
+func (sm *SharedSubscriptionManager) LocalMemberCount(groupKey string) int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	group, exists := sm.groups[groupKey]
+	group, exists := sm.groups[shareGroupKey(groupKey)]
+	if !exists {
+		return 0
+	}
+
+	return len(group.Subscribers)
+}
+
+// LocalMemberAt returns the group's i-th local member. ok is false once i
+// reaches the count, and for an i whose member left since the count was taken.
+func (sm *SharedSubscriptionManager) LocalMemberAt(groupKey string, i int) (string, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	group, exists := sm.groups[shareGroupKey(groupKey)]
 	if !exists {
 		return "", false
 	}
 
-	return group.SubscriberAt(rotation, offset)
+	return group.SubscriberAt(0, i)
 }
 
 // shareGroupKey normalizes a filter to the key groups are stored under. Callers hold
@@ -140,6 +163,7 @@ func (sm *SharedSubscriptionManager) RemoveClient(clientID string) []string {
 		if group.RemoveSubscriber(clientID) {
 			if group.IsEmpty() {
 				delete(sm.groups, key)
+				delete(sm.cursors, key)
 				emptyGroups = append(emptyGroups, group.TopicFilter)
 			}
 		}

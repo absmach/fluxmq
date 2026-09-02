@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -44,4 +45,15 @@ func TestCreateSessionRejectsFailedOwnershipClaim(t *testing.T) {
 	require.Nil(t, got)
 	require.False(t, created)
 	require.Nil(t, b.Get("contended"), "an unowned session must not become locally visible")
+}
+
+// ShareGroupMembers reports no share group members on other nodes. This stub
+// embeds the bare cluster.Cluster interface, so every method it does not define
+// is a nil call, and a publish asks the cluster for share group members.
+func (*ownershipFailCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*ownershipFailCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
 }

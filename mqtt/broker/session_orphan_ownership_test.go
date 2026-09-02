@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -276,4 +277,15 @@ func TestDiscardedSessionIsPurgedAfterOwnership(t *testing.T) {
 	require.NotEqual(t, -1, acquired, "the accepted CONNECT takes the client ID")
 	require.NotEqual(t, -1, removed, "the discarded session's cluster routes are cleared")
 	require.Less(t, acquired, removed, "the client ID is owned before its cluster routes are deleted")
+}
+
+// ShareGroupMembers reports no share group members on other nodes. This stub
+// embeds the bare cluster.Cluster interface, so every method it does not define
+// is a nil call, and a publish asks the cluster for share group members.
+func (*raceCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*raceCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
 }

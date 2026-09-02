@@ -203,43 +203,6 @@ func TestShareGroup_IsEmpty(t *testing.T) {
 	}
 }
 
-func TestShareGroup_Select(t *testing.T) {
-	group := &ShareGroup{
-		Name:        testGroup1,
-		TopicFilter: testSensorsMulti,
-		Subscribers: []string{testClient1, testClient2, testClient3},
-	}
-
-	// Select reports the member it took and the rotation it took it from, and
-	// advances the cursor exactly like NextSubscriber.
-	expected := []struct {
-		clientID string
-		rotation int
-	}{
-		{testClient1, 0},
-		{testClient2, 1},
-		{testClient3, 2},
-		{testClient1, 0},
-	}
-	for i, exp := range expected {
-		clientID, rotation, ok := group.Select()
-		if !ok {
-			t.Fatalf("Round %d: expected a selection", i)
-		}
-		if clientID != exp.clientID {
-			t.Errorf("Round %d: expected client '%s', got '%s'", i, exp.clientID, clientID)
-		}
-		if rotation != exp.rotation {
-			t.Errorf("Round %d: expected rotation %d, got %d", i, exp.rotation, rotation)
-		}
-	}
-
-	emptyGroup := &ShareGroup{Subscribers: []string{}}
-	if _, _, ok := emptyGroup.Select(); ok {
-		t.Error("Expected no selection from an empty group")
-	}
-}
-
 func TestShareGroup_SubscriberAt(t *testing.T) {
 	members := []string{testClient1, testClient2, testClient3}
 
@@ -276,38 +239,5 @@ func TestShareGroup_SubscriberAt(t *testing.T) {
 				t.Errorf("Expected '%s', got '%s'", tc.want, got)
 			}
 		})
-	}
-}
-
-// TestShareGroup_SelectThenWalkCoversEveryMember guards the retry contract: a
-// caller that walks offsets up from 1 after a Select reaches every other member
-// exactly once and then stops.
-func TestShareGroup_SelectThenWalkCoversEveryMember(t *testing.T) {
-	group := &ShareGroup{Subscribers: []string{testClient1, testClient2, testClient3}}
-
-	// Advance the cursor so the walk starts mid-group and has to wrap.
-	group.NextSubscriber()
-
-	selected, rotation, ok := group.Select()
-	if !ok {
-		t.Fatal("Expected a selection")
-	}
-
-	seen := map[string]int{selected: 1}
-	for offset := 1; ; offset++ {
-		clientID, more := group.SubscriberAt(rotation, offset)
-		if !more {
-			break
-		}
-		seen[clientID]++
-	}
-
-	if len(seen) != 3 {
-		t.Fatalf("Expected the walk to reach 3 members, reached %d", len(seen))
-	}
-	for clientID, count := range seen {
-		if count != 1 {
-			t.Errorf("Expected '%s' once, saw it %d times", clientID, count)
-		}
 	}
 }

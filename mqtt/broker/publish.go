@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/broker/router"
+	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
@@ -209,7 +211,7 @@ func (b *Broker) Distribute(topic string, payload []byte, qos byte, retain bool,
 
 // distribute distributes a message to all matching subscribers (local and remote).
 func (b *Broker) distribute(ctx context.Context, msg *message.Envelope) error {
-	if _, err := b.distributeLocal(ctx, msg, true); err != nil {
+	if _, err := b.distributeLocal(ctx, msg, ingressScope); err != nil {
 		return err
 	}
 
@@ -239,15 +241,46 @@ func (b *Broker) distribute(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }
 
+// distributeScope says which deliveries one local distribution is responsible
+// for. An ingress publish owns all of them. A publish forwarded from another
+// node owns neither cross-protocol delivery nor share groups: the ingress node
+// ran the first, and chose a share group's member across the whole cluster,
+// sending to it directly. A forwarded message reaches this node because of some
+// ordinary subscription, and letting it pick from a share group here would hand
+// the group a second copy.
+type distributeScope struct {
+	crossProtocol bool
+	shareGroups   bool
+}
+
+var (
+	ingressScope   = distributeScope{crossProtocol: true, shareGroups: true}
+	forwardedScope = distributeScope{}
+)
+
 // distributeLocal delivers a message to local subscribers and returns the
 // number of matched subscriptions.
-// allowCross controls whether cross-protocol delivery callbacks may run.
-func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, allowCross bool) (int, error) {
+func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, scope distributeScope) (int, error) {
 	matched := router.AcquireSubscriptionSlice()
 	defer router.ReleaseSubscriptionSlice(matched)
 
 	if err := b.router.MatchInto(msg.Topic, matched); err != nil {
 		return 0, err
+	}
+
+	// Members of matching share groups that live on other nodes. The local
+	// router only knows the groups something here subscribed to, so without
+	// this a group whose members are all elsewhere would match nothing and
+	// receive nothing.
+	remote := acquireShareMembers()
+	defer releaseShareMembers(remote)
+
+	if scope.shareGroups && b.cluster != nil {
+		members, err := b.cluster.ShareGroupMembers(ctx, msg.Topic, (*remote)[:0])
+		if err != nil {
+			b.logError("cluster_share_group_members", err, slog.String("topic", msg.Topic))
+		}
+		*remote = members
 	}
 
 	// Track which share groups have already received the message (lazy init)
@@ -258,6 +291,10 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 
 		// Check if this is a shared subscription
 		if strings.HasPrefix(clientID, "$share/") {
+			if !scope.shareGroups {
+				continue
+			}
+
 			// Extract group key from the special client ID
 			groupKey := clientID[7:] // Remove "$share/" prefix
 
@@ -273,13 +310,13 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 			deliveredGroups[groupKey] = true
 
 			// groupKey here typically looks like "groupName/topicFilter"
-			b.deliverToShareGroup(ctx, groupKey, sub, msg)
+			b.deliverToShareGroup(ctx, groupKey, sub.QoS, msg, *remote)
 		} else {
 			if sub.Options.NoLocal && clientID == msg.BrokerMeta.Source.ClientID {
 				continue
 			}
 			if broker.IsAMQP091Client(clientID) || broker.IsAMQP1Client(clientID) {
-				if allowCross && b.crossDeliver != nil {
+				if scope.crossProtocol && b.crossDeliver != nil {
 					b.crossDeliver(ctx, clientID, msg.Topic, msg.PayloadBytes(), sub.QoS, message.ProjectProperties(msg, message.TrustedServiceProjection))
 				}
 				continue
@@ -318,65 +355,194 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 		}
 	}
 
+	// A group with no member on this node never appears in the local match, so
+	// its turn has to be taken from the remote members directly.
+	for i := range *remote {
+		member := (*remote)[i]
+		groupKey := member.ShareName + "/" + member.Filter
+		if deliveredGroups[groupKey] {
+			continue
+		}
+		if deliveredGroups == nil {
+			deliveredGroups = make(map[string]bool)
+		}
+		deliveredGroups[groupKey] = true
+
+		b.deliverToShareGroup(ctx, groupKey, member.QoS, msg, *remote)
+	}
+
 	return len(*matched), nil
 }
 
-// deliverToShareGroup hands msg to one live member of a share group and
-// advances the group's round-robin cursor by one. A member whose session is
-// gone, or which cannot take the message, is skipped and the next member is
-// tried, so the group loses a message only when no member can take it: a share
-// group whose selected member disconnected a moment ago still gets its work.
+// shareMemberPool holds the per-publish slice of remote share group members.
+// A publish that matches no share group never fills one, so the pool costs a
+// get and a put on the hot path rather than an allocation.
+var shareMemberPool = sync.Pool{
+	New: func() any {
+		members := make([]cluster.ShareMember, 0, 8)
+		return &members
+	},
+}
+
+func acquireShareMembers() *[]cluster.ShareMember {
+	return shareMemberPool.Get().(*[]cluster.ShareMember)
+}
+
+func releaseShareMembers(members *[]cluster.ShareMember) {
+	const maxPooledShareMembers = 256
+	if cap(*members) > maxPooledShareMembers {
+		return
+	}
+	*members = (*members)[:0]
+	shareMemberPool.Put(members)
+}
+
+// shareMemberCount reports how many of members belong to groupKey.
+func shareMemberCount(members []cluster.ShareMember, groupKey string) int {
+	count := 0
+	for i := range members {
+		if shareMemberInGroup(members[i], groupKey) {
+			count++
+		}
+	}
+
+	return count
+}
+
+// shareMemberAt returns the i-th member of groupKey. Members of one group are
+// not contiguous in the slice — it holds every group the topic matched — so the
+// index is counted rather than sliced. A group is small, and counting keeps the
+// publish path free of a per-group slice.
+func shareMemberAt(members []cluster.ShareMember, groupKey string, i int) (cluster.ShareMember, bool) {
+	for j := range members {
+		if !shareMemberInGroup(members[j], groupKey) {
+			continue
+		}
+		if i == 0 {
+			return members[j], true
+		}
+		i--
+	}
+
+	return cluster.ShareMember{}, false
+}
+
+func shareMemberInGroup(member cluster.ShareMember, groupKey string) bool {
+	name, filter, _ := strings.Cut(groupKey, "/")
+	return member.ShareName == name && member.Filter == filter
+}
+
+// deliverToShareGroup hands msg to one member of a share group and advances the
+// group's round-robin cursor by one. The group spans the cluster: its members
+// here and its members on other nodes take turns in one rotation, so exactly
+// one of them receives the message wherever it is connected.
+//
+// A member that cannot take the message — its session is gone, its node is
+// unreachable — is skipped and the next is tried, so the group loses a message
+// only when no member can take it. subQoS caps delivery for local members;
+// remote members carry their own cap.
 //
 // It borrows msg. Reports whether a member took the message.
-func (b *Broker) deliverToShareGroup(ctx context.Context, groupKey string, sub *storage.Subscription, msg *message.Envelope) bool {
-	clientID, rotation, ok := b.sharedSubs.SelectSubscriber(groupKey)
-	if !ok {
+func (b *Broker) deliverToShareGroup(ctx context.Context, groupKey string, subQoS byte, msg *message.Envelope, remote []cluster.ShareMember) bool {
+	local := b.sharedSubs.LocalMemberCount(groupKey)
+	remoteCount := shareMemberCount(remote, groupKey)
+
+	total := local + remoteCount
+	if total == 0 {
+		return false
+	}
+
+	rotation := b.sharedSubs.NextRotation(groupKey, total)
+
+	// The rotation names the member whose turn it is; the rest of the pass are
+	// its fallbacks, in group order, and one pass tries every member once.
+	for offset := range total {
+		index := (rotation + offset) % total
+
+		if index < local {
+			clientID, ok := b.sharedSubs.LocalMemberAt(groupKey, index)
+			if !ok {
+				continue
+			}
+			if b.deliverShareLocal(ctx, clientID, subQoS, msg) {
+				return true
+			}
+			continue
+		}
+
+		member, ok := shareMemberAt(remote, groupKey, index-local)
+		if !ok {
+			continue
+		}
+		if b.deliverShareRemote(ctx, member, msg) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// deliverShareLocal delivers to one share group member connected to this node.
+func (b *Broker) deliverShareLocal(ctx context.Context, clientID string, subQoS byte, msg *message.Envelope) bool {
+	s := b.sessionsMap.Get(clientID)
+	if s == nil {
 		return false
 	}
 
 	deliverQoS := msg.BrokerMeta.Delivery.QoS
-	if sub.QoS < deliverQoS {
-		deliverQoS = sub.QoS
+	if subQoS < deliverQoS {
+		deliverQoS = subQoS
 	}
 
-	// offset 0 is the member the round robin selected; the rest are fallbacks,
-	// in group order, and SubscriberAt stops the walk after one full pass.
-	for offset := 0; ; offset++ {
-		if offset > 0 {
-			var more bool
-			clientID, more = b.sharedSubs.SubscriberAt(groupKey, rotation, offset)
-			if !more {
-				return false
-			}
-		}
-
-		s := b.sessionsMap.Get(clientID)
-		if s == nil {
-			continue
-		}
-
-		if deliverQoS == 0 {
-			if err := b.deliverSharedQoS0(ctx, s, msg, false); err != nil {
-				continue
-			}
-			return true
-		}
-
-		deliverMsg := msg.Clone()
-		deliverMsg.BrokerMeta.Delivery.QoS = deliverQoS
-		deliverMsg.BrokerMeta.Delivery.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
-
-		// DeliverToSession takes full ownership of the message
-		if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
-			b.telemetry.logger.Warn("failed to deliver QoS message to share group member",
-				slog.String("client_id", clientID),
-				slog.String("topic", msg.Topic),
-				slog.Uint64("qos", uint64(deliverQoS)),
-				slog.String("error", err.Error()))
-			continue
-		}
-		return true
+	if deliverQoS == 0 {
+		return b.deliverSharedQoS0(ctx, s, msg, false) == nil
 	}
+
+	deliverMsg := msg.Clone()
+	deliverMsg.BrokerMeta.Delivery.QoS = deliverQoS
+	deliverMsg.BrokerMeta.Delivery.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
+
+	// DeliverToSession takes full ownership of the message
+	if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
+		b.telemetry.logger.Warn("failed to deliver QoS message to share group member",
+			slog.String("client_id", clientID),
+			slog.String("topic", msg.Topic),
+			slog.Uint64("qos", uint64(deliverQoS)),
+			slog.String("error", err.Error()))
+		return false
+	}
+
+	return true
+}
+
+// deliverShareRemote sends the message to the one group member that was chosen,
+// on the node holding its session. It is addressed to that client rather than
+// broadcast to the node: the receiving node delivers it as told and runs no
+// matching of its own, which is what keeps a group to one copy per message.
+func (b *Broker) deliverShareRemote(ctx context.Context, member cluster.ShareMember, msg *message.Envelope) bool {
+	if b.cluster == nil {
+		return false
+	}
+
+	// The cross-node hop reads a borrowed shallow copy: local fan-out may still
+	// be reading msg, and the QoS cap and cleared retain belong to this
+	// delivery alone.
+	forward := *msg
+	if member.QoS < forward.BrokerMeta.Delivery.QoS {
+		forward.BrokerMeta.Delivery.QoS = member.QoS
+	}
+	forward.BrokerMeta.Delivery.Retain = false
+
+	if err := b.cluster.RoutePublishToClient(ctx, member.NodeID, member.ClientID, &forward); err != nil {
+		b.telemetry.logger.Warn("failed to deliver to remote share group member",
+			slog.String("client_id", member.ClientID),
+			slog.String("node_id", member.NodeID),
+			slog.String("topic", msg.Topic),
+			slog.String("error", err.Error()))
+		return false
+	}
+
+	return true
 }
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.
@@ -384,7 +550,7 @@ func (b *Broker) deliverToShareGroup(ctx context.Context, groupKey string, sub *
 func (b *Broker) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
 	storeMsg := msg.Clone()
 
-	matched, err := b.distributeLocal(ctx, storeMsg, false)
+	matched, err := b.distributeLocal(ctx, storeMsg, forwardedScope)
 	message.Release(storeMsg)
 	if err == nil && matched == 0 {
 		// The sending node believed a subscriber lives here (stale owner

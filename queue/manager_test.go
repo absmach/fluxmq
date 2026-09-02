@@ -1862,6 +1862,17 @@ func (c *mockCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 }
 func (c *mockCluster) Retained() brokerstorage.RetainedStore { return nil }
 func (c *mockCluster) Wills() brokerstorage.WillStore        { return nil }
+
+// ShareGroupMembers reports no share group members: a queue consumer group is
+// not an MQTT share group, and this mock stands in for the queue paths only.
+func (c *mockCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (c *mockCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
+}
+
 func (c *mockCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 
 	corebroker "github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
@@ -125,4 +126,15 @@ func TestMQTTMTLSClusterTakeoverPropagatesIdentityGuard(t *testing.T) {
 			require.Nil(t, b.Get("bound-client"))
 		})
 	}
+}
+
+// ShareGroupMembers reports no share group members on other nodes. This stub
+// embeds the bare cluster.Cluster interface, so every method it does not define
+// is a nil call, and a publish asks the cluster for share group members.
+func (*identityRejectingCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*identityRejectingCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
 }

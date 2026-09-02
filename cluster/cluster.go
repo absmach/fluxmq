@@ -171,11 +171,44 @@ type Cluster interface {
 	// Returns the session state to be restored, or nil if no state exists.
 	TakeoverSession(ctx context.Context, clientID, fromNode, toNode string, identity *SessionIdentityGuard) (*clusterv1.SessionState, error)
 
+	// ShareGroupMembers appends the members of shared subscriptions matching
+	// topic that live on other nodes to dst, and returns the extended slice.
+	// Only members whose owning node is known are reported: one whose owner
+	// cannot be resolved is left out rather than guessed at, because a guess
+	// would send the message to a node that cannot deliver it while the group
+	// counted it as delivered.
+	//
+	// Local members are the caller's own business — it holds them directly, and
+	// without the round trip this would otherwise take on every publish.
+	ShareGroupMembers(ctx context.Context, topic string, dst []ShareMember) ([]ShareMember, error)
+
+	// RoutePublishToClient delivers msg to one named client on a named node,
+	// bypassing the receiving node's own subscription matching. It is how a
+	// share group whose selected member lives elsewhere reaches that member
+	// without every node holding a member delivering its own copy. It borrows
+	// msg for the duration of the call.
+	RoutePublishToClient(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error
+
 	// RouteQueueMessage sends a queue message to a remote consumer.
 	// This is called in proxy mode when the worker needs to deliver a message
 	// to a consumer connected to a different node. It borrows msg for the
 	// duration of the call.
 	RouteQueueMessage(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error
+}
+
+// ShareMember is one member of a shared subscription group, together with the
+// node its session lives on.
+type ShareMember struct {
+	ClientID string
+	NodeID   string
+
+	// ShareName and Filter together name the group. Two groups sharing a name
+	// but bound to different topic filters are different groups, so neither
+	// half identifies one on its own.
+	ShareName string
+	Filter    string
+
+	QoS byte
 }
 
 // ForwardPublishHandler handles topic-based message forwarding from remote nodes.

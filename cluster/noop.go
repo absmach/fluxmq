@@ -128,6 +128,15 @@ func (s *noopWillStore) GetPending(ctx context.Context, _ time.Time) ([]*storage
 
 // Message routing - no routing in single-node
 
+func (n *NoopCluster) ShareGroupMembers(ctx context.Context, topic string, dst []ShareMember) ([]ShareMember, error) {
+	// Single-node: every share group member is local to the caller.
+	return dst, nil
+}
+
+func (n *NoopCluster) RoutePublishToClient(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
+	return ErrClusterNotEnabled
+}
+
 func (n *NoopCluster) RoutePublish(ctx context.Context, msg *message.Envelope) error {
 	// Single-node: no remote nodes to route to
 	return nil

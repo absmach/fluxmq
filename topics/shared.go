@@ -46,22 +46,13 @@ type ShareGroup struct {
 // NextSubscriber returns the next subscriber in round-robin fashion.
 // Returns empty string if no subscribers.
 func (g *ShareGroup) NextSubscriber() string {
-	clientID, _, _ := g.Select()
-	return clientID
-}
-
-// Select returns the next subscriber in round-robin fashion along with the
-// rotation it was taken from, and advances the cursor by one. A caller that
-// cannot deliver to the returned member passes the rotation to SubscriberAt to
-// walk the rest of the group.
-func (g *ShareGroup) Select() (clientID string, rotation int, ok bool) {
 	if len(g.Subscribers) == 0 {
-		return "", 0, false
+		return ""
 	}
 
-	rotation = g.lastIndex
+	subscriber := g.Subscribers[g.lastIndex]
 	g.lastIndex = (g.lastIndex + 1) % len(g.Subscribers)
-	return g.Subscribers[rotation], rotation, true
+	return subscriber
 }
 
 // SubscriberAt returns the member offset positions after rotation, wrapping
@@ -69,10 +60,10 @@ func (g *ShareGroup) Select() (clientID string, rotation int, ok bool) {
 // stepping offset up from 1 tries every remaining member exactly once and then
 // stops.
 //
-// Membership can change between the Select that produced rotation and this
-// call. A member that joined or left in the meantime is picked up or skipped;
-// for a fallback walk that is harmless, and bounding the walk by the current
-// size is what keeps it terminating.
+// Membership can change between the rotation being chosen and this call. A
+// member that joined or left in the meantime is picked up or skipped; for a
+// fallback walk that is harmless, and bounding the walk by the current size is
+// what keeps it terminating.
 func (g *ShareGroup) SubscriberAt(rotation, offset int) (string, bool) {
 	size := len(g.Subscribers)
 	if size == 0 || offset < 0 || offset >= size {

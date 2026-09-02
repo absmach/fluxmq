@@ -22,6 +22,7 @@ import (
 	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	etcdtransport "go.etcd.io/etcd/client/pkg/v3/transport"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -110,6 +111,12 @@ type EtcdCluster struct {
 	subTrie     *router.TrieRouter
 	subCacheRev int64
 	subCacheMu  sync.RWMutex
+
+	// sharedSubCount is how many shared subscriptions the trie currently
+	// indexes. A publish consults it before matching for share group members,
+	// so a deployment that uses no shared subscription pays one atomic load
+	// rather than a second walk of the trie on every message.
+	sharedSubCount atomic.Int64
 
 	// Local session owner cache to avoid etcd roundtrips in RoutePublish.
 	// ownerCacheRev is the etcd revision the cache was loaded at; the owner
@@ -1429,6 +1436,89 @@ func (c *EtcdCluster) GetSubscribersForTopic(ctx context.Context, topic string) 
 	return subTrie.Match(topic)
 }
 
+// ShareGroupMembers reports the shared-subscription members matching topic that
+// live on other nodes. See cluster.Cluster.
+func (c *EtcdCluster) ShareGroupMembers(ctx context.Context, topic string, dst []ShareMember) ([]ShareMember, error) {
+	if c.sharedSubCount.Load() == 0 {
+		return dst, nil
+	}
+
+	c.subCacheMu.RLock()
+	subTrie := c.subTrie
+	c.subCacheMu.RUnlock()
+	if subTrie == nil {
+		return dst, nil
+	}
+
+	matched := router.AcquireSubscriptionSlice()
+	defer router.ReleaseSubscriptionSlice(matched)
+
+	if err := subTrie.MatchInto(topic, matched); err != nil {
+		return dst, fmt.Errorf("failed to match share group members: %w", err)
+	}
+
+	// Resolve everything the owner cache already knows under one read lock, and
+	// leave the rest for an etcd lookup once it is released.
+	var misses []*storage.Subscription
+	c.ownerCacheMu.RLock()
+	for _, sub := range *matched {
+		if sub.Options.ShareName == "" {
+			continue
+		}
+		nodeID, ok := c.ownerCache[sub.ClientID]
+		if !ok {
+			misses = append(misses, sub)
+			continue
+		}
+		if nodeID == c.nodeID {
+			continue
+		}
+		dst = append(dst, shareMember(sub, nodeID))
+	}
+	c.ownerCacheMu.RUnlock()
+
+	unknownOwners := 0
+	for _, sub := range misses {
+		if ctx.Err() != nil {
+			break
+		}
+		nodeID, _, err := c.GetSessionOwner(ctx, sub.ClientID)
+		if err != nil || nodeID == "" {
+			unknownOwners++
+			continue
+		}
+		if nodeID == c.nodeID {
+			continue
+		}
+		dst = append(dst, shareMember(sub, nodeID))
+	}
+	if unknownOwners > 0 {
+		c.warnUnknownOwners(topic, unknownOwners)
+	}
+
+	return dst, nil
+}
+
+func shareMember(sub *storage.Subscription, nodeID string) ShareMember {
+	return ShareMember{
+		ClientID:  sub.ClientID,
+		NodeID:    nodeID,
+		ShareName: sub.Options.ShareName,
+		Filter:    sub.Filter,
+		QoS:       sub.QoS,
+	}
+}
+
+// RoutePublishToClient delivers msg to one named client on a named node. See
+// cluster.Cluster.
+func (c *EtcdCluster) RoutePublishToClient(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
+	if c.transport == nil {
+		return ErrClusterNotEnabled
+	}
+
+	return c.transport.SendPublish(ctx, nodeID, clientID, msg)
+}
+
 // Retained returns the cluster-wide retained message store.
 func (c *EtcdCluster) Retained() storage.RetainedStore {
 	// Return hybrid retained store if available, otherwise fall back to old implementation
@@ -1641,6 +1731,13 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, msg *message.Envelope) e
 	c.ownerCacheMu.RLock()
 	var cacheMisses map[string]struct{}
 	for _, sub := range subs {
+		if sub.Options.ShareName != "" {
+			// A share group is resolved to a single member before a publish
+			// reaches this point, and that member is sent to directly. Adding
+			// its node to the topic broadcast would hand the group one copy per
+			// node that holds a member, which is the whole point of the group.
+			continue
+		}
 		nodeID, ok := c.ownerCache[sub.ClientID]
 		if !ok {
 			if cacheMisses == nil {
@@ -2537,6 +2634,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 	freshClientSubs := make(map[string][]string)
 	freshTrie := router.NewRouter()
 
+	var freshShared int64
 	for _, kv := range resp.Kvs {
 		clientID := strings.TrimPrefix(string(kv.Key), subscriptionsPrefix)
 
@@ -2553,7 +2651,11 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 			cacheKey := subPtr.ClientID + "|" + subPtr.Filter
 			fresh[cacheKey] = subPtr
 			freshClientSubs[clientID] = append(freshClientSubs[clientID], cacheKey)
-			if err := freshTrie.Subscribe(subPtr.ClientID, subPtr.Filter, subPtr.QoS, subPtr.Options); err != nil {
+			indexed := indexSubscription(subPtr)
+			if subPtr.Options.ShareName != "" {
+				freshShared++
+			}
+			if err := freshTrie.Subscribe(subPtr.ClientID, indexed, subPtr.QoS, subPtr.Options); err != nil {
 				c.logger.Warn("failed to index subscription in trie",
 					slog.String("client_id", subPtr.ClientID),
 					slog.String("filter", subPtr.Filter),
@@ -2568,6 +2670,7 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 	c.clientSubs = freshClientSubs
 	c.subTrie = freshTrie
 	c.subCacheRev = resp.Header.Revision
+	c.sharedSubCount.Store(freshShared)
 	c.subCacheMu.Unlock()
 
 	if staleRemoved := prevSize - len(fresh); staleRemoved > 0 {
@@ -2579,6 +2682,26 @@ func (c *EtcdCluster) loadSubscriptionCache() error {
 		c.logger.Info("loaded subscriptions into cache", slog.Int("cache_len", len(fresh)))
 	}
 	return nil
+}
+
+// indexSubscription prepares sub for the cluster subscription trie and reports
+// the filter it must be indexed under.
+//
+// A shared subscription is stored as the client wrote it, "$share/<group>/<filter>",
+// because that is the form a session replays on reconnect. The trie is matched
+// against published topics, which never carry that prefix, so a member indexed
+// under the raw filter is a member no publish can ever find. Index it under the
+// bare topic filter instead and record the group in the options, so a match
+// still says which group the member shares with — without which every node
+// holding a member would deliver the message, rather than one of them.
+func indexSubscription(sub *storage.Subscription) string {
+	shareName, topicFilter, isShared := topics.ParseShared(sub.Filter)
+	if !isShared {
+		return sub.Filter
+	}
+
+	sub.Options.ShareName = shareName
+	return topicFilter
 }
 
 // reconcileSubscriptionCache periodically reloads the subscription cache from
@@ -2641,7 +2764,11 @@ func (c *EtcdCluster) watchSubscriptions() {
 					// Purge all existing cache entries for this client
 					for _, ck := range c.clientSubs[clientID] {
 						if prevSub, ok := c.subCache[ck]; ok {
-							_ = c.subTrie.Unsubscribe(prevSub.ClientID, prevSub.Filter)
+							_, indexed, _ := topics.ParseShared(prevSub.Filter)
+							_ = c.subTrie.Unsubscribe(prevSub.ClientID, indexed)
+							if prevSub.Options.ShareName != "" {
+								c.sharedSubCount.Add(-1)
+							}
 						}
 						delete(c.subCache, ck)
 					}
@@ -2662,7 +2789,11 @@ func (c *EtcdCluster) watchSubscriptions() {
 							ck := subPtr.ClientID + "|" + subPtr.Filter
 							c.subCache[ck] = subPtr
 							keys = append(keys, ck)
-							if err := c.subTrie.Subscribe(subPtr.ClientID, subPtr.Filter, subPtr.QoS, subPtr.Options); err != nil {
+							indexed := indexSubscription(subPtr)
+							if subPtr.Options.ShareName != "" {
+								c.sharedSubCount.Add(1)
+							}
+							if err := c.subTrie.Subscribe(subPtr.ClientID, indexed, subPtr.QoS, subPtr.Options); err != nil {
 								c.logger.Warn("failed to index subscription in trie",
 									slog.String("client_id", subPtr.ClientID),
 									slog.String("filter", subPtr.Filter),

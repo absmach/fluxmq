@@ -350,7 +350,7 @@ func TestSharedSubscription_SkipsDisconnectedMember(t *testing.T) {
 			msg.BrokerMeta.Delivery.QoS = qos
 			defer message.Release(msg)
 
-			matched, err := b.distributeLocal(context.Background(), msg, false)
+			matched, err := b.distributeLocal(context.Background(), msg, ingressScope)
 			require.NoError(t, err)
 			assert.Equal(t, 1, matched, "the share group is one matched subscription")
 
@@ -375,8 +375,7 @@ func TestSharedSubscription_WalksEveryMemberOnce(t *testing.T) {
 	msg.BrokerMeta.Delivery.QoS = 1
 	defer message.Release(msg)
 
-	sub := &storage.Subscription{ClientID: "$share/workers/tasks/#", Filter: "tasks/#", QoS: 1}
-	assert.False(t, b.deliverToShareGroup(context.Background(), "workers/tasks/#", sub, msg),
+	assert.False(t, b.deliverToShareGroup(context.Background(), "workers/tasks/#", 1, msg, nil),
 		"a group with no live member takes nothing")
 }
 
@@ -396,7 +395,7 @@ func TestSharedSubscription_RoundRobinSurvivesSkips(t *testing.T) {
 
 	for range publishes {
 		msg := message.New("tasks/job1", []byte("work"))
-		_, err := b.distributeLocal(context.Background(), msg, false)
+		_, err := b.distributeLocal(context.Background(), msg, ingressScope)
 		require.NoError(t, err)
 		message.Release(msg)
 	}

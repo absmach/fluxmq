@@ -872,3 +872,14 @@ func TestCreateSession_CleanStartPublishesStoredWillWithoutLocalSession(t *testi
 	_, err = store.Wills().Get(context.Background(), clientID)
 	require.ErrorIs(t, err, storage.ErrNotFound)
 }
+
+// ShareGroupMembers reports no share group members on other nodes. This stub
+// embeds the bare cluster.Cluster interface, so every method it does not define
+// is a nil call, and a publish asks the cluster for share group members.
+func (*cleanupSpyCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*cleanupSpyCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
+}

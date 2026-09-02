@@ -14,6 +14,14 @@ const (
 	testFilterSensorPlusHash = "sensor/+/#"
 	testTopicSensor          = "sensor"
 
+	testShareFilter = "$share/workers/tasks/#"
+	testTasksFilter = "tasks/#"
+	testTasksTopic  = "tasks/job1"
+	testShareName   = "workers"
+	testWorkerA     = "worker-a"
+	testWorkerB     = "worker-b"
+	testPlainA      = "plain-a"
+
 	testNodeLocal = "node-local"
 	testNodeA     = "node-a"
 	testNodeB     = "node-b"

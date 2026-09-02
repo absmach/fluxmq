@@ -431,3 +431,25 @@ func TestCreateSessionBoundConnectDiscardsUnboundLocalSession(t *testing.T) {
 	assert.Equal(t, identityA, s.ExternalIdentity())
 	assert.Empty(t, s.GetSubscriptions())
 }
+
+// ShareGroupMembers reports no share group members on other nodes. This stub
+// embeds the bare cluster.Cluster interface, so every method it does not define
+// is a nil call, and a publish asks the cluster for share group members.
+func (*takeoverCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*takeoverCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
+}
+
+// ShareGroupMembers reports no share group members on other nodes. This stub
+// embeds the bare cluster.Cluster interface, so every method it does not define
+// is a nil call, and a publish asks the cluster for share group members.
+func (*guardHonoringCluster) ShareGroupMembers(_ context.Context, _ string, dst []cluster.ShareMember) ([]cluster.ShareMember, error) {
+	return dst, nil
+}
+
+func (*guardHonoringCluster) RoutePublishToClient(context.Context, string, string, *message.Envelope) error {
+	return cluster.ErrClusterNotEnabled
+}
