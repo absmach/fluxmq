@@ -30,7 +30,7 @@ FluxMQ uses MQTT-style topics across protocols. Some topic namespaces have speci
 | `$SYS/...` | Broker stats and health telemetry | Published periodically as retained messages. |
 | `$queue/<name>/...` | Durable queue traffic | Routed to the queue manager (not normal pub/sub). |
 | `$queue/.../$ack|$nack|$reject` | Queue acknowledgments | Consumers publish these to drive Ack/Nack/Reject. |
-| `$share/<group>/<filter>` | Shared subscriptions (MQTT) | Load-balances pub/sub delivery inside a share group. |
+| `$share/<group>/<filter>` | Shared subscriptions (MQTT) | Each message goes to one member of the share group, cluster-wide. |
 | `$dlq/...` | Dead-letter namespace | A handler exists, but automatic DLQ routing is not fully wired yet. |
 
 ## Routing Decision (High Level)
@@ -124,7 +124,7 @@ stateDiagram-v2
 
 **Message Routing (MQTT)**
 
-Topic matching is trie-based. Retained messages are stored and replayed on subscribe. Shared subscriptions (`$share/...`) are grouped and then routed through the same matcher, but delivery within a share group is load-balanced.
+Topic matching is trie-based. Retained messages are stored and replayed on subscribe. Shared subscriptions (`$share/...`) are matched under their bare topic filter and resolved to a single group member before delivery. The group spans the cluster: the publishing node takes its turn across every member, wherever that member is connected, and addresses the message to the one it chose. See [Shared Subscriptions](/concepts/shared-subscriptions).
 
 ## AMQP 1.0 Broker
 

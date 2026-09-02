@@ -39,7 +39,7 @@ Key principles:
 - Consumer groups are set via `consumer-group` user property on SUBSCRIBE (MQTT v5 only)
 - MQTT v3 clients can publish and subscribe to queue topics, but cannot set consumer groups or send acknowledgments (requires user properties)
 - Acknowledgments use special topics: `$queue/<queue>/$ack`, `$queue/<queue>/$nack`, `$queue/<queue>/$reject`
-- Shared subscriptions (`$share/<group>/<filter>`) are a separate pub/sub feature — they are not queue consumer groups
+- Shared subscriptions (`$share/<group>/<filter>`) are a separate pub/sub feature — they are not queue consumer groups. Each message reaches one member of the group, across the whole cluster; see [Shared Subscriptions](/concepts/shared-subscriptions)
 
 See [MQTT client](/clients/mqtt) for usage examples.
 

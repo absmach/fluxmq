@@ -5,6 +5,7 @@
     "topics",
     "queues",
     "consumer-groups",
+    "shared-subscriptions",
     "storage",
     "clustering"
   ]

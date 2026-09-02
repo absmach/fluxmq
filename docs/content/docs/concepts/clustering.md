@@ -13,6 +13,7 @@ Clustering enables high availability and cross-node routing. FluxMQ uses embedde
 
 - Session ownership and takeover
 - Cross-node subscription routing
+- [Shared subscription](/concepts/shared-subscriptions) groups that span nodes — members on different nodes are one group, and each message reaches one of them
 - Queue consumer registry across nodes
 - Optional Raft replication for queues
 

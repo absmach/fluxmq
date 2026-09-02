@@ -47,7 +47,7 @@ Some prefixes are reserved for broker features:
 | --- | --- |
 | `$SYS/...` | Broker stats topics (published periodically, retained). |
 | `$queue/<name>/...` | Durable queue traffic (stored in queue logs, delivered via consumer groups). |
-| `$share/<group>/<filter>` | Shared subscriptions (MQTT): load-balanced pub/sub delivery. |
+| `$share/<group>/<filter>` | [Shared subscriptions](/concepts/shared-subscriptions) (MQTT): each message goes to one member of the group. |
 
 ## Queue Topics (`$queue/`)
 
