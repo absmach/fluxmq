@@ -1733,9 +1733,12 @@ func (c *EtcdCluster) RoutePublish(ctx context.Context, msg *message.Envelope) e
 	for _, sub := range subs {
 		if sub.Options.ShareName != "" {
 			// A share group is resolved to a single member before a publish
-			// reaches this point, and that member is sent to directly. Adding
-			// its node to the topic broadcast would hand the group one copy per
-			// node that holds a member, which is the whole point of the group.
+			// reaches this point, and that member is sent to directly. A node
+			// listed here only because it holds a group member would receive a
+			// message it is not going to deliver — the receiving side declines
+			// to choose from a share group, which is what actually keeps the
+			// group to one copy. Skipping it here is what stops the message
+			// crossing the network to be dropped on arrival.
 			continue
 		}
 		nodeID, ok := c.ownerCache[sub.ClientID]

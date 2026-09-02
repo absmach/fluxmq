@@ -70,10 +70,12 @@ Group membership travels through etcd, so a member that subscribed moments ago b
 
 ## Why a Message Is Never Duplicated
 
-Only the node that received the publish ever chooses a member, and the ordinary cross-node broadcast is closed to share groups from both ends:
+Only the node that received the publish ever chooses a member. Two rules keep it that way, and they do different jobs:
 
-- The broadcast that carries a publish to nodes with matching subscribers skips shared subscriptions entirely. A share group member's node is not added to it, because the chosen member is sent to directly and a broadcast cannot tell whose turn it was.
-- A publish that arrives from another node does not select from share groups at all. It reached this node for some ordinary subscription; selecting here would hand the group a second copy.
+- **A publish arriving from another node never selects from a share group.** It reached this node for some ordinary subscription of its own, and choosing a member here would hand the group a second copy of a message it has already been given. This is the rule that prevents the duplicate.
+- **The cross-node broadcast skips shared subscriptions.** A node listed only because it holds a group member would receive a message the rule above then declines to deliver. Skipping it saves the message crossing the network to be dropped on arrival.
+
+The distinction matters when one node holds both an ordinary subscription and a group member for the same topic. That node is forwarded to to satisfy its ordinary subscriber, so the first rule is the only thing standing between the group and a duplicate.
 
 ## When a Member Cannot Take a Message
 

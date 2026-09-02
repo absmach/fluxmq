@@ -117,6 +117,55 @@ func TestCrossNode_SharedSubscription_DeliversOneCopyPerMessage(t *testing.T) {
 	}
 }
 
+// TestCrossNode_SharedSubscription_CoexistsWithOrdinarySubscriber is the case
+// that separates the two guards keeping a group to one copy per message.
+//
+// The cross-node broadcast skips shared subscriptions, so a node holding only
+// share members is never forwarded to. That alone is not enough: a node holding
+// an ordinary subscription to the same topic *is* forwarded to, and if a
+// forwarded publish were allowed to choose from a share group, the group would
+// take a second copy of every message that node was already receiving for its
+// own reasons. Both guards are load-bearing, and only this arrangement shows it.
+func TestCrossNode_SharedSubscription_CoexistsWithOrdinarySubscriber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cluster := startSharedCluster(t)
+
+	// Node 1 holds both a share group member and an ordinary subscriber to the
+	// same topic; node 2 holds the group's other member.
+	members := []*testutil.TestMQTTClient{
+		joinShareGroup(t, cluster.GetNodeByIndex(1), "worker-1"),
+		joinShareGroup(t, cluster.GetNodeByIndex(2), "worker-2"),
+	}
+
+	observer := testutil.NewTestMQTTClient(t, cluster.GetNodeByIndex(1), "observer")
+	require.NoError(t, observer.Connect(true))
+	t.Cleanup(func() { observer.Disconnect() }) //nolint:errcheck // test cleanup
+	require.NoError(t, observer.Subscribe("sensors/#", 1))
+
+	publisherNode := cluster.GetNodeByIndex(0)
+	waitForRemoteMembers(t, publisherNode, 2)
+
+	const messages = 20
+	publishShared(t, publisherNode, "coexist-publisher", messages)
+
+	// The ordinary subscriber receives every message; the group receives each
+	// message once between its two members.
+	require.Eventually(t, func() bool {
+		return observer.Messages().Count() >= messages && totalReceived(members...) >= messages
+	}, 30*time.Second, 100*time.Millisecond, "the ordinary subscriber and the group did not both receive the messages")
+
+	require.Never(t, func() bool {
+		return totalReceived(members...) > messages
+	}, 3*time.Second, 200*time.Millisecond,
+		"the group took a second copy of a message forwarded for the ordinary subscription")
+
+	assert.Equal(t, messages, observer.Messages().Count(),
+		"an ordinary subscription is unaffected by the share group beside it")
+}
+
 // TestCrossNode_SharedSubscription_GroupWithNoLocalMember covers the case the
 // publishing node's own router cannot see: every member is connected elsewhere,
 // so nothing local matches the topic at all.
