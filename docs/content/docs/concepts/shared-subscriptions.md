@@ -27,20 +27,53 @@ Shared subscriptions are a **pub/sub** feature. They are not queue consumer grou
 
 Members take turns in a round robin. Publishing four messages to a group of two hands two to each.
 
-The turn is decided per publish, on the node that received the publish. That node counts the group's members — the ones connected to it and the ones connected to every other node — takes the next position in a single rotation across all of them, and delivers to the member whose turn it is.
+The decision is made entirely on the node that received the publish, with no coordination and no round trip to anywhere else. That node:
+
+1. **Builds the candidate list.** Its own members it holds directly. Members on other nodes it reads from the cluster's subscription index, which resolves each one to the node holding its session. The list is always its own members first, then the rest.
+2. **Takes a turn.** It keeps one cursor per group and advances it: position `n` of a group of `size` members is `n = cursor++ % size`.
+3. **Delivers.** If the position falls inside its own members, it delivers to that session directly. Otherwise it addresses the message to that one client on the node holding it, and that node delivers it as told — it does not match the topic again, which is what stops it choosing a second member of its own.
 
 ## Across a Cluster
 
 A share group spans the whole cluster. Members connected to different nodes are one group, not one group per node, and each message reaches exactly one member wherever it is connected.
 
-When the chosen member is connected elsewhere, the publishing node addresses the message to that one client on the node holding its session. The receiving node delivers it as told rather than matching the topic again, which is what keeps the group to one copy per message.
+### A Worked Example
 
-**The rotation cursor is deliberately node-local.** Nodes do not agree on whose turn it is. Each spreads its own publishes across the whole group, which balances the group without a coordination round trip on every message. Two consequences follow:
+Three nodes. Node 1 holds three members, nodes 2 and 3 hold one each — five members in one group:
 
-- Balance is statistical rather than exact. Over enough messages from enough publishers, members receive an even share; over a handful of messages, they may not.
+| Ingress node | Its own members | Members elsewhere | Rotation order |
+| --- | --- | --- | --- |
+| Node 1 | A, B, C | D, E | A B C D E |
+| Node 2 | D | A, B, C, E | D A B C E |
+| Node 3 | E | A, B, C, D | E A B C D |
+
+Every node sees all five members and rotates over all five. What differs is the order: each node puts its own members first.
+
+Ten messages published to node 1 go `A B C D E A B C D E` — a clean round robin. Ten messages spread across all three nodes do not form one global round robin: each node walks its own order with its own cursor, so a short burst can reach A twice before it reaches E once. Over a run of any length, each member still converges on its fifth of the traffic.
+
+### Members Are Weighted, Not Nodes
+
+Node 1 holds three of the five members, so it receives three fifths of the group's messages. Scaling a group means adding subscribers, and it does not matter where you add them — a node with more workers is given more work, which is what makes the group a worker pool rather than a node-level load balancer.
+
+### Why the Cursor Is Node-Local
+
+Nodes do not agree on whose turn it is, deliberately. Each spreads its own publishes across the whole group, and that balances the group without a coordination round trip on every message. The alternative — one cursor the cluster agrees on — would put a consensus operation in the publish path.
+
+Two consequences follow:
+
+- Balance is statistical rather than exact, as the worked example shows. Two nodes publishing at the same instant can choose the same member; those are two different messages, so nothing is duplicated.
 - A publisher pinned to one node still spreads its work over every member of the group, not just the members on that node.
 
+### Membership Propagation
+
 Group membership travels through etcd, so a member that subscribed moments ago becomes visible to other nodes as the subscription watch propagates. Until then, publishes on other nodes choose among the members they can already see. No message is lost to this — some other member takes it — but a brand-new member does not start receiving instantly.
+
+## Why a Message Is Never Duplicated
+
+Only the node that received the publish ever chooses a member, and the ordinary cross-node broadcast is closed to share groups from both ends:
+
+- The broadcast that carries a publish to nodes with matching subscribers skips shared subscriptions entirely. A share group member's node is not added to it, because the chosen member is sent to directly and a broadcast cannot tell whose turn it was.
+- A publish that arrives from another node does not select from share groups at all. It reached this node for some ordinary subscription; selecting here would hand the group a second copy.
 
 ## When a Member Cannot Take a Message
 
@@ -59,7 +92,7 @@ A member that has gone but is still counted — a client that disconnected a mom
 | Empty group | A group with no members matches nothing; the message is not stored for later. |
 | Unsubscribing | Removes the member from the group; the group disappears with its last member. |
 
-## Example
+## Usage
 
 Three workers share a sensor feed. Any MQTT client can publish to `sensors/room1/temp` as usual; the publisher needs to know nothing about the group.
 
