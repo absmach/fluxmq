@@ -80,24 +80,52 @@ func (sm *SharedSubscriptionManager) Unsubscribe(clientID, filter string) bool {
 	return false
 }
 
-// GetNextSubscriber selects the next subscriber in the group (round-robin).
-// Returns the client ID and true if a subscriber was found.
-func (sm *SharedSubscriptionManager) GetNextSubscriber(filter string) (string, bool) {
+// SelectSubscriber selects the next subscriber in the group (round-robin) and
+// reports the rotation it came from, so a caller that cannot deliver to the
+// selected member can walk the rest of the group with SubscriberAt.
+func (sm *SharedSubscriptionManager) SelectSubscriber(filter string) (clientID string, rotation int, ok bool) {
 	// Pre-compute group key outside the lock
-	if strings.HasPrefix(filter, "$share/") {
-		shareName, topicFilter, _ := topics.ParseShared(filter)
-		filter = shareName + "/" + topicFilter
-	}
+	groupKey := shareGroupKey(filter)
 
 	sm.mu.Lock()
-	group, exists := sm.groups[filter]
-	if !exists || group.IsEmpty() {
-		sm.mu.Unlock()
+	defer sm.mu.Unlock()
+
+	group, exists := sm.groups[groupKey]
+	if !exists {
+		return "", 0, false
+	}
+
+	return group.Select()
+}
+
+// SubscriberAt returns the group member offset positions after rotation, for a
+// caller retrying a delivery the selected member could not take. ok is false
+// once offset reaches the group size, which is what bounds the retry walk.
+func (sm *SharedSubscriptionManager) SubscriberAt(filter string, rotation, offset int) (string, bool) {
+	// Pre-compute group key outside the lock
+	groupKey := shareGroupKey(filter)
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	group, exists := sm.groups[groupKey]
+	if !exists {
 		return "", false
 	}
-	next := group.NextSubscriber()
-	sm.mu.Unlock()
-	return next, true
+
+	return group.SubscriberAt(rotation, offset)
+}
+
+// shareGroupKey normalizes a filter to the key groups are stored under. Callers hold
+// either form: the router carries "$share/<name>/<filter>", the manager keys on
+// "<name>/<filter>".
+func shareGroupKey(filter string) string {
+	if !strings.HasPrefix(filter, "$share/") {
+		return filter
+	}
+
+	shareName, topicFilter, _ := topics.ParseShared(filter)
+	return shareName + "/" + topicFilter
 }
 
 // RemoveClient removes a client from all shared groups it is a member of.

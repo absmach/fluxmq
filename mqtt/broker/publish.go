@@ -270,46 +270,10 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 			if deliveredGroups[groupKey] {
 				continue
 			}
-
-			// Select next subscriber in the group
-			// groupKey here typically looks like "groupName/topicFilter"
-			// GetNextSubscriber handles matching
-			selectedClientID, ok := b.sharedSubs.GetNextSubscriber(groupKey)
-			if !ok {
-				continue
-			}
-
 			deliveredGroups[groupKey] = true
 
-			s := b.sessionsMap.Get(selectedClientID)
-			if s == nil {
-				continue
-			}
-
-			deliverQoS := msg.BrokerMeta.Delivery.QoS
-			if sub.QoS < deliverQoS {
-				deliverQoS = sub.QoS
-			}
-			if deliverQoS == 0 {
-				_ = b.deliverSharedQoS0(ctx, s, msg, false)
-				continue
-			}
-
-			deliverMsg := msg.Clone()
-			deliverMsg.BrokerMeta.Delivery.QoS = deliverQoS
-			deliverMsg.BrokerMeta.Delivery.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
-
-			// DeliverToSession takes full ownership of the message
-			if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
-				if deliverQoS > 0 {
-					b.telemetry.logger.Warn("failed to deliver QoS message",
-						slog.String("client_id", selectedClientID),
-						slog.String("topic", msg.Topic),
-						slog.Uint64("qos", uint64(deliverQoS)),
-						slog.String("error", err.Error()))
-				}
-				continue
-			}
+			// groupKey here typically looks like "groupName/topicFilter"
+			b.deliverToShareGroup(ctx, groupKey, sub, msg)
 		} else {
 			if sub.Options.NoLocal && clientID == msg.BrokerMeta.Source.ClientID {
 				continue
@@ -355,6 +319,64 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, all
 	}
 
 	return len(*matched), nil
+}
+
+// deliverToShareGroup hands msg to one live member of a share group and
+// advances the group's round-robin cursor by one. A member whose session is
+// gone, or which cannot take the message, is skipped and the next member is
+// tried, so the group loses a message only when no member can take it: a share
+// group whose selected member disconnected a moment ago still gets its work.
+//
+// It borrows msg. Reports whether a member took the message.
+func (b *Broker) deliverToShareGroup(ctx context.Context, groupKey string, sub *storage.Subscription, msg *message.Envelope) bool {
+	clientID, rotation, ok := b.sharedSubs.SelectSubscriber(groupKey)
+	if !ok {
+		return false
+	}
+
+	deliverQoS := msg.BrokerMeta.Delivery.QoS
+	if sub.QoS < deliverQoS {
+		deliverQoS = sub.QoS
+	}
+
+	// offset 0 is the member the round robin selected; the rest are fallbacks,
+	// in group order, and SubscriberAt stops the walk after one full pass.
+	for offset := 0; ; offset++ {
+		if offset > 0 {
+			var more bool
+			clientID, more = b.sharedSubs.SubscriberAt(groupKey, rotation, offset)
+			if !more {
+				return false
+			}
+		}
+
+		s := b.sessionsMap.Get(clientID)
+		if s == nil {
+			continue
+		}
+
+		if deliverQoS == 0 {
+			if err := b.deliverSharedQoS0(ctx, s, msg, false); err != nil {
+				continue
+			}
+			return true
+		}
+
+		deliverMsg := msg.Clone()
+		deliverMsg.BrokerMeta.Delivery.QoS = deliverQoS
+		deliverMsg.BrokerMeta.Delivery.Retain = false // MQTT spec: shared subscriptions don't receive retained flag
+
+		// DeliverToSession takes full ownership of the message
+		if _, err := b.DeliverToSession(ctx, s, deliverMsg); err != nil {
+			b.telemetry.logger.Warn("failed to deliver QoS message to share group member",
+				slog.String("client_id", clientID),
+				slog.String("topic", msg.Topic),
+				slog.Uint64("qos", uint64(deliverQoS)),
+				slog.String("error", err.Error()))
+			continue
+		}
+		return true
+	}
 }
 
 // ForwardPublish handles a forwarded publish from a remote cluster node.

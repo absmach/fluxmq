@@ -202,3 +202,112 @@ func TestShareGroup_IsEmpty(t *testing.T) {
 		t.Error("Expected group to be empty after removing all subscribers")
 	}
 }
+
+func TestShareGroup_Select(t *testing.T) {
+	group := &ShareGroup{
+		Name:        testGroup1,
+		TopicFilter: testSensorsMulti,
+		Subscribers: []string{testClient1, testClient2, testClient3},
+	}
+
+	// Select reports the member it took and the rotation it took it from, and
+	// advances the cursor exactly like NextSubscriber.
+	expected := []struct {
+		clientID string
+		rotation int
+	}{
+		{testClient1, 0},
+		{testClient2, 1},
+		{testClient3, 2},
+		{testClient1, 0},
+	}
+	for i, exp := range expected {
+		clientID, rotation, ok := group.Select()
+		if !ok {
+			t.Fatalf("Round %d: expected a selection", i)
+		}
+		if clientID != exp.clientID {
+			t.Errorf("Round %d: expected client '%s', got '%s'", i, exp.clientID, clientID)
+		}
+		if rotation != exp.rotation {
+			t.Errorf("Round %d: expected rotation %d, got %d", i, exp.rotation, rotation)
+		}
+	}
+
+	emptyGroup := &ShareGroup{Subscribers: []string{}}
+	if _, _, ok := emptyGroup.Select(); ok {
+		t.Error("Expected no selection from an empty group")
+	}
+}
+
+func TestShareGroup_SubscriberAt(t *testing.T) {
+	members := []string{testClient1, testClient2, testClient3}
+
+	cases := []struct {
+		name     string
+		group    []string
+		rotation int
+		offset   int
+		want     string
+		wantOK   bool
+	}{
+		{name: "offset/zero", group: members, rotation: 0, offset: 0, want: testClient1, wantOK: true},
+		{name: "offset/one", group: members, rotation: 0, offset: 1, want: testClient2, wantOK: true},
+		{name: "offset/last", group: members, rotation: 0, offset: 2, want: testClient3, wantOK: true},
+		{name: "offset/past-end", group: members, rotation: 0, offset: 3, wantOK: false},
+		{name: "offset/negative", group: members, rotation: 0, offset: -1, wantOK: false},
+		{name: "rotation/wraps", group: members, rotation: 2, offset: 1, want: testClient1, wantOK: true},
+		{name: "rotation/wraps-twice", group: members, rotation: 2, offset: 2, want: testClient2, wantOK: true},
+		// A rotation taken before members left still resolves, and the walk is
+		// bounded by the size the group has now.
+		{name: "shrunk/rotation-past-end", group: []string{testClient1}, rotation: 2, offset: 0, want: testClient1, wantOK: true},
+		{name: "shrunk/offset-past-end", group: []string{testClient1}, rotation: 2, offset: 1, wantOK: false},
+		{name: "empty", group: []string{}, rotation: 0, offset: 0, wantOK: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			group := &ShareGroup{Subscribers: tc.group}
+			got, ok := group.SubscriberAt(tc.rotation, tc.offset)
+			if ok != tc.wantOK {
+				t.Fatalf("Expected ok=%v, got %v", tc.wantOK, ok)
+			}
+			if got != tc.want {
+				t.Errorf("Expected '%s', got '%s'", tc.want, got)
+			}
+		})
+	}
+}
+
+// TestShareGroup_SelectThenWalkCoversEveryMember guards the retry contract: a
+// caller that walks offsets up from 1 after a Select reaches every other member
+// exactly once and then stops.
+func TestShareGroup_SelectThenWalkCoversEveryMember(t *testing.T) {
+	group := &ShareGroup{Subscribers: []string{testClient1, testClient2, testClient3}}
+
+	// Advance the cursor so the walk starts mid-group and has to wrap.
+	group.NextSubscriber()
+
+	selected, rotation, ok := group.Select()
+	if !ok {
+		t.Fatal("Expected a selection")
+	}
+
+	seen := map[string]int{selected: 1}
+	for offset := 1; ; offset++ {
+		clientID, more := group.SubscriberAt(rotation, offset)
+		if !more {
+			break
+		}
+		seen[clientID]++
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("Expected the walk to reach 3 members, reached %d", len(seen))
+	}
+	for clientID, count := range seen {
+		if count != 1 {
+			t.Errorf("Expected '%s' once, saw it %d times", clientID, count)
+		}
+	}
+}

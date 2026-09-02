@@ -4,14 +4,18 @@
 package broker
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"testing"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSharedSubscription_GroupCreation(t *testing.T) {
@@ -21,9 +25,9 @@ func TestSharedSubscription_GroupCreation(t *testing.T) {
 	b := NewBroker(store, cl, WithLogger(logger))
 
 	// Create 3 clients
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
-	s3, _, _ := b.CreateSession("client3", 5, session.Options{CleanStart: true})
+	s3, _, _ := b.CreateSession(testClient3, 5, session.Options{CleanStart: true})
 
 	// All 3 subscribe to the same shared subscription
 	sharedFilter := "$share/group1/sensors/#"
@@ -56,9 +60,9 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
-	s3, _, _ := b.CreateSession("client3", 5, session.Options{CleanStart: true})
+	s3, _, _ := b.CreateSession(testClient3, 5, session.Options{CleanStart: true})
 
 	sharedFilter := "$share/workers/jobs/#"
 	opts := storage.SubscribeOptions{}
@@ -70,7 +74,7 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	group := b.sharedSubs.GetGroup("workers/jobs/#")
 
 	// Test round-robin selection
-	expected := []string{"client1", testClient2, "client3", "client1", testClient2, "client3"}
+	expected := []string{testClient1, testClient2, testClient3, testClient1, testClient2, testClient3}
 	for i, exp := range expected {
 		selected := group.NextSubscriber()
 		if selected != exp {
@@ -85,7 +89,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	sharedFilter := "$share/group1/test/topic"
@@ -131,7 +135,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	sharedFilter := "$share/mygroup/data/#"
@@ -141,7 +145,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Destroy client1's session
-	b.DestroySession("client1") //nolint:errcheck // test cleanup
+	b.DestroySession(testClient1) //nolint:errcheck // test cleanup
 
 	// Group should still exist with 1 subscriber
 	group := b.sharedSubs.GetGroup("mygroup/data/#")
@@ -171,9 +175,9 @@ func TestSharedSubscription_MultipleGroups(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
-	s3, _, _ := b.CreateSession("client3", 5, session.Options{CleanStart: true})
+	s3, _, _ := b.CreateSession(testClient3, 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
 
@@ -205,7 +209,7 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
@@ -238,7 +242,7 @@ func TestSharedSubscription_DuplicateSubscribe(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
 	sharedFilter := "$share/group1/test/#"
@@ -264,7 +268,7 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
 	b := NewBroker(store, cl, WithLogger(logger))
 
-	s1, _, _ := b.CreateSession("client1", 5, session.Options{CleanStart: true})
+	s1, _, _ := b.CreateSession(testClient1, 5, session.Options{CleanStart: true})
 	s2, _, _ := b.CreateSession(testClient2, 5, session.Options{CleanStart: true})
 
 	opts := storage.SubscribeOptions{}
@@ -288,4 +292,121 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	if matched[0].ClientID != "$share/workers/tasks/#" {
 		t.Errorf("Expected share group client ID, got '%s'", matched[0].ClientID)
 	}
+}
+
+// shareGroupMember is one connected member of a share group under test.
+type shareGroupMember struct {
+	session *session.Session
+	conn    *mockConnection
+}
+
+// newShareGroupBroker builds a broker whose share group holds one connected
+// member per client ID, subscribed at qos, in the order given.
+func newShareGroupBroker(t *testing.T, filter string, qos byte, clientIDs ...string) (*Broker, map[string]*shareGroupMember) {
+	t.Helper()
+
+	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
+	b := NewBroker(memory.New(), cluster.NewNoopCluster("test"), WithLogger(logger))
+	t.Cleanup(func() { b.Close() })
+
+	members := make(map[string]*shareGroupMember, len(clientIDs))
+	for _, clientID := range clientIDs {
+		s, _, err := b.CreateSession(clientID, 5, session.Options{CleanStart: true})
+		require.NoError(t, err)
+
+		conn := &mockConnection{}
+		_, err = s.Connect(conn)
+		require.NoError(t, err)
+
+		require.NoError(t, b.subscribe(s, filter, qos, storage.SubscribeOptions{}))
+		members[clientID] = &shareGroupMember{session: s, conn: conn}
+	}
+
+	return b, members
+}
+
+// TestSharedSubscription_SkipsDisconnectedMember guards the delivery contract of
+// a share group: the round robin selecting a member whose session is gone must
+// pass the message to the next member, not drop it. A session can vanish
+// between selection and delivery, so a group that gave up there would lose work
+// with no trace.
+func TestSharedSubscription_SkipsDisconnectedMember(t *testing.T) {
+	const filter = "$share/workers/tasks/#"
+
+	for _, qos := range []byte{0, 1} {
+		name := "qos0"
+		if qos == 1 {
+			name = "qos1"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			b, members := newShareGroupBroker(t, filter, qos, testClient1, testClient2, testClient3)
+
+			// The round robin starts at client1. Drop its session the way a
+			// disconnect does, leaving the group membership behind.
+			b.sessionsMap.Delete(testClient1)
+
+			msg := message.New("tasks/job1", []byte("work"))
+			msg.BrokerMeta.Delivery.QoS = qos
+			defer message.Release(msg)
+
+			matched, err := b.distributeLocal(context.Background(), msg, false)
+			require.NoError(t, err)
+			assert.Equal(t, 1, matched, "the share group is one matched subscription")
+
+			assert.Len(t, members[testClient2].conn.packets, 1, "the next live member should take the message")
+			assert.Empty(t, members[testClient3].conn.packets, "only one member of a group receives a message")
+		})
+	}
+}
+
+// TestSharedSubscription_WalksEveryMemberOnce checks that the fallback walk
+// stops after one pass rather than spinning when no member can take the
+// message.
+func TestSharedSubscription_WalksEveryMemberOnce(t *testing.T) {
+	const filter = "$share/workers/tasks/#"
+
+	b, _ := newShareGroupBroker(t, filter, 1, testClient1, testClient2, testClient3)
+	for _, clientID := range []string{testClient1, testClient2, testClient3} {
+		b.sessionsMap.Delete(clientID)
+	}
+
+	msg := message.New("tasks/job1", []byte("work"))
+	msg.BrokerMeta.Delivery.QoS = 1
+	defer message.Release(msg)
+
+	sub := &storage.Subscription{ClientID: "$share/workers/tasks/#", Filter: "tasks/#", QoS: 1}
+	assert.False(t, b.deliverToShareGroup(context.Background(), "workers/tasks/#", sub, msg),
+		"a group with no live member takes nothing")
+}
+
+// TestSharedSubscription_RoundRobinSurvivesSkips checks that skipping a dead
+// member costs no messages and does not pin the group to a single live member.
+// The cursor still advances once per message, so the dead member's turn falls
+// to whichever member follows it: the share is uneven while the group holds a
+// member that has gone, which is what pruning on disconnect resolves, but every
+// message is still delivered exactly once.
+func TestSharedSubscription_RoundRobinSurvivesSkips(t *testing.T) {
+	const filter = "$share/workers/tasks/#"
+
+	const publishes = 4
+
+	b, members := newShareGroupBroker(t, filter, 0, testClient1, testClient2, testClient3)
+	b.sessionsMap.Delete(testClient1)
+
+	for range publishes {
+		msg := message.New("tasks/job1", []byte("work"))
+		_, err := b.distributeLocal(context.Background(), msg, false)
+		require.NoError(t, err)
+		message.Release(msg)
+	}
+
+	live := []string{testClient2, testClient3}
+	delivered := 0
+	for _, clientID := range live {
+		got := len(members[clientID].conn.packets)
+		assert.NotZero(t, got, "%s should take a share of the group's messages", clientID)
+		delivered += got
+	}
+	assert.Equal(t, publishes, delivered, "every message reaches exactly one live member")
 }
