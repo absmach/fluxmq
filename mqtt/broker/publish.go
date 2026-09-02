@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 )
 
 // Publish publishes a message, handling retained storage and distribution to subscribers.
@@ -272,19 +274,26 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, sco
 	// router only knows the groups something here subscribed to, so without
 	// this a group whose members are all elsewhere would match nothing and
 	// receive nothing.
-	remote := acquireShareMembers()
-	defer releaseShareMembers(remote)
-
+	// A broker with no cluster has no such members, and the publish path is not
+	// where to spend a pool round trip establishing that.
+	var remote []cluster.ShareMember
 	if scope.shareGroups && b.cluster != nil {
-		members, err := b.cluster.ShareGroupMembers(ctx, msg.Topic, (*remote)[:0])
+		pooled := acquireShareMembers()
+		defer releaseShareMembers(pooled)
+
+		members, err := b.cluster.ShareGroupMembers(ctx, msg.Topic, (*pooled)[:0])
 		if err != nil {
 			b.logError("cluster_share_group_members", err, slog.String("topic", msg.Topic))
 		}
-		*remote = members
+		*pooled = members
+		remote = members
 	}
 
-	// Track which share groups have already received the message (lazy init)
-	var deliveredGroups map[string]bool
+	// Share groups matching one topic are few — nearly always one — so the
+	// groups already served are kept in a small array and scanned rather than
+	// hashed, which keeps a map allocation off the publish path.
+	var servedBuf [8]shareGroupID
+	served := servedBuf[:0]
 
 	for _, sub := range *matched {
 		clientID := sub.ClientID
@@ -295,22 +304,19 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, sco
 				continue
 			}
 
-			// Extract group key from the special client ID
-			groupKey := clientID[7:] // Remove "$share/" prefix
-
-			// Lazy init the map only when we have shared subscriptions
-			if deliveredGroups == nil {
-				deliveredGroups = make(map[string]bool)
-			}
+			// The router carries the group under a synthetic client ID, so both
+			// halves of its identity come straight back out of it with no
+			// string built on the publish path.
+			shareName, topicFilter, _ := topics.ParseShared(clientID)
+			id := shareGroupID{Name: shareName, Filter: topicFilter}
 
 			// Skip if we already delivered to this group
-			if deliveredGroups[groupKey] {
+			if slices.Contains(served, id) {
 				continue
 			}
-			deliveredGroups[groupKey] = true
+			served = append(served, id)
 
-			// groupKey here typically looks like "groupName/topicFilter"
-			b.deliverToShareGroup(ctx, groupKey, sub.QoS, msg, *remote)
+			b.deliverToShareGroup(ctx, id, sub.QoS, msg, remote)
 		} else {
 			if sub.Options.NoLocal && clientID == msg.BrokerMeta.Source.ClientID {
 				continue
@@ -357,18 +363,15 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, sco
 
 	// A group with no member on this node never appears in the local match, so
 	// its turn has to be taken from the remote members directly.
-	for i := range *remote {
-		member := (*remote)[i]
-		groupKey := member.ShareName + "/" + member.Filter
-		if deliveredGroups[groupKey] {
+	for i := range remote {
+		member := remote[i]
+		id := shareGroupID{Name: member.ShareName, Filter: member.Filter}
+		if slices.Contains(served, id) {
 			continue
 		}
-		if deliveredGroups == nil {
-			deliveredGroups = make(map[string]bool)
-		}
-		deliveredGroups[groupKey] = true
+		served = append(served, id)
 
-		b.deliverToShareGroup(ctx, groupKey, member.QoS, msg, *remote)
+		b.deliverToShareGroup(ctx, id, member.QoS, msg, remote)
 	}
 
 	return len(*matched), nil
@@ -397,11 +400,11 @@ func releaseShareMembers(members *[]cluster.ShareMember) {
 	shareMemberPool.Put(members)
 }
 
-// shareMemberCount reports how many of members belong to groupKey.
-func shareMemberCount(members []cluster.ShareMember, groupKey string) int {
+// shareMemberCount reports how many of members belong to id.
+func shareMemberCount(members []cluster.ShareMember, id shareGroupID) int {
 	count := 0
 	for i := range members {
-		if shareMemberInGroup(members[i], groupKey) {
+		if shareMemberInGroup(members[i], id) {
 			count++
 		}
 	}
@@ -413,9 +416,9 @@ func shareMemberCount(members []cluster.ShareMember, groupKey string) int {
 // not contiguous in the slice — it holds every group the topic matched — so the
 // index is counted rather than sliced. A group is small, and counting keeps the
 // publish path free of a per-group slice.
-func shareMemberAt(members []cluster.ShareMember, groupKey string, i int) (cluster.ShareMember, bool) {
+func shareMemberAt(members []cluster.ShareMember, id shareGroupID, i int) (cluster.ShareMember, bool) {
 	for j := range members {
-		if !shareMemberInGroup(members[j], groupKey) {
+		if !shareMemberInGroup(members[j], id) {
 			continue
 		}
 		if i == 0 {
@@ -427,9 +430,8 @@ func shareMemberAt(members []cluster.ShareMember, groupKey string, i int) (clust
 	return cluster.ShareMember{}, false
 }
 
-func shareMemberInGroup(member cluster.ShareMember, groupKey string) bool {
-	name, filter, _ := strings.Cut(groupKey, "/")
-	return member.ShareName == name && member.Filter == filter
+func shareMemberInGroup(member cluster.ShareMember, id shareGroupID) bool {
+	return member.ShareName == id.Name && member.Filter == id.Filter
 }
 
 // deliverToShareGroup hands msg to one member of a share group and advances the
@@ -443,26 +445,30 @@ func shareMemberInGroup(member cluster.ShareMember, groupKey string) bool {
 // remote members carry their own cap.
 //
 // It borrows msg. Reports whether a member took the message.
-func (b *Broker) deliverToShareGroup(ctx context.Context, groupKey string, subQoS byte, msg *message.Envelope, remote []cluster.ShareMember) bool {
-	local := b.sharedSubs.LocalMemberCount(groupKey)
-	remoteCount := shareMemberCount(remote, groupKey)
+func (b *Broker) deliverToShareGroup(ctx context.Context, id shareGroupID, subQoS byte, msg *message.Envelope, remote []cluster.ShareMember) bool {
+	remoteCount := shareMemberCount(remote, id)
 
-	total := local + remoteCount
-	if total == 0 {
+	rotation, local, chosen, ok := b.sharedSubs.SelectMember(id, remoteCount)
+	if !ok {
 		return false
 	}
 
-	rotation := b.sharedSubs.NextRotation(groupKey, total)
-
 	// The rotation names the member whose turn it is; the rest of the pass are
 	// its fallbacks, in group order, and one pass tries every member once.
+	total := local + remoteCount
 	for offset := range total {
 		index := (rotation + offset) % total
 
 		if index < local {
-			clientID, ok := b.sharedSubs.LocalMemberAt(groupKey, index)
-			if !ok {
-				continue
+			// The member whose turn it was came back with the rotation; only
+			// the fallbacks have to be looked up.
+			clientID := chosen
+			if offset > 0 {
+				var found bool
+				clientID, found = b.sharedSubs.LocalMemberAt(id, index)
+				if !found {
+					continue
+				}
 			}
 			if b.deliverShareLocal(ctx, clientID, subQoS, msg) {
 				return true
@@ -470,7 +476,7 @@ func (b *Broker) deliverToShareGroup(ctx context.Context, groupKey string, subQo
 			continue
 		}
 
-		member, ok := shareMemberAt(remote, groupKey, index-local)
+		member, ok := shareMemberAt(remote, id, index-local)
 		if !ok {
 			continue
 		}

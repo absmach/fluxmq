@@ -4,7 +4,6 @@
 package broker
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/absmach/fluxmq/topics"
@@ -12,9 +11,20 @@ import (
 
 // SharedSubscriptionManager manages shared subscriptions (MQTT 5.0).
 // It encapsulates the logic for grouping subscribers and round-robin distribution.
+// shareGroupID names one share group. A group is identified by its name and
+// the filter it is bound to together: two groups sharing a name but bound to
+// different filters are different groups, so neither half names one on its own.
+//
+// It is a struct rather than a joined string because the publish path derives
+// it on every message, and joining would allocate once per share group member
+// the topic matched.
+type shareGroupID struct {
+	Name   string
+	Filter string
+}
+
 type SharedSubscriptionManager struct {
-	// key: "shareName/topicFilter"
-	groups map[string]*topics.ShareGroup
+	groups map[shareGroupID]*topics.ShareGroup
 
 	// cursors is the round-robin position per group, kept apart from the group
 	// itself because a group can have members on other nodes and none here: a
@@ -25,7 +35,7 @@ type SharedSubscriptionManager struct {
 	// The cursor is deliberately node-local. Nodes do not agree on whose turn
 	// it is; each spreads its own publishes across the whole group, which
 	// balances the group without a round trip per message.
-	cursors map[string]uint64
+	cursors map[shareGroupID]uint64
 
 	mu sync.RWMutex
 }
@@ -33,8 +43,8 @@ type SharedSubscriptionManager struct {
 // NewSharedSubscriptionManager creates a new shared subscription manager.
 func NewSharedSubscriptionManager() *SharedSubscriptionManager {
 	return &SharedSubscriptionManager{
-		groups:  make(map[string]*topics.ShareGroup),
-		cursors: make(map[string]uint64),
+		groups:  make(map[shareGroupID]*topics.ShareGroup),
+		cursors: make(map[shareGroupID]uint64),
 	}
 }
 
@@ -49,8 +59,8 @@ func (sm *SharedSubscriptionManager) Subscribe(clientID, filter string) bool {
 		return false
 	}
 
-	groupKey := shareName + "/" + topicFilter
-	group, exists := sm.groups[groupKey]
+	id := shareGroupID{Name: shareName, Filter: topicFilter}
+	group, exists := sm.groups[id]
 	isNewGroup := !exists
 
 	if !exists {
@@ -59,7 +69,7 @@ func (sm *SharedSubscriptionManager) Subscribe(clientID, filter string) bool {
 			TopicFilter: topicFilter,
 			Subscribers: []string{},
 		}
-		sm.groups[groupKey] = group
+		sm.groups[id] = group
 	}
 
 	group.AddSubscriber(clientID)
@@ -77,8 +87,8 @@ func (sm *SharedSubscriptionManager) Unsubscribe(clientID, filter string) bool {
 		return false
 	}
 
-	groupKey := shareName + "/" + topicFilter
-	group, exists := sm.groups[groupKey]
+	id := shareGroupID{Name: shareName, Filter: topicFilter}
+	group, exists := sm.groups[id]
 	if !exists {
 		return false
 	}
@@ -86,69 +96,59 @@ func (sm *SharedSubscriptionManager) Unsubscribe(clientID, filter string) bool {
 	group.RemoveSubscriber(clientID)
 
 	if group.IsEmpty() {
-		delete(sm.groups, groupKey)
-		delete(sm.cursors, groupKey)
+		delete(sm.groups, id)
+		delete(sm.cursors, id)
 		return true
 	}
 
 	return false
 }
 
-// NextRotation reserves this node's next position in a group of size members
-// and reports it. Callers walk the group from there, so consecutive publishes
-// from this node start at consecutive members.
-func (sm *SharedSubscriptionManager) NextRotation(groupKey string, size int) int {
-	if size <= 0 {
-		return 0
-	}
-
+// SelectMember reserves this node's turn in a group of localCount + remoteCount
+// members and reports the position it chose, how many of the members are local,
+// and — when the chosen position is a local member — which one. Everything the
+// choice depends on is read under one lock, because a group is chosen from on
+// every message published to its topic.
+//
+// ok is false for a group with no members at all.
+func (sm *SharedSubscriptionManager) SelectMember(id shareGroupID, remoteCount int) (rotation, localCount int, clientID string, ok bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	cursor := sm.cursors[groupKey]
-	sm.cursors[groupKey] = cursor + 1
-
-	return int(cursor % uint64(size))
-}
-
-// LocalMemberCount reports how many of a group's members are connected to this
-// node.
-func (sm *SharedSubscriptionManager) LocalMemberCount(groupKey string) int {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	group, exists := sm.groups[shareGroupKey(groupKey)]
-	if !exists {
-		return 0
+	group := sm.groups[id]
+	if group != nil {
+		localCount = len(group.Subscribers)
 	}
 
-	return len(group.Subscribers)
+	total := localCount + remoteCount
+	if total == 0 {
+		return 0, 0, "", false
+	}
+
+	cursor := sm.cursors[id]
+	sm.cursors[id] = cursor + 1
+	rotation = int(cursor % uint64(total))
+
+	if rotation < localCount {
+		clientID, _ = group.SubscriberAt(0, rotation)
+	}
+
+	return rotation, localCount, clientID, true
 }
 
-// LocalMemberAt returns the group's i-th local member. ok is false once i
-// reaches the count, and for an i whose member left since the count was taken.
-func (sm *SharedSubscriptionManager) LocalMemberAt(groupKey string, i int) (string, bool) {
+// LocalMemberAt returns the group's i-th local member, for a caller walking the
+// group after the member it selected could not take the message. ok is false
+// once i reaches the count, and for an i whose member left in the meantime.
+func (sm *SharedSubscriptionManager) LocalMemberAt(id shareGroupID, i int) (string, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	group, exists := sm.groups[shareGroupKey(groupKey)]
+	group, exists := sm.groups[id]
 	if !exists {
 		return "", false
 	}
 
 	return group.SubscriberAt(0, i)
-}
-
-// shareGroupKey normalizes a filter to the key groups are stored under. Callers hold
-// either form: the router carries "$share/<name>/<filter>", the manager keys on
-// "<name>/<filter>".
-func shareGroupKey(filter string) string {
-	if !strings.HasPrefix(filter, "$share/") {
-		return filter
-	}
-
-	shareName, topicFilter, _ := topics.ParseShared(filter)
-	return shareName + "/" + topicFilter
 }
 
 // RemoveClient removes a client from all shared groups it is a member of.
@@ -172,9 +172,10 @@ func (sm *SharedSubscriptionManager) RemoveClient(clientID string) []string {
 	return emptyGroups
 }
 
-// GetGroup returns a share group by key (for testing).
-func (sm *SharedSubscriptionManager) GetGroup(key string) *topics.ShareGroup {
+// GetGroup returns a share group by name and filter (for testing).
+func (sm *SharedSubscriptionManager) GetGroup(name, filter string) *topics.ShareGroup {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return sm.groups[key]
+
+	return sm.groups[shareGroupID{Name: name, Filter: filter}]
 }

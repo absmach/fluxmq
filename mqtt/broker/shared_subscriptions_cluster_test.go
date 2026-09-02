@@ -119,7 +119,7 @@ func remoteMember(clientID, nodeID string, qos byte) cluster.ShareMember {
 		ClientID:  clientID,
 		NodeID:    nodeID,
 		ShareName: testGroupWorkers,
-		Filter:    "tasks/#",
+		Filter:    testTasksFilter,
 		QoS:       qos,
 	}
 }
@@ -142,7 +142,7 @@ func publishTasks(t *testing.T, b *Broker, qos byte, scope distributeScope, time
 // message went nowhere.
 func TestShareGroup_RemoteOnlyGroupReceives(t *testing.T) {
 	cl := &shareStubCluster{members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 1)}}
-	b, _ := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 1)
+	b, _ := newClusteredShareBroker(t, cl, testSharedTasksFilter, 1)
 
 	publishTasks(t, b, 1, ingressScope, 1)
 
@@ -156,7 +156,7 @@ func TestShareGroup_RemoteOnlyGroupReceives(t *testing.T) {
 // rotation, so each message reaches exactly one of them.
 func TestShareGroup_LocalAndRemoteShareOneRotation(t *testing.T) {
 	cl := &shareStubCluster{members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 1)}}
-	b, members := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 0, testClient1)
+	b, members := newClusteredShareBroker(t, cl, testSharedTasksFilter, 0, testClient1)
 
 	publishTasks(t, b, 0, ingressScope, 4)
 
@@ -174,7 +174,7 @@ func TestShareGroup_RemoteFailureFallsBackToLocal(t *testing.T) {
 		members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 0)},
 		sendErr: errors.New("node unreachable"),
 	}
-	b, members := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 0, testClient1)
+	b, members := newClusteredShareBroker(t, cl, testSharedTasksFilter, 0, testClient1)
 
 	// Two publishes: the first is the local member's turn, the second the
 	// remote member's, which fails and falls back.
@@ -188,7 +188,7 @@ func TestShareGroup_RemoteFailureFallsBackToLocal(t *testing.T) {
 // subscription must not also start a second selection.
 func TestShareGroup_ForwardedPublishDoesNotPick(t *testing.T) {
 	cl := &shareStubCluster{members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 1)}}
-	b, members := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 1, testClient1)
+	b, members := newClusteredShareBroker(t, cl, testSharedTasksFilter, 1, testClient1)
 
 	publishTasks(t, b, 1, forwardedScope, 3)
 
@@ -201,7 +201,7 @@ func TestShareGroup_ForwardedPublishDoesNotPick(t *testing.T) {
 // than matching the subscription itself.
 func TestShareGroup_RemoteDeliveryCapsQoS(t *testing.T) {
 	cl := &shareStubCluster{members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 0)}}
-	b, _ := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 1)
+	b, _ := newClusteredShareBroker(t, cl, testSharedTasksFilter, 1)
 
 	publishTasks(t, b, 1, ingressScope, 1)
 
@@ -218,11 +218,117 @@ func TestShareGroup_MovedMemberFallsBackWithoutWarning(t *testing.T) {
 		members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 0)},
 		sendErr: fmt.Errorf("%w: session not found: worker-b", broker.ErrClientNotConnected),
 	}
-	b, members := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 0, testClient1)
+	b, members := newClusteredShareBroker(t, cl, testSharedTasksFilter, 0, testClient1)
 
 	// The first publish is the local member's turn, the second the remote
 	// member's, which has moved.
 	publishTasks(t, b, 0, ingressScope, 2)
 
 	assert.Len(t, members[testClient1].conn.packets, 2, "both messages land on the member that is there")
+}
+
+func groupMember(clientID, nodeID, shareName, filter string, qos byte) cluster.ShareMember {
+	return cluster.ShareMember{
+		ClientID:  clientID,
+		NodeID:    nodeID,
+		ShareName: shareName,
+		Filter:    filter,
+		QoS:       qos,
+	}
+}
+
+// subscribeShared connects one client to b and subscribes it to filter.
+func subscribeShared(t *testing.T, b *Broker, clientID, filter string) *mockConnection {
+	t.Helper()
+
+	s, _, err := b.CreateSession(clientID, 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+
+	conn := &mockConnection{}
+	_, err = s.Connect(conn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(s, filter, 0, storage.SubscribeOptions{}))
+
+	return conn
+}
+
+// TestShareGroup_DistinctGroupsEachReceiveACopy checks that two groups matching
+// one topic are two groups. A message belongs to each of them once: sharing is
+// within a group, never between groups.
+func TestShareGroup_DistinctGroupsEachReceiveACopy(t *testing.T) {
+	cases := []struct {
+		name    string
+		filterA string
+		filterB string
+		shareA  string
+		filtA   string
+		shareB  string
+		filtB   string
+	}{
+		{
+			// Different group names over the same filter.
+			name:    "different-names",
+			filterA: testSharedTasksFilter,
+			filterB: "$share/auditors/tasks/#",
+			shareA:  testGroupWorkers, filtA: testTasksFilter,
+			shareB: "auditors", filtB: testTasksFilter,
+		},
+		{
+			// One name, two filters. The filter is half the group's identity,
+			// so these are separate groups that both match the topic.
+			name:    "same-name-different-filters",
+			filterA: testSharedTasksFilter,
+			filterB: "$share/workers/tasks/job1",
+			shareA:  testGroupWorkers, filtA: testTasksFilter,
+			shareB: testGroupWorkers, filtB: "tasks/job1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := &shareStubCluster{members: []cluster.ShareMember{
+				groupMember("remote-a", "node-b", tc.shareA, tc.filtA, 0),
+				groupMember("remote-b", "node-c", tc.shareB, tc.filtB, 0),
+			}}
+
+			logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
+			b := NewBroker(memory.New(), cl, WithLogger(logger))
+			t.Cleanup(func() { b.Close() })
+
+			localA := subscribeShared(t, b, "local-a", tc.filterA)
+			localB := subscribeShared(t, b, "local-b", tc.filterB)
+
+			publishTasks(t, b, 0, ingressScope, 1)
+
+			// Each group has one local and one remote member, and the rotation
+			// starts at the local one, so both groups deliver locally here.
+			delivered := len(localA.packets) + len(localB.packets) + len(cl.sends())
+			assert.Equal(t, 2, delivered, "each group takes one copy of the message")
+			assert.Len(t, localA.packets, 1)
+			assert.Len(t, localB.packets, 1)
+			assert.Empty(t, cl.sends(), "neither group's turn fell to its remote member")
+		})
+	}
+}
+
+// TestShareGroup_DistinctGroupsRotateIndependently checks the cursors are per
+// group: one group's traffic must not advance another's turn.
+func TestShareGroup_DistinctGroupsRotateIndependently(t *testing.T) {
+	cl := &shareStubCluster{members: []cluster.ShareMember{
+		groupMember("remote-a", "node-b", "workers", testTasksFilter, 0),
+	}}
+
+	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
+	b := NewBroker(memory.New(), cl, WithLogger(logger))
+	t.Cleanup(func() { b.Close() })
+
+	// "workers" has a local and a remote member; "auditors" only a local one.
+	workers := subscribeShared(t, b, "local-worker", testSharedTasksFilter)
+	auditors := subscribeShared(t, b, "local-auditor", "$share/auditors/tasks/#")
+
+	publishTasks(t, b, 0, ingressScope, 4)
+
+	assert.Len(t, auditors.packets, 4, "a group of one takes every message regardless of the group beside it")
+	assert.Len(t, workers.packets, 2, "the two-member group alternates on its own cursor")
+	assert.Len(t, cl.sends(), 2)
 }

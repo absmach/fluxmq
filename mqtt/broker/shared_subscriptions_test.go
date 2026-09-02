@@ -38,7 +38,7 @@ func TestSharedSubscription_GroupCreation(t *testing.T) {
 	b.subscribe(s3, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Verify share group was created with all 3 subscribers
-	group := b.sharedSubs.GetGroup("group1/sensors/#")
+	group := b.sharedSubs.GetGroup("group1", "sensors/#")
 
 	if group == nil {
 		t.Fatal("Share group was not created")
@@ -71,7 +71,7 @@ func TestSharedSubscription_RoundRobinSelection(t *testing.T) {
 	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
 	b.subscribe(s3, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
-	group := b.sharedSubs.GetGroup("workers/jobs/#")
+	group := b.sharedSubs.GetGroup("workers", "jobs/#")
 
 	// Test round-robin selection
 	expected := []string{testClient1, testClient2, testClient3, testClient1, testClient2, testClient3}
@@ -99,7 +99,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b.subscribe(s2, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Verify group exists
-	group := b.sharedSubs.GetGroup("group1/test/topic")
+	group := b.sharedSubs.GetGroup("group1", "test/topic")
 	if group == nil {
 		t.Fatal("Share group should exist")
 	}
@@ -111,7 +111,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b.unsubscribeInternal(s1, sharedFilter) //nolint:errcheck // test cleanup
 
 	// Group should still exist with 1 subscriber
-	group = b.sharedSubs.GetGroup("group1/test/topic")
+	group = b.sharedSubs.GetGroup("group1", "test/topic")
 	if group == nil {
 		t.Fatal("Share group should still exist")
 	}
@@ -123,7 +123,7 @@ func TestSharedSubscription_Unsubscribe(t *testing.T) {
 	b.unsubscribeInternal(s2, sharedFilter) //nolint:errcheck // test cleanup
 
 	// Group should be deleted
-	group = b.sharedSubs.GetGroup("group1/test/topic")
+	group = b.sharedSubs.GetGroup("group1", "test/topic")
 	if group != nil {
 		t.Fatal("Share group should be deleted when empty")
 	}
@@ -148,7 +148,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	b.DestroySession(testClient1) //nolint:errcheck // test cleanup
 
 	// Group should still exist with 1 subscriber
-	group := b.sharedSubs.GetGroup("mygroup/data/#")
+	group := b.sharedSubs.GetGroup("mygroup", "data/#")
 	if group == nil {
 		t.Fatal("Share group should still exist")
 	}
@@ -163,7 +163,7 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	b.DestroySession(testClient2) //nolint:errcheck // test cleanup
 
 	// Group should be deleted
-	group = b.sharedSubs.GetGroup("mygroup/data/#")
+	group = b.sharedSubs.GetGroup("mygroup", "data/#")
 	if group != nil {
 		t.Fatal("Share group should be deleted when all members are gone")
 	}
@@ -189,8 +189,8 @@ func TestSharedSubscription_MultipleGroups(t *testing.T) {
 	b.subscribe(s3, "$share/group1/sensors/#", 1, opts) //nolint:errcheck // test setup
 
 	// Both groups should exist
-	group1 := b.sharedSubs.GetGroup("group1/sensors/#")
-	group2 := b.sharedSubs.GetGroup("group2/sensors/#")
+	group1 := b.sharedSubs.GetGroup("group1", "sensors/#")
+	group2 := b.sharedSubs.GetGroup("group2", "sensors/#")
 
 	if group1 == nil || group2 == nil {
 		t.Fatal("Both share groups should exist")
@@ -219,8 +219,8 @@ func TestSharedSubscription_SameGroupDifferentTopics(t *testing.T) {
 	b.subscribe(s2, "$share/workers/logs/#", 1, opts)    //nolint:errcheck // test setup
 
 	// Two separate groups should exist
-	sensorsGroup := b.sharedSubs.GetGroup("workers/sensors/#")
-	logsGroup := b.sharedSubs.GetGroup("workers/logs/#")
+	sensorsGroup := b.sharedSubs.GetGroup("workers", "sensors/#")
+	logsGroup := b.sharedSubs.GetGroup("workers", "logs/#")
 
 	if sensorsGroup == nil || logsGroup == nil {
 		t.Fatal("Both share groups should exist")
@@ -252,7 +252,7 @@ func TestSharedSubscription_DuplicateSubscribe(t *testing.T) {
 	b.subscribe(s1, sharedFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Group should have the client only once
-	group := b.sharedSubs.GetGroup("group1/test/#")
+	group := b.sharedSubs.GetGroup("group1", "test/#")
 
 	if group == nil {
 		t.Fatal("Share group should exist")
@@ -274,8 +274,8 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	opts := storage.SubscribeOptions{}
 
 	// Subscribe to shared subscription
-	b.subscribe(s1, "$share/workers/tasks/#", 1, opts) //nolint:errcheck // test setup
-	b.subscribe(s2, "$share/workers/tasks/#", 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s1, testSharedTasksFilter, 1, opts) //nolint:errcheck // test setup
+	b.subscribe(s2, testSharedTasksFilter, 1, opts) //nolint:errcheck // test setup
 
 	// Router should have the share group subscription, not individual clients
 	matched, err := b.router.Match("tasks/job1")
@@ -289,7 +289,7 @@ func TestSharedSubscription_RouterIntegration(t *testing.T) {
 	}
 
 	// The matched subscription should be for the share group
-	if matched[0].ClientID != "$share/workers/tasks/#" {
+	if matched[0].ClientID != testSharedTasksFilter {
 		t.Errorf("Expected share group client ID, got '%s'", matched[0].ClientID)
 	}
 }
@@ -331,7 +331,7 @@ func newShareGroupBroker(t *testing.T, filter string, qos byte, clientIDs ...str
 // between selection and delivery, so a group that gave up there would lose work
 // with no trace.
 func TestSharedSubscription_SkipsDisconnectedMember(t *testing.T) {
-	const filter = "$share/workers/tasks/#"
+	const filter = testSharedTasksFilter
 
 	for _, qos := range []byte{0, 1} {
 		name := "qos0"
@@ -364,7 +364,7 @@ func TestSharedSubscription_SkipsDisconnectedMember(t *testing.T) {
 // stops after one pass rather than spinning when no member can take the
 // message.
 func TestSharedSubscription_WalksEveryMemberOnce(t *testing.T) {
-	const filter = "$share/workers/tasks/#"
+	const filter = testSharedTasksFilter
 
 	b, _ := newShareGroupBroker(t, filter, 1, testClient1, testClient2, testClient3)
 	for _, clientID := range []string{testClient1, testClient2, testClient3} {
@@ -375,7 +375,7 @@ func TestSharedSubscription_WalksEveryMemberOnce(t *testing.T) {
 	msg.BrokerMeta.Delivery.QoS = 1
 	defer message.Release(msg)
 
-	assert.False(t, b.deliverToShareGroup(context.Background(), "workers/tasks/#", 1, msg, nil),
+	assert.False(t, b.deliverToShareGroup(context.Background(), shareGroupID{Name: testGroupWorkers, Filter: testTasksFilter}, 1, msg, nil),
 		"a group with no live member takes nothing")
 }
 
@@ -386,7 +386,7 @@ func TestSharedSubscription_WalksEveryMemberOnce(t *testing.T) {
 // member that has gone, which is what pruning on disconnect resolves, but every
 // message is still delivered exactly once.
 func TestSharedSubscription_RoundRobinSurvivesSkips(t *testing.T) {
-	const filter = "$share/workers/tasks/#"
+	const filter = testSharedTasksFilter
 
 	const publishes = 4
 

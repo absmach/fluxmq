@@ -8,6 +8,8 @@ const (
 	testTelemetryRoom      = "telemetry/room1"
 	testSource             = "test"
 	testGroupWorkers       = "workers"
+	testTasksFilter        = "tasks/#"
+	testSharedTasksFilter  = "$share/workers/tasks/#"
 	testClientA            = "client-a"
 	testClient1            = "client1"
 	testClient2            = "client2"
