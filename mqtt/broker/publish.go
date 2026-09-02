@@ -534,11 +534,16 @@ func (b *Broker) deliverShareRemote(ctx context.Context, member cluster.ShareMem
 	forward.BrokerMeta.Delivery.Retain = false
 
 	if err := b.cluster.RoutePublishToClient(ctx, member.NodeID, member.ClientID, &forward); err != nil {
-		b.telemetry.logger.Warn("failed to deliver to remote share group member",
-			slog.String("client_id", member.ClientID),
-			slog.String("node_id", member.NodeID),
-			slog.String("topic", msg.Topic),
-			slog.String("error", err.Error()))
+		// A member that has moved is ordinary churn: the owner entry naming
+		// this node is stale, the rotation moves on, and saying so at warn
+		// level on every publish would bury the failures that do matter.
+		if !broker.IsErrClientNotConnected(err) {
+			b.telemetry.logger.Warn("failed to deliver to remote share group member",
+				slog.String("client_id", member.ClientID),
+				slog.String("node_id", member.NodeID),
+				slog.String("topic", msg.Topic),
+				slog.String("error", err.Error()))
+		}
 		return false
 	}
 

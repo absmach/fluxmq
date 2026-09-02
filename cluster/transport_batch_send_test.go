@@ -28,6 +28,11 @@ type mockBrokerClient struct {
 	forwardPublishBatchFn func(context.Context, *connect.Request[clusterv1.ForwardPublishBatchRequest]) (*connect.Response[clusterv1.ForwardPublishBatchResponse], error)
 	routePublishBatchFn   func(context.Context, *connect.Request[clusterv1.PublishBatchRequest]) (*connect.Response[clusterv1.PublishBatchResponse], error)
 	routeQueueBatchFn     func(context.Context, *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error)
+	routePublishFn        func(context.Context, *connect.Request[clusterv1.PublishRequest]) (*connect.Response[clusterv1.PublishResponse], error)
+}
+
+func (m *mockBrokerClient) RoutePublish(ctx context.Context, req *connect.Request[clusterv1.PublishRequest]) (*connect.Response[clusterv1.PublishResponse], error) {
+	return m.routePublishFn(ctx, req)
 }
 
 func (m *mockBrokerClient) ForwardPublishBatch(ctx context.Context, req *connect.Request[clusterv1.ForwardPublishBatchRequest]) (*connect.Response[clusterv1.ForwardPublishBatchResponse], error) {

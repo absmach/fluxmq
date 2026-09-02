@@ -64,6 +64,11 @@ message PublishRequest {
 message PublishResponse {
   bool success = 1;
   string error = 2;
+
+  // client_not_connected signals the delivery target had no live connection,
+  // as opposed to the peer failing to handle the request. A share group uses
+  // it to move on to another member without holding the peer responsible.
+  bool client_not_connected = 3;
 }
 
 message PublishBatchRequest {

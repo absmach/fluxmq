@@ -128,11 +128,15 @@ func (x *PublishRequest) GetEnvelope() []byte {
 }
 
 type PublishResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error   string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// client_not_connected signals the delivery target had no live connection,
+	// as opposed to the peer failing to handle the request. A share group uses
+	// it to move on to another member without holding the peer responsible.
+	ClientNotConnected bool `protobuf:"varint,3,opt,name=client_not_connected,json=clientNotConnected,proto3" json:"client_not_connected,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PublishResponse) Reset() {
@@ -177,6 +181,13 @@ func (x *PublishResponse) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *PublishResponse) GetClientNotConnected() bool {
+	if x != nil {
+		return x.ClientNotConnected
+	}
+	return false
 }
 
 type PublishBatchRequest struct {
@@ -3037,10 +3048,11 @@ const file_cluster_v1_broker_proto_rawDesc = "" +
 	"\x0ePublishRequest\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12\x1a\n" +
 	"\benvelope\x18\b \x01(\fR\benvelopeJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aJ\x04\b\a\x10\bR\x05topicR\apayloadR\x03qosR\x06retainR\x03dupR\n" +
-	"properties\"A\n" +
+	"properties\"s\n" +
 	"\x0fPublishResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"T\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x120\n" +
+	"\x14client_not_connected\x18\x03 \x01(\bR\x12clientNotConnected\"T\n" +
 	"\x13PublishBatchRequest\x12=\n" +
 	"\bmessages\x18\x01 \x03(\v2!.fluxmq.cluster.v1.PublishRequestR\bmessages\"\\\n" +
 	"\x11PublishBatchError\x12\x14\n" +

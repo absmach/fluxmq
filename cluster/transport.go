@@ -261,8 +261,9 @@ func (t *Transport) RoutePublish(ctx context.Context, req *PublishReq) (*Publish
 
 	if err := t.handler.DeliverToClient(ctx, req.Msg.ClientId, msg); err != nil {
 		return connect.NewResponse(&clusterv1.PublishResponse{
-			Success: false,
-			Error:   err.Error(),
+			Success:            false,
+			Error:              err.Error(),
+			ClientNotConnected: corebroker.IsErrClientNotConnected(err),
 		}), nil
 	}
 
@@ -686,34 +687,59 @@ func (t *Transport) SetForwardPublishHandler(handler ForwardPublishHandler) {
 
 // SendPublish sends a PUBLISH message to a specific peer node with retry and
 // circuit breaker. It borrows msg for the duration of the call.
+// SendPublish delivers one message to a named client on a peer node, in a
+// single attempt.
+//
+// It deliberately does not retry. Its caller is a share group choosing between
+// members: a member that cannot take the message has others waiting, and
+// spending the retry budget here would stall the message for seconds to reach
+// one client the group never had to use. A peer that is down is still recorded
+// against its circuit breaker, so the group stops choosing members there; a
+// peer that answers "that client is not here" is not.
 func (t *Transport) SendPublish(ctx context.Context, nodeID, clientID string, msg *message.Envelope) error {
 	encoded, err := encodeEnvelope(msg)
 	if err != nil {
 		return err
 	}
 
-	return retryWithBreaker(ctx, t.breakers, nodeID, func() error {
-		client, err := t.GetPeerClient(nodeID)
-		if err != nil {
-			return err
-		}
+	breaker := t.breakers.get(nodeID)
+	if !breaker.allow() {
+		return fmt.Errorf("circuit open for peer %s", nodeID)
+	}
 
-		req := connect.NewRequest(&clusterv1.PublishRequest{
-			ClientId: clientID,
-			Envelope: encoded,
-		})
+	client, err := t.GetPeerClient(nodeID)
+	if err != nil {
+		breaker.recordFailure()
+		return err
+	}
 
-		resp, err := client.RoutePublish(ctx, req)
-		if err != nil {
-			return fmt.Errorf("connect call failed: %w", err)
-		}
-
-		if !resp.Msg.Success {
-			return fmt.Errorf("publish failed: %s", resp.Msg.Error)
-		}
-
-		return nil
+	req := connect.NewRequest(&clusterv1.PublishRequest{
+		ClientId: clientID,
+		Envelope: encoded,
 	})
+
+	resp, err := client.RoutePublish(ctx, req)
+	if err != nil {
+		breaker.recordFailure()
+		return fmt.Errorf("connect call failed: %w", err)
+	}
+
+	if !resp.Msg.Success {
+		if resp.Msg.ClientNotConnected {
+			// The peer answered, and answered correctly. Holding it responsible
+			// would open its circuit over a client that merely moved, and take
+			// every other delivery to that node down with it.
+			breaker.recordSuccess()
+			return fmt.Errorf("%w: publish failed: %s", corebroker.ErrClientNotConnected, resp.Msg.Error)
+		}
+
+		breaker.recordFailure()
+		return fmt.Errorf("publish failed: %s", resp.Msg.Error)
+	}
+
+	breaker.recordSuccess()
+
+	return nil
 }
 
 // SendTakeover sends a session takeover request to a peer node with retry and circuit breaker.

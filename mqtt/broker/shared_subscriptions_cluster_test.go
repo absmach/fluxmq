@@ -6,11 +6,13 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
 	"testing"
 
+	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/session"
@@ -206,4 +208,21 @@ func TestShareGroup_RemoteDeliveryCapsQoS(t *testing.T) {
 	sends := cl.sends()
 	require.Len(t, sends, 1)
 	assert.Equal(t, byte(0), sends[0].qos, "a QoS 0 subscription does not receive a QoS 1 delivery")
+}
+
+// TestShareGroup_MovedMemberFallsBackWithoutWarning checks the ordinary churn
+// case: a member whose session reconnected elsewhere leaves a stale owner entry
+// behind, and the group must move on to a member that can take the message.
+func TestShareGroup_MovedMemberFallsBackWithoutWarning(t *testing.T) {
+	cl := &shareStubCluster{
+		members: []cluster.ShareMember{remoteMember("worker-b", "node-b", 0)},
+		sendErr: fmt.Errorf("%w: session not found: worker-b", broker.ErrClientNotConnected),
+	}
+	b, members := newClusteredShareBroker(t, cl, "$share/workers/tasks/#", 0, testClient1)
+
+	// The first publish is the local member's turn, the second the remote
+	// member's, which has moved.
+	publishTasks(t, b, 0, ingressScope, 2)
+
+	assert.Len(t, members[testClient1].conn.packets, 2, "both messages land on the member that is there")
 }
