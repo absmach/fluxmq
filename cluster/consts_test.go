@@ -15,6 +15,7 @@ const (
 	testTopicSensor          = "sensor"
 
 	testClientGone  = "gone"
+	testNoSession   = "session not found"
 	testShareFilter = "$share/workers/tasks/#"
 	testTasksFilter = "tasks/#"
 	testTasksTopic  = "tasks/job1"

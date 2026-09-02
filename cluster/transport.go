@@ -1031,6 +1031,14 @@ func (t *Transport) SendRouteQueueBatch(ctx context.Context, nodeID string, deli
 		}
 		failures = failed
 		remaining = queueBatchFailureDeliveries(failed)
+
+		// Every remaining target is gone. Repeating the batch cannot bring one
+		// back, and the caller's answer to this is to evict the consumer, so
+		// further rounds only delay it.
+		if noClientConnected(failed) {
+			break
+		}
+
 		if attempt < maxPartialRetries-1 {
 			t.logger.Warn("route queue batch partial failure, retrying failed subset",
 				slog.String("node_id", nodeID),

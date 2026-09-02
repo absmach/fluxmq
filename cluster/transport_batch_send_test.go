@@ -29,6 +29,11 @@ type mockBrokerClient struct {
 	routePublishBatchFn   func(context.Context, *connect.Request[clusterv1.PublishBatchRequest]) (*connect.Response[clusterv1.PublishBatchResponse], error)
 	routeQueueBatchFn     func(context.Context, *connect.Request[clusterv1.RouteQueueBatchRequest]) (*connect.Response[clusterv1.RouteQueueBatchResponse], error)
 	routePublishFn        func(context.Context, *connect.Request[clusterv1.PublishRequest]) (*connect.Response[clusterv1.PublishResponse], error)
+	routeQueueMessageFn   func(context.Context, *connect.Request[clusterv1.RouteQueueMessageRequest]) (*connect.Response[clusterv1.RouteQueueMessageResponse], error)
+}
+
+func (m *mockBrokerClient) RouteQueueMessage(ctx context.Context, req *connect.Request[clusterv1.RouteQueueMessageRequest]) (*connect.Response[clusterv1.RouteQueueMessageResponse], error) {
+	return m.routeQueueMessageFn(ctx, req)
 }
 
 func (m *mockBrokerClient) RoutePublish(ctx context.Context, req *connect.Request[clusterv1.PublishRequest]) (*connect.Response[clusterv1.PublishResponse], error) {
@@ -573,7 +578,7 @@ func TestSendRouteQueueBatch_WrapsSentinelWhenAllFailuresNotConnected(t *testing
 				Success: false,
 				Error:   testAlwaysFails,
 				Failures: []*clusterv1.RouteQueueBatchError{
-					{Index: 0, ClientId: "c1", QueueName: "q1", Error: "session not found", ClientNotConnected: true},
+					{Index: 0, ClientId: "c1", QueueName: "q1", Error: testNoSession, ClientNotConnected: true},
 				},
 			}), nil
 		},

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	corebroker "github.com/absmach/fluxmq/broker"
 )
 
 const (
@@ -100,6 +102,15 @@ func retryWithBreaker(ctx context.Context, breakers *peerBreakers, nodeID string
 		if lastErr == nil {
 			cb.recordSuccess()
 			return nil
+		}
+
+		// A delivery target that is gone stays gone. The peer answered, and
+		// answered correctly, so it is neither at fault nor going to say
+		// anything different on a second attempt: retrying only delays the
+		// caller's response to the answer, which is to stop delivering there.
+		if corebroker.IsErrClientNotConnected(lastErr) {
+			cb.recordSuccess()
+			return lastErr
 		}
 
 		cb.recordFailure()
