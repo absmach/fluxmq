@@ -9,10 +9,15 @@ GO := go
 # VERSION is stamped into the binary and reported at startup. It defaults to the
 # current git description and can be overridden: make build VERSION=v0.50.0
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# The tag `make release` builds from. Override to release something other than
+# the most recent tag: make release RELEASE_VERSION=v0.50.0
+RELEASE_VERSION ?= $(shell git describe --abbrev=0 --tags 2>/dev/null)
 LDFLAGS := -s -w -X github.com/absmach/fluxmq.Version=$(VERSION)
 GOFLAGS := -trimpath
-DOCKER_IMAGE_LATEST := ghcr.io/absmach/fluxmq:latest
-DASHBOARD_IMAGE_LATEST := ghcr.io/absmach/fluxmq-dashboard:latest
+DOCKER_IMAGE := ghcr.io/absmach/fluxmq
+DASHBOARD_IMAGE := ghcr.io/absmach/fluxmq-dashboard
+DOCKER_IMAGE_LATEST := $(DOCKER_IMAGE):latest
+DASHBOARD_IMAGE_LATEST := $(DASHBOARD_IMAGE):latest
 PERF_SCRIPT_DIR := tests/perf/scripts
 PERF_SCENARIO_CONFIG ?= $(CONFIG)
 DEPLOY_COMPOSE := deployments/cluster/docker-compose.yaml
@@ -56,6 +61,33 @@ docker:
 .PHONY: docker-dashboard
 docker-dashboard:
 	docker build -f ui/docker/Dockerfile -t $(DASHBOARD_IMAGE_LATEST) ui
+
+# --- Release ---
+
+# Build both images with the :latest tag, without pushing anything.
+.PHONY: latest
+latest: docker docker-dashboard
+
+# Build both :latest images and push them to GHCR.
+.PHONY: push_latest
+push_latest: latest
+	docker push $(DOCKER_IMAGE_LATEST)
+	docker push $(DASHBOARD_IMAGE_LATEST)
+
+# Build the broker and dashboard images from the most recent git tag and push
+# them to GHCR. The Build workflow already does this on every "v*" tag push;
+# this target is the manual path when a release has to go out by hand.
+# It checks the tag out, so the working tree must be clean, and it leaves the
+# repository on that tag in detached HEAD.
+.PHONY: release
+release:
+	@test -n "$(RELEASE_VERSION)" || { echo "release: no git tag found"; exit 1; }
+	@git diff-index --quiet HEAD -- || { echo "release: working tree is dirty, commit or stash first"; exit 1; }
+	git checkout $(RELEASE_VERSION)
+	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(RELEASE_VERSION) -t $(DOCKER_IMAGE):$(RELEASE_VERSION) .
+	docker build -f ui/docker/Dockerfile -t $(DASHBOARD_IMAGE):$(RELEASE_VERSION) ui
+	docker push $(DOCKER_IMAGE):$(RELEASE_VERSION)
+	docker push $(DASHBOARD_IMAGE):$(RELEASE_VERSION)
 
 # Run the broker (uses default configuration)
 .PHONY: run
@@ -386,6 +418,10 @@ help:
 	@echo "  build              Build the broker binary to $(BUILD_DIR)/$(BINARY)"
 	@echo "  docker             Build Docker image ($(DOCKER_IMAGE_LATEST))"
 	@echo "  docker-dashboard   Build dashboard Docker image ($(DASHBOARD_IMAGE_LATEST))"
+	@echo "  latest             Build both images tagged :latest (no push)"
+	@echo "  push_latest        Build and push both :latest images"
+	@echo "  release            Build and push both images tagged with the latest"
+	@echo "                     git tag ($(RELEASE_VERSION))"
 	@echo ""
 	@echo "Run (single node):"
 	@echo "  run                Build and run with default config"
