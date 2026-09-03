@@ -287,9 +287,12 @@ func countPeers(selfID string, nodes []cluster.NodeInfo) (total, healthy int) {
 	return total, healthy
 }
 
-// ClusterStatusResponse represents cluster health information.
+// ClusterStatusResponse represents cluster health information. Version is this
+// node's own build; the per-node versions of the whole cluster are on the
+// admin API's /cluster endpoint.
 type ClusterStatusResponse struct {
 	NodeID      string `json:"node_id"`
+	Version     string `json:"version"`
 	IsLeader    bool   `json:"is_leader"`
 	ClusterMode bool   `json:"cluster_mode"`
 	NodeCount   int    `json:"node_count,omitempty"`
@@ -308,6 +311,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 
 	response := ClusterStatusResponse{
 		ClusterMode: false,
+		Version:     fluxmq.Version,
 	}
 
 	// Single-node mode

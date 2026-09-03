@@ -14,6 +14,9 @@ type nodeResponse struct {
 	Healthy       bool    `json:"healthy"`
 	Leader        bool    `json:"leader"`
 	UptimeSeconds float64 `json:"uptime_seconds"`
+	// Version is what that node reports as its own build. It is absent for a
+	// peer that has not registered its metadata yet.
+	Version string `json:"version,omitempty"`
 }
 
 type clusterResponse struct {
@@ -47,6 +50,7 @@ func (s *Server) buildClusterResponse(ctx context.Context) clusterResponse {
 			Healthy:       n.Healthy,
 			Leader:        n.Leader,
 			UptimeSeconds: n.Uptime.Seconds(),
+			Version:       n.Version,
 		})
 	}
 	return resp

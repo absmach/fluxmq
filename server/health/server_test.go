@@ -530,6 +530,9 @@ func TestClusterStatusEndpoint(t *testing.T) {
 				if response.Sessions < 0 {
 					t.Errorf("expected non-negative sessions, got %d", response.Sessions)
 				}
+				if response.Version != fluxmq.Version {
+					t.Errorf("expected version %q, got %q", fluxmq.Version, response.Version)
+				}
 			}
 		})
 	}

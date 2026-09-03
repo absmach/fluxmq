@@ -68,8 +68,8 @@ func TestClusterWithStub(t *testing.T) {
 		nodeID: testNodeID,
 		leader: true,
 		nodes: []cluster.NodeInfo{
-			{ID: testNodeID, Address: "10.0.0.1:7946", Healthy: true, Leader: true, Uptime: 24 * time.Hour},
-			{ID: "node-2", Address: "10.0.0.2:7946", Healthy: true, Leader: false, Uptime: 12 * time.Hour},
+			{ID: testNodeID, Address: "10.0.0.1:7946", Healthy: true, Leader: true, Uptime: 24 * time.Hour, Version: "v1.0.0"},
+			{ID: "node-2", Address: "10.0.0.2:7946", Healthy: true, Leader: false, Uptime: 12 * time.Hour, Version: "v1.1.0"},
 		},
 	}
 	srv := New(Config{}, b, nil, stub, nil, nil, nil, slog.Default())
@@ -104,6 +104,17 @@ func TestClusterWithStub(t *testing.T) {
 	}
 	if resp.Nodes[1].ID != "node-2" || resp.Nodes[1].Leader {
 		t.Fatalf("unexpected node-2 data: %+v", resp.Nodes[1])
+	}
+
+	// A mixed-version cluster has to be legible per node, not just in aggregate.
+	if resp.Nodes[0].Version != "v1.0.0" {
+		t.Fatalf("expected node-1 version 'v1.0.0', got %q", resp.Nodes[0].Version)
+	}
+	if resp.Nodes[1].Version != "v1.1.0" {
+		t.Fatalf("expected node-2 version 'v1.1.0', got %q", resp.Nodes[1].Version)
+	}
+	if resp.Nodes[0].UptimeSeconds != (24 * time.Hour).Seconds() {
+		t.Fatalf("expected node-1 uptime %v, got %v", (24 * time.Hour).Seconds(), resp.Nodes[0].UptimeSeconds)
 	}
 }
 

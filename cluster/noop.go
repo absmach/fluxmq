@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/absmach/fluxmq"
 	"github.com/absmach/fluxmq/message"
 	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
@@ -20,13 +21,15 @@ var ErrClusterNotEnabled = errors.New("clustering is not enabled")
 // It satisfies the Cluster interface but returns appropriate errors
 // indicating that clustering is not enabled.
 type NoopCluster struct {
-	nodeID string
+	nodeID    string
+	startedAt time.Time
 }
 
 // NewNoopCluster creates a new no-op cluster for single-node operation.
 func NewNoopCluster(nodeID string) *NoopCluster {
 	return &NoopCluster{
-		nodeID: nodeID,
+		nodeID:    nodeID,
+		startedAt: time.Now(),
 	}
 }
 
@@ -234,7 +237,8 @@ func (n *NoopCluster) Nodes() []NodeInfo {
 			Address: "local",
 			Healthy: true,
 			Leader:  true,
-			Uptime:  0,
+			Uptime:  time.Since(n.startedAt),
+			Version: fluxmq.Version,
 		},
 	}
 }

@@ -39,6 +39,18 @@ type NodeInfo struct {
 	Healthy bool
 	Leader  bool
 	Uptime  time.Duration
+	// Version is the peer's build version, as reported by that node itself.
+	// It is empty for a node that has not registered its metadata yet, and is
+	// meant for operators watching a rolling upgrade.
+	//
+	// It carries whatever `git describe` produced for that build - "dev", a
+	// bare commit for an untagged tree, a tag with a -dirty suffix - so it is
+	// a label rather than an ordering, and it says nothing about which
+	// features config left enabled on that peer. Code that has to adapt to an
+	// older peer needs a comparable signal published next to this one: a
+	// capability set, or an explicit wire version the way queue/raft versions
+	// its own formats.
+	Version string
 }
 
 // SessionOwnership manages distributed session ownership across cluster nodes.
