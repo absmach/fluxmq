@@ -23,10 +23,10 @@
     "ajv": "^8.20.0",
     "fast-content-type-parse": "^3.0.0",
     "fumadocs-core": "16.15.4",
-    "fumadocs-mdx": "15.3.0",
+    "fumadocs-mdx": "15.4.0",
     "fumadocs-openapi": "11.0.6",
     "fumadocs-ui": "16.10.7",
-    "lucide-react": "^1.35.0",
+    "lucide-react": "^1.38.0",
     "mermaid": "^11.17.2",
     "next": "16.3.3",
     "next-themes": "^0.4.6",
@@ -46,9 +46,9 @@
     "postcss": "^8.5.26",
     "serve": "^14.2.5",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.23.12",
+    "tsx": "^4.23.13",
     "typescript": "^6.0.3",
-    "wrangler": "^4.127.0"
+    "wrangler": "^4.127.1"
   },
   "packageManager": "pnpm@10.33.0"
 }
