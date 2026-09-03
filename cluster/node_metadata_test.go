@@ -48,6 +48,47 @@ func TestNodeMetadata_ReportedForEveryPeer(t *testing.T) {
 	}
 }
 
+// TestNodeMetadata_ClearedWhenNodeStops covers the watch's delete path: a node
+// that leaves takes its metadata with it, so the surviving nodes stop
+// attributing a build to a member that is no longer running one.
+func TestNodeMetadata_ClearedWhenNodeStops(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tc := testutil.NewTestCluster(t, 3)
+	t.Cleanup(tc.Stop)
+
+	require.NoError(t, tc.Start())
+	require.NoError(t, tc.WaitForClusterReady(30*time.Second))
+	_, err := tc.WaitForLeader(15 * time.Second)
+	require.NoError(t, err)
+
+	// Killing a follower keeps the remaining two in quorum, so the survivors
+	// keep serving Nodes() without waiting out an election.
+	gone := tc.GetNonLeaderNode()
+	require.NotNil(t, gone)
+	goneID := gone.ID
+	require.NoError(t, tc.KillNode(goneID))
+
+	for _, node := range tc.Nodes {
+		if node.Cluster == nil {
+			continue
+		}
+		require.Eventuallyf(t, func() bool {
+			for _, n := range node.Cluster.Nodes() {
+				if n.ID == goneID {
+					// Still an etcd member, just without a live build.
+					return n.Version == ""
+				}
+			}
+			// The member itself dropping out is also a cleared version.
+			return true
+		}, 30*time.Second, 200*time.Millisecond,
+			"node %s still reports a version for stopped node %s: %+v", node.ID, goneID, node.Cluster.Nodes())
+	}
+}
+
 // TestNoopClusterNodes_ReportsVersion keeps the single-node path reporting the
 // same fields as the clustered one, since /cluster and the health endpoint
 // render both through NodeInfo.

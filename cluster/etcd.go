@@ -98,6 +98,15 @@ type EtcdCluster struct {
 	// registered under nodesPrefix so peers can report it too.
 	startedAt time.Time
 
+	// Local cache of what peers published under nodesPrefix. A node's
+	// metadata changes only when it starts or stops, and Nodes() sits on the
+	// readiness-probe path, which would otherwise pay a range read per probe
+	// for fields it does not read.
+	// nodeMetaRev: see subCacheRev.
+	nodeMeta    map[string]nodeMetadata
+	nodeMetaRev int64
+	nodeMetaMu  sync.RWMutex
+
 	// Throttles the unknown-owner warning in RoutePublish (unix nanos of last log).
 	lastUnknownOwnerWarn atomic.Int64
 
@@ -324,6 +333,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 		localStore:            localStore,
 		leasedKeys:            make(map[string]string),
 		startedAt:             time.Now(),
+		nodeMeta:              make(map[string]nodeMetadata),
 		stopCh:                make(chan struct{}),
 	}
 	c.lifecycleCtx, c.cancelLifecycle = context.WithCancel(context.Background())
@@ -426,6 +436,11 @@ func (c *EtcdCluster) Start() error {
 		c.logger.Warn("failed to register node metadata", slog.String("error", err.Error()))
 	}
 
+	// Load what peers published about themselves
+	if err := c.loadNodeMetadataCache(); err != nil {
+		c.logger.Warn("failed to load node metadata cache", slog.String("error", err.Error()))
+	}
+
 	// Load existing subscriptions into cache
 	if err := c.loadSubscriptionCache(); err != nil {
 		c.logger.Warn("failed to load subscription cache", slog.String("error", err.Error()))
@@ -474,6 +489,13 @@ func (c *EtcdCluster) Start() error {
 	go func() {
 		defer c.wg.Done()
 		c.watchQueueConsumers()
+	}()
+
+	// Start watching for node metadata changes
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.watchNodeMetadata()
 	}()
 
 	// Load retained message cache on startup
@@ -624,43 +646,118 @@ func (c *EtcdCluster) registerNodeMetadata(ctx context.Context) error {
 	return c.putWithSessionLease(ctx, nodesPrefix+c.nodeID, string(value))
 }
 
-// peerMetadata reads what the other nodes published about themselves.
-//
-// The read is serializable: node metadata changes only when a node starts or
-// stops, and Nodes() is on the readiness-probe path, so a slightly stale local
-// view beats a quorum round-trip every few seconds. A failed read costs the
-// version and uptime columns, never the membership itself.
-func (c *EtcdCluster) peerMetadata() map[string]nodeMetadata {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+// peerMetadata returns what a peer published about itself, or false when this
+// node has not seen that peer's metadata. It reads the cache the node watch
+// maintains, so it costs no etcd round-trip.
+func (c *EtcdCluster) peerMetadata(nodeID string) (nodeMetadata, bool) {
+	c.nodeMetaMu.RLock()
+	defer c.nodeMetaMu.RUnlock()
 
-	resp, err := c.client.Get(ctx, nodesPrefix, clientv3.WithPrefix(), clientv3.WithSerializable())
+	md, ok := c.nodeMeta[nodeID]
+
+	return md, ok
+}
+
+// loadNodeMetadataCache replaces the cache with a full read of nodesPrefix and
+// records the revision it read at, so the watch can resume from there without
+// missing an event in between.
+func (c *EtcdCluster) loadNodeMetadataCache() error {
+	resp, err := c.client.Get(context.Background(), nodesPrefix, clientv3.WithPrefix())
 	if err != nil {
-		c.logger.Debug("failed to read node metadata", slog.String("error", err.Error()))
-		return nil
+		return fmt.Errorf("failed to load node metadata: %w", err)
 	}
 
-	meta := make(map[string]nodeMetadata, len(resp.Kvs))
+	fresh := make(map[string]nodeMetadata, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		nodeID := strings.TrimPrefix(string(kv.Key), nodesPrefix)
 		var md nodeMetadata
 		if err := json.Unmarshal(kv.Value, &md); err != nil {
-			c.logger.Warn("failed to decode node metadata",
+			c.logger.Warn("failed to decode node metadata during cache load",
 				slog.String("node_id", nodeID),
 				slog.String("error", err.Error()))
 			continue
 		}
-		meta[nodeID] = md
+		fresh[nodeID] = md
 	}
 
-	return meta
+	c.nodeMetaMu.Lock()
+	c.nodeMeta = fresh
+	c.nodeMetaRev = resp.Header.Revision
+	c.nodeMetaMu.Unlock()
+
+	return nil
+}
+
+// watchNodeMetadata keeps the peer metadata cache current. A node writes its
+// key once at startup and the lease removes it at shutdown, so this watch is
+// idle for the life of a stable cluster.
+func (c *EtcdCluster) watchNodeMetadata() {
+	for {
+		c.nodeMetaMu.RLock()
+		rev := c.nodeMetaRev
+		c.nodeMetaMu.RUnlock()
+		watchCh := c.client.Watch(c.lifecycleCtx, nodesPrefix, prefixWatchOpts(rev)...)
+
+		for {
+			select {
+			case <-c.stopCh:
+				return
+			case watchResp, ok := <-watchCh:
+				if !ok {
+					if c.lifecycleCtx.Err() != nil {
+						return
+					}
+					c.logger.Warn("node metadata watch channel closed, reloading cache")
+					if err := c.loadNodeMetadataCache(); err != nil {
+						c.logger.Error("failed to reload node metadata cache", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+				if watchResp.Err() != nil {
+					c.logger.Error("node metadata watch error", slog.String("error", watchResp.Err().Error()))
+					if err := c.loadNodeMetadataCache(); err != nil {
+						c.logger.Error("failed to reload node metadata cache", slog.String("error", err.Error()))
+					}
+					goto restart
+				}
+
+				for _, event := range watchResp.Events {
+					nodeID := strings.TrimPrefix(string(event.Kv.Key), nodesPrefix)
+					switch event.Type {
+					case clientv3.EventTypePut:
+						var md nodeMetadata
+						if err := json.Unmarshal(event.Kv.Value, &md); err != nil {
+							c.logger.Warn("failed to decode node metadata in watch",
+								slog.String("node_id", nodeID),
+								slog.String("error", err.Error()))
+							continue
+						}
+						c.nodeMetaMu.Lock()
+						c.nodeMeta[nodeID] = md
+						c.nodeMetaRev = watchResp.Header.Revision
+						c.nodeMetaMu.Unlock()
+					case clientv3.EventTypeDelete:
+						c.nodeMetaMu.Lock()
+						delete(c.nodeMeta, nodeID)
+						c.nodeMetaRev = watchResp.Header.Revision
+						c.nodeMetaMu.Unlock()
+					}
+				}
+			}
+		}
+	restart:
+		select {
+		case <-c.stopCh:
+			return
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // Nodes returns information about all cluster nodes.
 func (c *EtcdCluster) Nodes() []NodeInfo {
 	// Query etcd for member list
 	members := c.etcd.Server.Cluster().Members()
-	meta := c.peerMetadata()
 
 	nodes := make([]NodeInfo, 0, len(members))
 	for _, member := range members {
@@ -689,7 +786,7 @@ func (c *EtcdCluster) Nodes() []NodeInfo {
 			node.Version = fluxmq.Version
 			node.Uptime = time.Since(c.startedAt)
 		default:
-			if md, ok := meta[member.Name]; ok {
+			if md, ok := c.peerMetadata(member.Name); ok {
 				node.Version = md.Version
 				if !md.StartedAt.IsZero() {
 					node.Uptime = time.Since(md.StartedAt)
