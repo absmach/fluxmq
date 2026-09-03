@@ -42,10 +42,10 @@ A share group spans the whole cluster. Members connected to different nodes are 
 Three nodes. Node 1 holds three members, nodes 2 and 3 hold one each — five members in one group:
 
 | Ingress node | Its own members | Members elsewhere | Rotation order |
-| --- | --- | --- | --- |
-| Node 1 | A, B, C | D, E | A B C D E |
-| Node 2 | D | A, B, C, E | D A B C E |
-| Node 3 | E | A, B, C, D | E A B C D |
+| ------------ | --------------- | ----------------- | -------------- |
+| Node 1       | A, B, C         | D, E              | A B C D E      |
+| Node 2       | D               | A, B, C, E        | D A B C E      |
+| Node 3       | E               | A, B, C, D        | E A B C D      |
 
 Every node sees all five members and rotates over all five. What differs is the order: each node puts its own members first.
 
@@ -85,14 +85,14 @@ A member that has gone but is still counted — a client that disconnected a mom
 
 ## Delivery Details
 
-| Aspect | Behaviour |
-| --- | --- |
-| QoS | Capped per member at that member's own subscription QoS, and at the publish QoS. |
-| Retain flag | Never set on a message delivered to a share group. |
-| Retained messages | Not replayed when a shared subscription is created. |
-| `NoLocal`, `RetainAsPublished` | Not applied to share group delivery. |
-| Empty group | A group with no members matches nothing; the message is not stored for later. |
-| Unsubscribing | Removes the member from the group; the group disappears with its last member. |
+| Aspect                         | Behaviour                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| QoS                            | Each member is delivered to at the minimum of the publish QoS and its own subscription QoS. Members of one group may subscribe at different QoS, but it is worth avoiding: the group then gives different delivery guarantees depending on which member a message lands on, which is awkward to reason about and awkward to debug. |
+| Retain flag                    | Never set on a message delivered to a share group.                                                                                                                                                                                                                                                                                 |
+| Retained messages              | Not replayed when a shared subscription is created.                                                                                                                                                                                                                                                                                |
+| `NoLocal`, `RetainAsPublished` | Not applied to share group delivery.                                                                                                                                                                                                                                                                                               |
+| Empty group                    | A group with no members matches nothing; the message is not stored for later.                                                                                                                                                                                                                                                      |
+| Unsubscribing                  | Removes the member from the group; the group disappears with its last member.                                                                                                                                                                                                                                                      |
 
 ## Usage
 

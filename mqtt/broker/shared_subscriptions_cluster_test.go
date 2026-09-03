@@ -15,6 +15,7 @@ import (
 	"github.com/absmach/fluxmq/broker"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
+	"github.com/absmach/fluxmq/mqtt/packets"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
@@ -237,6 +238,21 @@ func groupMember(clientID, nodeID, shareName, filter string, qos byte) cluster.S
 	}
 }
 
+// subscribeSharedQoS connects one client to b and subscribes it at qos.
+func subscribeSharedQoS(t *testing.T, b *Broker, clientID, filter string, qos byte) *mockConnection {
+	t.Helper()
+
+	s, _, err := b.CreateSession(clientID, 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+
+	conn := &mockConnection{}
+	_, err = s.Connect(conn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(s, filter, qos, storage.SubscribeOptions{}))
+
+	return conn
+}
+
 // subscribeShared connects one client to b and subscribes it to filter.
 func subscribeShared(t *testing.T, b *Broker, clientID, filter string) *mockConnection {
 	t.Helper()
@@ -331,4 +347,95 @@ func TestShareGroup_DistinctGroupsRotateIndependently(t *testing.T) {
 	assert.Len(t, auditors.packets, 4, "a group of one takes every message regardless of the group beside it")
 	assert.Len(t, workers.packets, 2, "the two-member group alternates on its own cursor")
 	assert.Len(t, cl.sends(), 2)
+}
+
+// deliveredQoS reports the QoS of each PUBLISH a mock connection received,
+// read off the fixed header so it holds for either protocol version.
+func deliveredQoS(conn *mockConnection) []byte {
+	out := make([]byte, 0, len(conn.packets))
+	for _, p := range conn.packets {
+		if p.Type() != packets.PublishType {
+			continue
+		}
+		encoded := p.Encode()
+		if len(encoded) == 0 {
+			continue
+		}
+		out = append(out, (encoded[0]>>1)&0x03)
+	}
+
+	return out
+}
+
+// TestShareGroup_MemberKeepsItsOwnQoS guards the rule a share group has no say
+// in: each member is delivered to at the QoS it subscribed at.
+//
+// The group's members used to share whatever QoS its first subscriber asked
+// for, because the router entry standing in for the group was registered once,
+// when the group was created. A member that joined at a lower QoS was then
+// handed deliveries above what it had agreed to acknowledge.
+func TestShareGroup_MemberKeepsItsOwnQoS(t *testing.T) {
+	cases := []struct {
+		name       string
+		founderQoS byte
+		joinerQoS  byte
+	}{
+		// The joiner asks for more than the group was founded at.
+		{name: "founded-at-qos0/joins-at-qos1", founderQoS: 0, joinerQoS: 1},
+		// The joiner asks for less — the direction that over-delivered.
+		{name: "founded-at-qos1/joins-at-qos0", founderQoS: 1, joinerQoS: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := &shareStubCluster{}
+			logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
+			b := NewBroker(memory.New(), cl, WithLogger(logger))
+			t.Cleanup(func() { b.Close() })
+
+			founder := subscribeSharedQoS(t, b, "founder", testSharedTasksFilter, tc.founderQoS)
+			joiner := subscribeSharedQoS(t, b, "joiner", testSharedTasksFilter, tc.joinerQoS)
+
+			// Two members, two publishes: one message each.
+			publishTasks(t, b, 1, ingressScope, 2)
+
+			for _, got := range deliveredQoS(founder) {
+				assert.Equal(t, tc.founderQoS, got, "the founder is delivered to at its own QoS")
+			}
+			for _, got := range deliveredQoS(joiner) {
+				assert.Equal(t, tc.joinerQoS, got, "a member that joined later keeps its own QoS")
+			}
+			assert.Len(t, deliveredQoS(founder), 1)
+			assert.Len(t, deliveredQoS(joiner), 1)
+		})
+	}
+}
+
+// TestShareGroup_ResubscribeUpdatesMemberQoS checks that a client changing its
+// mind is honoured: re-subscribing at a new QoS replaces the stored one rather
+// than being ignored as a duplicate member.
+func TestShareGroup_ResubscribeUpdatesMemberQoS(t *testing.T) {
+	cl := &shareStubCluster{}
+	logger := slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), nil))
+	b := NewBroker(memory.New(), cl, WithLogger(logger))
+	t.Cleanup(func() { b.Close() })
+
+	conn := subscribeSharedQoS(t, b, "resubscriber", testSharedTasksFilter, 1)
+
+	group := b.sharedSubs.GetGroup(testGroupWorkers, testTasksFilter)
+	require.NotNil(t, group)
+	require.Len(t, group.Subscribers, 1)
+	require.Equal(t, byte(1), group.Subscribers[0].QoS)
+
+	// Same client, same filter, lower QoS.
+	s := b.Get("resubscriber")
+	require.NotNil(t, s)
+	require.NoError(t, b.subscribe(s, testSharedTasksFilter, 0, storage.SubscribeOptions{}))
+
+	group = b.sharedSubs.GetGroup(testGroupWorkers, testTasksFilter)
+	require.Len(t, group.Subscribers, 1, "re-subscribing does not add a second member")
+	assert.Equal(t, byte(0), group.Subscribers[0].QoS, "the stored QoS follows the latest subscribe")
+
+	publishTasks(t, b, 1, ingressScope, 1)
+	assert.Equal(t, []byte{0}, deliveredQoS(conn), "delivery follows the new QoS, not the old one")
 }

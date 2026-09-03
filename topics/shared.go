@@ -35,12 +35,23 @@ func IsShared(filter string) bool {
 	return strings.HasPrefix(filter, "$share/")
 }
 
+// ShareSubscriber is one member of a share group, with the QoS that member
+// subscribed at.
+//
+// The QoS belongs to the member rather than to the group: joining a group does
+// not change what a client asked for, and delivering above it would hand a
+// client packets it never agreed to acknowledge.
+type ShareSubscriber struct {
+	ClientID string
+	QoS      byte
+}
+
 // ShareGroup represents a group of subscribers sharing a subscription.
 type ShareGroup struct {
-	Name        string   // Share group name
-	TopicFilter string   // The topic filter being shared
-	Subscribers []string // List of client IDs in this group
-	lastIndex   int      // For round-robin distribution
+	Name        string            // Share group name
+	TopicFilter string            // The topic filter being shared
+	Subscribers []ShareSubscriber // Members of this group
+	lastIndex   int               // For round-robin distribution
 }
 
 // NextSubscriber returns the next subscriber in round-robin fashion.
@@ -52,7 +63,7 @@ func (g *ShareGroup) NextSubscriber() string {
 
 	subscriber := g.Subscribers[g.lastIndex]
 	g.lastIndex = (g.lastIndex + 1) % len(g.Subscribers)
-	return subscriber
+	return subscriber.ClientID
 }
 
 // SubscriberAt returns the member offset positions after rotation, wrapping
@@ -64,26 +75,27 @@ func (g *ShareGroup) NextSubscriber() string {
 // member that joined or left in the meantime is picked up or skipped; for a
 // fallback walk that is harmless, and bounding the walk by the current size is
 // what keeps it terminating.
-func (g *ShareGroup) SubscriberAt(rotation, offset int) (string, bool) {
+func (g *ShareGroup) SubscriberAt(rotation, offset int) (ShareSubscriber, bool) {
 	size := len(g.Subscribers)
 	if size == 0 || offset < 0 || offset >= size {
-		return "", false
+		return ShareSubscriber{}, false
 	}
 
 	return g.Subscribers[(rotation+offset)%size], true
 }
 
-// AddSubscriber adds a subscriber to the group if not already present.
-// Returns true if the subscriber was added.
-func (g *ShareGroup) AddSubscriber(clientID string) bool {
-	// Check if already exists
-	for _, sub := range g.Subscribers {
-		if sub == clientID {
+// AddSubscriber adds a subscriber to the group, or updates the QoS of one
+// already in it — re-subscribing at a different QoS is how a client changes
+// what it agreed to receive. Returns true if the subscriber was added.
+func (g *ShareGroup) AddSubscriber(clientID string, qos byte) bool {
+	for i := range g.Subscribers {
+		if g.Subscribers[i].ClientID == clientID {
+			g.Subscribers[i].QoS = qos
 			return false
 		}
 	}
 
-	g.Subscribers = append(g.Subscribers, clientID)
+	g.Subscribers = append(g.Subscribers, ShareSubscriber{ClientID: clientID, QoS: qos})
 	return true
 }
 
@@ -91,7 +103,7 @@ func (g *ShareGroup) AddSubscriber(clientID string) bool {
 // Returns true if the subscriber was found and removed.
 func (g *ShareGroup) RemoveSubscriber(clientID string) bool {
 	for i, sub := range g.Subscribers {
-		if sub == clientID {
+		if sub.ClientID == clientID {
 			// Remove by swapping with last element and truncating
 			g.Subscribers[i] = g.Subscribers[len(g.Subscribers)-1]
 			g.Subscribers = g.Subscribers[:len(g.Subscribers)-1]

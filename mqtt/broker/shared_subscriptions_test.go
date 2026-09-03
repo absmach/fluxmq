@@ -155,8 +155,8 @@ func TestSharedSubscription_SessionDestroy(t *testing.T) {
 	if len(group.Subscribers) != 1 {
 		t.Fatalf("Expected 1 subscriber after destroy, got %d", len(group.Subscribers))
 	}
-	if group.Subscribers[0] != testClient2 {
-		t.Errorf("Expected remaining subscriber to be client2, got %s", group.Subscribers[0])
+	if group.Subscribers[0].ClientID != testClient2 {
+		t.Errorf("Expected remaining subscriber to be client2, got %s", group.Subscribers[0].ClientID)
 	}
 
 	// Destroy client2's session
@@ -375,7 +375,7 @@ func TestSharedSubscription_WalksEveryMemberOnce(t *testing.T) {
 	msg.BrokerMeta.Delivery.QoS = 1
 	defer message.Release(msg)
 
-	assert.False(t, b.deliverToShareGroup(context.Background(), shareGroupID{Name: testGroupWorkers, Filter: testTasksFilter}, 1, msg, nil),
+	assert.False(t, b.deliverToShareGroup(context.Background(), shareGroupID{Name: testGroupWorkers, Filter: testTasksFilter}, msg, nil),
 		"a group with no live member takes nothing")
 }
 

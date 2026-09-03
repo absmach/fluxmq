@@ -50,7 +50,7 @@ func NewSharedSubscriptionManager() *SharedSubscriptionManager {
 
 // Subscribe adds a client to a shared subscription group.
 // Returns true if this is a new group (first subscriber).
-func (sm *SharedSubscriptionManager) Subscribe(clientID, filter string) bool {
+func (sm *SharedSubscriptionManager) Subscribe(clientID, filter string, qos byte) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -67,12 +67,13 @@ func (sm *SharedSubscriptionManager) Subscribe(clientID, filter string) bool {
 		group = &topics.ShareGroup{
 			Name:        shareName,
 			TopicFilter: topicFilter,
-			Subscribers: []string{},
+			Subscribers: []topics.ShareSubscriber{},
 		}
 		sm.groups[id] = group
 	}
 
-	group.AddSubscriber(clientID)
+	group.AddSubscriber(clientID, qos)
+
 	return isNewGroup
 }
 
@@ -111,7 +112,7 @@ func (sm *SharedSubscriptionManager) Unsubscribe(clientID, filter string) bool {
 // every message published to its topic.
 //
 // ok is false for a group with no members at all.
-func (sm *SharedSubscriptionManager) SelectMember(id shareGroupID, remoteCount int) (rotation, localCount int, clientID string, ok bool) {
+func (sm *SharedSubscriptionManager) SelectMember(id shareGroupID, remoteCount int) (rotation, localCount int, chosen topics.ShareSubscriber, ok bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -122,7 +123,7 @@ func (sm *SharedSubscriptionManager) SelectMember(id shareGroupID, remoteCount i
 
 	total := localCount + remoteCount
 	if total == 0 {
-		return 0, 0, "", false
+		return 0, 0, topics.ShareSubscriber{}, false
 	}
 
 	cursor := sm.cursors[id]
@@ -130,22 +131,22 @@ func (sm *SharedSubscriptionManager) SelectMember(id shareGroupID, remoteCount i
 	rotation = int(cursor % uint64(total))
 
 	if rotation < localCount {
-		clientID, _ = group.SubscriberAt(0, rotation)
+		chosen, _ = group.SubscriberAt(0, rotation)
 	}
 
-	return rotation, localCount, clientID, true
+	return rotation, localCount, chosen, true
 }
 
 // LocalMemberAt returns the group's i-th local member, for a caller walking the
 // group after the member it selected could not take the message. ok is false
 // once i reaches the count, and for an i whose member left in the meantime.
-func (sm *SharedSubscriptionManager) LocalMemberAt(id shareGroupID, i int) (string, bool) {
+func (sm *SharedSubscriptionManager) LocalMemberAt(id shareGroupID, i int) (topics.ShareSubscriber, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
 	group, exists := sm.groups[id]
 	if !exists {
-		return "", false
+		return topics.ShareSubscriber{}, false
 	}
 
 	return group.SubscriberAt(0, i)

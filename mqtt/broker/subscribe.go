@@ -66,7 +66,7 @@ func (b *Broker) subscribe(s *session.Session, filter string, qos byte, opts sto
 	}
 
 	// Check if this is a shared subscription
-	if b.sharedSubs.Subscribe(s.ID, filter) {
+	if b.sharedSubs.Subscribe(s.ID, filter, qos) {
 		// Only subscribe to router when creating a new share group
 		// The manager handles the grouping logic.
 		// We still need to register the group with the router strictly for routing purposes.

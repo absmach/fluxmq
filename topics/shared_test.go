@@ -109,11 +109,11 @@ func TestShareGroup_AddSubscriber(t *testing.T) {
 	group := &ShareGroup{
 		Name:        testGroup1,
 		TopicFilter: testSensorsMulti,
-		Subscribers: []string{},
+		Subscribers: []ShareSubscriber{},
 	}
 
 	// Add first subscriber
-	if !group.AddSubscriber(testClient1) {
+	if !group.AddSubscriber(testClient1, 0) {
 		t.Error("Expected AddSubscriber to return true for new subscriber")
 	}
 	if len(group.Subscribers) != 1 {
@@ -121,13 +121,13 @@ func TestShareGroup_AddSubscriber(t *testing.T) {
 	}
 
 	// Add second subscriber
-	group.AddSubscriber(testClient2)
+	group.AddSubscriber(testClient2, 0)
 	if len(group.Subscribers) != 2 {
 		t.Errorf("Expected 2 subscribers, got %d", len(group.Subscribers))
 	}
 
 	// Add duplicate (should not add)
-	if group.AddSubscriber(testClient1) {
+	if group.AddSubscriber(testClient1, 0) {
 		t.Error("Expected AddSubscriber to return false for duplicate")
 	}
 	if len(group.Subscribers) != 2 {
@@ -139,7 +139,7 @@ func TestShareGroup_RemoveSubscriber(t *testing.T) {
 	group := &ShareGroup{
 		Name:        testGroup1,
 		TopicFilter: testSensorsMulti,
-		Subscribers: []string{testClient1, testClient2, testClient3},
+		Subscribers: []ShareSubscriber{{ClientID: testClient1}, {ClientID: testClient2}, {ClientID: testClient3}},
 	}
 
 	// Remove existing subscriber
@@ -152,7 +152,7 @@ func TestShareGroup_RemoveSubscriber(t *testing.T) {
 
 	// Verify client2 is gone
 	for _, sub := range group.Subscribers {
-		if sub == testClient2 {
+		if sub.ClientID == testClient2 {
 			t.Error("client2 should have been removed")
 		}
 	}
@@ -167,7 +167,7 @@ func TestShareGroup_NextSubscriber(t *testing.T) {
 	group := &ShareGroup{
 		Name:        testGroup1,
 		TopicFilter: testSensorsMulti,
-		Subscribers: []string{testClient1, testClient2, testClient3},
+		Subscribers: []ShareSubscriber{{ClientID: testClient1}, {ClientID: testClient2}, {ClientID: testClient3}},
 	}
 
 	// Test round-robin
@@ -181,7 +181,7 @@ func TestShareGroup_NextSubscriber(t *testing.T) {
 
 	// Test empty group
 	emptyGroup := &ShareGroup{
-		Subscribers: []string{},
+		Subscribers: []ShareSubscriber{},
 	}
 	if sub := emptyGroup.NextSubscriber(); sub != "" {
 		t.Errorf("Expected empty string for empty group, got '%s'", sub)
@@ -190,7 +190,7 @@ func TestShareGroup_NextSubscriber(t *testing.T) {
 
 func TestShareGroup_IsEmpty(t *testing.T) {
 	group := &ShareGroup{
-		Subscribers: []string{testClient1},
+		Subscribers: []ShareSubscriber{{ClientID: testClient1}},
 	}
 
 	if group.IsEmpty() {
@@ -230,13 +230,17 @@ func TestShareGroup_SubscriberAt(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			group := &ShareGroup{Subscribers: tc.group}
+			members := make([]ShareSubscriber, 0, len(tc.group))
+			for _, id := range tc.group {
+				members = append(members, ShareSubscriber{ClientID: id})
+			}
+			group := &ShareGroup{Subscribers: members}
 			got, ok := group.SubscriberAt(tc.rotation, tc.offset)
 			if ok != tc.wantOK {
 				t.Fatalf("Expected ok=%v, got %v", tc.wantOK, ok)
 			}
-			if got != tc.want {
-				t.Errorf("Expected '%s', got '%s'", tc.want, got)
+			if got.ClientID != tc.want {
+				t.Errorf("Expected '%s', got '%s'", tc.want, got.ClientID)
 			}
 		})
 	}

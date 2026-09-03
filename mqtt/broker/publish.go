@@ -316,7 +316,7 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, sco
 			}
 			served = append(served, id)
 
-			b.deliverToShareGroup(ctx, id, sub.QoS, msg, remote)
+			b.deliverToShareGroup(ctx, id, msg, remote)
 		} else {
 			if sub.Options.NoLocal && clientID == msg.BrokerMeta.Source.ClientID {
 				continue
@@ -371,7 +371,7 @@ func (b *Broker) distributeLocal(ctx context.Context, msg *message.Envelope, sco
 		}
 		served = append(served, id)
 
-		b.deliverToShareGroup(ctx, id, member.QoS, msg, remote)
+		b.deliverToShareGroup(ctx, id, msg, remote)
 	}
 
 	return len(*matched), nil
@@ -445,7 +445,7 @@ func shareMemberInGroup(member cluster.ShareMember, id shareGroupID) bool {
 // remote members carry their own cap.
 //
 // It borrows msg. Reports whether a member took the message.
-func (b *Broker) deliverToShareGroup(ctx context.Context, id shareGroupID, subQoS byte, msg *message.Envelope, remote []cluster.ShareMember) bool {
+func (b *Broker) deliverToShareGroup(ctx context.Context, id shareGroupID, msg *message.Envelope, remote []cluster.ShareMember) bool {
 	remoteCount := shareMemberCount(remote, id)
 
 	rotation, local, chosen, ok := b.sharedSubs.SelectMember(id, remoteCount)
@@ -462,15 +462,15 @@ func (b *Broker) deliverToShareGroup(ctx context.Context, id shareGroupID, subQo
 		if index < local {
 			// The member whose turn it was came back with the rotation; only
 			// the fallbacks have to be looked up.
-			clientID := chosen
+			member := chosen
 			if offset > 0 {
 				var found bool
-				clientID, found = b.sharedSubs.LocalMemberAt(id, index)
+				member, found = b.sharedSubs.LocalMemberAt(id, index)
 				if !found {
 					continue
 				}
 			}
-			if b.deliverShareLocal(ctx, clientID, subQoS, msg) {
+			if b.deliverShareLocal(ctx, member, msg) {
 				return true
 			}
 			continue
@@ -488,16 +488,21 @@ func (b *Broker) deliverToShareGroup(ctx context.Context, id shareGroupID, subQo
 	return false
 }
 
-// deliverShareLocal delivers to one share group member connected to this node.
-func (b *Broker) deliverShareLocal(ctx context.Context, clientID string, subQoS byte, msg *message.Envelope) bool {
-	s := b.sessionsMap.Get(clientID)
+// deliverShareLocal delivers to one share group member connected to this node,
+// capped at the QoS that member subscribed at rather than at the group's — a
+// group does not have one, and a member must never be handed a delivery above
+// what it agreed to acknowledge.
+func (b *Broker) deliverShareLocal(ctx context.Context, member topics.ShareSubscriber, msg *message.Envelope) bool {
+	s := b.sessionsMap.Get(member.ClientID)
 	if s == nil {
 		return false
 	}
 
+	clientID := member.ClientID
+
 	deliverQoS := msg.BrokerMeta.Delivery.QoS
-	if subQoS < deliverQoS {
-		deliverQoS = subQoS
+	if member.QoS < deliverQoS {
+		deliverQoS = member.QoS
 	}
 
 	if deliverQoS == 0 {
