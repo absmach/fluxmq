@@ -815,7 +815,20 @@ components:
         uptime_seconds:
           type: number
           format: double
+          description: |
+            Seconds since the node started. For a peer this is derived from the
+            start time that node published, so a cluster without synchronised
+            clocks reports it approximately; it is never negative.
           example: 86400.5
+        version:
+          type: string
+          description: |
+            Build version the node reports for itself, for watching a rolling
+            upgrade. Absent for a peer that has not registered its metadata
+            yet, or that has already shut down. It is a label, not an
+            ordering, and says nothing about which features that peer has
+            enabled.
+          example: v1.0.0
 
     ClusterResponse:
       type: object
@@ -1075,6 +1088,12 @@ components:
         node_id:
           type: string
           example: node-1
+        version:
+          type: string
+          description: |
+            Build version of this node. For the per-node versions of the whole
+            cluster, use `GET /api/v1/cluster` on the API server.
+          example: v1.0.0
         is_leader:
           type: boolean
         cluster_mode:

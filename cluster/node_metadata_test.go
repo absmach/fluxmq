@@ -29,8 +29,9 @@ func TestNodeMetadata_ReportedForEveryPeer(t *testing.T) {
 	require.NoError(t, tc.Start())
 	require.NoError(t, tc.WaitForClusterReady(30*time.Second))
 
-	// The metadata read is serializable, so a follower may briefly serve a view
-	// that predates a peer's registration.
+	// Nodes() reads a watch-fed cache, so a node that came up first serves a
+	// view that predates a later peer's registration until the watch delivers
+	// it.
 	for _, node := range tc.Nodes {
 		require.Eventuallyf(t, func() bool {
 			nodes := node.Cluster.Nodes()
@@ -65,7 +66,8 @@ func TestNodeMetadata_ClearedWhenNodeStops(t *testing.T) {
 	require.NoError(t, err)
 
 	// Killing a follower keeps the remaining two in quorum, so the survivors
-	// keep serving Nodes() without waiting out an election.
+	// keep serving Nodes() without waiting out an election. A graceful stop
+	// deletes the key outright, so this does not wait out the lease TTL.
 	gone := tc.GetNonLeaderNode()
 	require.NotNil(t, gone)
 	goneID := gone.ID

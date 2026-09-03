@@ -15,7 +15,7 @@ type nodeResponse struct {
 	Leader        bool    `json:"leader"`
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	// Version is what that node reports as its own build. It is absent for a
-	// peer that has not registered its metadata yet.
+	// peer that has not registered its metadata yet or has already stopped.
 	Version string `json:"version,omitempty"`
 }
 

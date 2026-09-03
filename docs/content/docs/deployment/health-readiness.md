@@ -143,11 +143,15 @@ When clustering is disabled, the `cluster` check is omitted:
 Returns cluster membership information. Useful for dashboards and debugging
 but not intended as a probe target.
 
+`version` is this node's own build. The per-node versions of the whole
+cluster are on the admin API's `/api/v1/cluster` endpoint.
+
 ### Single-node response
 
 ```json
 {
   "node_id": "single-node",
+  "version": "v1.0.0",
   "is_leader": false,
   "cluster_mode": false,
   "sessions": 42
@@ -159,11 +163,20 @@ but not intended as a probe target.
 ```json
 {
   "node_id": "node-1",
+  "version": "v1.0.0",
   "is_leader": true,
   "cluster_mode": true,
   "sessions": 128
 }
 ```
+
+<Callout type="warn">
+The health listener is unauthenticated, and `/cluster/status` reports the exact
+build this node runs. Keep the health port on an internal network reachable by
+your probes and dashboards rather than publishing it, so a reachable endpoint
+cannot be matched against advisories for that build. The same applies to the
+admin API, which reports a version per node.
+</Callout>
 
 ---
 

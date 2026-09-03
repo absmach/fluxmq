@@ -40,8 +40,9 @@ type NodeInfo struct {
 	Leader  bool
 	Uptime  time.Duration
 	// Version is the peer's build version, as reported by that node itself.
-	// It is empty for a node that has not registered its metadata yet, and is
-	// meant for operators watching a rolling upgrade.
+	// It is empty for a node that has not registered its metadata yet or has
+	// since withdrawn it on shutdown, and is meant for operators watching a
+	// rolling upgrade.
 	//
 	// It carries whatever `git describe` produced for that build - "dev", a
 	// bare commit for an untagged tree, a tag with a -dirty suffix - so it is

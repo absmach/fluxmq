@@ -26,13 +26,13 @@ import (
 
 // TestCluster represents a cluster of test nodes.
 type TestCluster struct {
-	t       *testing.T
+	t       testing.TB
 	Nodes   []*TestNode
 	mu      sync.RWMutex
 	stopped bool
 }
 
-func allocateUniquePort(t *testing.T, used map[int]struct{}) int {
+func allocateUniquePort(t testing.TB, used map[int]struct{}) int {
 	t.Helper()
 
 	for {
@@ -118,7 +118,7 @@ func (n *TestNode) QueueDeliveries() []QueueDelivery {
 
 // NewTestCluster creates a new test cluster with the specified number of nodes.
 // Nodes are numbered starting from 0.
-func NewTestCluster(t *testing.T, nodeCount int) *TestCluster {
+func NewTestCluster(t testing.TB, nodeCount int) *TestCluster {
 	require.True(t, nodeCount > 0, "nodeCount must be positive")
 	require.True(t, nodeCount <= 10, "nodeCount must be <= 10 for port allocation")
 
