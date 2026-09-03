@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/absmach/fluxmq"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/broker"
@@ -181,7 +182,7 @@ func TestHealthEndpoint(t *testing.T) {
 			name:           "GET request returns healthy",
 			method:         http.MethodGet,
 			expectedStatus: http.StatusOK,
-			expectedBody:   HealthResponse{Status: "healthy"},
+			expectedBody:   HealthResponse{Status: "healthy", Version: fluxmq.Version},
 		},
 		{
 			name:           testPostNotAllowed,
@@ -203,6 +204,12 @@ func TestHealthEndpoint(t *testing.T) {
 				}
 				if response.Status != tt.expectedBody.Status {
 					t.Errorf("expected status %q, got %q", tt.expectedBody.Status, response.Status)
+				}
+				if response.Version != tt.expectedBody.Version {
+					t.Errorf("expected version %q, got %q", tt.expectedBody.Version, response.Version)
+				}
+				if response.Version == "" {
+					t.Error("expected a non-empty build version")
 				}
 			}
 		})

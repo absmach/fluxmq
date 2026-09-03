@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/absmach/fluxmq"
 	"github.com/absmach/fluxmq/cluster"
 	"github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
@@ -135,9 +136,12 @@ type CheckResult struct {
 	Details string `json:"details,omitempty"`
 }
 
-// HealthResponse represents the liveness probe response.
+// HealthResponse represents the liveness probe response. Version is the build
+// version reported at startup, so an operator can tell which build answered
+// the probe without shelling into the node.
 type HealthResponse struct {
-	Status string `json:"status"`
+	Status  string `json:"status"`
+	Version string `json:"version"`
 }
 
 // ReadyResponse represents the readiness probe response.
@@ -159,7 +163,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(HealthResponse{ //nolint:errcheck,errchkjson // HTTP response write; client disconnect is non-fatal
-		Status: "healthy",
+		Status:  "healthy",
+		Version: fluxmq.Version,
 	})
 }
 
