@@ -220,7 +220,7 @@ Defaults in `examples/no-cluster.yaml`:
 
 ## Configuration
 
-Configuration is YAML-based. See `examples/` for starter files and [Configuration Reference](https://www.absmach.eu/products/fluxmq/docs/reference/configuration-reference) for the full reference.
+Configuration is YAML-based. See `examples/` for starter files and [Configuration Reference](https://www.absmach.eu/docs/fluxmq/reference/configuration-reference) for the full reference.
 
 ## Benchmarks
 
@@ -230,18 +230,18 @@ hardware. See `benchmarks/README.md` for commands and guidance.
 
 ## Documentation
 
-| Document                                                                                              | Description                                       |
-| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| [Architecture](https://www.absmach.eu/products/fluxmq/docs/architecture/overview)                     | Detailed system design                            |
-| [Scaling & Performance](https://www.absmach.eu/products/fluxmq/docs/deployment/running-in-production) | Benchmarking and tuning guidance                  |
-| [Clustering](https://www.absmach.eu/products/fluxmq/docs/architecture/clustering)                     | Distributed broker design                         |
-| [Client Library](https://www.absmach.eu/products/fluxmq/docs/clients/go-client)                       | Go MQTT and AMQP 0.9.1 clients with queue support |
-| [Broker Internals](https://www.absmach.eu/products/fluxmq/docs/architecture/routing)                  | Message routing, sessions                         |
-| [Blocking Hooks](https://www.absmach.eu/products/fluxmq/docs/architecture/hooks)                      | Synchronous allow/deny and mutation callouts      |
-| [Durable Queues](https://www.absmach.eu/products/fluxmq/docs/messaging/durable-queues)                | Queue configuration, consumer groups              |
-| [Configuration](https://www.absmach.eu/products/fluxmq/docs/reference/configuration-reference)        | Complete config reference                         |
-| [Webhooks](https://www.absmach.eu/products/fluxmq/docs/architecture/webhooks)                         | Webhook event system                              |
-| [Roadmap](https://www.absmach.eu/products/fluxmq/docs/roadmap)                                        | Project planning notes                            |
+| Document                                                                                     | Description                                       |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [Architecture](https://www.absmach.eu/docs/fluxmq/architecture/overview)                     | Detailed system design                            |
+| [Scaling & Performance](https://www.absmach.eu/docs/fluxmq/deployment/running-in-production) | Benchmarking and tuning guidance                  |
+| [Clustering](https://www.absmach.eu/docs/fluxmq/architecture/clustering)                     | Distributed broker design                         |
+| [Client Library](https://www.absmach.eu/docs/fluxmq/clients/go-client)                       | Go MQTT and AMQP 0.9.1 clients with queue support |
+| [Broker Internals](https://www.absmach.eu/docs/fluxmq/architecture/routing)                  | Message routing, sessions                         |
+| [Blocking Hooks](https://www.absmach.eu/docs/fluxmq/architecture/hooks)                      | Synchronous allow/deny and mutation callouts      |
+| [Durable Queues](https://www.absmach.eu/docs/fluxmq/messaging/durable-queues)                | Queue configuration, consumer groups              |
+| [Configuration](https://www.absmach.eu/docs/fluxmq/reference/configuration-reference)        | Complete config reference                         |
+| [Webhooks](https://www.absmach.eu/docs/fluxmq/architecture/webhooks)                         | Webhook event system                              |
+| [Roadmap](https://www.absmach.eu/docs/fluxmq/roadmap)                                        | Project planning notes                            |
 
 ## Contributing
 
