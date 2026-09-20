@@ -1160,13 +1160,6 @@ func (s *Session) RemoveSubscriptionID(filter string) {
 	delete(s.subscriptionIDs, filter)
 }
 
-// UpdateSessionExpiry updates the session expiry interval.
-func (s *Session) UpdateSessionExpiry(interval uint32) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ExpiryInterval = interval
-}
-
 // SetAuthState sets enhanced auth state.
 func (s *Session) SetAuthState(method string, state any) {
 	s.mu.Lock()

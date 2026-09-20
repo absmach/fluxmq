@@ -863,12 +863,12 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool, disconnectE
 	}
 
 	b.persistSessionInfo(s)
-	sessionEnds := s.CleanStart && s.ExpiryInterval == 0
+	sessionEnds := s.ExpiryInterval == 0
 	will := s.TakeWill()
 	if !graceful && will != nil {
 		switch {
 		case will.Delay == 0 || sessionEnds:
-			// A zero-delay Will is due at the physical disconnect. Clean Start
+			// A zero-delay Will is due at the physical disconnect. A zero expiry
 			// also ends the session, so MQTT requires a delayed Will immediately.
 			publishWill = will
 		case b.stores.wills != nil:

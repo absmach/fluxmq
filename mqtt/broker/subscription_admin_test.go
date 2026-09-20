@@ -257,6 +257,7 @@ func newTestBrokerWithSharedSubs(t *testing.T) (*Broker, func()) {
 	opts := session.Options{
 		CleanStart:     false,
 		KeepAlive:      30 * time.Second,
+		ExpiryInterval: 3600,
 		ReceiveMaximum: 10,
 	}
 

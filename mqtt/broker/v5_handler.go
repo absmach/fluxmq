@@ -703,13 +703,35 @@ func (h *v5Handler) HandlePingReq(s *connCtx) error {
 
 // HandleDisconnect handles DISCONNECT packets.
 func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) error {
-	_, ok := pkt.(*v5.Disconnect)
+	p, ok := pkt.(*v5.Disconnect)
 	if !ok {
 		return ErrInvalidPacketType
 	}
 
-	h.broker.telemetry.logger.Info("v5_disconnect", slog.String("client_id", s.ID))
-	s.Disconnect(true, v5.DisconnectNormalDisconnection) //nolint:errcheck // graceful disconnect initiated by client
+	reasonCode := byte(v5.DisconnectNormalDisconnection)
+	logAttrs := []any{slog.String("client_id", s.ID)}
+	if p.Properties != nil && p.Properties.SessionExpiryInterval != nil {
+		expiry := *p.Properties.SessionExpiryInterval
+		switch {
+		case expiry == 0:
+			// A zero Session Expiry Interval ends the session when the network
+			// connection closes, regardless of Clean Start. [MQTT-3.1.2-23]
+			s.SetExpiryInterval(0)
+		case s.Info().ExpiryInterval == 0:
+			// A non-zero Session Expiry Interval after a CONNECT whose expiry was
+			// 0 is a Protocol Error [MQTT-3.14.2.2.2]. Reply 0x82; the session
+			// still ends, so expiry remains 0.
+			h.broker.telemetry.stats.IncrementProtocolErrors()
+			reasonCode = v5.DisconnectProtocolError
+		default:
+			s.SetExpiryInterval(expiry)
+		}
+		logAttrs = append(logAttrs, slog.Uint64("session_expiry", uint64(s.Info().ExpiryInterval)))
+	}
+
+	h.broker.telemetry.logger.Info("v5_disconnect", logAttrs...)
+
+	s.Disconnect(true, reasonCode) //nolint:errcheck // graceful disconnect initiated by client
 	return io.EOF
 }
 
