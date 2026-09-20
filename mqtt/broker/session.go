@@ -1036,7 +1036,6 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 		return nil
 	}
 
-	var err error
 	if stored != nil {
 		// RestoreFrom replays the persisted identity, which is empty for a
 		// session written before identities were resolved. Re-binding puts the
@@ -1048,19 +1047,9 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 		}
 	}
 
-	// Restore subscriptions from cluster if available, otherwise from local storage
-	var subs []*storage.Subscription
-	if b.cluster != nil {
-		ctx := context.Background()
-		subs, err = b.cluster.GetSubscriptionsForClient(ctx, clientID)
-		if err != nil {
-			return fmt.Errorf("failed to get subscriptions from cluster: %w", err)
-		}
-	} else {
-		subs, err = b.stores.subscriptions.GetForClient(clientID)
-		if err != nil {
-			return fmt.Errorf("failed to get subscriptions: %w", err)
-		}
+	subs, err := b.sessionSubscriptions(context.Background(), clientID)
+	if err != nil {
+		return err
 	}
 
 	for _, sub := range subs {
@@ -1078,6 +1067,36 @@ func (b *Broker) restoreSessionFromStorage(s *session.Session, clientID string, 
 	}
 
 	return nil
+}
+
+// sessionSubscriptions resolves the subscriptions a resuming session inherits.
+// A clustered node reads them from the routing table, which is the record that
+// survives the session moving between nodes; local storage holds only what this
+// node last wrote.
+//
+// A single node has no routing table. It still gets a cluster — NoopCluster,
+// not nil — so ErrClusterNotEnabled here is the answer "there is no such table,
+// ask local storage", not a failure. Returning it as one refuses every CONNECT
+// that resumes a session, which is the whole of persistent sessions on a
+// single-node broker. removeOrphanedClusterSubscriptions reads the same error
+// the same way.
+func (b *Broker) sessionSubscriptions(ctx context.Context, clientID string) ([]*storage.Subscription, error) {
+	if b.cluster != nil {
+		subs, err := b.cluster.GetSubscriptionsForClient(ctx, clientID)
+		switch {
+		case err == nil:
+			return subs, nil
+		case !errors.Is(err, cluster.ErrClusterNotEnabled):
+			return nil, fmt.Errorf("failed to get subscriptions from cluster: %w", err)
+		}
+	}
+
+	subs, err := b.stores.subscriptions.GetForClient(clientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get subscriptions: %w", err)
+	}
+
+	return subs, nil
 }
 
 // restoreInflightFromTakeover restores inflight messages from takeover state.

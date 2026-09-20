@@ -161,6 +161,9 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 		if errors.Is(err, ErrMaxSessionsExceeded) {
 			connAckCode = v5.ConnAckQuotaExceeded
 		}
+		// An unspecified error tells the client nothing, so the reason has to
+		// be on this side or the refusal cannot be diagnosed at all.
+		h.broker.logError("v5_create_session_failed", err, slog.String("client_id", clientID))
 		sendV5ConnAck(conn, false, connAckCode, nil) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err

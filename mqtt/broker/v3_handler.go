@@ -136,6 +136,9 @@ func (h *v3Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 			return ErrNotAuthorized
 		}
 		h.broker.telemetry.stats.IncrementProtocolErrors()
+		// "Server unavailable" tells the client nothing, so the reason has to
+		// be on this side or the refusal cannot be diagnosed at all.
+		h.broker.logError("v3_create_session_failed", err, slog.String("client_id", clientID))
 		sendV3ConnAck(conn, false, v3.ConnAckServerUnavailable) //nolint:errcheck // best-effort rejection reply before closing
 		conn.Close()
 		return err
