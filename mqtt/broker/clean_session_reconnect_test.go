@@ -285,7 +285,7 @@ func TestHandleDisconnect_CleanSessionPublishesWillBeforeDestroy(t *testing.T) {
 	require.NoError(t, err)
 
 	disconnected := make(chan struct{})
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+	s.SetOnDisconnectWithCause(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
 		b.handleDisconnect(s, cause, epoch)
 		close(disconnected)
 	})
@@ -420,7 +420,7 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 	callbackStarted := make(chan struct{})
 	releaseCallback := make(chan struct{})
 	callbackDone := make(chan struct{})
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+	s.SetOnDisconnectWithCause(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
 		close(callbackStarted)
 		<-releaseCallback
 		b.handleDisconnect(s, cause, epoch)
@@ -458,7 +458,7 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 
 	close(releaseCallback)
 	<-callbackDone
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+	s.SetOnDisconnectWithCause(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
 		b.handleDisconnect(s, cause, epoch)
 	})
 
@@ -939,7 +939,7 @@ func TestHandleDisconnect_ReasonCodeDecidesWillAndClassification(t *testing.T) {
 			// Waiting on the callback rather than on the Will itself is what
 			// lets the negative case assert an absence.
 			disconnected := make(chan struct{})
-			s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+			s.SetOnDisconnectWithCause(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
 				b.handleDisconnect(s, cause, epoch)
 				close(disconnected)
 			})

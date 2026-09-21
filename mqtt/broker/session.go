@@ -401,7 +401,7 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		}
 	}
 
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+	s.SetOnDisconnectWithCause(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
 		b.handleDisconnect(s, cause, epoch)
 	})
 

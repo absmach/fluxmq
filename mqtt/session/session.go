@@ -984,18 +984,34 @@ func (s *Session) Touch() {
 // epoch. It is retained for callers that do not need generation-aware cleanup.
 func (s *Session) SetOnDisconnect(fn func(*Session, bool)) {
 	if fn == nil {
-		s.SetOnDisconnectWithEpoch(nil)
+		s.SetOnDisconnectWithCause(nil)
 		return
 	}
-	s.SetOnDisconnectWithEpoch(func(s *Session, cause DisconnectCause, _ uint64) {
-		fn(s, cause.Orderly())
+	s.SetOnDisconnectWithEpoch(func(s *Session, graceful bool, _ uint64) {
+		fn(s, graceful)
 	})
 }
 
 // SetOnDisconnectWithEpoch sets a disconnect callback that receives the epoch
 // of the physical connection that disconnected. Broker cleanup uses the epoch
 // together with session identity to fence callbacks delayed past a reconnect.
-func (s *Session) SetOnDisconnectWithEpoch(fn func(*Session, DisconnectCause, uint64)) {
+//
+// The callback is told only whether the connection ended in an orderly way. A
+// caller that has to tell an orderly end that publishes the Will from one that
+// discards it wants SetOnDisconnectWithCause.
+func (s *Session) SetOnDisconnectWithEpoch(fn func(*Session, bool, uint64)) {
+	if fn == nil {
+		s.SetOnDisconnectWithCause(nil)
+		return
+	}
+	s.SetOnDisconnectWithCause(func(s *Session, cause DisconnectCause, epoch uint64) {
+		fn(s, cause.Orderly(), epoch)
+	})
+}
+
+// SetOnDisconnectWithCause sets a disconnect callback that receives the full
+// classification of how the connection ended, alongside its epoch.
+func (s *Session) SetOnDisconnectWithCause(fn func(*Session, DisconnectCause, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onDisconnect = fn
