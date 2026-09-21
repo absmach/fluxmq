@@ -443,6 +443,7 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 	s, _, err := b.CreateSession(clientID, version, session.Options{
 		CleanStart:     false,
 		KeepAlive:      30 * time.Second,
+		ExpiryInterval: 3600,
 		ReceiveMaximum: 10,
 	})
 	if err != nil {

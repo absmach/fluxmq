@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"io"
 	"slices"
 	"sync"
 	"testing"
@@ -526,6 +527,92 @@ func TestHandleDisconnect_PersistentZeroDelayWillPublishesWithoutStorage(t *test
 	}, "persistent zero-delay Will is published directly")
 	_, err = store.Wills().Get(context.Background(), clientID)
 	require.ErrorIs(t, err, storage.ErrNotFound, "zero-delay Wills must never enter delayed-Will storage")
+}
+
+func TestHandleDisconnect_AppliesSessionExpiryInterval(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry"
+	s, _, err := b.CreateSession(clientID, 5, session.Options{ExpiryInterval: 300})
+	require.NoError(t, err)
+	_, err = s.Connect(newSyncConn())
+	require.NoError(t, err)
+
+	expiry := uint32(120)
+	pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+	require.Equal(t, uint32(120), s.Info().ExpiryInterval)
+	require.NotNil(t, b.Get(clientID), "non-zero expiry must keep the session alive")
+
+	waitFor(t, func() bool {
+		stored, err := store.Sessions().Get(clientID)
+		return err == nil && stored.ExpiryInterval == 120
+	}, "overridden expiry reaches the stored session record")
+}
+
+func TestHandleDisconnect_NilPropertiesKeepsExpiry(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry-nil"
+	s, _, err := b.CreateSession(clientID, 5, session.Options{ExpiryInterval: 300})
+	require.NoError(t, err)
+	_, err = s.Connect(newSyncConn())
+	require.NoError(t, err)
+
+	pkt := &v5.Disconnect{}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+	require.Equal(t, uint32(300), s.Info().ExpiryInterval)
+}
+
+func TestHandleDisconnect_ZeroExpiryEndsPersistentSession(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry-zero"
+	s, _, err := b.CreateSession(clientID, 5, session.Options{ExpiryInterval: 300})
+	require.NoError(t, err)
+	_, err = s.Connect(newSyncConn())
+	require.NoError(t, err)
+
+	expiry := uint32(0)
+	pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+
+	waitFor(t, func() bool { return b.Get(clientID) == nil }, "zero expiry ends the persistent session")
+}
+
+func TestHandleDisconnect_NonZeroExpiryAfterConnectZeroIsProtocolError(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry-protocol-error"
+	s, _, err := b.CreateSession(clientID, 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	conn := newSyncConn()
+	_, err = s.Connect(conn)
+	require.NoError(t, err)
+
+	expiry := uint32(3600)
+	pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+
+	waitFor(t, func() bool {
+		for _, p := range conn.writtenPackets() {
+			if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == v5.DisconnectProtocolError {
+				return true
+			}
+		}
+		return false
+	}, "server replies DISCONNECT 0x82 on protocol error")
+
+	waitFor(t, func() bool { return b.Get(clientID) == nil }, "session still ends after protocol error")
 }
 
 func TestAttachSessionCancelsStoredDelayedWillBeforeLaterCleanStart(t *testing.T) {
