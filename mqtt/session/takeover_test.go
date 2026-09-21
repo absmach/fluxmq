@@ -139,7 +139,7 @@ func TestDetachForTakeoverAdvancesEpochBeforeClosingConnection(t *testing.T) {
 	s := newTakeoverSession(t)
 
 	callbackEpoch := make(chan uint64, 1)
-	s.SetOnDisconnectWithEpoch(func(_ *Session, _ bool, epoch uint64) {
+	s.SetOnDisconnectWithEpoch(func(_ *Session, _ DisconnectCause, epoch uint64) {
 		callbackEpoch <- epoch
 	})
 	oldConn := &wsLikeConn{}
@@ -164,7 +164,7 @@ func TestDetachForTakeoverAdvancesEpochBeforeClosingConnection(t *testing.T) {
 func TestDisconnectCallbackReportsDisconnectedEpoch(t *testing.T) {
 	s := newTakeoverSession(t)
 	epochCh := make(chan uint64, 1)
-	s.SetOnDisconnectWithEpoch(func(_ *Session, _ bool, epoch uint64) {
+	s.SetOnDisconnectWithEpoch(func(_ *Session, _ DisconnectCause, epoch uint64) {
 		epochCh <- epoch
 	})
 

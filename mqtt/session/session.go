@@ -68,7 +68,7 @@ type Session struct {
 	subscriptions       map[string]storage.SubscribeOptions
 	subscriptionAliases map[string]string
 	subscriptionIDs     map[string][]uint32
-	onDisconnect        func(s *Session, graceful bool, epoch uint64)
+	onDisconnect        func(s *Session, cause DisconnectCause, epoch uint64)
 	KeepAlive           time.Duration
 	state               State
 	// epoch is bumped on every attach and explicit detachment. It identifies the
@@ -288,6 +288,38 @@ func (s *Session) AuthorizationIdentity() string {
 		return s.ExternalID
 	}
 	return s.ID
+}
+
+// DisconnectCause classifies how a network connection ended. How the end is
+// reported and what happens to the Will are separate questions: a client may
+// end the connection itself and still ask for its Will to be published.
+type DisconnectCause uint8
+
+const (
+	// DisconnectClean is a DISCONNECT with Reason Code 0x00, on which
+	// [MQTT-3.1.2-8] discards the Will without publishing it.
+	DisconnectClean DisconnectCause = iota
+	// DisconnectCleanWithWill is a DISCONNECT with Reason Code 0x04, the
+	// orderly end that [MQTT-3.14.2.2] defines as asking for the Will.
+	DisconnectCleanWithWill
+	// DisconnectAbnormal is a dropped connection, a server-side close, or a
+	// DISCONNECT carrying any other Reason Code. The Will is owed.
+	DisconnectAbnormal
+)
+
+// Orderly reports whether the connection ended the way the protocol intends,
+// which is what the disconnect is reported as to event consumers.
+func (c DisconnectCause) Orderly() bool { return c != DisconnectAbnormal }
+
+// DiscardsWill reports whether this end of the connection deletes the Will
+// without publishing it.
+func (c DisconnectCause) DiscardsWill() bool { return c == DisconnectClean }
+
+func causeFor(graceful bool) DisconnectCause {
+	if graceful {
+		return DisconnectClean
+	}
+	return DisconnectAbnormal
 }
 
 // ConnectOptions carries the per-connection settings negotiated by a CONNECT.
@@ -679,9 +711,16 @@ pendingDrained:
 
 // Disconnect disconnects the session unconditionally.
 func (s *Session) Disconnect(graceful bool, reasonCode byte) error {
+	return s.DisconnectWithCause(causeFor(graceful), reasonCode)
+}
+
+// DisconnectWithCause disconnects and classifies the end explicitly, for the
+// cases a bool cannot describe: reasonCode is what goes to the client, cause is
+// what the broker cleans up on.
+func (s *Session) DisconnectWithCause(cause DisconnectCause, reasonCode byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.disconnectLocked(graceful, reasonCode)
+	return s.disconnectLocked(cause, reasonCode)
 }
 
 // DisconnectIf disconnects the session only if epoch still matches the current
@@ -689,12 +728,17 @@ func (s *Session) Disconnect(graceful bool, reasonCode byte) error {
 // been superseded by a local takeover) passes its own epoch here and becomes a
 // no-op, so it cannot tear down the connection that replaced it.
 func (s *Session) DisconnectIf(graceful bool, epoch uint64, reasonCode byte) error {
+	return s.DisconnectWithCauseIf(causeFor(graceful), epoch, reasonCode)
+}
+
+// DisconnectWithCauseIf is DisconnectIf with an explicit cause.
+func (s *Session) DisconnectWithCauseIf(cause DisconnectCause, epoch uint64, reasonCode byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.epoch != epoch {
 		return nil
 	}
-	return s.disconnectLocked(graceful, reasonCode)
+	return s.disconnectLocked(cause, reasonCode)
 }
 
 func (s *Session) sendDisconnect(reasonCode byte) {
@@ -709,7 +753,7 @@ func (s *Session) sendDisconnect(reasonCode byte) {
 }
 
 // disconnectLocked performs the disconnect. Caller must hold s.mu.
-func (s *Session) disconnectLocked(graceful bool, reasonCode byte) error {
+func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte) error {
 	if s.state != StateConnected {
 		return nil
 	}
@@ -733,7 +777,7 @@ func (s *Session) disconnectLocked(graceful bool, reasonCode byte) error {
 	}
 	s.state = StateDisconnected
 
-	if graceful {
+	if cause.DiscardsWill() {
 		s.Will = nil
 	}
 
@@ -746,7 +790,7 @@ func (s *Session) disconnectLocked(graceful bool, reasonCode byte) error {
 	callback := s.onDisconnect
 	epoch := s.epoch
 	if callback != nil {
-		go callback(s, graceful, epoch)
+		go callback(s, cause, epoch)
 	}
 
 	return nil
@@ -943,15 +987,15 @@ func (s *Session) SetOnDisconnect(fn func(*Session, bool)) {
 		s.SetOnDisconnectWithEpoch(nil)
 		return
 	}
-	s.SetOnDisconnectWithEpoch(func(s *Session, graceful bool, _ uint64) {
-		fn(s, graceful)
+	s.SetOnDisconnectWithEpoch(func(s *Session, cause DisconnectCause, _ uint64) {
+		fn(s, cause.Orderly())
 	})
 }
 
 // SetOnDisconnectWithEpoch sets a disconnect callback that receives the epoch
 // of the physical connection that disconnected. Broker cleanup uses the epoch
 // together with session identity to fence callbacks delayed past a reconnect.
-func (s *Session) SetOnDisconnectWithEpoch(fn func(*Session, bool, uint64)) {
+func (s *Session) SetOnDisconnectWithEpoch(fn func(*Session, DisconnectCause, uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onDisconnect = fn

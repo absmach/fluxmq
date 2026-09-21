@@ -17,6 +17,7 @@ import (
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
+	clusterv1 "github.com/absmach/fluxmq/pkg/proto/cluster/v1"
 	"github.com/absmach/fluxmq/storage"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/require"
@@ -284,8 +285,8 @@ func TestHandleDisconnect_CleanSessionPublishesWillBeforeDestroy(t *testing.T) {
 	require.NoError(t, err)
 
 	disconnected := make(chan struct{})
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
-		b.handleDisconnect(s, graceful, epoch)
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+		b.handleDisconnect(s, cause, epoch)
 		close(disconnected)
 	})
 	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
@@ -379,7 +380,7 @@ func TestHandleDisconnect_StaleCleanSessionDoesNotDeleteReplacementClusterState(
 
 	// Model the old Session.Disconnect callback starting after the replacement
 	// was installed. It must not touch client-ID-scoped cluster state.
-	b.handleDisconnect(oldSession, false, oldEpoch)
+	b.handleDisconnect(oldSession, session.DisconnectAbnormal, oldEpoch)
 
 	require.Same(t, replacement, b.sessionsMap.Get(clientID))
 	owner, acquires, releases, removeAllSubscriptionsCalls = cl.snapshot()
@@ -419,10 +420,10 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 	callbackStarted := make(chan struct{})
 	releaseCallback := make(chan struct{})
 	callbackDone := make(chan struct{})
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
 		close(callbackStarted)
 		<-releaseCallback
-		b.handleDisconnect(s, graceful, epoch)
+		b.handleDisconnect(s, cause, epoch)
 		close(callbackDone)
 	})
 	require.NoError(t, s.Disconnect(false, v5.DisconnectUnspecifiedError))
@@ -457,8 +458,8 @@ func TestHandleDisconnect_StalePersistentCallbackCannotMutateReplacementGenerati
 
 	close(releaseCallback)
 	<-callbackDone
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
-		b.handleDisconnect(s, graceful, epoch)
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+		b.handleDisconnect(s, cause, epoch)
 	})
 
 	require.Same(t, newWill, s.GetWill(), "stale callback must not consume the replacement Will")
@@ -757,62 +758,160 @@ func TestHandleDisconnect_ProtocolErrorPublishesWill(t *testing.T) {
 	}, "protocol error still publishes the Will")
 }
 
-func TestCreateSession_MigratedExpiryDoesNotMaskTheConnectValue(t *testing.T) {
-	t.Run("connect/no_expiry", func(t *testing.T) {
-		cl := &takeoverCluster{state: migratedState(identityA)}
-		b := NewBroker(memory.New(), cl)
-		defer b.Close()
-		h := newV5Handler(b)
+// A migrated session hands over the interval its previous connection
+// negotiated. That interval keeps it alive until someone attaches to it, but it
+// says nothing about how long the next client wants its session kept: the
+// CONNECT that resumes it decides, and [MQTT-3.1.2-11] reads an absent Session
+// Expiry Interval as zero.
+func TestHandleConnect_MigratedSessionTakesTheConnectExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		connectExemplar *uint32
+		wantExpiry      uint32
+	}{
+		{name: "absent_expiry_is_zero", connectExemplar: nil, wantExpiry: 0},
+		{name: "own_expiry_governs", connectExemplar: ptrUint32(600), wantExpiry: 600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cl := &takeoverCluster{state: &clusterv1.SessionState{ExpiryInterval: 300}}
+			b := NewBroker(memory.New(), cl)
+			defer b.Close()
+			h := newV5Handler(b)
 
-		const clientID = "migrated-expiry-none"
-		s, _, err := b.CreateSession(clientID, 5, session.Options{})
-		require.NoError(t, err)
-		require.Equal(t, uint32(300), s.Info().ExpiryInterval, "the migrated interval stands in for a CONNECT that asked for none")
-		require.Zero(t, s.ConnectExpiryInterval(), "what the migrated session negotiated is not what this client asked for")
-
-		conn := newSyncConn()
-		_, err = s.Connect(conn)
-		require.NoError(t, err)
-
-		expiry := uint32(3600)
-		pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
-		require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
-
-		waitFor(t, func() bool {
-			for _, p := range conn.writtenPackets() {
-				if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == v5.DisconnectProtocolError {
-					return true
-				}
+			clientID := "migrated-expiry-" + tc.name
+			connect := v5Connect(clientID, "", nil)
+			if tc.connectExemplar != nil {
+				connect.Properties = &v5.ConnectProperties{SessionExpiryInterval: tc.connectExemplar}
 			}
-			return false
-		}, "server replies DISCONNECT 0x82 despite the migrated expiry")
-		waitFor(t, func() bool { return b.Get(clientID) == nil }, "session ends on the interval the client asked for")
-	})
 
-	t.Run("connect/own_expiry", func(t *testing.T) {
-		cl := &takeoverCluster{state: migratedState(identityA)}
-		b := NewBroker(memory.New(), cl)
-		defer b.Close()
+			conn := newSyncConn()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				h.HandleConnect(context.Background(), conn, connect) //nolint:errcheck
+			}()
 
-		s, _, err := b.CreateSession("migrated-expiry-own", 5, session.Options{ExpiryInterval: 600})
-		require.NoError(t, err)
-		require.Equal(t, uint32(600), s.Info().ExpiryInterval, "the connecting client's interval governs the session it resumes")
-		require.Equal(t, uint32(600), s.ConnectExpiryInterval())
-	})
+			<-conn.reading
+			waitFor(t, func() bool {
+				s := b.sessionsMap.Get(clientID)
+				return s != nil && s.IsConnected()
+			}, "migrated session attached")
+
+			s := b.sessionsMap.Get(clientID)
+			require.NotNil(t, s)
+			require.Equal(t, tc.wantExpiry, s.Info().ExpiryInterval, "the attaching CONNECT decides how long its session is kept")
+			require.Equal(t, tc.wantExpiry, s.ConnectExpiryInterval())
+
+			conn.Close()
+			wg.Wait()
+
+			if tc.wantExpiry == 0 {
+				waitFor(t, func() bool { return b.Get(clientID) == nil }, "a session with no expiry ends with its connection")
+			}
+		})
+	}
 }
 
-func TestHandleDisconnect_ReasonCodeDecidesTheWill(t *testing.T) {
+func ptrUint32(v uint32) *uint32 { return &v }
+
+// A session restored from storage is continued just as a migrated one is: the
+// record the previous connection left behind keeps it until someone attaches,
+// and the CONNECT that does decides how long it is kept from then on.
+func TestHandleConnect_RestoredSessionTakesTheConnectExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		connectExpiry *uint32
+		wantExpiry    uint32
+	}{
+		{name: "absent_expiry_is_zero", connectExpiry: nil, wantExpiry: 0},
+		{name: "own_expiry_governs", connectExpiry: ptrUint32(600), wantExpiry: 600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := memory.New()
+			clientID := "restored-expiry-" + tc.name
+
+			// Leave a stored session behind, the way a broker restart does.
+			previous := NewBroker(store, nil)
+			s, _, err := previous.CreateSession(clientID, 5, session.Options{ExpiryInterval: 300})
+			require.NoError(t, err)
+			_, err = s.Connect(newSyncConn())
+			require.NoError(t, err)
+			previous.persistSessionInfo(s)
+			require.NoError(t, s.Disconnect(true, v5.DisconnectNormalDisconnection))
+			require.NoError(t, previous.Close())
+
+			stored, err := store.Sessions().Get(clientID)
+			require.NoError(t, err)
+			require.Equal(t, uint32(300), stored.ExpiryInterval, "the previous connection's interval is what is on disk")
+
+			b := NewBroker(store, nil)
+			defer b.Close()
+			h := newV5Handler(b)
+
+			connect := v5Connect(clientID, "", nil)
+			if tc.connectExpiry != nil {
+				connect.Properties = &v5.ConnectProperties{SessionExpiryInterval: tc.connectExpiry}
+			}
+			conn := newSyncConn()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				h.HandleConnect(context.Background(), conn, connect) //nolint:errcheck
+			}()
+
+			<-conn.reading
+			waitFor(t, func() bool {
+				s := b.sessionsMap.Get(clientID)
+				return s != nil && s.IsConnected()
+			}, "restored session attached")
+
+			restored := b.sessionsMap.Get(clientID)
+			require.NotNil(t, restored)
+			require.Equal(t, tc.wantExpiry, restored.Info().ExpiryInterval, "the attaching CONNECT decides, not the stored record")
+			require.Equal(t, tc.wantExpiry, restored.ConnectExpiryInterval())
+
+			conn.Close()
+			wg.Wait()
+		})
+	}
+}
+
+// The Reason Code decides two separate things, and they do not move together:
+// whether the Will is published, and whether the connection ended the way the
+// protocol intends. 0x04 is an orderly end that asks for the Will.
+func TestHandleDisconnect_ReasonCodeDecidesWillAndClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		reasonCode  byte
 		publishWill bool
+		wantReason  string
 	}{
-		{name: "normal_disconnection", reasonCode: v5.DisconnectNormalDisconnection, publishWill: false},
-		{name: "with_will_message", reasonCode: v5.DisconnectDisconnectWithWillMessage, publishWill: true},
+		{
+			name:        "normal_disconnection",
+			reasonCode:  v5.DisconnectNormalDisconnection,
+			publishWill: false,
+			wantReason:  disconnectReasonNormal,
+		},
+		{
+			name:        "with_will_message",
+			reasonCode:  v5.DisconnectDisconnectWithWillMessage,
+			publishWill: true,
+			wantReason:  disconnectReasonNormal,
+		},
+		{
+			name:        "client_error_code",
+			reasonCode:  v5.DisconnectUnspecifiedError,
+			publishWill: true,
+			wantReason:  disconnectReasonError,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := NewBroker(memory.New(), nil)
 			defer b.Close()
+			hook := &disconnectSpyHook{}
+			b.SetEventHook(hook)
 			h := newV5Handler(b)
 
 			clientID := "disconnect-reason-" + tc.name
@@ -840,8 +939,8 @@ func TestHandleDisconnect_ReasonCodeDecidesTheWill(t *testing.T) {
 			// Waiting on the callback rather than on the Will itself is what
 			// lets the negative case assert an absence.
 			disconnected := make(chan struct{})
-			s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
-				b.handleDisconnect(s, graceful, epoch)
+			s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+				b.handleDisconnect(s, cause, epoch)
 				close(disconnected)
 			})
 
@@ -864,7 +963,10 @@ func TestHandleDisconnect_ReasonCodeDecidesTheWill(t *testing.T) {
 			}
 			// A Will is discarded only on 0x00; 0x04 is the client asking for
 			// it to go out. [MQTT-3.1.2-8]
-			require.Equal(t, tc.publishWill, published)
+			require.Equal(t, tc.publishWill, published, "Will publication")
+
+			waitFor(t, func() bool { return len(hook.snapshot()) > 0 }, "disconnect reaches the event hook")
+			require.Equal(t, []string{tc.wantReason}, hook.snapshot(), "reported disconnect reason")
 		})
 	}
 }

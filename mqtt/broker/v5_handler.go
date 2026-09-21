@@ -176,10 +176,10 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	// a configuration reload cannot leave the connection enforcing a limit other
 	// than the one its CONNACK announced.
 	sessionMaxQoS := h.broker.MaxQoS()
-	var expiryInterval *uint32
-	if !isNew {
-		expiryInterval = &sessionExpiry
-	}
+	// The interval this CONNECT carried, passed for every CONNECT: attachSession
+	// applies it to a session that is being continued and leaves a new one with
+	// what createSession settled on.
+	expiryInterval := &sessionExpiry
 	epoch, err := h.broker.attachSession(ctx, s, claim, conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
@@ -735,14 +735,26 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 
 	h.broker.telemetry.logger.Info("v5_disconnect", logAttrs...)
 
-	// Only a clean disconnect discards the Will [MQTT-3.1.2-8]. Both sides get
-	// a say in that: the client asks for its Will with 0x04, and the server
-	// closing the connection on a Protocol Error is an abnormal end. Either
-	// way the Will is still owed to the subscribers watching this client.
-	graceful := p.ReasonCode == v5.DisconnectNormalDisconnection &&
-		reasonCode == v5.DisconnectNormalDisconnection
-	s.Disconnect(graceful, reasonCode) //nolint:errcheck // disconnect initiated by client
+	s.DisconnectWithCause(disconnectCause(p.ReasonCode, reasonCode), reasonCode) //nolint:errcheck // disconnect initiated by client
 	return io.EOF
+}
+
+// disconnectCause classifies a client DISCONNECT. Only Reason Code 0x00
+// discards the Will [MQTT-3.1.2-8]; 0x04 is the client ending the connection
+// itself and asking for the Will to go out, which stays an orderly end. A
+// packet the server refused, or any other Reason Code, is not.
+func disconnectCause(clientReason, serverReason byte) session.DisconnectCause {
+	if serverReason != v5.DisconnectNormalDisconnection {
+		return session.DisconnectAbnormal
+	}
+	switch clientReason {
+	case v5.DisconnectNormalDisconnection:
+		return session.DisconnectClean
+	case v5.DisconnectDisconnectWithWillMessage:
+		return session.DisconnectCleanWithWill
+	default:
+		return session.DisconnectAbnormal
+	}
 }
 
 // HandleAuth handles AUTH packets.

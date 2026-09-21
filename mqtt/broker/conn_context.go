@@ -63,6 +63,12 @@ func (c *connCtx) Disconnect(graceful bool, reasonCode byte) error {
 	return c.Session.DisconnectIf(graceful, c.epoch, reasonCode)
 }
 
+// DisconnectWithCause is Disconnect with an explicit classification of how the
+// connection ended, for the cases where that is not just "clean or not".
+func (c *connCtx) DisconnectWithCause(cause session.DisconnectCause, reasonCode byte) error {
+	return c.Session.DisconnectWithCauseIf(cause, c.epoch, reasonCode)
+}
+
 // current reports whether this is still the active connection generation. A
 // superseded goroutine reads and writes its own closed socket, so its read and
 // dispatch failures are expected teardown — not packet or protocol errors —

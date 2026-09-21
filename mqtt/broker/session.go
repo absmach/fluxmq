@@ -371,10 +371,10 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	connectExpiry := opts.ExpiryInterval
 
 	// A migrated session carries the interval its previous connection
-	// negotiated. It only fills in for a CONNECT that asked for nothing: this
-	// CONNECT's own interval governs the session it is resuming.
-	// [MQTT-3.1.2-11]
-	if takeoverState != nil && takeoverState.ExpiryInterval > 0 && opts.ExpiryInterval == 0 {
+	// negotiated. It keeps the session alive until a CONNECT attaches to it,
+	// which then applies its own interval; a session nothing attaches to -
+	// one preserved for another principal - has nothing else to expire on.
+	if takeoverState != nil && takeoverState.ExpiryInterval > 0 {
 		opts.ExpiryInterval = takeoverState.ExpiryInterval
 	}
 
@@ -401,8 +401,8 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		}
 	}
 
-	s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
-		b.handleDisconnect(s, graceful, epoch)
+	s.SetOnDisconnectWithEpoch(func(s *session.Session, cause session.DisconnectCause, epoch uint64) {
+		b.handleDisconnect(s, cause, epoch)
 	})
 
 	if b.stores.sessions != nil {
@@ -481,7 +481,14 @@ func (b *Broker) attachSession(ctx context.Context, s *session.Session, claim se
 	}
 
 	epoch, superseded := s.ConnectWithOptions(conn, opts)
-	if expiryInterval != nil {
+
+	// A session this CONNECT continues - live, migrated or restored from
+	// storage - takes the interval this CONNECT carried, which is zero when it
+	// carried none [MQTT-3.1.2-11]. Whatever a previous connection negotiated
+	// says nothing about how long this client wants its session kept. A
+	// session that starts here keeps what createSession settled on, including
+	// the configured default.
+	if expiryInterval != nil && claim.continuesSession {
 		s.SetExpiryInterval(*expiryInterval)
 		s.SetConnectExpiryInterval(*expiryInterval)
 	}
@@ -835,13 +842,13 @@ func (b *Broker) HandleSessionLeaseLost(_ context.Context, clientIDs []string) {
 // describe the socket and are always emitted; client-ID-scoped cleanup is
 // allowed only while both the session identity and disconnected epoch remain
 // current.
-func (b *Broker) handleDisconnect(s *session.Session, graceful bool, disconnectEpoch uint64) {
+func (b *Broker) handleDisconnect(s *session.Session, cause session.DisconnectCause, disconnectEpoch uint64) {
 	sessionLock := b.sessionLocks.Key(s.ID)
 	sessionLock.Lock()
 	var publishWill *storage.WillMessage
 	notifyDisconnect := false
 	disconnectReason := disconnectReasonNormal
-	if !graceful {
+	if !cause.Orderly() {
 		disconnectReason = disconnectReasonError
 	}
 	defer func() {
@@ -876,19 +883,22 @@ func (b *Broker) handleDisconnect(s *session.Session, graceful bool, disconnectE
 	b.persistSessionInfo(s)
 	sessionEnds := s.ExpiryInterval == 0
 	will := s.TakeWill()
-	if !graceful && will != nil {
-		switch {
-		case will.Delay == 0 || sessionEnds:
-			// A zero-delay Will is due at the physical disconnect. A zero expiry
-			// also ends the session, so MQTT requires a delayed Will immediately.
-			publishWill = will
-		case b.stores.wills != nil:
-			// Only delayed Wills survive in storage. attachSession cancels this
-			// record atomically if the persistent session reconnects in time.
-			b.stores.wills.Set(context.Background(), s.ID, will) //nolint:errcheck // best-effort delayed-Will persistence
+	switch {
+	case cause.DiscardsWill():
+		// The Will died with the clean disconnect that asked for it to be
+		// dropped, and so must any delayed record of an earlier one.
+		if b.stores.wills != nil {
+			b.stores.wills.Delete(context.Background(), s.ID) //nolint:errcheck // best-effort Will cleanup on clean disconnect
 		}
-	} else if graceful && b.stores.wills != nil {
-		b.stores.wills.Delete(context.Background(), s.ID) //nolint:errcheck // best-effort Will cleanup on graceful disconnect
+	case will == nil:
+	case will.Delay == 0 || sessionEnds:
+		// A zero-delay Will is due at the physical disconnect. A zero expiry
+		// also ends the session, so MQTT requires a delayed Will immediately.
+		publishWill = will
+	case b.stores.wills != nil:
+		// Only delayed Wills survive in storage. attachSession cancels this
+		// record atomically if the persistent session reconnects in time.
+		b.stores.wills.Set(context.Background(), s.ID, will) //nolint:errcheck // best-effort delayed-Will persistence
 	}
 	b.persistSessionMessages(s)
 
