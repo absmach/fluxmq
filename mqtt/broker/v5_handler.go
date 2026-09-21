@@ -176,10 +176,10 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 	// a configuration reload cannot leave the connection enforcing a limit other
 	// than the one its CONNACK announced.
 	sessionMaxQoS := h.broker.MaxQoS()
-	var expiryInterval *uint32
-	if !isNew {
-		expiryInterval = &sessionExpiry
-	}
+	// The interval this CONNECT carried, passed for every CONNECT: attachSession
+	// applies it to a session that is being continued and leaves a new one with
+	// what createSession settled on.
+	expiryInterval := &sessionExpiry
 	epoch, err := h.broker.attachSession(ctx, s, claim, conn, session.ConnectOptions{
 		Version:        p.ProtocolVersion,
 		KeepAlive:      time.Duration(p.KeepAlive) * time.Second,
@@ -717,11 +717,15 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 			// A zero Session Expiry Interval ends the session when the network
 			// connection closes, regardless of Clean Start. [MQTT-3.1.2-23]
 			s.SetExpiryInterval(0)
-		case s.Info().ExpiryInterval == 0:
+		case s.ConnectExpiryInterval() == 0:
 			// A non-zero Session Expiry Interval after a CONNECT whose expiry was
-			// 0 is a Protocol Error [MQTT-3.14.2.2.2]. Reply 0x82; the session
-			// still ends, so expiry remains 0.
+			// 0 is a Protocol Error [MQTT-3.14.2.2.2]: the override is refused
+			// with 0x82 and the session still ends on the interval the client
+			// asked for. The CONNECT-time value is what decides this, because a
+			// persistent session may be carrying the server's default expiry
+			// rather than the zero the client sent.
 			h.broker.telemetry.stats.IncrementProtocolErrors()
+			s.SetExpiryInterval(0)
 			reasonCode = v5.DisconnectProtocolError
 		default:
 			s.SetExpiryInterval(expiry)
@@ -731,8 +735,26 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 
 	h.broker.telemetry.logger.Info("v5_disconnect", logAttrs...)
 
-	s.Disconnect(true, reasonCode) //nolint:errcheck // graceful disconnect initiated by client
+	s.DisconnectWithCause(disconnectCause(p.ReasonCode, reasonCode), reasonCode) //nolint:errcheck // disconnect initiated by client
 	return io.EOF
+}
+
+// disconnectCause classifies a client DISCONNECT. Only Reason Code 0x00
+// discards the Will [MQTT-3.1.2-8]; 0x04 is the client ending the connection
+// itself and asking for the Will to go out, which stays an orderly end. A
+// packet the server refused, or any other Reason Code, is not.
+func disconnectCause(clientReason, serverReason byte) session.DisconnectCause {
+	if serverReason != v5.DisconnectNormalDisconnection {
+		return session.DisconnectAbnormal
+	}
+	switch clientReason {
+	case v5.DisconnectNormalDisconnection:
+		return session.DisconnectClean
+	case v5.DisconnectDisconnectWithWillMessage:
+		return session.DisconnectCleanWithWill
+	default:
+		return session.DisconnectAbnormal
+	}
 }
 
 // HandleAuth handles AUTH packets.

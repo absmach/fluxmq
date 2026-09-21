@@ -161,6 +161,34 @@ func TestDetachForTakeoverAdvancesEpochBeforeClosingConnection(t *testing.T) {
 	}, 50*time.Millisecond, time.Millisecond, "detached connection callback must be stale")
 }
 
+// SetOnDisconnectWithEpoch is the callback API callers outside this module are
+// written against: it keeps reporting a bool, and an orderly end stays orderly
+// whether or not it takes the Will with it.
+func TestSetOnDisconnectWithEpochReportsOrderlyEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		cause        DisconnectCause
+		wantGraceful bool
+	}{
+		{name: "clean", cause: DisconnectClean, wantGraceful: true},
+		{name: "clean_with_will", cause: DisconnectCleanWithWill, wantGraceful: true},
+		{name: "abnormal", cause: DisconnectAbnormal, wantGraceful: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTakeoverSession(t)
+			gracefulCh := make(chan bool, 1)
+			s.SetOnDisconnectWithEpoch(func(_ *Session, graceful bool, _ uint64) {
+				gracefulCh <- graceful
+			})
+
+			_, err := s.Connect(&recordingConn{})
+			require.NoError(t, err)
+			require.NoError(t, s.DisconnectWithCause(tc.cause, v5.DisconnectNormalDisconnection))
+			require.Equal(t, tc.wantGraceful, <-gracefulCh)
+		})
+	}
+}
+
 func TestDisconnectCallbackReportsDisconnectedEpoch(t *testing.T) {
 	s := newTakeoverSession(t)
 	epochCh := make(chan uint64, 1)
