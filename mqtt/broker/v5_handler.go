@@ -735,10 +735,12 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 
 	h.broker.telemetry.logger.Info("v5_disconnect", logAttrs...)
 
-	// Only a clean disconnect discards the Will. The server closing the
-	// connection on a Protocol Error is an abnormal end, so the Will is still
-	// owed to the subscribers watching this client. [MQTT-3.1.2-8]
-	graceful := reasonCode == v5.DisconnectNormalDisconnection
+	// Only a clean disconnect discards the Will [MQTT-3.1.2-8]. Both sides get
+	// a say in that: the client asks for its Will with 0x04, and the server
+	// closing the connection on a Protocol Error is an abnormal end. Either
+	// way the Will is still owed to the subscribers watching this client.
+	graceful := p.ReasonCode == v5.DisconnectNormalDisconnection &&
+		reasonCode == v5.DisconnectNormalDisconnection
 	s.Disconnect(graceful, reasonCode) //nolint:errcheck // disconnect initiated by client
 	return io.EOF
 }

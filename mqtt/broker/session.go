@@ -364,15 +364,19 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		opts.Will.ClientID = clientID
 	}
 
-	// Override session expiry from takeover state if available
-	if takeoverState != nil && takeoverState.ExpiryInterval > 0 {
+	// The interval the client itself asked for, captured before the migrated
+	// state and the default below replace it. A DISCONNECT is validated
+	// against this value, not against anything the server substituted for it.
+	// [MQTT-3.14.2.2.2]
+	connectExpiry := opts.ExpiryInterval
+
+	// A migrated session carries the interval its previous connection
+	// negotiated. It only fills in for a CONNECT that asked for nothing: this
+	// CONNECT's own interval governs the session it is resuming.
+	// [MQTT-3.1.2-11]
+	if takeoverState != nil && takeoverState.ExpiryInterval > 0 && opts.ExpiryInterval == 0 {
 		opts.ExpiryInterval = takeoverState.ExpiryInterval
 	}
-
-	// The interval the client itself asked for, captured before the default
-	// below replaces it. A DISCONNECT is validated against this value, not
-	// against the server's substitution. [MQTT-3.14.2.2.2]
-	connectExpiry := opts.ExpiryInterval
 
 	// Apply default expiry for persistent sessions that don't specify one,
 	// preventing indefinite memory growth.

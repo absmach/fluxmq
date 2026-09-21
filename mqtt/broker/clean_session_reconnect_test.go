@@ -757,6 +757,118 @@ func TestHandleDisconnect_ProtocolErrorPublishesWill(t *testing.T) {
 	}, "protocol error still publishes the Will")
 }
 
+func TestCreateSession_MigratedExpiryDoesNotMaskTheConnectValue(t *testing.T) {
+	t.Run("connect/no_expiry", func(t *testing.T) {
+		cl := &takeoverCluster{state: migratedState(identityA)}
+		b := NewBroker(memory.New(), cl)
+		defer b.Close()
+		h := newV5Handler(b)
+
+		const clientID = "migrated-expiry-none"
+		s, _, err := b.CreateSession(clientID, 5, session.Options{})
+		require.NoError(t, err)
+		require.Equal(t, uint32(300), s.Info().ExpiryInterval, "the migrated interval stands in for a CONNECT that asked for none")
+		require.Zero(t, s.ConnectExpiryInterval(), "what the migrated session negotiated is not what this client asked for")
+
+		conn := newSyncConn()
+		_, err = s.Connect(conn)
+		require.NoError(t, err)
+
+		expiry := uint32(3600)
+		pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
+		require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+
+		waitFor(t, func() bool {
+			for _, p := range conn.writtenPackets() {
+				if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == v5.DisconnectProtocolError {
+					return true
+				}
+			}
+			return false
+		}, "server replies DISCONNECT 0x82 despite the migrated expiry")
+		waitFor(t, func() bool { return b.Get(clientID) == nil }, "session ends on the interval the client asked for")
+	})
+
+	t.Run("connect/own_expiry", func(t *testing.T) {
+		cl := &takeoverCluster{state: migratedState(identityA)}
+		b := NewBroker(memory.New(), cl)
+		defer b.Close()
+
+		s, _, err := b.CreateSession("migrated-expiry-own", 5, session.Options{ExpiryInterval: 600})
+		require.NoError(t, err)
+		require.Equal(t, uint32(600), s.Info().ExpiryInterval, "the connecting client's interval governs the session it resumes")
+		require.Equal(t, uint32(600), s.ConnectExpiryInterval())
+	})
+}
+
+func TestHandleDisconnect_ReasonCodeDecidesTheWill(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reasonCode  byte
+		publishWill bool
+	}{
+		{name: "normal_disconnection", reasonCode: v5.DisconnectNormalDisconnection, publishWill: false},
+		{name: "with_will_message", reasonCode: v5.DisconnectDisconnectWithWillMessage, publishWill: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewBroker(memory.New(), nil)
+			defer b.Close()
+			h := newV5Handler(b)
+
+			clientID := "disconnect-reason-" + tc.name
+			willTopic := "clients/" + clientID + "/status"
+
+			sub, _, err := b.CreateSession(clientID+"-sub", 5, session.Options{CleanStart: true})
+			require.NoError(t, err)
+			subConn := newSyncConn()
+			_, err = sub.Connect(subConn)
+			require.NoError(t, err)
+			require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+			s, _, err := b.CreateSession(clientID, 5, session.Options{
+				CleanStart: true,
+				Will: &storage.WillMessage{
+					ClientID: clientID,
+					Topic:    willTopic,
+					Payload:  []byte(willPayloadOffline),
+				},
+			})
+			require.NoError(t, err)
+			_, err = s.Connect(newSyncConn())
+			require.NoError(t, err)
+
+			// Waiting on the callback rather than on the Will itself is what
+			// lets the negative case assert an absence.
+			disconnected := make(chan struct{})
+			s.SetOnDisconnectWithEpoch(func(s *session.Session, graceful bool, epoch uint64) {
+				b.handleDisconnect(s, graceful, epoch)
+				close(disconnected)
+			})
+
+			pkt := &v5.Disconnect{ReasonCode: tc.reasonCode}
+			require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+			waitFor(t, func() bool {
+				select {
+				case <-disconnected:
+					return true
+				default:
+					return false
+				}
+			}, "disconnect callback completes")
+
+			var published bool
+			for _, p := range subConn.writtenPackets() {
+				if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+					published = string(pub.Payload) == willPayloadOffline
+				}
+			}
+			// A Will is discarded only on 0x00; 0x04 is the client asking for
+			// it to go out. [MQTT-3.1.2-8]
+			require.Equal(t, tc.publishWill, published)
+		})
+	}
+}
+
 func TestAttachSessionCancelsStoredDelayedWillBeforeLaterCleanStart(t *testing.T) {
 	store := memory.New()
 	b := NewBroker(store, nil)
