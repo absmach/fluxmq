@@ -369,6 +369,11 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 		opts.ExpiryInterval = takeoverState.ExpiryInterval
 	}
 
+	// The interval the client itself asked for, captured before the default
+	// below replaces it. A DISCONNECT is validated against this value, not
+	// against the server's substitution. [MQTT-3.14.2.2.2]
+	connectExpiry := opts.ExpiryInterval
+
 	// Apply default expiry for persistent sessions that don't specify one,
 	// preventing indefinite memory growth.
 	if !opts.CleanStart && opts.ExpiryInterval == 0 && sessionCfg.DefaultExpiryInterval > 0 {
@@ -379,6 +384,7 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 	opts.ReceiveMaximum = receiveMax
 
 	s := session.New(clientID, version, opts, inflight, offlineQueue, *sessionCfg)
+	s.SetConnectExpiryInterval(connectExpiry)
 
 	// Restore subscriptions from takeover state or storage
 	if takeoverState != nil {
@@ -473,6 +479,7 @@ func (b *Broker) attachSession(ctx context.Context, s *session.Session, claim se
 	epoch, superseded := s.ConnectWithOptions(conn, opts)
 	if expiryInterval != nil {
 		s.SetExpiryInterval(*expiryInterval)
+		s.SetConnectExpiryInterval(*expiryInterval)
 	}
 	b.BindExternalID(s.ID, s.ExternalIdentity())
 	b.persistSessionInfo(s)

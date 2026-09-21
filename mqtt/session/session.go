@@ -75,19 +75,25 @@ type Session struct {
 	// current connection generation so a stale runSession goroutine (from a
 	// superseded connection) can detect that the session has moved on and avoid
 	// tearing down the new connection. Guarded by mu.
-	epoch                uint64
-	ExpiryInterval       uint32
-	MaxPacketSize        uint32
-	ReceiveMaximum       uint16
-	TopicAliasMax        uint16
-	Version              byte
-	maxQoS               byte
-	CleanStart           bool
-	requestResponseInfo  bool
-	requestProblemInfo   bool
-	retainAvailable      bool
-	wildcardSubAvailable bool
-	sharedSubAvailable   bool
+	epoch          uint64
+	ExpiryInterval uint32
+	// connectExpiryInterval is the Session Expiry Interval the CONNECT carried,
+	// before any server-side substitution. A DISCONNECT may only shorten or
+	// extend an interval the client itself asked for, so the Protocol Error
+	// check in [MQTT-3.14.2.2.2] has to read this rather than ExpiryInterval,
+	// which may hold a server default. Guarded by mu.
+	connectExpiryInterval uint32
+	MaxPacketSize         uint32
+	ReceiveMaximum        uint16
+	TopicAliasMax         uint16
+	Version               byte
+	maxQoS                byte
+	CleanStart            bool
+	requestResponseInfo   bool
+	requestProblemInfo    bool
+	retainAvailable       bool
+	wildcardSubAvailable  bool
+	sharedSubAvailable    bool
 
 	// sendWindow is the outbound QoS 1/2 send quota (Receive Maximum), bounded
 	// by serverMaxInflight. Independent of the bidirectional inflight store.
@@ -1158,6 +1164,23 @@ func (s *Session) RemoveSubscriptionID(filter string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subscriptionIDs, filter)
+}
+
+// SetConnectExpiryInterval records the Session Expiry Interval the CONNECT
+// carried. It is deliberately separate from SetExpiryInterval: the effective
+// interval may be a server default, while this is what the client asked for.
+func (s *Session) SetConnectExpiryInterval(interval uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connectExpiryInterval = interval
+}
+
+// ConnectExpiryInterval returns the Session Expiry Interval the CONNECT
+// carried, zero when it carried none.
+func (s *Session) ConnectExpiryInterval() uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.connectExpiryInterval
 }
 
 // SetAuthState sets enhanced auth state.

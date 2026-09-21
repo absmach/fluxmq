@@ -717,11 +717,15 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 			// A zero Session Expiry Interval ends the session when the network
 			// connection closes, regardless of Clean Start. [MQTT-3.1.2-23]
 			s.SetExpiryInterval(0)
-		case s.Info().ExpiryInterval == 0:
+		case s.ConnectExpiryInterval() == 0:
 			// A non-zero Session Expiry Interval after a CONNECT whose expiry was
-			// 0 is a Protocol Error [MQTT-3.14.2.2.2]. Reply 0x82; the session
-			// still ends, so expiry remains 0.
+			// 0 is a Protocol Error [MQTT-3.14.2.2.2]: the override is refused
+			// with 0x82 and the session still ends on the interval the client
+			// asked for. The CONNECT-time value is what decides this, because a
+			// persistent session may be carrying the server's default expiry
+			// rather than the zero the client sent.
 			h.broker.telemetry.stats.IncrementProtocolErrors()
+			s.SetExpiryInterval(0)
 			reasonCode = v5.DisconnectProtocolError
 		default:
 			s.SetExpiryInterval(expiry)
@@ -731,7 +735,11 @@ func (h *v5Handler) HandleDisconnect(s *connCtx, pkt packets.ControlPacket) erro
 
 	h.broker.telemetry.logger.Info("v5_disconnect", logAttrs...)
 
-	s.Disconnect(true, reasonCode) //nolint:errcheck // graceful disconnect initiated by client
+	// Only a clean disconnect discards the Will. The server closing the
+	// connection on a Protocol Error is an abnormal end, so the Will is still
+	// owed to the subscribers watching this client. [MQTT-3.1.2-8]
+	graceful := reasonCode == v5.DisconnectNormalDisconnection
+	s.Disconnect(graceful, reasonCode) //nolint:errcheck // disconnect initiated by client
 	return io.EOF
 }
 

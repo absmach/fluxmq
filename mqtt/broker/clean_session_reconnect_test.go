@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/message"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
@@ -613,6 +614,147 @@ func TestHandleDisconnect_NonZeroExpiryAfterConnectZeroIsProtocolError(t *testin
 	}, "server replies DISCONNECT 0x82 on protocol error")
 
 	waitFor(t, func() bool { return b.Get(clientID) == nil }, "session still ends after protocol error")
+}
+
+func TestHandleDisconnect_OverriddenExpirySurvivesReconnect(t *testing.T) {
+	store := memory.New()
+	b := NewBroker(store, nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry-reconnect"
+
+	connectExpiry := uint32(300)
+	connect := v5Connect(clientID, "", nil)
+	connect.Properties = &v5.ConnectProperties{SessionExpiryInterval: &connectExpiry}
+	conn := newSyncConn()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.HandleConnect(context.Background(), conn, connect) //nolint:errcheck
+	}()
+
+	<-conn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected()
+	}, "persistent v5 session connected")
+
+	s := b.sessionsMap.Get(clientID)
+	require.NotNil(t, s)
+
+	disconnectExpiry := uint32(120)
+	pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &disconnectExpiry}}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+	wg.Wait()
+
+	waitFor(t, func() bool {
+		stored, err := store.Sessions().Get(clientID)
+		return err == nil && stored.ExpiryInterval == 120
+	}, "overridden expiry reaches the stored session record")
+
+	// The override must leave a session that is still there to resume, not one
+	// the disconnect ended.
+	reconnect := v5Connect(clientID, "", nil)
+	reconnectConn := newSyncConn()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		h.HandleConnect(context.Background(), reconnectConn, reconnect) //nolint:errcheck
+	}()
+
+	<-reconnectConn.reading
+	waitFor(t, func() bool {
+		s := b.sessionsMap.Get(clientID)
+		return s != nil && s.IsConnected()
+	}, "session resumed after the overridden expiry")
+
+	var sawConnAck bool
+	for _, p := range reconnectConn.writtenPackets() {
+		if ack, ok := p.(*v5.ConnAck); ok {
+			sawConnAck = true
+			require.True(t, ack.SessionPresent, "reconnect resumes the session the override kept alive")
+		}
+	}
+	require.True(t, sawConnAck, "reconnect is answered with a CONNACK")
+
+	reconnectConn.Close()
+	wg.Wait()
+}
+
+func TestHandleDisconnect_NonZeroExpiryAfterDefaultedConnectZeroIsProtocolError(t *testing.T) {
+	b := NewBroker(memory.New(), nil, WithSessionConfig(config.SessionConfig{DefaultExpiryInterval: 300}))
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry-defaulted"
+	s, _, err := b.CreateSession(clientID, 5, session.Options{})
+	require.NoError(t, err)
+	require.Equal(t, uint32(300), s.Info().ExpiryInterval, "the server default replaces the client's zero")
+	conn := newSyncConn()
+	_, err = s.Connect(conn)
+	require.NoError(t, err)
+
+	expiry := uint32(3600)
+	pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+
+	// The CONNECT carried no expiry, so it carried zero: the server default it
+	// was given must not make the override legal.
+	waitFor(t, func() bool {
+		for _, p := range conn.writtenPackets() {
+			if d, ok := p.(*v5.Disconnect); ok && d.ReasonCode == v5.DisconnectProtocolError {
+				return true
+			}
+		}
+		return false
+	}, "server replies DISCONNECT 0x82 despite the defaulted expiry")
+
+	waitFor(t, func() bool { return b.Get(clientID) == nil }, "session ends on the interval the client asked for")
+}
+
+func TestHandleDisconnect_ProtocolErrorPublishesWill(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	h := newV5Handler(b)
+
+	const clientID = "disconnect-expiry-protocol-error-will"
+	const willTopic = "clients/disconnect-expiry-protocol-error-will/status"
+
+	sub, _, err := b.CreateSession(clientID+"-sub", 5, session.Options{CleanStart: true})
+	require.NoError(t, err)
+	subConn := newSyncConn()
+	_, err = sub.Connect(subConn)
+	require.NoError(t, err)
+	require.NoError(t, b.subscribe(sub, willTopic, 0, storage.SubscribeOptions{}))
+
+	s, _, err := b.CreateSession(clientID, 5, session.Options{
+		CleanStart: true,
+		Will: &storage.WillMessage{
+			ClientID: clientID,
+			Topic:    willTopic,
+			Payload:  []byte(willPayloadOffline),
+		},
+	})
+	require.NoError(t, err)
+	_, err = s.Connect(newSyncConn())
+	require.NoError(t, err)
+
+	expiry := uint32(3600)
+	pkt := &v5.Disconnect{Properties: &v5.DisconnectProperties{SessionExpiryInterval: &expiry}}
+	require.ErrorIs(t, h.HandleDisconnect(bindConn(s), pkt), io.EOF)
+
+	// The server closes on a Protocol Error, so this is not the clean
+	// disconnect that discards a Will.
+	waitFor(t, func() bool {
+		for _, p := range subConn.writtenPackets() {
+			if pub, ok := p.(*v5.Publish); ok && pub.TopicName == willTopic {
+				return string(pub.Payload) == willPayloadOffline
+			}
+		}
+		return false
+	}, "protocol error still publishes the Will")
 }
 
 func TestAttachSessionCancelsStoredDelayedWillBeforeLaterCleanStart(t *testing.T) {
