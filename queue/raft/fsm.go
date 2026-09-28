@@ -128,7 +128,7 @@ type LogFSM struct {
 	logger     *slog.Logger
 
 	// recorded holds the queues whose settings this FSM has applied from Raft
-	// state: an update, a create that made the queue, or a snapshot. A queue
+	// state: an update or a snapshot, which set them on every replica. A queue
 	// absent here exists, if at all, only as a node-local copy, which a
 	// snapshot restore or log replay can rebuild with default settings.
 	//
@@ -268,11 +268,9 @@ func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("error", err.Error()))
 		return stopLocalFailure("create queue", op, err)
 	}
-	// A create that found the queue already there did not set its settings;
-	// appends earlier in the log may have, with defaults.
-	if err == nil {
-		f.markConfigRecorded(op.QueueConfig.Name)
-	}
+	// A create does not record the settings even where it made the queue:
+	// a replica that already had the queue keeps whatever it held, so only the
+	// update that follows puts the same settings on every replica.
 
 	return &ApplyResult{}
 }

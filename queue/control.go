@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -120,8 +119,7 @@ func (c *queueControl) configuredQueueReadiness(queueName string) error {
 		// The leader applies the same check to anything forwarded to it.
 		return nil
 	}
-	recorder, ok := coordinator.(raft.QueueConfigRecorder)
-	if !ok || recorder.IsQueueConfigRecorded(queueName) {
+	if coordinator.IsQueueConfigRecorded(queueName) {
 		return nil
 	}
 	return WithFailure(

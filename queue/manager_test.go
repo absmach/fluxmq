@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1969,6 +1970,13 @@ type mockQueueCoordinator struct {
 	queueMu             sync.Mutex
 	queueCalls          []string
 	createQueueFailures int
+
+	// configRecorded stands in for the FSM's record of applied settings.
+	configRecorded atomic.Bool
+}
+
+func (m *mockQueueCoordinator) IsQueueConfigRecorded(string) bool {
+	return m.configRecorded.Load()
 }
 
 func (m *mockQueueCoordinator) setLeader(queueName string, leader bool) {

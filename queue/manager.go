@@ -96,6 +96,7 @@ type queueRaftCoordinator interface {
 	raft.ReplicationInfo
 	raft.QueueMapping
 	raft.QueueLogReplicator
+	raft.QueueConfigRecorder
 }
 
 // Manager is the queue-based queue manager.

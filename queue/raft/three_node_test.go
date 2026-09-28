@@ -305,12 +305,50 @@ func TestThreeNodeRaftTracksRecordedQueueConfig(t *testing.T) {
 
 	require.NoError(t, leader.manager.ApplyDeleteQueue(ctx, configured.Name))
 	c.eventuallyConfigRecorded(t, configured.Name, false, "a deleted queue has no recorded settings")
+}
 
-	fresh := types.DefaultQueueConfig("fresh-jobs", "fresh/#")
-	fresh.Replication.Enabled = true
-	fresh.Replication.Group = DefaultGroupID
-	require.NoError(t, leader.manager.ApplyCreateQueue(ctx, fresh))
-	c.eventuallyConfigRecorded(t, fresh.Name, true, "a create that made the queue records its settings")
+// A create applies its settings only on replicas that lacked the queue. Until
+// the update lands, a replica holding other settings keeps them, so the queue
+// must not count as recorded anywhere, the leader included.
+func TestThreeNodeRaftCreateAloneDoesNotRecordQueueConfig(t *testing.T) {
+	c := newThreeNodeCluster(t)
+	leader := c.waitForLeader(t)
+	ctx := context.Background()
+
+	var stale *threeNodeClusterNode
+	for _, node := range c.nodes {
+		if node != leader {
+			stale = node
+			break
+		}
+	}
+	configured := types.DefaultQueueConfig("configured-jobs", "configured/#")
+	configured.Replication.Enabled = true
+	configured.Replication.Group = DefaultGroupID
+	staleSettings := configured
+	staleSettings.Topics = []string{"$queue/configured-jobs/#"}
+	staleSettings.Durable = false
+	require.NoError(t, stale.store.CreateQueue(ctx, staleSettings))
+
+	// The leader lacks the queue, so this create makes it there; the update
+	// that would follow it is taken to have failed.
+	require.NoError(t, leader.manager.ApplyCreateQueue(ctx, configured))
+	require.Eventually(t, func() bool {
+		_, err := c.nodes[0].store.GetQueue(ctx, configured.Name)
+		_, err2 := c.nodes[1].store.GetQueue(ctx, configured.Name)
+		_, err3 := c.nodes[2].store.GetQueue(ctx, configured.Name)
+		return err == nil && err2 == nil && err3 == nil
+	}, 15*time.Second, 25*time.Millisecond, "create should reach every node")
+	staleNow, err := stale.store.GetQueue(ctx, configured.Name)
+	require.NoError(t, err)
+	require.Equal(t, staleSettings.Topics, staleNow.Topics, "create must not have repaired the stale replica")
+	c.requireConfigRecorded(t, configured.Name, false, "a create alone must not open the write gate")
+
+	require.NoError(t, leader.manager.ApplyUpdateQueue(ctx, configured))
+	c.eventuallyConfigRecorded(t, configured.Name, true, "the update records the settings everywhere")
+	repaired, err := stale.store.GetQueue(ctx, configured.Name)
+	require.NoError(t, err)
+	require.Equal(t, configured.Topics, repaired.Topics, "the update should repair the stale replica")
 }
 
 func (c *threeNodeCluster) requireConfigRecorded(t *testing.T, queueName string, want bool, msg string) {
