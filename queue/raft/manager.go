@@ -194,7 +194,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Create FSM that handles all queues
 	m.fsm = NewLogFSM(m.groupID(), m.queueStore, m.groupStore, m.logger)
-	if err := m.prepareFSMForRecovery(); err != nil {
+	if err := m.prepareFSMForRecovery(ctx); err != nil {
 		_ = raftDB.Close()
 		return fmt.Errorf("failed to prepare raft state machine recovery: %w", err)
 	}
@@ -265,9 +265,12 @@ func raftBadgerOptions(dir string) badger.Options {
 // twice after a process restart. Hashicorp Raft restores a snapshot when one
 // exists; Restore replaces this group's state before replaying newer entries.
 // Without a snapshot, it replays the log over the queue store as it stands, so
-// discard only this group's old materialized state first. The Raft log remains
-// authoritative; no other group's queues or local-only queues are touched.
-func (m *Manager) prepareFSMForRecovery() error {
+// empty this group's queues first. Their configurations stay, because a queue
+// declared in the broker's configuration never passes through the log. No other
+// group's queues or local-only queues are touched.
+//
+// Until the replay catches up, this group's queues read as empty on this node.
+func (m *Manager) prepareFSMForRecovery(ctx context.Context) error {
 	snapshots, err := m.snapshotStore.List()
 	if err != nil {
 		return fmt.Errorf("list raft snapshots: %w", err)
@@ -296,7 +299,7 @@ func (m *Manager) prepareFSMForRecovery() error {
 	if !ok {
 		return fmt.Errorf("queue store cannot be rebuilt from raft log: %T", m.queueStore)
 	}
-	if err := m.fsm.resetState(context.Background(), snapshotable); err != nil {
+	if err := m.fsm.resetForReplay(ctx, snapshotable); err != nil {
 		return fmt.Errorf("clear materialized raft group state: %w", err)
 	}
 	return nil

@@ -253,6 +253,11 @@ func TestThreeNodeRaftLeaderFailoverAndRestart(t *testing.T) {
 
 	c.startNodes(t, leader)
 	c.waitForRecord(t, queueName, offset, "failover-1", payload)
+	for _, node := range c.nodes {
+		count, err := node.store.Count(context.Background(), queueName)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), count, "%s should hold the record exactly once", node.id)
+	}
 }
 
 func TestThreeNodeRaftRejectsWriteWithoutQuorum(t *testing.T) {
