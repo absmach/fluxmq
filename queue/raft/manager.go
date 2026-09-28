@@ -469,6 +469,15 @@ func (m *Manager) Stop() error {
 	return nil
 }
 
+// IsQueueConfigRecorded reports whether the queue's settings have been applied
+// from this group's Raft state on this node.
+func (m *Manager) IsQueueConfigRecorded(queueName string) bool {
+	if m.fsm == nil {
+		return false
+	}
+	return m.fsm.IsQueueConfigRecorded(queueName)
+}
+
 // IsEnabled returns true if Raft replication is enabled.
 func (m *Manager) IsEnabled() bool {
 	return m.config.Enabled && m.raft != nil

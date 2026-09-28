@@ -156,6 +156,13 @@ func TestThreeNodeRaftCrashHelper(t *testing.T) {
 			c.waitForRecord(t, "replicated-jobs", 1, "crash-2", []byte("after snapshot"))
 		}
 		c.waitForRecord(t, configuredQueueName, 0, "configured-1", []byte("keep configured queue"))
+		// Recovery rebuilds which settings are raft state from the log and
+		// snapshot alone. Only log-replay never put the queue in either.
+		if scenario == scenarioLogReplay {
+			c.requireConfigRecorded(t, configuredQueueName, false, "settings never logged must not count as recorded")
+		} else {
+			c.eventuallyConfigRecorded(t, configuredQueueName, true, "settings in the log or snapshot must count as recorded")
+		}
 		for _, node := range c.nodes {
 			count, err := node.store.Count(context.Background(), "replicated-jobs")
 			require.NoError(t, err)

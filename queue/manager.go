@@ -320,6 +320,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		replication:          replication,
 		writePolicy:          normalizeWritePolicy(config.WritePolicy),
 		defaultAckDurability: config.AckDurability,
+		configuredReplicated: configuredReplicatedQueues(config.QueueConfigs),
 	}
 
 	// The facade and record core aggregate the same independent policy and

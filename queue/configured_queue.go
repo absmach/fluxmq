@@ -83,9 +83,11 @@ func (m *Manager) tryRecordConfiguredQueue(ctx context.Context, cfg types.QueueC
 // runConfiguredQueueRecorder retries queues whose settings Start could not
 // record, until each is recorded or the manager stops.
 //
-// Until then the queue can still lose its settings to a snapshot restore or a
-// log replay. A queue waits here while this node is a follower and is recorded
-// once the node becomes leader. If a leader holding an older configuration
+// Until the settings are Raft state, the leader refuses writes to the queue
+// (see queueControl.configuredQueueReadiness), so no append can be committed
+// ahead of them. A queue waits here while this node is a follower and is
+// recorded if the node becomes leader; recording again settings another leader
+// already committed is harmless. If a leader holding an older configuration
 // never gives up leadership, nothing on this node can record the queue.
 func (m *Manager) runConfiguredQueueRecorder(ctx context.Context, pending []types.QueueConfig) {
 	defer m.wg.Done()
@@ -119,6 +121,16 @@ func (m *Manager) runConfiguredQueueRecorder(ctx context.Context, pending []type
 		delay = min(delay*2, maxDelay)
 		timer.Reset(delay)
 	}
+}
+
+func configuredReplicatedQueues(configs []types.QueueConfig) map[string]struct{} {
+	names := make(map[string]struct{})
+	for _, cfg := range configs {
+		if cfg.Replication.Enabled {
+			names[cfg.Name] = struct{}{}
+		}
+	}
+	return names
 }
 
 func (m *Manager) configuredQueueRetryIntervals() (time.Duration, time.Duration) {

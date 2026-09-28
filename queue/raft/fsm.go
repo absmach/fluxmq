@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
@@ -125,6 +126,16 @@ type LogFSM struct {
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	logger     *slog.Logger
+
+	// recorded holds the queues whose settings this FSM has applied from Raft
+	// state: an update, a create that made the queue, or a snapshot. A queue
+	// absent here exists, if at all, only as a node-local copy, which a
+	// snapshot restore or log replay can rebuild with default settings.
+	//
+	// It is rebuilt by restore and replay rather than persisted, so it answers
+	// for what the log and snapshot hold, never for what the store held before.
+	recordedMu sync.RWMutex
+	recorded   map[string]struct{}
 }
 
 // NewLogFSM creates a new FSM for queue operations.
@@ -137,7 +148,35 @@ func NewLogFSM(groupID string, queueStore storage.QueueStore, groupStore storage
 		queueStore: queueStore,
 		groupStore: groupStore,
 		logger:     logger,
+		recorded:   make(map[string]struct{}),
 	}
+}
+
+// IsQueueConfigRecorded reports whether the queue's settings have been applied
+// from Raft state on this node. Safe for concurrent use.
+func (f *LogFSM) IsQueueConfigRecorded(queueName string) bool {
+	f.recordedMu.RLock()
+	defer f.recordedMu.RUnlock()
+	_, ok := f.recorded[queueName]
+	return ok
+}
+
+func (f *LogFSM) markConfigRecorded(queueName string) {
+	f.recordedMu.Lock()
+	defer f.recordedMu.Unlock()
+	f.recorded[queueName] = struct{}{}
+}
+
+func (f *LogFSM) forgetConfigRecorded(queueName string) {
+	f.recordedMu.Lock()
+	defer f.recordedMu.Unlock()
+	delete(f.recorded, queueName)
+}
+
+func (f *LogFSM) forgetAllConfigsRecorded() {
+	f.recordedMu.Lock()
+	defer f.recordedMu.Unlock()
+	clear(f.recorded)
 }
 
 // owns reports whether a queue is replicated by this FSM's raft group.
@@ -229,6 +268,11 @@ func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("error", err.Error()))
 		return stopLocalFailure("create queue", op, err)
 	}
+	// A create that found the queue already there did not set its settings;
+	// appends earlier in the log may have, with defaults.
+	if err == nil {
+		f.markConfigRecorded(op.QueueConfig.Name)
+	}
 
 	return &ApplyResult{}
 }
@@ -244,6 +288,7 @@ func (f *LogFSM) applyUpdateQueue(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("error", err.Error()))
 		return stopLocalFailure("update queue", op, err)
 	}
+	f.markConfigRecorded(op.QueueConfig.Name)
 
 	return &ApplyResult{}
 }
@@ -259,6 +304,7 @@ func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("error", err.Error()))
 		return stopLocalFailure("delete queue", op, err)
 	}
+	f.forgetConfigRecorded(op.QueueName)
 
 	return &ApplyResult{}
 }
@@ -866,6 +912,7 @@ func (f *LogFSM) restoreQueue(ctx context.Context, store storage.SnapshotableQue
 			slog.String("error", err.Error()))
 		return err
 	}
+	f.markConfigRecorded(queue.QueueName)
 
 	for _, group := range queue.Groups {
 		if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil && !errors.Is(err, storage.ErrConsumerGroupExists) {
@@ -923,13 +970,16 @@ func (f *LogFSM) resetForReplay(ctx context.Context, store storage.SnapshotableQ
 }
 
 // dropOwnedGroups deletes the consumer groups of every queue this Raft group
-// owns and returns those queues' configurations.
+// owns and returns those queues' configurations. Whatever follows rebuilds
+// Raft state, so it also forgets which queue settings came from it.
 //
 // Groups go first, while the queues that name them are still listable. A group
 // left behind because its listing or its deletion failed is state from before
 // the reset surviving underneath it, so either failure aborts the reset rather
 // than leave this replica holding a group the rest of the cluster does not have.
 func (f *LogFSM) dropOwnedGroups(ctx context.Context) ([]types.QueueConfig, error) {
+	f.forgetAllConfigsRecorded()
+
 	queues, err := f.queueStore.ListQueues(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list queues for reset: %w", err)

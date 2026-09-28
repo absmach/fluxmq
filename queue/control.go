@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -79,6 +80,11 @@ type queueControl struct {
 	replication          *replicationRuntime
 	writePolicy          WritePolicy
 	defaultAckDurability AckDurability
+
+	// configuredReplicated names the replicated queues declared in the
+	// broker's configuration. Set at construction and never changed, so it is
+	// read without a lock.
+	configuredReplicated map[string]struct{}
 }
 
 var _ recordServices = (*queueControl)(nil)
@@ -91,7 +97,46 @@ func (c *queueControl) replicationCoordinator() queueRaftCoordinator {
 	return c.replication.get()
 }
 
+// replicationWriteReadiness reports whether a write to a replicated queue may
+// proceed from this node.
+//
+// Beyond the group being usable, the leader refuses writes to a configured
+// queue until its settings are Raft state. Its local copy is not: an append
+// committed ahead of the settings is replayed, after a crash or onto a stale
+// snapshot, into a queue rebuilt with default settings.
 func (c *queueControl) replicationWriteReadiness(queueName string) error {
+	if err := c.replicationReadiness(queueName); err != nil {
+		return err
+	}
+	return c.configuredQueueReadiness(queueName)
+}
+
+func (c *queueControl) configuredQueueReadiness(queueName string) error {
+	if _, configured := c.configuredReplicated[queueName]; !configured {
+		return nil
+	}
+	coordinator := c.replication.get()
+	if !coordinator.IsLeaderForQueue(queueName) {
+		// The leader applies the same check to anything forwarded to it.
+		return nil
+	}
+	recorder, ok := coordinator.(raft.QueueConfigRecorder)
+	if !ok || recorder.IsQueueConfigRecorded(queueName) {
+		return nil
+	}
+	return WithFailure(
+		fmt.Errorf("%w: queue %q settings are not yet recorded in its raft log", ErrReplicationUnavailable, queueName),
+		Failure{
+			Code:       ErrorCodeUnavailable,
+			Retryable:  true,
+			Durability: DurabilityNotAttempted,
+		},
+	)
+}
+
+// replicationReadiness reports whether the queue's Raft group can take a
+// write from this node, directly or by forwarding to its leader.
+func (c *queueControl) replicationReadiness(queueName string) error {
 	coordinator := c.replication.get()
 	if coordinator == nil || !coordinator.IsEnabled() {
 		return fmt.Errorf("%w: queue %q has no enabled raft coordinator", ErrReplicationUnavailable, queueName)
@@ -135,7 +180,9 @@ func (c *queueControl) validateQueueReplication(ctx context.Context, queueCfg ty
 	if err := coordinator.EnsureQueue(ctx, queueCfg); err != nil {
 		return fmt.Errorf("%w: queue %q group: %v", ErrReplicationUnavailable, queueCfg.Name, err)
 	}
-	return c.replicationWriteReadiness(queueCfg.Name)
+	// Validation precedes recording a configured queue's settings, so it
+	// cannot wait for them.
+	return c.replicationReadiness(queueCfg.Name)
 }
 
 func (c *queueControl) validateQueueAckDurability(queueConfig types.QueueConfig) error {

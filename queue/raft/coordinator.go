@@ -203,6 +203,19 @@ func (c *LogicalGroupCoordinator) IsQueueReplicated(queueName string) bool {
 	return ok
 }
 
+// QueueConfigRecorder reports whether a queue's settings have been applied
+// from Raft state on this node, as opposed to existing only as a node-local
+// copy that recovery can rebuild with default settings.
+type QueueConfigRecorder interface {
+	IsQueueConfigRecorded(queueName string) bool
+}
+
+// IsQueueConfigRecorded implements QueueConfigRecorder for the queue's group.
+func (c *LogicalGroupCoordinator) IsQueueConfigRecorded(queueName string) bool {
+	recorder, ok := c.replicatorForQueue(queueName).(QueueConfigRecorder)
+	return ok && recorder.IsQueueConfigRecorded(queueName)
+}
+
 func (c *LogicalGroupCoordinator) ensureQueueAssignment(cfg types.QueueConfig) {
 	if !cfg.Replication.Enabled {
 		delete(c.queueGroups, cfg.Name)

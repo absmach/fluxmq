@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	queueraft "github.com/absmach/fluxmq/queue/raft"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
@@ -28,6 +30,13 @@ var recordedConfiguredQueue = []string{"create:" + configuredTestQueue, "update:
 // one queue, with a retry backoff short enough to poll for.
 func startConfiguredQueueManager(t *testing.T, replicated bool, coordinator *mockQueueCoordinator) (*Manager, *memlog.Store) {
 	t.Helper()
+	return startConfiguredQueueManagerWith(t, replicated, coordinator, coordinator)
+}
+
+// startConfiguredQueueManagerWith installs installed, which wraps coordinator
+// when a test needs capabilities the plain mock lacks.
+func startConfiguredQueueManagerWith(t *testing.T, replicated bool, coordinator *mockQueueCoordinator, installed queueraft.QueueCoordinator) (*Manager, *memlog.Store) {
+	t.Helper()
 	configured := types.DefaultQueueConfig(configuredTestQueue, configuredTestTopic)
 	configured.Replication.Enabled = replicated
 
@@ -43,7 +52,7 @@ func startConfiguredQueueManager(t *testing.T, replicated bool, coordinator *moc
 
 	logStore := memlog.New()
 	manager := NewManager(logStore, newMockGroupStore(), nil, config, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	manager.SetRaftCoordinator(coordinator)
+	manager.SetRaftCoordinator(installed)
 	require.NoError(t, manager.Start(context.Background()))
 	return manager, logStore
 }
@@ -129,5 +138,73 @@ func TestConfiguredQueueRecorderRetriesUntilRecorded(t *testing.T) {
 			t.Fatal("Stop did not return while a configured queue was still pending")
 		}
 		assert.Empty(t, coordinator.recordedQueueCalls())
+	})
+}
+
+// configRecordingCoordinator reports configured queue settings as recorded in
+// Raft state only once the test says so, standing in for the FSM.
+type configRecordingCoordinator struct {
+	*mockQueueCoordinator
+	recorded atomic.Bool
+}
+
+func (c *configRecordingCoordinator) IsQueueConfigRecorded(string) bool {
+	return c.recorded.Load()
+}
+
+// Until a configured queue's settings are raft state, an append committed on
+// its leader could be replayed into a queue rebuilt with default settings.
+func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
+	publish := func(t *testing.T, manager *Manager) error {
+		t.Helper()
+		return manager.Publish(context.Background(), publishEnvelope(t, "configured/ready", []byte("job")))
+	}
+
+	t.Run("leader/unrecorded/rejects-then-accepts-once-recorded", func(t *testing.T) {
+		mock := &mockQueueCoordinator{}
+		mock.setLeader(configuredTestQueue, true)
+		coordinator := &configRecordingCoordinator{mockQueueCoordinator: mock}
+		manager, _ := startConfiguredQueueManagerWith(t, true, mock, coordinator)
+		stopManagerOnCleanup(t, manager)
+
+		err := publish(t, manager)
+		require.ErrorIs(t, err, ErrReplicationUnavailable)
+		failure := ClassifyError(err)
+		assert.Equal(t, ErrorCodeUnavailable, failure.Code)
+		assert.True(t, failure.Retryable)
+		assert.Equal(t, DurabilityNotAttempted, failure.Durability)
+		assert.Empty(t, mock.appendCalls, "no append may reach raft before the settings")
+
+		coordinator.recorded.Store(true)
+		require.NoError(t, publish(t, manager))
+		assert.Equal(t, []string{configuredTestQueue}, mock.appendCalls)
+	})
+
+	t.Run("follower/not-gated-here/leader-decides", func(t *testing.T) {
+		mock := &mockQueueCoordinator{}
+		mock.setLeader(configuredTestQueue, false)
+		coordinator := &configRecordingCoordinator{mockQueueCoordinator: mock}
+		manager, _ := startConfiguredQueueManagerWith(t, true, mock, coordinator)
+		stopManagerOnCleanup(t, manager)
+
+		assert.NoError(t, manager.replicationWriteReadiness(configuredTestQueue))
+	})
+
+	t.Run("leader/queue-not-in-configuration/not-gated", func(t *testing.T) {
+		mock := &mockQueueCoordinator{}
+		mock.setLeader(configuredTestQueue, true)
+		coordinator := &configRecordingCoordinator{mockQueueCoordinator: mock}
+		manager, _ := startConfiguredQueueManagerWith(t, true, mock, coordinator)
+		stopManagerOnCleanup(t, manager)
+
+		const apiQueue = "api-jobs"
+		mock.setLeader(apiQueue, true)
+		mock.replicatedByQueue[apiQueue] = true // no recorder goroutine runs: Start recorded the configured queue
+		created := types.DefaultQueueConfig(apiQueue, "api/#")
+		created.Replication.Enabled = true
+		require.NoError(t, manager.CreateQueue(context.Background(), created))
+
+		assert.NoError(t, manager.replicationWriteReadiness(apiQueue),
+			"a queue created through raft has its settings in the log already")
 	})
 }

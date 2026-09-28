@@ -279,3 +279,52 @@ func TestThreeNodeRaftRejectsWriteWithoutQuorum(t *testing.T) {
 	// A timed-out submission may still commit after quorum returns. Its result
 	// is unconfirmed, not proof that the record is absent or safe to retry.
 }
+
+// A queue's settings count as Raft state only once the log or a snapshot
+// carries them. A node-local copy, or a create that found one, does not.
+func TestThreeNodeRaftTracksRecordedQueueConfig(t *testing.T) {
+	c := newThreeNodeCluster(t)
+	leader := c.waitForLeader(t)
+	ctx := context.Background()
+
+	configured := types.DefaultQueueConfig("configured-jobs", "configured/#")
+	configured.Replication.Enabled = true
+	configured.Replication.Group = DefaultGroupID
+	for _, node := range c.nodes {
+		require.NoError(t, node.store.CreateQueue(ctx, configured))
+	}
+	appendTestRecord(t, leader, configured.Name, "configured-1", []byte("before settings"))
+	c.waitForRecord(t, configured.Name, 0, "configured-1", []byte("before settings"))
+	c.requireConfigRecorded(t, configured.Name, false, "a node-local queue is not raft state")
+
+	require.NoError(t, leader.manager.ApplyCreateQueue(ctx, configured))
+	c.requireConfigRecorded(t, configured.Name, false, "a create that found the queue did not set its settings")
+
+	require.NoError(t, leader.manager.ApplyUpdateQueue(ctx, configured))
+	c.eventuallyConfigRecorded(t, configured.Name, true, "an applied update records the settings")
+
+	require.NoError(t, leader.manager.ApplyDeleteQueue(ctx, configured.Name))
+	c.eventuallyConfigRecorded(t, configured.Name, false, "a deleted queue has no recorded settings")
+
+	fresh := types.DefaultQueueConfig("fresh-jobs", "fresh/#")
+	fresh.Replication.Enabled = true
+	fresh.Replication.Group = DefaultGroupID
+	require.NoError(t, leader.manager.ApplyCreateQueue(ctx, fresh))
+	c.eventuallyConfigRecorded(t, fresh.Name, true, "a create that made the queue records its settings")
+}
+
+func (c *threeNodeCluster) requireConfigRecorded(t *testing.T, queueName string, want bool, msg string) {
+	t.Helper()
+	for _, node := range c.nodes {
+		require.Equal(t, want, node.manager.IsQueueConfigRecorded(queueName), "%s: %s", node.id, msg)
+	}
+}
+
+func (c *threeNodeCluster) eventuallyConfigRecorded(t *testing.T, queueName string, want bool, msg string) {
+	t.Helper()
+	for _, node := range c.nodes {
+		require.Eventuallyf(t, func() bool {
+			return node.manager.IsQueueConfigRecorded(queueName) == want
+		}, 15*time.Second, 25*time.Millisecond, "%s: %s", node.id, msg)
+	}
+}
