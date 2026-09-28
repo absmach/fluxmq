@@ -1955,7 +1955,6 @@ type mockQueueCoordinator struct {
 
 	appendCalls  []string
 	createCalls  []string
-	queueCalls   []string
 	cursorCalls  []string
 	commitCalls  []string
 	requeueCalls []string
@@ -1965,7 +1964,26 @@ type mockQueueCoordinator struct {
 	appendOnceCalls []string
 	appendOnceKeys  map[string]uint64
 
-	createQueueErr error
+	// queueMu guards the fields below and leaderByQueue reads, which the
+	// configured-queue recorder reaches from its own goroutine.
+	queueMu             sync.Mutex
+	queueCalls          []string
+	createQueueFailures int
+}
+
+func (m *mockQueueCoordinator) setLeader(queueName string, leader bool) {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	if m.leaderByQueue == nil {
+		m.leaderByQueue = make(map[string]bool)
+	}
+	m.leaderByQueue[queueName] = leader
+}
+
+func (m *mockQueueCoordinator) recordedQueueCalls() []string {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	return slices.Clone(m.queueCalls)
 }
 
 func (m *mockQueueCoordinator) Stop() error { return nil }
@@ -1981,6 +1999,8 @@ func (m *mockQueueCoordinator) IsQueueReplicated(queueName string) bool {
 }
 
 func (m *mockQueueCoordinator) IsLeaderForQueue(queueName string) bool {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
 	if m.leaderByQueue == nil {
 		return false
 	}
@@ -2005,11 +2025,19 @@ func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 }
 
 func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, cfg types.QueueConfig) error {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
 	m.queueCalls = append(m.queueCalls, "create:"+cfg.Name)
-	return m.createQueueErr
+	if m.createQueueFailures > 0 {
+		m.createQueueFailures--
+		return errors.New("raft apply timed out")
+	}
+	return nil
 }
 
 func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, cfg types.QueueConfig) error {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
 	m.queueCalls = append(m.queueCalls, "update:"+cfg.Name)
 	return nil
 }

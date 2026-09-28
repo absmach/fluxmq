@@ -197,6 +197,13 @@ type Config struct {
 	// Retention configuration
 	RetentionCheckInterval time.Duration
 
+	// ConfiguredQueueRetryInterval and ConfiguredQueueRetryMaxInterval bound
+	// the backoff between attempts to record a configured replicated queue's
+	// settings in its Raft log, while this node is not its leader or the
+	// write fails. Zero selects the default.
+	ConfiguredQueueRetryInterval    time.Duration
+	ConfiguredQueueRetryMaxInterval time.Duration
+
 	// Capture dispatcher configuration. Topic capture runs off the publish
 	// path so a stalled queue store cannot delay subscribers; these bound how
 	// much unwritten capture is held and how long shutdown waits for it.
@@ -252,6 +259,9 @@ func DefaultConfig() Config {
 		CaptureWorkers:         defaultCaptureWorkers,
 		CaptureQueueDepth:      defaultCaptureQueueDepth,
 		CaptureDrainTimeout:    defaultCaptureDrainTimeout,
+
+		ConfiguredQueueRetryInterval:    defaultConfiguredQueueRetryInterval,
+		ConfiguredQueueRetryMaxInterval: defaultConfiguredQueueRetryMaxInterval,
 	}
 }
 
@@ -438,7 +448,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// Ensure reserved queues exist
-	if err := m.ensureReservedQueues(ctx); err != nil {
+	unrecordedQueues, err := m.ensureReservedQueues(ctx)
+	if err != nil {
 		return fmt.Errorf("failed to create reserved queues: %w", err)
 	}
 	if err := m.ValidateProtectedQueueContracts(ctx); err != nil {
@@ -473,6 +484,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	// poison entries accumulate until MaxPELSize stalls the group.
 	m.wg.Add(1)
 	go m.runPoisonSweepLoop(backgroundCtx)
+
+	if len(unrecordedQueues) > 0 {
+		m.wg.Add(1)
+		go m.runConfiguredQueueRecorder(backgroundCtx, unrecordedQueues)
+	}
 
 	// Start consumer cleanup
 	m.wg.Add(1)
@@ -513,27 +529,32 @@ func (m *Manager) replicationWriteReadiness(queueName string) error {
 	return m.queueControl.replicationWriteReadiness(queueName)
 }
 
-// ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
-func (m *Manager) ensureReservedQueues(ctx context.Context) error {
+// ensureReservedQueues creates queues from config or the default mqtt queue if
+// no config provided. It returns the replicated ones whose settings could not
+// yet be recorded in their Raft log, for the recorder to retry.
+func (m *Manager) ensureReservedQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	// If no queue configs provided, use the default mqtt queue
 	configs := m.config.QueueConfigs
 	if len(configs) == 0 {
 		configs = []types.QueueConfig{types.MQTTQueueConfig()}
 	}
 
+	var unrecorded []types.QueueConfig
 	for _, cfg := range configs {
 		if err := m.validateQueueReplication(ctx, cfg); err != nil {
-			return err
+			return nil, err
 		}
-		m.recordConfiguredQueue(ctx, cfg)
+		if cfg.Replication.Enabled && !m.tryRecordConfiguredQueue(ctx, cfg, 1) {
+			unrecorded = append(unrecorded, cfg)
+		}
 		if err := m.queueStore.CreateQueue(ctx, cfg); err != nil {
 			if !errors.Is(err, storage.ErrQueueAlreadyExists) {
-				return err
+				return nil, err
 			}
 		}
 		if m.coordinator() != nil && !cfg.Replication.Enabled {
 			if err := m.coordinator().EnsureQueue(ctx, cfg); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -543,42 +564,7 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 			slog.Bool("reserved", cfg.Reserved))
 	}
 
-	return nil
-}
-
-// recordConfiguredQueue writes a configured replicated queue's settings into
-// its Raft log when this node leads the queue's group.
-//
-// Each node also creates the queue in its own store, but that copy is not Raft
-// state: restoring a snapshot taken before the queue existed, or replaying the
-// log after a recovery lost the queue, rebuilds it from appends alone, with
-// ephemeral defaults. The create covers a replay that reaches this point
-// without the queue; the update then overrides whatever an earlier replayed
-// append invented, since an existing queue ignores the create. Both are
-// written on every leader start because the log's older entries cannot be
-// rewritten, only followed.
-//
-// A failure is logged, not returned: the local queue is still usable, and the
-// next start of a leader records the settings again.
-func (m *Manager) recordConfiguredQueue(ctx context.Context, cfg types.QueueConfig) {
-	if !cfg.Replication.Enabled {
-		return
-	}
-	coordinator := m.coordinator()
-	if coordinator == nil || !coordinator.IsLeaderForQueue(cfg.Name) {
-		return
-	}
-	if err := coordinator.ApplyCreateQueue(ctx, cfg); err != nil {
-		m.logger.Warn("failed to record configured queue in raft log",
-			slog.String("queue", cfg.Name),
-			slog.String("error", err.Error()))
-		return
-	}
-	if err := coordinator.ApplyUpdateQueue(ctx, cfg); err != nil {
-		m.logger.Warn("failed to record configured queue settings in raft log",
-			slog.String("queue", cfg.Name),
-			slog.String("error", err.Error()))
-	}
+	return unrecorded, nil
 }
 
 // Stop stops the manager and all workers.
