@@ -6,6 +6,7 @@ package raft
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/dgraph-io/badger/v4"
@@ -34,6 +35,101 @@ func setupTestDB(t *testing.T) (*badger.DB, func()) {
 	}
 
 	return db, cleanup
+}
+
+func TestRaftBadgerOptionsSyncLogAndStableState(t *testing.T) {
+	dir := t.TempDir()
+	opts := raftBadgerOptions(dir)
+	if !opts.SyncWrites {
+		t.Fatal("Raft log and stable state must use synchronous Badger writes")
+	}
+
+	db, err := badger.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logStore := NewBadgerLogStore(db, "_raft", 0)
+	stableStore := NewBadgerStableStore(db, "_raft", 0)
+	want := &raft.Log{Index: 7, Term: 3, Type: raft.LogCommand, Data: []byte("durable entry")}
+	if err := logStore.StoreLog(want); err != nil {
+		t.Fatal(err)
+	}
+	if err := stableStore.SetUint64([]byte("term"), want.Term); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = badger.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	got := new(raft.Log)
+	if err := NewBadgerLogStore(db, "_raft", 0).GetLog(want.Index, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Data) != string(want.Data) || got.Term != want.Term {
+		t.Fatalf("reopened log = %#v, want %#v", got, want)
+	}
+	term, err := NewBadgerStableStore(db, "_raft", 0).GetUint64([]byte("term"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if term != want.Term {
+		t.Fatalf("reopened term = %d, want %d", term, want.Term)
+	}
+}
+
+// The child exits without closing Badger, as a broker killed after a write
+// would. A graceful Close can flush buffered data and would hide a missing
+// SyncWrites option.
+func TestRaftBadgerWritesSurviveUncleanExit(t *testing.T) {
+	const helper = "FLUXMQ_RAFT_UNCLEAN_EXIT_HELPER"
+	const helperDir = "FLUXMQ_RAFT_UNCLEAN_EXIT_DIR"
+	if os.Getenv(helper) == "1" {
+		db, err := badger.Open(raftBadgerOptions(os.Getenv(helperDir)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewBadgerLogStore(db, "_raft", 0).StoreLog(&raft.Log{
+			Index: 7, Term: 3, Type: raft.LogCommand, Data: []byte("unclean exit"),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewBadgerStableStore(db, "_raft", 0).SetUint64([]byte("term"), 3); err != nil {
+			t.Fatal(err)
+		}
+		os.Exit(0) // Deliberately bypass Badger.Close and all deferred cleanup.
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRaftBadgerWritesSurviveUncleanExit$")
+	cmd.Env = append(os.Environ(), helper+"=1", helperDir+"="+dir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("unclean writer exited with error: %v\n%s", err, output)
+	}
+
+	db, err := badger.Open(raftBadgerOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	got := new(raft.Log)
+	if err := NewBadgerLogStore(db, "_raft", 0).GetLog(7, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Data) != "unclean exit" || got.Term != 3 {
+		t.Fatalf("recovered log = %#v", got)
+	}
+	term, err := NewBadgerStableStore(db, "_raft", 0).GetUint64([]byte("term"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if term != 3 {
+		t.Fatalf("recovered term = %d, want 3", term)
+	}
 }
 
 func TestBadgerLogStore_FirstLastIndex(t *testing.T) {

@@ -1204,7 +1204,9 @@ Deferring these is the point of having a roadmap:
   least two further weeks of partition, restart, snapshot, rolling-upgrade, and
   quorum-loss soak. 1.0 ships it behind an experimental gate, off by default,
   outside the compatibility contract — which is exactly why 1.1 (Track A) only
-  has to secure its transport rather than harden it.
+  has to secure its transport rather than harden it. Production support targets
+  a distinct quorum-durable acknowledgement policy, not local `fsync` on
+  replicated queues; this is not a current guarantee.
 - Elastic cluster membership. 1.0 membership is static: a changed member map
   against existing cluster data fails startup. Join and remove at runtime are
   their own project.
@@ -1242,7 +1244,6 @@ Deferring these is the point of having a roadmap:
 
 - [x] Queue acknowledgement durability configurable per queue and broker-wide; loss window and cost documented per setting — *#578*
 - [x] Durability barriers coalesce, so `fsync` scales with concurrent publishers — *#579*. The default stays `buffered`: sharing the barrier makes `fsync` usable on a busy queue, not free
-- [ ] Replicated queues can use `fsync` — today the combination is refused, because Raft apply never reaches the queue log's per-append barrier
 - [ ] Acknowledged fsync-mode messages survive `SIGKILL` and restart
 - [x] Injected append/fsync/DLQ failures never remove the source PEL entry; crash-window DLQ duplicates share a stable transfer ID; `Reject` routes through DLQ — *`87aa027e9`*
 - [x] Replication-enabled queues refuse configuration/writes without the experimental gate and a healthy Raft manager; no silent local fallback remains — *`0978aa117`*
