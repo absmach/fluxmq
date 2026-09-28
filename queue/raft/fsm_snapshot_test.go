@@ -487,10 +487,15 @@ func (failingGroupStore) ListConsumerGroups(context.Context, string) ([]*types.C
 // as cleanly as a complete one, and raft compacts the log against either, so the
 // declared tail has to be checked at the next queue and again at the end.
 func TestLogFSMRestoreRejectsShortSnapshot(t *testing.T) {
+	ctx := context.Background()
 	store := memlog.New()
 	fsm := NewLogFSM(testFSMGroup, store, newRecordingGroupStore(), discardLogger())
 
 	config := conformanceQueueConfig()
+	require.NoError(t, store.CreateQueue(ctx, config))
+	_, err := store.Append(ctx, config.Name, newQueuedEnvelope("existing", "$queue/"+config.Name, []byte("existing")))
+	require.NoError(t, err)
+
 	var buf bytes.Buffer
 	writer := newSnapshotWriter(&buf)
 	require.NoError(t, writer.WriteHeader(conformanceTime))
@@ -501,6 +506,79 @@ func TestLogFSMRestoreRejectsShortSnapshot(t *testing.T) {
 	require.NoError(t, writer.WriteRecord(0, encodeOperationEnvelope(t,
 		newQueuedEnvelope("only", "$queue/"+config.Name, []byte("only")))))
 
-	err := fsm.Restore(io.NopCloser(bytes.NewReader(buf.Bytes())))
+	err = fsm.Restore(io.NopCloser(bytes.NewReader(buf.Bytes())))
 	assert.ErrorIs(t, err, errMalformedSnapshot, "a snapshot that stops short of its declared tail must be refused")
+	got, readErr := store.Read(ctx, config.Name, 0)
+	require.NoError(t, readErr, "validation must finish before existing state is cleared")
+	assert.Equal(t, "existing", string(got.PayloadBytes()))
+	message.Release(got)
+}
+
+type shortSnapshotReader struct{}
+
+func (shortSnapshotReader) Head() uint64 { return 0 }
+func (shortSnapshotReader) Tail() uint64 { return 1 }
+func (shortSnapshotReader) Next(context.Context) (uint64, *message.Envelope, bool, error) {
+	return 0, nil, false, nil
+}
+func (shortSnapshotReader) Close() error { return nil }
+
+func TestLogFSMSnapshotCancelsIncompleteCapturedRange(t *testing.T) {
+	config := conformanceQueueConfig()
+	snapshot := &GlobalSnapshot{
+		logger: discardLogger(),
+		queues: []capturedQueue{{
+			QueueSnapshotData: QueueSnapshotData{
+				QueueName: config.Name, QueueConfig: &config, Head: 0, Tail: 1,
+			},
+			reader: shortSnapshotReader{},
+		}},
+	}
+	sink := new(memSink)
+	err := snapshot.Persist(sink)
+	assert.ErrorIs(t, err, errMalformedSnapshot)
+	assert.True(t, sink.cancelled, "an incomplete snapshot must never be published")
+}
+
+type failOnceRestoreRecordStore struct {
+	storage.SnapshotableQueueStore
+	fail bool
+}
+
+func (s *failOnceRestoreRecordStore) RestoreRecord(ctx context.Context, queueName string, offset uint64, msg *message.Envelope) error {
+	if s.fail {
+		s.fail = false
+		message.Release(msg)
+		return errors.New("injected restore failure")
+	}
+	return s.SnapshotableQueueStore.RestoreRecord(ctx, queueName, offset, msg)
+}
+
+func TestLogFSMRestoreStopsAfterInstallFailureAndCanReplay(t *testing.T) {
+	ctx := context.Background()
+	config := conformanceQueueConfig()
+	source := memlog.New()
+	require.NoError(t, source.CreateQueue(ctx, config))
+	_, err := source.Append(ctx, config.Name, newQueuedEnvelope("recover", "$queue/"+config.Name, []byte("recover")))
+	require.NoError(t, err)
+	snapshot, err := NewLogFSM(testFSMGroup, source, newRecordingGroupStore(), discardLogger()).Snapshot()
+	require.NoError(t, err)
+	sink := new(memSink)
+	require.NoError(t, snapshot.Persist(sink))
+	snapshot.Release()
+
+	target := memlog.New()
+	failing := &failOnceRestoreRecordStore{SnapshotableQueueStore: target, fail: true}
+	fsm := NewLogFSM(testFSMGroup, failing, newRecordingGroupStore(), discardLogger())
+	assert.Panics(t, func() {
+		_ = fsm.Restore(io.NopCloser(bytes.NewReader(sink.Bytes())))
+	}, "a failed install must stop Raft rather than continue with a partial FSM")
+
+	// On process restart, Raft opens the same durable snapshot again. Replay
+	// must replace the partial state left by the interrupted first install.
+	require.NoError(t, fsm.Restore(io.NopCloser(bytes.NewReader(sink.Bytes()))))
+	got, err := target.Read(ctx, config.Name, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "recover", string(got.PayloadBytes()))
+	message.Release(got)
 }

@@ -166,10 +166,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create raft directory: %w", err)
 	}
 
-	// Open BadgerDB for Raft log and metadata
-	opts := badger.DefaultOptions(raftDir)
-	opts.Logger = nil
-	raftDB, err := badger.Open(opts)
+	// Raft must not report a committed entry while its log or stable metadata
+	// exists only in the page cache. Both stores share this DB.
+	raftDB, err := badger.Open(raftBadgerOptions(raftDir))
 	if err != nil {
 		return fmt.Errorf("failed to open raft badger db: %w", err)
 	}
@@ -250,6 +249,12 @@ func (m *Manager) Start(ctx context.Context) error {
 		slog.String("bind_addr", m.bindAddr))
 
 	return nil
+}
+
+func raftBadgerOptions(dir string) badger.Options {
+	opts := badger.DefaultOptions(dir).WithSyncWrites(true)
+	opts.Logger = nil
+	return opts
 }
 
 func (m *Manager) validateReplicationTopology() error {

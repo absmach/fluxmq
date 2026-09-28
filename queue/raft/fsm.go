@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -679,9 +680,10 @@ func (f *LogFSM) Snapshot() (raft.FSMSnapshot, error) {
 // Restore rebuilds the FSM from a snapshot.
 //
 // A snapshot is the authoritative state of the group at the index it was taken,
-// not a set of changes to merge: raft installs one precisely when this node is
-// too far behind for the log to catch it up. Anything already here describes a
-// past the group has compacted away, so it is discarded first.
+// not a set of changes to merge. Validate the entire stream before discarding
+// any existing state. The staging file bounds memory independently of snapshot
+// size; it need not be durable because Raft retains the original snapshot and
+// restores it again on restart.
 func (f *LogFSM) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
 
@@ -692,15 +694,64 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 		return fmt.Errorf("queue store cannot be restored: %T", f.queueStore)
 	}
 
-	ctx := context.Background()
-	reader := newSnapshotReader(rc)
-	if err := reader.ReadHeader(); err != nil {
-		f.logger.Error("failed to decode snapshot header",
-			slog.String("error", err.Error()))
-		return err
+	stage, err := os.CreateTemp("", "fluxmq-raft-restore-*")
+	if err != nil {
+		return fmt.Errorf("stage queue raft snapshot: %w", err)
 	}
+	// Unlink the open file where supported so SIGKILL during restore cannot
+	// leave a snapshot-sized orphan in the temp directory. Platforms that do
+	// not allow unlinking an open file remove it after Close instead.
+	if err := os.Remove(stage.Name()); err != nil {
+		defer func() { _ = os.Remove(stage.Name()) }()
+	}
+	defer func() { _ = stage.Close() }()
+	if _, err := io.Copy(stage, rc); err != nil {
+		return fmt.Errorf("stage queue raft snapshot: %w", err)
+	}
+	if _, err := stage.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind queue raft snapshot: %w", err)
+	}
+	if _, _, err := f.scanSnapshot(stage, nil, nil); err != nil {
+		return fmt.Errorf("validate queue raft snapshot: %w", err)
+	}
+
+	ctx := context.Background()
+	// A failed reset or install can leave this node partly changed. Hashicorp
+	// Raft reports a Restore error but keeps its FSM running, so returning here
+	// would allow a divergent replica to serve. Stop instead; restart replays
+	// the original durable snapshot from the beginning.
 	if err := f.resetState(ctx, snapshotable); err != nil {
-		return err
+		panic(fmt.Errorf("queue raft snapshot reset left partial state: %w", err))
+	}
+	if _, err := stage.Seek(0, io.SeekStart); err != nil {
+		panic(fmt.Errorf("queue raft snapshot rewind after reset: %w", err))
+	}
+	queueCount, records, err := f.scanSnapshot(stage,
+		func(queue *QueueSnapshotData) error {
+			return f.restoreQueue(ctx, snapshotable, queue)
+		},
+		func(queueName string, offset uint64, envelope *message.Envelope) error {
+			return snapshotable.RestoreRecord(ctx, queueName, offset, envelope)
+		},
+	)
+	if err != nil {
+		panic(fmt.Errorf("queue raft snapshot install left partial state: %w", err))
+	}
+
+	f.logger.Info("restored snapshot",
+		slog.Int("queue_count", queueCount),
+		slog.Uint64("record_count", records))
+
+	return nil
+}
+
+// scanSnapshot checks the complete stream's ownership and contiguous record
+// ranges. Without callbacks it only validates; with callbacks it transfers
+// each decoded record's ownership to onRecord while rebuilding state.
+func (f *LogFSM) scanSnapshot(src io.Reader, onQueue func(*QueueSnapshotData) error, onRecord func(string, uint64, *message.Envelope) error) (int, uint64, error) {
+	reader := newSnapshotReader(src)
+	if err := reader.ReadHeader(); err != nil {
+		return 0, 0, err
 	}
 
 	var (
@@ -710,15 +761,9 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 		queueCount int
 		records    uint64
 	)
-	// Each queue frame states the tail its records reach. Checking it as the
-	// next queue opens, and again at the end, is what separates a snapshot that
-	// carried everything from one that was cut short: both decode cleanly, and
-	// raft compacts the log against either.
+	seen := make(map[string]struct{})
 	closeQueue := func() error {
-		if current == "" {
-			return nil
-		}
-		if next != expected {
+		if current != "" && next != expected {
 			return fmt.Errorf("%w: queue %q declared tail %d but carried records to %d",
 				errMalformedSnapshot, current, expected, next)
 		}
@@ -731,49 +776,76 @@ func (f *LogFSM) Restore(rc io.ReadCloser) error {
 			break
 		}
 		if err != nil {
-			f.logger.Error("failed to decode snapshot",
-				slog.String("error", err.Error()))
-			return err
+			return 0, 0, err
 		}
 
 		switch {
 		case entry.Queue != nil:
 			if err := closeQueue(); err != nil {
-				return err
+				return 0, 0, err
 			}
-			if err := f.restoreQueue(ctx, snapshotable, entry.Queue); err != nil {
-				return err
+			queue := entry.Queue
+			if err := validateSnapshotQueueData(queue); err != nil {
+				return 0, 0, err
 			}
-			current, expected, next = entry.Queue.QueueName, entry.Queue.Tail, entry.Queue.Head
+			if !f.owns(*queue.QueueConfig) {
+				return 0, 0, fmt.Errorf("%w: queue %q is not replicated by group %q", errMalformedSnapshot, queue.QueueName, f.groupID)
+			}
+			if _, duplicate := seen[queue.QueueName]; duplicate {
+				return 0, 0, fmt.Errorf("%w: duplicate queue %q", errMalformedSnapshot, queue.QueueName)
+			}
+			seen[queue.QueueName] = struct{}{}
+			if onQueue != nil {
+				if err := onQueue(queue); err != nil {
+					return 0, 0, err
+				}
+			}
+			current, expected, next = queue.QueueName, queue.Tail, queue.Head
 			queueCount++
 		case entry.Record != nil:
-			if current == "" {
-				return fmt.Errorf("%w: record before any queue", errMalformedSnapshot)
+			if current == "" || next >= expected || entry.Record.Offset != next {
+				return 0, 0, fmt.Errorf("%w: queue %q carried record %d where offset %d was expected before tail %d",
+					errMalformedSnapshot, current, entry.Record.Offset, next, expected)
 			}
 			envelope, err := decodeOperationMessage(entry.Record.Envelope)
 			if err != nil {
-				return fmt.Errorf("%w: queue %q record %d: %w", errMalformedSnapshot, current, entry.Record.Offset, err)
+				return 0, 0, fmt.Errorf("%w: queue %q record %d: %w", errMalformedSnapshot, current, next, err)
 			}
-			if err := snapshotable.RestoreRecord(ctx, current, entry.Record.Offset, envelope); err != nil {
-				f.logger.Error("failed to restore record",
-					slog.String("queue", current),
-					slog.Uint64("offset", entry.Record.Offset),
-					slog.String("error", err.Error()))
-				return err
+			if onRecord == nil {
+				message.Release(envelope)
+			} else if err := onRecord(current, next, envelope); err != nil {
+				return 0, 0, err
 			}
-			next = entry.Record.Offset + 1
+			next++
 			records++
 		}
 	}
-
 	if err := closeQueue(); err != nil {
-		return err
+		return 0, 0, err
 	}
+	return queueCount, records, nil
+}
 
-	f.logger.Info("restored snapshot",
-		slog.Int("queue_count", queueCount),
-		slog.Uint64("record_count", records))
-
+func validateSnapshotQueueData(queue *QueueSnapshotData) error {
+	if queue.QueueConfig == nil || queue.QueueName == "" || queue.QueueConfig.Name != queue.QueueName {
+		return fmt.Errorf("%w: queue %q has missing or mismatched config", errMalformedSnapshot, queue.QueueName)
+	}
+	if queue.Tail < queue.Head {
+		return fmt.Errorf("%w: queue %q tail %d precedes head %d", errMalformedSnapshot, queue.QueueName, queue.Tail, queue.Head)
+	}
+	if err := queue.QueueConfig.Validate(); err != nil {
+		return fmt.Errorf("%w: queue %q config: %w", errMalformedSnapshot, queue.QueueName, err)
+	}
+	groups := make(map[string]struct{}, len(queue.Groups))
+	for _, group := range queue.Groups {
+		if group == nil || group.ID == "" || group.QueueName != queue.QueueName {
+			return fmt.Errorf("%w: queue %q has missing or mismatched group", errMalformedSnapshot, queue.QueueName)
+		}
+		if _, duplicate := groups[group.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate group %q in queue %q", errMalformedSnapshot, group.ID, queue.QueueName)
+		}
+		groups[group.ID] = struct{}{}
+	}
 	return nil
 }
 
@@ -786,11 +858,7 @@ func (f *LogFSM) restoreQueue(ctx context.Context, store storage.SnapshotableQue
 		return fmt.Errorf("%w: queue %q is not replicated by group %q", errMalformedSnapshot, queue.QueueName, f.groupID)
 	}
 	if config == nil {
-		// A queue frame without a config predates nothing this build writes,
-		// but a snapshot is still expected to name what it restores. Fall back
-		// to the ephemeral default so its groups do not become orphaned.
-		fallback := types.DefaultEphemeralQueueConfig(queue.QueueName, "$queue/"+queue.QueueName+"/#")
-		config = &fallback
+		return fmt.Errorf("%w: queue %q is missing config", errMalformedSnapshot, queue.QueueName)
 	}
 	if err := store.RestoreQueue(ctx, *config, queue.Head); err != nil {
 		f.logger.Error("failed to restore queue config",
@@ -897,6 +965,12 @@ func (s *GlobalSnapshot) write(writer *snapshotWriter) error {
 		return err
 	}
 	for _, queue := range s.queues {
+		if err := validateSnapshotQueueData(&queue.QueueSnapshotData); err != nil {
+			return err
+		}
+		if queue.reader == nil || queue.reader.Head() != queue.Head || queue.reader.Tail() != queue.Tail {
+			return fmt.Errorf("%w: queue %q capture range changed before persist", errMalformedSnapshot, queue.QueueName)
+		}
 		if err := writer.WriteQueue(queue.QueueSnapshotData); err != nil {
 			return err
 		}
@@ -909,13 +983,23 @@ func (s *GlobalSnapshot) write(writer *snapshotWriter) error {
 
 func writeQueueRecords(writer *snapshotWriter, queue capturedQueue) error {
 	ctx := context.Background()
+	next := queue.Head
 	for {
 		offset, record, ok, err := queue.reader.Next(ctx)
 		if err != nil {
 			return fmt.Errorf("read record of queue %q: %w", queue.QueueName, err)
 		}
 		if !ok {
+			if next != queue.Tail {
+				return fmt.Errorf("%w: queue %q declared tail %d but yielded records to %d",
+					errMalformedSnapshot, queue.QueueName, queue.Tail, next)
+			}
 			return nil
+		}
+		if offset != next || next >= queue.Tail {
+			message.Release(record)
+			return fmt.Errorf("%w: queue %q yielded offset %d where %d was expected before tail %d",
+				errMalformedSnapshot, queue.QueueName, offset, next, queue.Tail)
 		}
 
 		encoded, err := message.MarshalBinary(record)
@@ -926,6 +1010,7 @@ func writeQueueRecords(writer *snapshotWriter, queue capturedQueue) error {
 		if err := writer.WriteRecord(offset, encoded); err != nil {
 			return err
 		}
+		next++
 	}
 }
 
