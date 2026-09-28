@@ -194,6 +194,10 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Create FSM that handles all queues
 	m.fsm = NewLogFSM(m.groupID(), m.queueStore, m.groupStore, m.logger)
+	if err := m.prepareFSMForRecovery(); err != nil {
+		_ = raftDB.Close()
+		return fmt.Errorf("failed to prepare raft state machine recovery: %w", err)
+	}
 
 	// Create transport
 	addr, err := net.ResolveTCPAddr("tcp", m.bindAddr)
@@ -255,6 +259,47 @@ func raftBadgerOptions(dir string) badger.Options {
 	opts := badger.DefaultOptions(dir).WithSyncWrites(true)
 	opts.Logger = nil
 	return opts
+}
+
+// prepareFSMForRecovery keeps the disk-backed queue state from being applied
+// twice after a process restart. Hashicorp Raft restores a snapshot when one
+// exists; Restore replaces this group's state before replaying newer entries.
+// Without a snapshot, it replays the log over the queue store as it stands, so
+// discard only this group's old materialized state first. The Raft log remains
+// authoritative; no other group's queues or local-only queues are touched.
+func (m *Manager) prepareFSMForRecovery() error {
+	snapshots, err := m.snapshotStore.List()
+	if err != nil {
+		return fmt.Errorf("list raft snapshots: %w", err)
+	}
+	if len(snapshots) > 0 {
+		return nil
+	}
+
+	hasState, err := raft.HasExistingState(m.raftLogStore, m.stableStore, m.snapshotStore)
+	if err != nil {
+		return fmt.Errorf("check existing raft state: %w", err)
+	}
+	if !hasState {
+		return nil
+	}
+
+	first, err := m.raftLogStore.FirstIndex()
+	if err != nil {
+		return fmt.Errorf("read first raft log index: %w", err)
+	}
+	if first > 1 {
+		return fmt.Errorf("raft log begins at index %d without a snapshot", first)
+	}
+
+	snapshotable, ok := m.queueStore.(storage.SnapshotableQueueStore)
+	if !ok {
+		return fmt.Errorf("queue store cannot be rebuilt from raft log: %T", m.queueStore)
+	}
+	if err := m.fsm.resetState(context.Background(), snapshotable); err != nil {
+		return fmt.Errorf("clear materialized raft group state: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) validateReplicationTopology() error {
