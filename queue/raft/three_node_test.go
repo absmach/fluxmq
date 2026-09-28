@@ -146,10 +146,6 @@ func (n *threeNodeClusterNode) stop() error {
 	var errs []error
 	if n.manager != nil {
 		errs = append(errs, n.manager.Stop())
-		// Manager.Stop does not close the network transport itself.
-		if transport, ok := n.manager.transport.(io.Closer); ok {
-			errs = append(errs, transport.Close())
-		}
 		n.manager = nil
 	}
 	if n.store != nil {
@@ -247,6 +243,10 @@ func TestThreeNodeRaftLeaderFailoverAndRestart(t *testing.T) {
 	require.Equal(t, uint64(0), offset)
 
 	c.stopNodes(t, leader)
+	// Stop must release the Raft listener, or the restart below cannot bind.
+	listener, err := net.Listen("tcp", leader.address)
+	require.NoError(t, err, "stopped manager should release %s", leader.address)
+	require.NoError(t, listener.Close())
 	replacement := c.waitForLeader(t)
 	require.NotEqual(t, leader.id, replacement.id)
 	c.waitForRecord(t, queueName, offset, "failover-1", payload)
