@@ -1955,6 +1955,7 @@ type mockQueueCoordinator struct {
 
 	appendCalls  []string
 	createCalls  []string
+	queueCalls   []string
 	cursorCalls  []string
 	commitCalls  []string
 	requeueCalls []string
@@ -1963,6 +1964,8 @@ type mockQueueCoordinator struct {
 	// answered the way a real FSM would answer it.
 	appendOnceCalls []string
 	appendOnceKeys  map[string]uint64
+
+	createQueueErr error
 }
 
 func (m *mockQueueCoordinator) Stop() error { return nil }
@@ -2001,11 +2004,13 @@ func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 	return m.leaderIDByQueue[queueName]
 }
 
-func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, _ types.QueueConfig) error {
-	return nil
+func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, cfg types.QueueConfig) error {
+	m.queueCalls = append(m.queueCalls, "create:"+cfg.Name)
+	return m.createQueueErr
 }
 
-func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, _ types.QueueConfig) error {
+func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, cfg types.QueueConfig) error {
+	m.queueCalls = append(m.queueCalls, "update:"+cfg.Name)
 	return nil
 }
 func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error { return nil }

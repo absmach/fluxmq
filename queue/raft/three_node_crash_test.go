@@ -24,31 +24,41 @@ const (
 	crashHelperMode = "FLUXMQ_RAFT_CRASH_HELPER_MODE"
 	crashHelperDir  = "FLUXMQ_RAFT_CRASH_HELPER_DIR"
 	crashHelperAddr = "FLUXMQ_RAFT_CRASH_HELPER_ADDRS"
-	crashHelperSnap = "FLUXMQ_RAFT_CRASH_HELPER_SNAPSHOT"
+	crashHelperCase = "FLUXMQ_RAFT_CRASH_HELPER_SCENARIO"
 
 	configuredQueueName  = "configured-jobs"
 	configuredQueueTopic = "configured/#"
+)
+
+// Crash scenarios. Each names what the Raft state looks like when the process
+// dies; recovery must reach the same queues in every one of them.
+const (
+	// The whole log is replayed; the configured queue's create never entered
+	// the log, as in deployments that predate the leader recording it.
+	scenarioLogReplay = "log-replay"
+	// A snapshot is restored and only the entries after it are replayed.
+	scenarioSnapshotTail = "snapshot-then-log-tail"
+	// The snapshot predates the configured queue, so restoring it drops the
+	// queue and only the log tail can bring back its settings.
+	scenarioStaleSnapshot = "snapshot-predates-configured-queue"
+	// The configured queue is gone from every store before replay, as after a
+	// crash between the delete and the recreate of an earlier recovery. Its
+	// first appends precede the create the leader later recorded.
+	scenarioConfigLost = "configured-queue-lost-before-replay"
 )
 
 // The parent kills the process containing all three nodes after the append
 // returns success, then opens the same disks in a fresh process. This tests
 // process-crash recovery, not power loss of the host or its page cache.
 func TestThreeNodeRaftRecoversAfterAbruptProcessExit(t *testing.T) {
-	cases := []struct {
-		name     string
-		snapshot bool
-	}{
-		{name: "log-replay", snapshot: false},
-		{name: "snapshot-then-log-tail", snapshot: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			runCrashRecovery(t, tc.snapshot)
+	for _, scenario := range []string{scenarioLogReplay, scenarioSnapshotTail, scenarioStaleSnapshot, scenarioConfigLost} {
+		t.Run(scenario, func(t *testing.T) {
+			runCrashRecovery(t, scenario)
 		})
 	}
 }
 
-func runCrashRecovery(t *testing.T, snapshot bool) {
+func runCrashRecovery(t *testing.T, scenario string) {
 	t.Helper()
 	root, addresses := threeNodeTestDirs(t)
 	_, err := testcert.Generate(root)
@@ -56,7 +66,7 @@ func runCrashRecovery(t *testing.T, snapshot bool) {
 	env := []string{
 		crashHelperDir + "=" + root,
 		crashHelperAddr + "=" + strings.Join(addresses[:], ","),
-		fmt.Sprintf("%s=%t", crashHelperSnap, snapshot),
+		crashHelperCase + "=" + scenario,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -105,32 +115,11 @@ func TestThreeNodeRaftCrashHelper(t *testing.T) {
 	copy(addresses[:], parts)
 	c := newThreeNodeClusterAt(t, root, addresses)
 	leader := c.waitForLeader(t)
+	scenario := os.Getenv(crashHelperCase)
 
 	switch mode {
 	case "write":
-		queueName := createTestReplicatedQueue(t, leader)
-		offset := appendTestRecord(t, leader, queueName, "crash-1", []byte("survive process crash"))
-		require.Equal(t, uint64(0), offset)
-
-		// A queue from the broker's configuration is created on every node's
-		// store directly; only its records pass through the Raft log.
-		configured := types.DefaultQueueConfig(configuredQueueName, configuredQueueTopic)
-		configured.Replication.Enabled = true
-		configured.Replication.Group = DefaultGroupID
-		for _, node := range c.nodes {
-			require.NoError(t, node.store.CreateQueue(context.Background(), configured))
-		}
-		configuredOffset := appendTestRecord(t, leader, configuredQueueName, "configured-1", []byte("keep configured queue"))
-		require.Equal(t, uint64(0), configuredOffset)
-
-		if os.Getenv(crashHelperSnap) == "true" {
-			c.waitForRecord(t, configuredQueueName, 0, "configured-1", []byte("keep configured queue"))
-			for _, node := range c.nodes {
-				require.NoError(t, node.manager.raft.Snapshot().Error(), "snapshot %s", node.id)
-			}
-			tailOffset := appendTestRecord(t, leader, queueName, "crash-2", []byte("after snapshot"))
-			require.Equal(t, uint64(1), tailOffset)
-		}
+		writeCrashScenario(t, c, leader, scenario)
 
 		// Recovery may discard only queues owned by this Raft group.
 		localQueue := types.DefaultQueueConfig("local-jobs", "local/#")
@@ -162,7 +151,7 @@ func TestThreeNodeRaftCrashHelper(t *testing.T) {
 	case "recover":
 		expected := uint64(1)
 		c.waitForRecord(t, "replicated-jobs", 0, "crash-1", []byte("survive process crash"))
-		if os.Getenv(crashHelperSnap) == "true" {
+		if scenario == scenarioSnapshotTail {
 			expected = 2
 			c.waitForRecord(t, "replicated-jobs", 1, "crash-2", []byte("after snapshot"))
 		}
@@ -192,5 +181,64 @@ func TestThreeNodeRaftCrashHelper(t *testing.T) {
 		message.Release(foreignRecord)
 	default:
 		t.Fatalf("unknown crash helper mode %q", mode)
+	}
+}
+
+func writeCrashScenario(t *testing.T, c *threeNodeCluster, leader *threeNodeClusterNode, scenario string) {
+	t.Helper()
+	ctx := context.Background()
+	queueName := createTestReplicatedQueue(t, leader)
+	offset := appendTestRecord(t, leader, queueName, "crash-1", []byte("survive process crash"))
+	require.Equal(t, uint64(0), offset)
+
+	if scenario == scenarioStaleSnapshot {
+		c.waitForRecord(t, queueName, 0, "crash-1", []byte("survive process crash"))
+		snapshotAllNodes(t, c)
+	}
+
+	// A queue from the broker's configuration is created on every node's store
+	// directly. Its records pass through the Raft log, and its settings do
+	// once a leader records them, as the queue manager does at startup.
+	configured := types.DefaultQueueConfig(configuredQueueName, configuredQueueTopic)
+	configured.Replication.Enabled = true
+	configured.Replication.Group = DefaultGroupID
+	for _, node := range c.nodes {
+		require.NoError(t, node.store.CreateQueue(ctx, configured))
+	}
+	if scenario == scenarioStaleSnapshot {
+		recordConfiguredQueue(t, leader, configured)
+	}
+	configuredOffset := appendTestRecord(t, leader, configuredQueueName, "configured-1", []byte("keep configured queue"))
+	require.Equal(t, uint64(0), configuredOffset)
+
+	switch scenario {
+	case scenarioSnapshotTail:
+		c.waitForRecord(t, configuredQueueName, 0, "configured-1", []byte("keep configured queue"))
+		snapshotAllNodes(t, c)
+		tailOffset := appendTestRecord(t, leader, queueName, "crash-2", []byte("after snapshot"))
+		require.Equal(t, uint64(1), tailOffset)
+	case scenarioConfigLost:
+		recordConfiguredQueue(t, leader, configured)
+		c.waitForRecord(t, configuredQueueName, 0, "configured-1", []byte("keep configured queue"))
+		for _, node := range c.nodes {
+			require.NoError(t, node.store.DeleteQueue(ctx, configuredQueueName), "drop configured queue on %s", node.id)
+		}
+	}
+}
+
+// recordConfiguredQueue writes a configured queue's settings into the Raft
+// log the way the queue manager's leader does at startup: a create, which a
+// replica that already has the queue ignores, then an update that restores the
+// settings over anything a replayed append had to invent.
+func recordConfiguredQueue(t *testing.T, leader *threeNodeClusterNode, configured types.QueueConfig) {
+	t.Helper()
+	require.NoError(t, leader.manager.ApplyCreateQueue(context.Background(), configured))
+	require.NoError(t, leader.manager.ApplyUpdateQueue(context.Background(), configured))
+}
+
+func snapshotAllNodes(t *testing.T, c *threeNodeCluster) {
+	t.Helper()
+	for _, node := range c.nodes {
+		require.NoError(t, node.manager.raft.Snapshot().Error(), "snapshot %s", node.id)
 	}
 }

@@ -525,6 +525,7 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 		if err := m.validateQueueReplication(ctx, cfg); err != nil {
 			return err
 		}
+		m.recordConfiguredQueue(ctx, cfg)
 		if err := m.queueStore.CreateQueue(ctx, cfg); err != nil {
 			if !errors.Is(err, storage.ErrQueueAlreadyExists) {
 				return err
@@ -543,6 +544,41 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// recordConfiguredQueue writes a configured replicated queue's settings into
+// its Raft log when this node leads the queue's group.
+//
+// Each node also creates the queue in its own store, but that copy is not Raft
+// state: restoring a snapshot taken before the queue existed, or replaying the
+// log after a recovery lost the queue, rebuilds it from appends alone, with
+// ephemeral defaults. The create covers a replay that reaches this point
+// without the queue; the update then overrides whatever an earlier replayed
+// append invented, since an existing queue ignores the create. Both are
+// written on every leader start because the log's older entries cannot be
+// rewritten, only followed.
+//
+// A failure is logged, not returned: the local queue is still usable, and the
+// next start of a leader records the settings again.
+func (m *Manager) recordConfiguredQueue(ctx context.Context, cfg types.QueueConfig) {
+	if !cfg.Replication.Enabled {
+		return
+	}
+	coordinator := m.coordinator()
+	if coordinator == nil || !coordinator.IsLeaderForQueue(cfg.Name) {
+		return
+	}
+	if err := coordinator.ApplyCreateQueue(ctx, cfg); err != nil {
+		m.logger.Warn("failed to record configured queue in raft log",
+			slog.String("queue", cfg.Name),
+			slog.String("error", err.Error()))
+		return
+	}
+	if err := coordinator.ApplyUpdateQueue(ctx, cfg); err != nil {
+		m.logger.Warn("failed to record configured queue settings in raft log",
+			slog.String("queue", cfg.Name),
+			slog.String("error", err.Error()))
+	}
 }
 
 // Stop stops the manager and all workers.
