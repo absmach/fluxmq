@@ -236,4 +236,32 @@ func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
 		assert.NotContains(t, mock.recordedQueueCalls()[callsBefore:], "update:"+configuredTestQueue,
 			"a create that found the queue must not submit its settings")
 	})
+
+	t.Run("leader/recreate-update-failed/retry-repairs-with-existing-settings", func(t *testing.T) {
+		mock := &mockQueueCoordinator{applyLikeFSM: true}
+		mock.setLeader(configuredTestQueue, true)
+		manager, logStore := startConfiguredQueueManager(t, true, mock)
+		stopManagerOnCleanup(t, manager)
+		mock.fsmStore = logStore
+
+		ctx := context.Background()
+		require.NoError(t, manager.DeleteQueue(ctx, configuredTestQueue))
+
+		recreated := types.DefaultQueueConfig(configuredTestQueue, configuredTestTopic)
+		recreated.Replication.Enabled = true
+		mock.updateQueueFailures = 1
+		require.Error(t, manager.CreateQueue(ctx, recreated), "the create committed, its settings did not")
+		require.ErrorIs(t, publish(t, manager), ErrReplicationUnavailable)
+
+		retry := types.DefaultQueueConfig(configuredTestQueue, "replacement/#")
+		retry.Replication.Enabled = true
+		require.NoError(t, manager.CreateQueue(ctx, retry))
+
+		assert.NoError(t, publish(t, manager), "the retry must record the settings and reopen writes")
+		assert.Equal(t, []string{configuredTestTopic}, mock.lastUpdate.Topics,
+			"the repair records the queue's existing settings, not the retry's")
+		stored, err := logStore.GetQueue(ctx, configuredTestQueue)
+		require.NoError(t, err)
+		assert.Equal(t, []string{configuredTestTopic}, stored.Topics)
+	})
 }

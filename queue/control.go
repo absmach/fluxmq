@@ -202,6 +202,37 @@ func (c *queueControl) validateQueueAckDurability(queueConfig types.QueueConfig)
 	return nil
 }
 
+// createReplicatedQueue records a replicated queue's creation and settings in
+// its Raft log.
+//
+// A create of an existing queue leaves its settings alone. For a new queue, the
+// update that follows is what records them as Raft state, and what reopens the
+// write gate of a configured queue that was deleted. If an earlier attempt
+// committed the create but not the update, the queue exists yet its settings
+// are unrecorded; the retry records the settings it already has rather than the
+// ones requested, so it repairs the gate without turning into an update.
+func (c *queueControl) createReplicatedQueue(ctx context.Context, coordinator queueRaftCoordinator, config types.QueueConfig) error {
+	existing, err := c.queueStore.GetQueue(ctx, config.Name)
+	switch {
+	case errors.Is(err, storage.ErrQueueNotFound):
+		existing = nil
+	case err != nil:
+		return err
+	}
+	if err := coordinator.ApplyCreateQueue(ctx, config); err != nil {
+		return err
+	}
+
+	settings := config
+	if existing != nil {
+		if !existing.Replication.Enabled || coordinator.IsQueueConfigRecorded(config.Name) {
+			return nil
+		}
+		settings = *existing
+	}
+	return coordinator.ApplyUpdateQueue(ctx, settings)
+}
+
 func (c *queueControl) CreateQueue(ctx context.Context, config types.QueueConfig) error {
 	if err := types.ValidateTopicFilters(config.Topics); err != nil {
 		return err
@@ -220,21 +251,8 @@ func (c *queueControl) CreateQueue(ctx context.Context, config types.QueueConfig
 
 	coordinator := c.replication.get()
 	if config.Replication.Enabled {
-		_, getErr := c.queueStore.GetQueue(ctx, config.Name)
-		if getErr != nil && !errors.Is(getErr, storage.ErrQueueNotFound) {
-			return getErr
-		}
-		existed := getErr == nil
-		if err := coordinator.ApplyCreateQueue(ctx, config); err != nil {
+		if err := c.createReplicatedQueue(ctx, coordinator, config); err != nil {
 			return err
-		}
-		// A create of an existing queue must leave its settings alone. For a
-		// new one, the update is what records them as Raft state, and what
-		// reopens the write gate of a configured queue that was deleted.
-		if !existed {
-			if err := coordinator.ApplyUpdateQueue(ctx, config); err != nil {
-				return err
-			}
 		}
 		if err := c.queueStore.CreateQueue(ctx, config); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 			return err

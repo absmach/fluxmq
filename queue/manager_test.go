@@ -1978,6 +1978,13 @@ type mockQueueCoordinator struct {
 	// applyLikeFSM makes updates and deletes move configRecorded the way the
 	// FSM does, for tests that follow a queue across its lifecycle.
 	applyLikeFSM bool
+
+	// fsmStore, when set, receives committed creates the way a replica's
+	// store does. updateQueueFailures fails that many updates after nothing
+	// was applied; lastUpdate is the settings the latest update carried.
+	fsmStore            storage.QueueStore
+	updateQueueFailures int
+	lastUpdate          types.QueueConfig
 }
 
 func (m *mockQueueCoordinator) IsQueueConfigRecorded(string) bool {
@@ -2038,13 +2045,18 @@ func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 	return m.leaderIDByQueue[queueName]
 }
 
-func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, cfg types.QueueConfig) error {
+func (m *mockQueueCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
 	m.queueMu.Lock()
 	defer m.queueMu.Unlock()
 	m.queueCalls = append(m.queueCalls, "create:"+cfg.Name)
 	if m.createQueueFailures > 0 {
 		m.createQueueFailures--
 		return errors.New("raft apply timed out")
+	}
+	if m.fsmStore != nil {
+		if err := m.fsmStore.CreateQueue(ctx, cfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
+			return err
+		}
 	}
 	return nil
 }
@@ -2053,6 +2065,11 @@ func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, cfg types.Que
 	m.queueMu.Lock()
 	defer m.queueMu.Unlock()
 	m.queueCalls = append(m.queueCalls, "update:"+cfg.Name)
+	if m.updateQueueFailures > 0 {
+		m.updateQueueFailures--
+		return errors.New("raft apply timed out")
+	}
+	m.lastUpdate = cfg
 	if m.applyLikeFSM {
 		m.configRecorded.Store(true)
 	}
