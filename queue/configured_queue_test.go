@@ -218,4 +218,22 @@ func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
 
 		assert.NoError(t, publish(t, manager), "the recreated queue's settings must be Raft state before writes resume")
 	})
+
+	t.Run("leader/duplicate-create/keeps-existing-settings", func(t *testing.T) {
+		mock := &mockQueueCoordinator{applyLikeFSM: true}
+		mock.setLeader(configuredTestQueue, true)
+		manager, logStore := startConfiguredQueueManager(t, true, mock)
+		stopManagerOnCleanup(t, manager)
+		callsBefore := len(mock.recordedQueueCalls())
+
+		replacement := types.DefaultQueueConfig(configuredTestQueue, "replacement/#")
+		replacement.Replication.Enabled = true
+		require.NoError(t, manager.CreateQueue(context.Background(), replacement))
+
+		stored, err := logStore.GetQueue(context.Background(), configuredTestQueue)
+		require.NoError(t, err)
+		assert.Equal(t, []string{configuredTestTopic}, stored.Topics)
+		assert.NotContains(t, mock.recordedQueueCalls()[callsBefore:], "update:"+configuredTestQueue,
+			"a create that found the queue must not submit its settings")
+	})
 }
