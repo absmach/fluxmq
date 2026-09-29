@@ -2065,6 +2065,7 @@ func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) err
 	}
 	return nil
 }
+
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil
