@@ -280,6 +280,17 @@ func (f *LogFSM) applyUpdateQueue(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: fmt.Errorf("nil queue config in update queue operation")}
 	}
 
+	// An update applies to a queue the log still holds. A delete can commit
+	// between the create and the update that records its settings, and every
+	// replica then lacks the queue; the disk store would otherwise save the
+	// settings as a queue with no log behind it, and the memory store would
+	// fail the update locally.
+	if _, err := f.queueStore.GetQueue(ctx, op.QueueConfig.Name); errors.Is(err, storage.ErrQueueNotFound) {
+		return &ApplyResult{Error: fmt.Errorf("update queue %q: %w", op.QueueConfig.Name, storage.ErrQueueNotFound)}
+	} else if err != nil {
+		return stopLocalFailure("read queue before update", op, err)
+	}
+
 	if err := f.queueStore.UpdateQueue(ctx, *op.QueueConfig); err != nil {
 		f.logger.Error("failed to apply update queue",
 			slog.String("queue", op.QueueConfig.Name),
