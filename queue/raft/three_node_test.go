@@ -366,3 +366,25 @@ func (c *threeNodeCluster) eventuallyConfigRecorded(t *testing.T, queueName stri
 		}, 15*time.Second, 25*time.Millisecond, "%s: %s", node.id, msg)
 	}
 }
+
+// Queue settings operations report success or trigger a retry on the answer, so
+// an async-configured group must still wait for the commit.
+func TestThreeNodeRaftQueueSettingsAreSynchronousInAsyncMode(t *testing.T) {
+	c := newThreeNodeCluster(t)
+	leader := c.waitForLeader(t)
+	leader.manager.config.SyncMode = false
+	ctx := context.Background()
+
+	configured := types.DefaultQueueConfig("async-jobs", "async/#")
+	configured.Replication.Enabled = true
+	configured.Replication.Group = DefaultGroupID
+
+	require.NoError(t, leader.manager.ApplyCreateQueue(ctx, configured))
+	require.NoError(t, leader.manager.ApplyUpdateQueue(ctx, configured))
+	require.True(t, leader.manager.IsQueueConfigRecorded(configured.Name),
+		"the update returned before the leader applied it")
+
+	require.NoError(t, leader.manager.ApplyDeleteQueue(ctx, configured.Name))
+	require.False(t, leader.manager.IsQueueConfigRecorded(configured.Name),
+		"the delete returned before the leader applied it")
+}

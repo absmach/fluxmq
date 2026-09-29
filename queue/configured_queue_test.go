@@ -115,6 +115,23 @@ func TestConfiguredQueueRecorderRetriesUntilRecorded(t *testing.T) {
 		}, 5*time.Second, time.Millisecond, "new leader should record the queue")
 	})
 
+	t.Run("follower/settings-arrive-then-leads/does-not-revert-them", func(t *testing.T) {
+		coordinator := &mockQueueCoordinator{}
+		coordinator.setLeader(configuredTestQueue, false)
+		manager, _ := startConfiguredQueueManager(t, true, coordinator)
+		stopManagerOnCleanup(t, manager)
+
+		// Newer settings reach the follower through Raft, then it wins an election.
+		coordinator.configRecorded.Store(true)
+		coordinator.setLeader(configuredTestQueue, true)
+
+		seen := coordinator.recordedChecks.Load()
+		require.Eventually(t, func() bool {
+			return coordinator.recordedChecks.Load() > seen
+		}, 5*time.Second, time.Millisecond, "recorder should look at the pending queue")
+		assert.Empty(t, coordinator.recordedQueueCalls(), "startup settings must not overwrite committed ones")
+	})
+
 	t.Run("follower/stop-ends-pending-retries", func(t *testing.T) {
 		coordinator := &mockQueueCoordinator{}
 		coordinator.setLeader(configuredTestQueue, false)
@@ -183,5 +200,22 @@ func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
 
 		assert.NoError(t, manager.replicationWriteReadiness(apiQueue),
 			"a queue created through raft has its settings in the log already")
+	})
+
+	t.Run("leader/deleted-and-recreated/settings-recorded-again", func(t *testing.T) {
+		mock := &mockQueueCoordinator{applyLikeFSM: true}
+		mock.setLeader(configuredTestQueue, true)
+		manager, _ := startConfiguredQueueManager(t, true, mock)
+		stopManagerOnCleanup(t, manager)
+		require.NoError(t, publish(t, manager), "Start recorded the settings")
+
+		ctx := context.Background()
+		require.NoError(t, manager.DeleteQueue(ctx, configuredTestQueue))
+
+		recreated := types.DefaultQueueConfig(configuredTestQueue, configuredTestTopic)
+		recreated.Replication.Enabled = true
+		require.NoError(t, manager.CreateQueue(ctx, recreated))
+
+		assert.NoError(t, publish(t, manager), "the recreated queue's settings must be Raft state before writes resume")
 	})
 }

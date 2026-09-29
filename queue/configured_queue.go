@@ -86,8 +86,8 @@ func (m *Manager) tryRecordConfiguredQueue(ctx context.Context, cfg types.QueueC
 // Until the settings are Raft state, the leader refuses writes to the queue
 // (see queueControl.configuredQueueReadiness), so no append can be committed
 // ahead of them. A queue waits here while this node is a follower and is
-// recorded if the node becomes leader; recording again settings another leader
-// already committed is harmless. If a leader holding an older configuration
+// recorded if the node becomes leader, unless settings from Raft reach it first:
+// those are authoritative and are never overwritten with the startup copy. If a leader holding an older configuration
 // never gives up leadership, nothing on this node can record the queue.
 func (m *Manager) runConfiguredQueueRecorder(ctx context.Context, pending []types.QueueConfig) {
 	defer m.wg.Done()
@@ -111,6 +111,9 @@ func (m *Manager) runConfiguredQueueRecorder(ctx context.Context, pending []type
 
 		remaining := pending[:0]
 		for _, cfg := range pending {
+			if m.configuredQueueSettled(cfg.Name) {
+				continue
+			}
 			attempts[cfg.Name]++
 			if !m.tryRecordConfiguredQueue(ctx, cfg, attempts[cfg.Name]) {
 				remaining = append(remaining, cfg)
@@ -121,6 +124,16 @@ func (m *Manager) runConfiguredQueueRecorder(ctx context.Context, pending []type
 		delay = min(delay*2, maxDelay)
 		timer.Reset(delay)
 	}
+}
+
+// configuredQueueSettled reports whether settings for the queue have reached
+// this node through Raft since Start. What a follower keeps pending is its
+// startup configuration; once authoritative settings arrive, possibly newer
+// ones from a runtime update, writing it back after a failover would revert
+// them.
+func (m *Manager) configuredQueueSettled(name string) bool {
+	coordinator := m.coordinator()
+	return coordinator != nil && coordinator.IsQueueConfigRecorded(name)
 }
 
 func configuredReplicatedQueues(configs []types.QueueConfig) map[string]struct{} {

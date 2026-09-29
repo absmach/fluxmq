@@ -223,6 +223,12 @@ func (c *queueControl) CreateQueue(ctx context.Context, config types.QueueConfig
 		if err := coordinator.ApplyCreateQueue(ctx, config); err != nil {
 			return err
 		}
+		// A create leaves a replica that already holds the queue on its own
+		// settings; the update is what records them as Raft state, and what
+		// reopens the write gate of a configured queue that was deleted.
+		if err := coordinator.ApplyUpdateQueue(ctx, config); err != nil {
+			return err
+		}
 		if err := c.queueStore.CreateQueue(ctx, config); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
 			return err
 		}

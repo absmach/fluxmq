@@ -660,6 +660,14 @@ func (m *Manager) ApplyAppendOnceWithOptions(ctx context.Context, queueName, ded
 	return result.Offset, result.Deduplicated, nil
 }
 
+// applyQueueMetadata applies a queue settings operation and waits for its
+// commit. Callers report success or retry on the answer, and an async apply
+// returns before either exists, so async mode is overridden rather than honoured.
+func (m *Manager) applyQueueMetadata(ctx context.Context, op *Operation) (*ApplyResult, error) {
+	syncMode := true
+	return m.ApplyWithOptions(ctx, op, ApplyOptions{SyncMode: &syncMode})
+}
+
 // ApplyCreateQueue submits a create queue config operation to Raft.
 func (m *Manager) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
 	if !m.IsEnabled() {
@@ -673,7 +681,7 @@ func (m *Manager) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) e
 		QueueConfig: &cfgCopy,
 	}
 
-	result, err := m.Apply(ctx, op)
+	result, err := m.applyQueueMetadata(ctx, op)
 	if err != nil {
 		return err
 	}
@@ -697,7 +705,7 @@ func (m *Manager) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) e
 		QueueConfig: &cfgCopy,
 	}
 
-	result, err := m.Apply(ctx, op)
+	result, err := m.applyQueueMetadata(ctx, op)
 	if err != nil {
 		return err
 	}
@@ -719,7 +727,7 @@ func (m *Manager) ApplyDeleteQueue(ctx context.Context, queueName string) error 
 		QueueName: queueName,
 	}
 
-	result, err := m.Apply(ctx, op)
+	result, err := m.applyQueueMetadata(ctx, op)
 	if err != nil {
 		return err
 	}

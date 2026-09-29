@@ -1973,9 +1973,15 @@ type mockQueueCoordinator struct {
 
 	// configRecorded stands in for the FSM's record of applied settings.
 	configRecorded atomic.Bool
+	recordedChecks atomic.Int64
+
+	// applyLikeFSM makes updates and deletes move configRecorded the way the
+	// FSM does, for tests that follow a queue across its lifecycle.
+	applyLikeFSM bool
 }
 
 func (m *mockQueueCoordinator) IsQueueConfigRecorded(string) bool {
+	m.recordedChecks.Add(1)
 	return m.configRecorded.Load()
 }
 
@@ -2047,9 +2053,18 @@ func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, cfg types.Que
 	m.queueMu.Lock()
 	defer m.queueMu.Unlock()
 	m.queueCalls = append(m.queueCalls, "update:"+cfg.Name)
+	if m.applyLikeFSM {
+		m.configRecorded.Store(true)
+	}
 	return nil
 }
-func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error { return nil }
+
+func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error {
+	if m.applyLikeFSM {
+		m.configRecorded.Store(false)
+	}
+	return nil
+}
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil

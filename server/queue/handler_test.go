@@ -58,6 +58,10 @@ func (c *readyQueueCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.
 	return c.store.CreateQueue(ctx, cfg)
 }
 
+func (c *readyQueueCoordinator) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	return c.store.UpdateQueue(ctx, cfg)
+}
+
 func TestListQueuesFilteringAndPagination(t *testing.T) {
 	t.Parallel()
 
