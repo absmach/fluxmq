@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/queue/storage"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
@@ -149,6 +150,56 @@ func TestConfiguredQueueRecorderRetriesUntilRecorded(t *testing.T) {
 	})
 }
 
+// deleteThroughRaft applies a delete of the configured queue the way a node
+// receives one committed by a leader whose configuration does not declare it.
+// This node refuses the delete itself; see TestConfiguredReplicatedQueueRuntimeDelete.
+func deleteThroughRaft(t *testing.T, mock *mockQueueCoordinator, logStore *memlog.Store) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, mock.ApplyDeleteQueue(ctx, configuredTestQueue))
+	require.NoError(t, logStore.DeleteQueue(ctx, configuredTestQueue))
+}
+
+// A node that declares a replicated queue records it again whenever it starts
+// or takes over the queue's Raft group, so a runtime delete would last only
+// until then, and whether it survived would depend on recorder timing.
+func TestConfiguredReplicatedQueueRuntimeDelete(t *testing.T) {
+	cases := []struct {
+		name       string
+		replicated bool
+		leader     bool
+		wantErr    error
+	}{
+		{name: "replicated/leader/refused", replicated: true, leader: true, wantErr: ErrConfiguredQueueDeletion},
+		{name: "replicated/follower/refused", replicated: true, leader: false, wantErr: ErrConfiguredQueueDeletion},
+		{name: "local/leader/deleted", replicated: false, leader: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockQueueCoordinator{applyLikeFSM: true}
+			mock.setLeader(configuredTestQueue, tc.leader)
+			manager, logStore := startConfiguredQueueManager(t, tc.replicated, mock)
+			stopManagerOnCleanup(t, manager)
+			callsBefore := len(mock.recordedQueueCalls())
+
+			ctx := context.Background()
+			err := manager.DeleteQueue(ctx, configuredTestQueue)
+			_, getErr := logStore.GetQueue(ctx, configuredTestQueue)
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				assert.ErrorIs(t, getErr, storage.ErrQueueNotFound)
+				return
+			}
+
+			require.ErrorIs(t, err, tc.wantErr)
+			assert.Equal(t, ErrorCodeFailedPrecondition, ClassifyError(err).Code)
+			assert.NoError(t, getErr, "a refused delete must leave the queue in place")
+			assert.Len(t, mock.recordedQueueCalls(), callsBefore, "a refused delete must not reach raft")
+		})
+	}
+}
+
 // Until a configured queue's settings are raft state, an append committed on
 // its leader could be replayed into a queue rebuilt with default settings.
 func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
@@ -205,12 +256,12 @@ func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
 	t.Run("leader/deleted-and-recreated/settings-recorded-again", func(t *testing.T) {
 		mock := &mockQueueCoordinator{applyLikeFSM: true}
 		mock.setLeader(configuredTestQueue, true)
-		manager, _ := startConfiguredQueueManager(t, true, mock)
+		manager, logStore := startConfiguredQueueManager(t, true, mock)
 		stopManagerOnCleanup(t, manager)
 		require.NoError(t, publish(t, manager), "Start recorded the settings")
 
 		ctx := context.Background()
-		require.NoError(t, manager.DeleteQueue(ctx, configuredTestQueue))
+		deleteThroughRaft(t, mock, logStore)
 
 		recreated := types.DefaultQueueConfig(configuredTestQueue, configuredTestTopic)
 		recreated.Replication.Enabled = true
@@ -245,7 +296,7 @@ func TestConfiguredQueueWritesWaitForRecordedSettings(t *testing.T) {
 		mock.fsmStore = logStore
 
 		ctx := context.Background()
-		require.NoError(t, manager.DeleteQueue(ctx, configuredTestQueue))
+		deleteThroughRaft(t, mock, logStore)
 
 		recreated := types.DefaultQueueConfig(configuredTestQueue, configuredTestTopic)
 		recreated.Replication.Enabled = true

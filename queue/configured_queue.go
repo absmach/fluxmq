@@ -87,8 +87,15 @@ func (m *Manager) tryRecordConfiguredQueue(ctx context.Context, cfg types.QueueC
 // (see queueControl.configuredQueueReadiness), so no append can be committed
 // ahead of them. A queue waits here while this node is a follower and is
 // recorded if the node becomes leader, unless settings from Raft reach it first:
-// those are authoritative and are never overwritten with the startup copy. If a leader holding an older configuration
-// never gives up leadership, nothing on this node can record the queue.
+// those are authoritative and are never overwritten with the startup copy. If a
+// leader holding an older configuration never gives up leadership, nothing on
+// this node can record the queue.
+//
+// A delete is the exception. It clears the recorded settings, so a queue still
+// pending here is recreated when this node next leads. Manager.DeleteQueue
+// refuses configured queues for that reason, but a node whose configuration
+// does not declare the queue can still delete it; nodes must declare the same
+// replicated queues.
 func (m *Manager) runConfiguredQueueRecorder(ctx context.Context, pending []types.QueueConfig) {
 	defer m.wg.Done()
 

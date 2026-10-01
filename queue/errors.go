@@ -202,6 +202,7 @@ func ClassifyError(err error) Failure {
 		errors.Is(err, ErrQueueNotProtected),
 		errors.Is(err, ErrProtectedQueueMutation),
 		errors.Is(err, ErrProtectedQueueContractDrift),
+		errors.Is(err, ErrConfiguredQueueDeletion),
 		errors.Is(err, ErrDLQDisabled),
 		errors.Is(err, ErrReplicationWritePolicy),
 		errors.Is(err, ErrAtomicBatchReplicationUnsupported),

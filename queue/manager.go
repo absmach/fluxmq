@@ -54,6 +54,11 @@ var (
 	// ErrProtectedQueueContractDrift is returned when a protected queue's
 	// persisted configuration no longer matches its registered contract.
 	ErrProtectedQueueContractDrift = errors.New("protected queue contract drift")
+	// ErrConfiguredQueueDeletion is returned when a runtime delete targets a
+	// replicated queue declared in this node's configuration. Any node that
+	// declares it re-records the queue when it starts or takes over the queue's
+	// Raft group, so the delete would not hold.
+	ErrConfiguredQueueDeletion = errors.New("configured replicated queue cannot be deleted at runtime")
 	// ErrDurableSyncUnsupported is returned before append when the configured
 	// queue store cannot establish a per-queue durability barrier.
 	ErrDurableSyncUnsupported = errors.New("queue store does not support durable sync")
@@ -953,6 +958,9 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 	defer m.protected.mu.RUnlock()
 	if _, protected := m.protected.contracts[queueName]; protected {
 		return fmt.Errorf("%w: queue %q cannot be deleted", ErrProtectedQueueMutation, queueName)
+	}
+	if _, configured := m.queueControl.configuredReplicated[queueName]; configured {
+		return fmt.Errorf("%w: remove queue %q from the configuration instead", ErrConfiguredQueueDeletion, queueName)
 	}
 
 	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)

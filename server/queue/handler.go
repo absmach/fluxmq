@@ -149,7 +149,7 @@ func (h *Handler) ListQueues(ctx context.Context, req *connect.Request[queuev1.L
 
 func (h *Handler) DeleteQueue(ctx context.Context, req *connect.Request[queuev1.DeleteQueueRequest]) (*connect.Response[emptypb.Empty], error) {
 	if err := h.manager.DeleteQueue(ctx, req.Msg.Name); err != nil {
-		if errors.Is(err, queue.ErrProtectedQueueMutation) {
+		if errors.Is(err, queue.ErrProtectedQueueMutation) || errors.Is(err, queue.ErrConfiguredQueueDeletion) {
 			return nil, newConnectError(queue.ErrorCodeFailedPrecondition, err)
 		}
 		if errors.Is(err, storage.ErrQueueNotFound) {
