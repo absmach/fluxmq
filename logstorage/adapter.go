@@ -236,6 +236,9 @@ func (a *Adapter) DeleteQueue(ctx context.Context, queueName string) error {
 		return err
 	}
 	if err := a.store.DeleteQueue(queueName); err != nil {
+		if errors.Is(err, ErrQueueNotFound) {
+			return storage.ErrQueueNotFound
+		}
 		return err
 	}
 	return a.dedupe.state.forget(queueName)
