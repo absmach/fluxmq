@@ -77,11 +77,13 @@ type QueueCoordinator interface {
 	QueueLogReplicator
 	GroupStateReplicator
 	QueueMapping
+	QueueConfigRecorder
 }
 
 // GroupReplicator is a low-level Raft apply/leader API for one replication
 // domain. The existing single-group Manager already satisfies this interface.
 type GroupReplicator interface {
+	QueueConfigRecorder
 	Stop() error
 	IsEnabled() bool
 	IsLeader(ctx context.Context) bool
@@ -201,6 +203,20 @@ func (c *LogicalGroupCoordinator) IsQueueReplicated(queueName string) bool {
 
 	_, ok := c.queueGroups[queueName]
 	return ok
+}
+
+// QueueConfigRecorder reports whether a queue's settings have been applied
+// from Raft state on this node, as opposed to existing only as a node-local
+// copy that recovery can rebuild with default settings.
+type QueueConfigRecorder interface {
+	IsQueueConfigRecorded(queueName string) bool
+}
+
+// IsQueueConfigRecorded implements QueueConfigRecorder for the queue's group.
+// A queue with no group has nothing recorded.
+func (c *LogicalGroupCoordinator) IsQueueConfigRecorded(queueName string) bool {
+	replicator := c.replicatorForQueue(queueName)
+	return replicator != nil && replicator.IsQueueConfigRecorded(queueName)
 }
 
 func (c *LogicalGroupCoordinator) ensureQueueAssignment(cfg types.QueueConfig) {

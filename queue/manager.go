@@ -54,6 +54,11 @@ var (
 	// ErrProtectedQueueContractDrift is returned when a protected queue's
 	// persisted configuration no longer matches its registered contract.
 	ErrProtectedQueueContractDrift = errors.New("protected queue contract drift")
+	// ErrConfiguredQueueDeletion is returned when a runtime delete targets a
+	// replicated queue declared in this node's configuration. Any node that
+	// declares it re-records the queue when it starts or takes over the queue's
+	// Raft group, so the delete would not hold.
+	ErrConfiguredQueueDeletion = errors.New("configured replicated queue cannot be deleted at runtime")
 	// ErrDurableSyncUnsupported is returned before append when the configured
 	// queue store cannot establish a per-queue durability barrier.
 	ErrDurableSyncUnsupported = errors.New("queue store does not support durable sync")
@@ -96,6 +101,7 @@ type queueRaftCoordinator interface {
 	raft.ReplicationInfo
 	raft.QueueMapping
 	raft.QueueLogReplicator
+	raft.QueueConfigRecorder
 }
 
 // Manager is the queue-based queue manager.
@@ -197,6 +203,13 @@ type Config struct {
 	// Retention configuration
 	RetentionCheckInterval time.Duration
 
+	// ConfiguredQueueRetryInterval and ConfiguredQueueRetryMaxInterval bound
+	// the backoff between attempts to record a configured replicated queue's
+	// settings in its Raft log, while this node is not its leader or the
+	// write fails. Zero selects the default.
+	ConfiguredQueueRetryInterval    time.Duration
+	ConfiguredQueueRetryMaxInterval time.Duration
+
 	// Capture dispatcher configuration. Topic capture runs off the publish
 	// path so a stalled queue store cannot delay subscribers; these bound how
 	// much unwritten capture is held and how long shutdown waits for it.
@@ -252,6 +265,9 @@ func DefaultConfig() Config {
 		CaptureWorkers:         defaultCaptureWorkers,
 		CaptureQueueDepth:      defaultCaptureQueueDepth,
 		CaptureDrainTimeout:    defaultCaptureDrainTimeout,
+
+		ConfiguredQueueRetryInterval:    defaultConfiguredQueueRetryInterval,
+		ConfiguredQueueRetryMaxInterval: defaultConfiguredQueueRetryMaxInterval,
 	}
 }
 
@@ -310,6 +326,7 @@ func NewManager(queueStore storage.QueueStore, groupStore storage.ConsumerGroupS
 		replication:          replication,
 		writePolicy:          normalizeWritePolicy(config.WritePolicy),
 		defaultAckDurability: config.AckDurability,
+		configuredReplicated: configuredReplicatedQueues(config.QueueConfigs),
 	}
 
 	// The facade and record core aggregate the same independent policy and
@@ -438,7 +455,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// Ensure reserved queues exist
-	if err := m.ensureReservedQueues(ctx); err != nil {
+	unrecordedQueues, err := m.ensureReservedQueues(ctx)
+	if err != nil {
 		return fmt.Errorf("failed to create reserved queues: %w", err)
 	}
 	if err := m.ValidateProtectedQueueContracts(ctx); err != nil {
@@ -473,6 +491,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	// poison entries accumulate until MaxPELSize stalls the group.
 	m.wg.Add(1)
 	go m.runPoisonSweepLoop(backgroundCtx)
+
+	if len(unrecordedQueues) > 0 {
+		m.wg.Add(1)
+		go m.runConfiguredQueueRecorder(backgroundCtx, unrecordedQueues)
+	}
 
 	// Start consumer cleanup
 	m.wg.Add(1)
@@ -513,26 +536,32 @@ func (m *Manager) replicationWriteReadiness(queueName string) error {
 	return m.queueControl.replicationWriteReadiness(queueName)
 }
 
-// ensureReservedQueues creates queues from config or the default mqtt queue if no config provided.
-func (m *Manager) ensureReservedQueues(ctx context.Context) error {
+// ensureReservedQueues creates queues from config or the default mqtt queue if
+// no config provided. It returns the replicated ones whose settings could not
+// yet be recorded in their Raft log, for the recorder to retry.
+func (m *Manager) ensureReservedQueues(ctx context.Context) ([]types.QueueConfig, error) {
 	// If no queue configs provided, use the default mqtt queue
 	configs := m.config.QueueConfigs
 	if len(configs) == 0 {
 		configs = []types.QueueConfig{types.MQTTQueueConfig()}
 	}
 
+	var unrecorded []types.QueueConfig
 	for _, cfg := range configs {
 		if err := m.validateQueueReplication(ctx, cfg); err != nil {
-			return err
+			return nil, err
+		}
+		if cfg.Replication.Enabled && !m.tryRecordConfiguredQueue(ctx, cfg, 1) {
+			unrecorded = append(unrecorded, cfg)
 		}
 		if err := m.queueStore.CreateQueue(ctx, cfg); err != nil {
 			if !errors.Is(err, storage.ErrQueueAlreadyExists) {
-				return err
+				return nil, err
 			}
 		}
 		if m.coordinator() != nil && !cfg.Replication.Enabled {
 			if err := m.coordinator().EnsureQueue(ctx, cfg); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -542,7 +571,7 @@ func (m *Manager) ensureReservedQueues(ctx context.Context) error {
 			slog.Bool("reserved", cfg.Reserved))
 	}
 
-	return nil
+	return unrecorded, nil
 }
 
 // Stop stops the manager and all workers.
@@ -929,6 +958,9 @@ func (m *Manager) DeleteQueue(ctx context.Context, queueName string) error {
 	defer m.protected.mu.RUnlock()
 	if _, protected := m.protected.contracts[queueName]; protected {
 		return fmt.Errorf("%w: queue %q cannot be deleted", ErrProtectedQueueMutation, queueName)
+	}
+	if _, configured := m.queueControl.configuredReplicated[queueName]; configured {
+		return fmt.Errorf("%w: remove queue %q from the configuration instead", ErrConfiguredQueueDeletion, queueName)
 	}
 
 	queueCfg, err := m.queueStore.GetQueue(ctx, queueName)

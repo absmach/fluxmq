@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1963,6 +1964,47 @@ type mockQueueCoordinator struct {
 	// answered the way a real FSM would answer it.
 	appendOnceCalls []string
 	appendOnceKeys  map[string]uint64
+
+	// queueMu guards the fields below and leaderByQueue reads, which the
+	// configured-queue recorder reaches from its own goroutine.
+	queueMu             sync.Mutex
+	queueCalls          []string
+	createQueueFailures int
+
+	// configRecorded stands in for the FSM's record of applied settings.
+	configRecorded atomic.Bool
+	recordedChecks atomic.Int64
+
+	// applyLikeFSM makes updates and deletes move configRecorded the way the
+	// FSM does, for tests that follow a queue across its lifecycle.
+	applyLikeFSM bool
+
+	// fsmStore, when set, receives committed creates the way a replica's
+	// store does. updateQueueFailures fails that many updates after nothing
+	// was applied; lastUpdate is the settings the latest update carried.
+	fsmStore            storage.QueueStore
+	updateQueueFailures int
+	lastUpdate          types.QueueConfig
+}
+
+func (m *mockQueueCoordinator) IsQueueConfigRecorded(string) bool {
+	m.recordedChecks.Add(1)
+	return m.configRecorded.Load()
+}
+
+func (m *mockQueueCoordinator) setLeader(queueName string, leader bool) {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	if m.leaderByQueue == nil {
+		m.leaderByQueue = make(map[string]bool)
+	}
+	m.leaderByQueue[queueName] = leader
+}
+
+func (m *mockQueueCoordinator) recordedQueueCalls() []string {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	return slices.Clone(m.queueCalls)
 }
 
 func (m *mockQueueCoordinator) Stop() error { return nil }
@@ -1978,6 +2020,8 @@ func (m *mockQueueCoordinator) IsQueueReplicated(queueName string) bool {
 }
 
 func (m *mockQueueCoordinator) IsLeaderForQueue(queueName string) bool {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
 	if m.leaderByQueue == nil {
 		return false
 	}
@@ -2001,14 +2045,44 @@ func (m *mockQueueCoordinator) LeaderIDForQueue(queueName string) string {
 	return m.leaderIDByQueue[queueName]
 }
 
-func (m *mockQueueCoordinator) ApplyCreateQueue(_ context.Context, _ types.QueueConfig) error {
+func (m *mockQueueCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	m.queueCalls = append(m.queueCalls, "create:"+cfg.Name)
+	if m.createQueueFailures > 0 {
+		m.createQueueFailures--
+		return errors.New("raft apply timed out")
+	}
+	if m.fsmStore != nil {
+		if err := m.fsmStore.CreateQueue(ctx, cfg); err != nil && !errors.Is(err, storage.ErrQueueAlreadyExists) {
+			return err
+		}
+	}
 	return nil
 }
 
-func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, _ types.QueueConfig) error {
+func (m *mockQueueCoordinator) ApplyUpdateQueue(_ context.Context, cfg types.QueueConfig) error {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+	m.queueCalls = append(m.queueCalls, "update:"+cfg.Name)
+	if m.updateQueueFailures > 0 {
+		m.updateQueueFailures--
+		return errors.New("raft apply timed out")
+	}
+	m.lastUpdate = cfg
+	if m.applyLikeFSM {
+		m.configRecorded.Store(true)
+	}
 	return nil
 }
-func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error { return nil }
+
+func (m *mockQueueCoordinator) ApplyDeleteQueue(_ context.Context, _ string) error {
+	if m.applyLikeFSM {
+		m.configRecorded.Store(false)
+	}
+	return nil
+}
+
 func (m *mockQueueCoordinator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ queueraft.ApplyOptions) (uint64, error) {
 	m.appendCalls = append(m.appendCalls, queueName)
 	return 1, nil

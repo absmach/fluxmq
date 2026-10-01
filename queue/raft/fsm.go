@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/absmach/fluxmq/message"
@@ -125,6 +126,16 @@ type LogFSM struct {
 	queueStore storage.QueueStore
 	groupStore storage.ConsumerGroupStore
 	logger     *slog.Logger
+
+	// recorded holds the queues whose settings this FSM has applied from Raft
+	// state: an update or a snapshot, which set them on every replica. A queue
+	// absent here exists, if at all, only as a node-local copy, which a
+	// snapshot restore or log replay can rebuild with default settings.
+	//
+	// It is rebuilt by restore and replay rather than persisted, so it answers
+	// for what the log and snapshot hold, never for what the store held before.
+	recordedMu sync.RWMutex
+	recorded   map[string]struct{}
 }
 
 // NewLogFSM creates a new FSM for queue operations.
@@ -137,7 +148,35 @@ func NewLogFSM(groupID string, queueStore storage.QueueStore, groupStore storage
 		queueStore: queueStore,
 		groupStore: groupStore,
 		logger:     logger,
+		recorded:   make(map[string]struct{}),
 	}
+}
+
+// IsQueueConfigRecorded reports whether the queue's settings have been applied
+// from Raft state on this node. Safe for concurrent use.
+func (f *LogFSM) IsQueueConfigRecorded(queueName string) bool {
+	f.recordedMu.RLock()
+	defer f.recordedMu.RUnlock()
+	_, ok := f.recorded[queueName]
+	return ok
+}
+
+func (f *LogFSM) markConfigRecorded(queueName string) {
+	f.recordedMu.Lock()
+	defer f.recordedMu.Unlock()
+	f.recorded[queueName] = struct{}{}
+}
+
+func (f *LogFSM) forgetConfigRecorded(queueName string) {
+	f.recordedMu.Lock()
+	defer f.recordedMu.Unlock()
+	delete(f.recorded, queueName)
+}
+
+func (f *LogFSM) forgetAllConfigsRecorded() {
+	f.recordedMu.Lock()
+	defer f.recordedMu.Unlock()
+	clear(f.recorded)
 }
 
 // owns reports whether a queue is replicated by this FSM's raft group.
@@ -229,6 +268,9 @@ func (f *LogFSM) applyCreateQueue(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("error", err.Error()))
 		return stopLocalFailure("create queue", op, err)
 	}
+	// A create does not record the settings even where it made the queue:
+	// a replica that already had the queue keeps whatever it held, so only the
+	// update that follows puts the same settings on every replica.
 
 	return &ApplyResult{}
 }
@@ -238,12 +280,24 @@ func (f *LogFSM) applyUpdateQueue(ctx context.Context, op *Operation) *ApplyResu
 		return &ApplyResult{Error: fmt.Errorf("nil queue config in update queue operation")}
 	}
 
+	// An update applies to a queue the log still holds. A delete can commit
+	// between the create and the update that records its settings, and every
+	// replica then lacks the queue; the disk store would otherwise save the
+	// settings as a queue with no log behind it, and the memory store would
+	// fail the update locally.
+	if _, err := f.queueStore.GetQueue(ctx, op.QueueConfig.Name); errors.Is(err, storage.ErrQueueNotFound) {
+		return &ApplyResult{Error: fmt.Errorf("update queue %q: %w", op.QueueConfig.Name, storage.ErrQueueNotFound)}
+	} else if err != nil {
+		return stopLocalFailure("read queue before update", op, err)
+	}
+
 	if err := f.queueStore.UpdateQueue(ctx, *op.QueueConfig); err != nil {
 		f.logger.Error("failed to apply update queue",
 			slog.String("queue", op.QueueConfig.Name),
 			slog.String("error", err.Error()))
 		return stopLocalFailure("update queue", op, err)
 	}
+	f.markConfigRecorded(op.QueueConfig.Name)
 
 	return &ApplyResult{}
 }
@@ -259,6 +313,7 @@ func (f *LogFSM) applyDeleteQueue(ctx context.Context, op *Operation) *ApplyResu
 			slog.String("error", err.Error()))
 		return stopLocalFailure("delete queue", op, err)
 	}
+	f.forgetConfigRecorded(op.QueueName)
 
 	return &ApplyResult{}
 }
@@ -866,6 +921,7 @@ func (f *LogFSM) restoreQueue(ctx context.Context, store storage.SnapshotableQue
 			slog.String("error", err.Error()))
 		return err
 	}
+	f.markConfigRecorded(queue.QueueName)
 
 	for _, group := range queue.Groups {
 		if err := f.groupStore.CreateConsumerGroup(ctx, group); err != nil && !errors.Is(err, storage.ErrConsumerGroupExists) {
@@ -886,37 +942,76 @@ func (f *LogFSM) restoreQueue(ctx context.Context, store storage.SnapshotableQue
 // be a different object from the queue store, and a queue the snapshot never
 // mentions has to go too.
 func (f *LogFSM) resetState(ctx context.Context, store storage.SnapshotableQueueStore) error {
-	queues, err := f.queueStore.ListQueues(ctx)
+	owned, err := f.dropOwnedGroups(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list queues for restore: %w", err)
+		return err
 	}
 
-	owned := make([]string, 0, len(queues))
+	names := make([]string, 0, len(owned))
+	for _, queueCfg := range owned {
+		names = append(names, queueCfg.Name)
+	}
+	if err := store.ResetForRestore(ctx, names); err != nil {
+		return fmt.Errorf("failed to clear queues for restore: %w", err)
+	}
+	return nil
+}
+
+// resetForReplay empties this group's queues before the whole Raft log is
+// replayed over them, keeping each queue's configuration.
+//
+// Unlike a snapshot, the log need not describe every queue it writes to. A
+// queue declared in the broker's configuration is created locally on each
+// node, never through the log, so dropping it would leave the replayed appends
+// to recreate it as an ephemeral queue with default settings.
+func (f *LogFSM) resetForReplay(ctx context.Context, store storage.SnapshotableQueueStore) error {
+	owned, err := f.dropOwnedGroups(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, queueCfg := range owned {
+		if err := store.RestoreQueue(ctx, queueCfg, 0); err != nil {
+			return fmt.Errorf("failed to empty queue %q for replay: %w", queueCfg.Name, err)
+		}
+	}
+	return nil
+}
+
+// dropOwnedGroups deletes the consumer groups of every queue this Raft group
+// owns and returns those queues' configurations. Whatever follows rebuilds
+// Raft state, so it also forgets which queue settings came from it.
+//
+// Groups go first, while the queues that name them are still listable. A group
+// left behind because its listing or its deletion failed is state from before
+// the reset surviving underneath it, so either failure aborts the reset rather
+// than leave this replica holding a group the rest of the cluster does not have.
+func (f *LogFSM) dropOwnedGroups(ctx context.Context) ([]types.QueueConfig, error) {
+	f.forgetAllConfigsRecorded()
+
+	queues, err := f.queueStore.ListQueues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list queues for reset: %w", err)
+	}
+
+	owned := make([]types.QueueConfig, 0, len(queues))
 	for _, queueCfg := range queues {
 		if !f.owns(queueCfg) {
 			continue
 		}
-		owned = append(owned, queueCfg.Name)
+		owned = append(owned, queueCfg)
 
-		// A group left behind because its listing or its deletion failed is
-		// state from before the snapshot surviving underneath it. Reporting the
-		// restore as successful would leave this replica holding a group the
-		// rest of the cluster does not have.
 		groups, err := f.groupStore.ListConsumerGroups(ctx, queueCfg.Name)
 		if err != nil {
-			return fmt.Errorf("failed to list consumer groups of queue %q for restore: %w", queueCfg.Name, err)
+			return nil, fmt.Errorf("failed to list consumer groups of queue %q for reset: %w", queueCfg.Name, err)
 		}
 		for _, group := range groups {
 			if err := f.groupStore.DeleteConsumerGroup(ctx, queueCfg.Name, group.ID); err != nil {
-				return fmt.Errorf("failed to drop consumer group %q of queue %q for restore: %w", group.ID, queueCfg.Name, err)
+				return nil, fmt.Errorf("failed to drop consumer group %q of queue %q for reset: %w", group.ID, queueCfg.Name, err)
 			}
 		}
 	}
-
-	if err := store.ResetForRestore(ctx, owned); err != nil {
-		return fmt.Errorf("failed to clear queues for restore: %w", err)
-	}
-	return nil
+	return owned, nil
 }
 
 // capturedQueue is a queue's metadata plus the open view its records are read

@@ -62,6 +62,34 @@ func TestAdapter_ReadBatch(t *testing.T) {
 	assert.Len(t, got, 0)
 }
 
+// Callers that tolerate deleting an absent queue, the raft FSM above all,
+// match only the storage package's sentinel.
+func TestAdapter_DeleteMissingQueueReportsStorageNotFound(t *testing.T) {
+	cases := []struct {
+		name   string
+		create bool
+	}{
+		{name: "never-created", create: false},
+		{name: "already-deleted", create: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, err := NewAdapter(t.TempDir(), DefaultAdapterConfig())
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = adapter.Close() })
+
+			ctx := context.Background()
+			if tc.create {
+				require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig("q1", "$queue/q1/#")))
+				require.NoError(t, adapter.DeleteQueue(ctx, "q1"))
+			}
+
+			require.ErrorIs(t, adapter.DeleteQueue(ctx, "q1"), storage.ErrQueueNotFound)
+		})
+	}
+}
+
 func TestAdapter_AppendRequiresQueueConfig(t *testing.T) {
 	dir := t.TempDir()
 	adapter, err := NewAdapter(dir, DefaultAdapterConfig())

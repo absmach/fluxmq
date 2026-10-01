@@ -125,11 +125,11 @@ FluxMQ uses a clean layered architecture:
 
 ## Performance Notes
 
-| Metric                     | Value                    |
-| -------------------------- | ------------------------ |
-| **Concurrent Connections** | Workload and hardware dependent |
-| **Message Throughput**     | Workload and hardware dependent |
-| **Latency (local)**        | Depends on QoS, fan-out, and persistence settings |
+| Metric                     | Value                                                     |
+| -------------------------- | --------------------------------------------------------- |
+| **Concurrent Connections** | Workload and hardware dependent                           |
+| **Message Throughput**     | Workload and hardware dependent                           |
+| **Latency (local)**        | Depends on QoS, fan-out, and persistence settings         |
 | **Session Takeover**       | Fast-path optimized; benchmark in your target environment |
 
 See `benchmarks/README.md` in the repository for reproducible benchmark commands.

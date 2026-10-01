@@ -11,6 +11,7 @@ import (
 
 	"github.com/absmach/fluxmq/logstorage"
 	"github.com/absmach/fluxmq/message"
+	"github.com/absmach/fluxmq/queue/storage"
 	hraft "github.com/hashicorp/raft"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,4 +71,26 @@ func TestLogFSMSnapshotsThroughProductionAdapter(t *testing.T) {
 		assert.Equal(t, want, string(got.PayloadBytes()), "offset %d", offset)
 		message.Release(got)
 	}
+}
+
+// Two deletes of one queue can both commit: each caller checks the queue
+// exists before its delete is applied. Every replica applies the second
+// against a queue the first removed, which must be a no-op on the
+// production store rather than a local failure that stops the node.
+func TestLogFSMRepeatedDeleteThroughProductionAdapter(t *testing.T) {
+	ctx := context.Background()
+	fsm, adapter := newAdapterFSM(t)
+
+	config := conformanceQueueConfig()
+	require.NoError(t, adapter.CreateQueue(ctx, config))
+
+	for index := uint64(1); index <= 2; index++ {
+		require.NotPanics(t, func() {
+			result := applyLogged(t, fsm, index, &Operation{Type: OpDeleteQueue, QueueName: config.Name})
+			require.NoError(t, result.Error)
+		}, "delete %d", index)
+	}
+
+	_, err := adapter.GetQueue(ctx, config.Name)
+	assert.ErrorIs(t, err, storage.ErrQueueNotFound)
 }

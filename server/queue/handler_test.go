@@ -58,6 +58,10 @@ func (c *readyQueueCoordinator) ApplyCreateQueue(ctx context.Context, cfg types.
 	return c.store.CreateQueue(ctx, cfg)
 }
 
+func (c *readyQueueCoordinator) ApplyUpdateQueue(ctx context.Context, cfg types.QueueConfig) error {
+	return c.store.UpdateQueue(ctx, cfg)
+}
+
 func TestListQueuesFilteringAndPagination(t *testing.T) {
 	t.Parallel()
 
@@ -490,6 +494,28 @@ func TestProtectedQueueAdminUpdateAndDeleteFailPrecondition(t *testing.T) {
 	}
 	if _, getErr := store.GetQueue(ctx, contract.Name); getErr != nil {
 		t.Fatalf("protected queue was deleted: %v", getErr)
+	}
+}
+
+func TestConfiguredReplicatedQueueAdminDeleteFailsPrecondition(t *testing.T) {
+	ctx := context.Background()
+	store := memlog.New()
+	configured := types.DefaultQueueConfig("configured.jobs", "configured/#")
+	configured.Replication.Enabled = true
+	if err := store.CreateQueue(ctx, configured); err != nil {
+		t.Fatalf("create configured queue: %v", err)
+	}
+	managerConfig := queuepkg.DefaultConfig()
+	managerConfig.QueueConfigs = []types.QueueConfig{configured}
+	manager := queuepkg.NewManager(store, noopGroupStore{}, nil, managerConfig, nil, nil)
+	h := NewHandler(manager, nil, nil, nil)
+
+	_, err := h.DeleteQueue(ctx, connect.NewRequest(&queuev1.DeleteQueueRequest{Name: configured.Name}))
+	if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+		t.Fatalf("DeleteQueue() code = %s, error = %v, want failed_precondition", got, err)
+	}
+	if _, getErr := store.GetQueue(ctx, configured.Name); getErr != nil {
+		t.Fatalf("configured queue was deleted: %v", getErr)
 	}
 }
 

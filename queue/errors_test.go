@@ -35,6 +35,7 @@ func TestClassifyErrorContract(t *testing.T) {
 		{name: "durability unconfirmed", err: storage.ErrDurabilityUnconfirmed, want: Failure{Code: ErrorCodeUnavailable, Retryable: true, Durability: DurabilityUnconfirmed}},
 		{name: "deduplication state unconfirmed", err: storage.ErrDeduplicationStateUnconfirmed, want: Failure{Code: ErrorCodeUnavailable, Retryable: true}},
 		{name: "protected", err: ErrProtectedQueueMutation, want: Failure{Code: ErrorCodeFailedPrecondition}},
+		{name: "configured queue deletion", err: ErrConfiguredQueueDeletion, want: Failure{Code: ErrorCodeFailedPrecondition}},
 		{name: "durability unsupported", err: ErrFsyncReplicatedQueueUnsupported, want: Failure{Code: ErrorCodeFailedPrecondition, Durability: DurabilityUnsupported}},
 		{name: "replication unavailable", err: ErrReplicationUnavailable, want: Failure{Code: ErrorCodeUnavailable, Retryable: true, Leader: LeaderUnavailable, Durability: DurabilityUnconfirmed}},
 		{name: "owned elsewhere", err: cluster.ErrSessionOwned, want: Failure{Code: ErrorCodeConflict, Retryable: true, Ownership: OwnershipOther}},

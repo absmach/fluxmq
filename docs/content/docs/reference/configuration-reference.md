@@ -389,6 +389,21 @@ rather than the events it named. Fix the filter rather than work around the erro
 | `snapshot_interval`    | Optional per-queue snapshot interval override. `0` inherits cluster/group value.  |
 | `snapshot_threshold`   | Optional per-queue snapshot threshold override. `0` inherits cluster/group value. |
 
+<Callout type="warn">
+A replicated queue declared under `queues` belongs to the configuration, not to
+the runtime API. A node refuses to delete it (`failed_precondition`) because any
+node that declares the queue records it again in the Raft log when it starts or
+becomes the leader of the queue's group, so the delete would not last. To
+remove such a queue, take it out of every node's configuration and restart the
+nodes before deleting it.
+
+Declare the same replicated queues on every node. A node whose configuration
+leaves the queue out does not refuse the delete. If it leads the group, the
+delete commits, and a node that still declares the queue recreates it with its
+own configured settings the next time that node starts or takes over the
+group.
+</Callout>
+
 ## Storage
 
 ```yaml

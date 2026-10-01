@@ -10,6 +10,8 @@ import (
 
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/queue/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockReplicator struct {
@@ -21,6 +23,8 @@ type mockReplicator struct {
 
 	stopCalls    int
 	appendQueues []string
+
+	recordedConfigs map[string]bool
 }
 
 type mockProvisioner struct {
@@ -62,7 +66,10 @@ func (m *mockReplicator) LeaderID() string {
 }
 func (m *mockReplicator) ApplyCreateQueue(context.Context, types.QueueConfig) error { return nil }
 func (m *mockReplicator) ApplyUpdateQueue(context.Context, types.QueueConfig) error { return nil }
-func (m *mockReplicator) ApplyDeleteQueue(context.Context, string) error            { return nil }
+func (m *mockReplicator) IsQueueConfigRecorded(queueName string) bool {
+	return m.recordedConfigs[queueName]
+}
+func (m *mockReplicator) ApplyDeleteQueue(context.Context, string) error { return nil }
 
 func (m *mockReplicator) ApplyAppendWithOptions(_ context.Context, queueName string, _ *message.Envelope, _ ApplyOptions) (uint64, error) {
 	m.appendQueues = append(m.appendQueues, queueName)
@@ -321,4 +328,24 @@ func TestLogicalGroupCoordinatorKeepsStaticGroupRegisteredOnQueueRemoval(t *test
 	if _, ok := coordinator.groupMembers["hot"]; !ok {
 		t.Fatalf("expected hot group member to remain for non-releasable group")
 	}
+}
+
+// The write gate asks the coordinator; it must answer for the queue's own
+// group and never report settings another group recorded.
+func TestLogicalGroupCoordinatorReportsRecordedConfigOfQueueGroup(t *testing.T) {
+	hot := &mockReplicator{enabled: true, recordedConfigs: map[string]bool{"orders": true}}
+	coordinator := NewLogicalGroupCoordinator(&mockReplicator{enabled: true}, nil)
+	coordinator.RegisterGroup("hot", hot)
+
+	orders := types.DefaultQueueConfig("orders", "$queue/orders/#")
+	orders.Replication.Enabled = true
+	orders.Replication.Group = "hot"
+	require.NoError(t, coordinator.EnsureQueue(context.Background(), orders))
+	assert.True(t, coordinator.IsQueueConfigRecorded("orders"), "recorded in its own group")
+
+	invoices := types.DefaultQueueConfig("invoices", "$queue/invoices/#")
+	invoices.Replication.Enabled = true
+	require.NoError(t, coordinator.EnsureQueue(context.Background(), invoices))
+	assert.False(t, coordinator.IsQueueConfigRecorded("invoices"), "default group recorded nothing")
+	assert.False(t, coordinator.IsQueueConfigRecorded("unassigned"), "an unknown queue reports nothing recorded")
 }
