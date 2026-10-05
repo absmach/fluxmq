@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/raft v1.8.0
 	github.com/klauspost/compress v1.20.1
-	github.com/pion/dtls/v3 v3.1.9
+	github.com/pion/dtls/v3 v3.1.10
 	github.com/plgd-dev/go-coap/v3 v3.5.4
 	github.com/rabbitmq/amqp091-go v1.15.0
 	github.com/sony/gobreaker v1.0.0
