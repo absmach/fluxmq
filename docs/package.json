@@ -18,15 +18,15 @@
     "publish-image": "node scripts/publish-image.mjs"
   },
   "dependencies": {
-    "@fastify/deepmerge": "^3.2.2",
-    "@scalar/openapi-upgrader": "0.4.4",
+    "@fastify/deepmerge": "^3.2.4",
+    "@scalar/openapi-upgrader": "0.4.6",
     "ajv": "^8.20.0",
     "fast-content-type-parse": "^4.0.1",
-    "fumadocs-core": "16.17.5",
-    "fumadocs-mdx": "15.4.7",
+    "fumadocs-core": "16.17.7",
+    "fumadocs-mdx": "15.4.9",
     "fumadocs-openapi": "11.0.6",
     "fumadocs-ui": "16.10.7",
-    "lucide-react": "^1.58.0",
+    "lucide-react": "^1.61.0",
     "mermaid": "^12.2.0",
     "next": "16.4.2",
     "next-themes": "^0.4.6",
@@ -37,18 +37,18 @@
     "zbsearch": "^4.0.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
+    "@biomejs/biome": "^2.6.2",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/mdx": "^2.0.14",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "postcss": "^8.5.30",
+    "postcss": "^8.5.31",
     "serve": "^14.2.5",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "wrangler": "^4.151.1"
+    "wrangler": "^4.152.0"
   },
   "packageManager": "pnpm@10.33.0"
 }
