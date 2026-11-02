@@ -256,7 +256,17 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer s.releaseConnectionSlot()
 
-	defer conn.Close()
+	// The raw socket is closed here only until the MQTT connection takes it
+	// over; from then on the MQTT connection closes it, after flushing any reply
+	// queued just before the close.
+	var hc core.Connection
+	defer func() {
+		if hc != nil {
+			hc.Close() //nolint:errcheck // idempotent; the session normally closed it already
+			return
+		}
+		conn.Close() //nolint:errcheck // best-effort close before hand-off
+	}()
 	defer connguard.Recover(s.config.Logger, "mqtt-tcp", conn.RemoteAddr().String())
 
 	s.trackConn(conn)
@@ -303,7 +313,7 @@ func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	// core.NewConnection accepts any net.Conn (TCP or TLS). The session replaces
 	// the read deadline on every packet read; the write deadline is applied per
 	// socket write by the connection itself.
-	hc := core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion,
+	hc = core.NewConnectionWithVersion(conn, s.config.SendQueueSize, s.config.DisconnectOnFull, s.config.ProtocolVersion,
 		core.WithMaxPacketSize(s.config.MaxPacketSize),
 		core.WithWriteTimeout(s.config.WriteTimeout))
 	broker.HandleConnection(handlerCtx, s.handler, hc)
