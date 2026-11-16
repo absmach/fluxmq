@@ -13,7 +13,7 @@ require (
 	github.com/hashicorp/raft v1.8.0
 	github.com/klauspost/compress v1.20.3
 	github.com/pion/dtls/v3 v3.1.15
-	github.com/plgd-dev/go-coap/v3 v3.6.0
+	github.com/plgd-dev/go-coap/v3 v3.8.1
 	github.com/rabbitmq/amqp091-go v1.16.0
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.12.1
@@ -83,7 +83,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
-	go.uber.org/atomic v1.12.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
