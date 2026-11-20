@@ -72,6 +72,44 @@ func TestConnectRefusalReachesClient(t *testing.T) {
 	}
 }
 
+func TestShutdownTracksStalledConnectRefusal(t *testing.T) {
+	b := broker.NewBroker(nil, nil)
+	t.Cleanup(func() { b.Close() }) //nolint:errcheck // best-effort teardown
+	b.SetAuthEngine(fluxbroker.NewAuthEngine(rejectAllAuthenticator{}, nil))
+	server := New(Config{
+		ShutdownTimeout: 100 * time.Millisecond,
+		SendQueueSize:   8,
+		MaxConnections:  1,
+	}, b)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	conn, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.True(t, server.tryAcquireConnectionSlot(ctx, conn))
+	server.wg.Add(1)
+	go server.handleConnection(ctx, conn)
+
+	// Send CONNECT and leave the refusal CONNACK blocked in the pipe.
+	require.NoError(t, client.SetWriteDeadline(time.Now().Add(time.Second)))
+	_, err = client.Write([]byte{
+		0x10, 0x14, 0, 4, 'M', 'Q', 'T', 'T', 4, 0xC2, 0, 0x3C,
+		0, 2, 'c', '1', 0, 1, 'u', 0, 1, 'p',
+	})
+	require.NoError(t, err)
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	acceptDone := make(chan struct{})
+	close(acceptDone)
+	require.ErrorIs(t, server.gracefulShutdown(listener, acceptDone, cancel), ErrShutdownTimeout)
+	_, err = client.Read(make([]byte, 1))
+	require.ErrorIs(t, err, io.EOF)
+}
+
 // connectAndReadUntilEOF runs one connection through the server's handler,
 // sends connect, and returns everything the broker writes before closing.
 func connectAndReadUntilEOF(t *testing.T, server *Server, connect []byte) []byte {

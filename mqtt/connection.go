@@ -102,6 +102,8 @@ type connection struct {
 	dataCh           chan sendItem
 	closeCh          chan struct{}
 	closeOnce        sync.Once
+	socketClosed     chan struct{}
+	socketCloseOnce  sync.Once
 	closeTimer       atomic.Pointer[time.Timer] // force-closes the socket if the close drain stalls
 	writeTimeout     time.Duration              // 0 = no write deadline
 	maxPacketSize    int                        // 0 = unlimited
@@ -183,6 +185,7 @@ func NewConnectionWithVersion(conn net.Conn, queueSize int, disconnectOnFull boo
 		c.controlCh = make(chan sendItem, controlCap)
 		c.dataCh = make(chan sendItem, queueSize)
 		c.closeCh = make(chan struct{})
+		c.socketClosed = make(chan struct{})
 		c.writer = bufio.NewWriterSize(c.sock, sendBufSize)
 
 		go c.sendLoop()
@@ -278,7 +281,7 @@ func (c *connection) WriteDataPacket(pkt packets.ControlPacket, onSent func()) e
 			return net.ErrClosed
 		default:
 			c.markClosed()
-			_ = c.conn.Close()
+			c.closeSocket()
 			pkt.Release()
 			return ErrSendQueueFull
 		}
@@ -317,7 +320,7 @@ func (c *connection) TryWriteDataPacket(pkt packets.ControlPacket, onSent func()
 	default:
 		if c.disconnectOnFull {
 			c.markClosed()
-			_ = c.conn.Close()
+			c.closeSocket()
 		}
 		pkt.Release()
 		return ErrSendQueueFull
@@ -457,8 +460,8 @@ func (c *connection) sendLoop() {
 	}
 }
 
-// drainControlOnClose writes out control packets queued before the connection
-// was closed, together with anything already packed into w, and flushes them.
+// drainControlOnClose flushes anything already packed into w and control
+// packets queued before Close, stopping after a DISCONNECT.
 // Close only marks the connection closed, so a refusal CONNACK or DISCONNECT
 // enqueued just before it still reaches the peer. Queued data packets are not
 // written: QoS>0 deliveries are retried on reconnect. A peer that does not read
@@ -477,13 +480,16 @@ func (c *connection) drainControlOnClose(w *bufio.Writer, pending *[]func()) {
 	}
 }
 
-// closeSocket closes the socket once the send loop has exited and disarms the
-// drain timer armed by Close.
+// closeSocket closes the asynchronous socket and signals its transport owner.
+// The send loop, abort paths and the drain timer can all call it.
 func (c *connection) closeSocket() {
-	if t := c.closeTimer.Load(); t != nil {
-		t.Stop()
-	}
-	_ = c.conn.Close()
+	c.socketCloseOnce.Do(func() {
+		if t := c.closeTimer.Load(); t != nil {
+			t.Stop()
+		}
+		_ = c.conn.Close()
+		close(c.socketClosed)
+	})
 }
 
 // drainSendQueues releases packets left queued when the send loop exits, so a
@@ -504,18 +510,29 @@ func (c *connection) drainSendQueues() {
 	}
 }
 
-// doPack serialises a packet into the buffered writer. onSent callbacks are
-// deferred into pending and fired after the batch is flushed to the socket.
+// doPack serialises a packet into the buffered writer and reports whether the
+// send loop should continue. A DISCONNECT flushes the final batch immediately.
+// onSent callbacks fire after their batch is flushed to the socket.
 func (c *connection) doPack(w *bufio.Writer, item sendItem, pending *[]func()) bool {
+	terminal := item.pkt.Type() == packets.DisconnectType
+	if terminal {
+		// Start the bounded close before packing the final packet. Packing
+		// itself can write to the socket when the buffer fills.
+		_ = c.Close()
+	}
 	if err := item.pkt.Pack(w); err != nil {
 		item.pkt.Release()
 		c.markClosed()
-		_ = c.conn.Close()
+		c.closeSocket()
 		return false
 	}
 	item.pkt.Release()
 	if item.onSent != nil {
 		*pending = append(*pending, item.onSent)
+	}
+	if terminal {
+		c.flushAndNotify(w, pending)
+		return false
 	}
 	return true
 }
@@ -528,7 +545,7 @@ func (c *connection) flushAndNotify(w *bufio.Writer, pending *[]func()) bool {
 		if err := w.Flush(); err != nil {
 			*pending = (*pending)[:0]
 			c.markClosed()
-			_ = c.conn.Close()
+			c.closeSocket()
 			return false
 		}
 	}
@@ -573,14 +590,20 @@ func (c *connection) Close() error {
 	if c.closed.Load() {
 		return nil
 	}
-	timer := time.AfterFunc(closeDrainTimeout, func() {
-		_ = c.conn.Close()
-	})
+	timer := time.AfterFunc(closeDrainTimeout, c.closeSocket)
 	if !c.closeTimer.CompareAndSwap(nil, timer) {
 		timer.Stop()
 	}
 	c.markClosed()
 	return nil
+}
+
+// WaitForClose waits for an asynchronous socket to close after Close.
+// Synchronous connections have already closed their socket when Close returns.
+func (c *connection) WaitForClose() {
+	if c.socketClosed != nil {
+		<-c.socketClosed
+	}
 }
 
 func (c *connection) LocalAddr() net.Addr {

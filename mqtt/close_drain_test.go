@@ -114,6 +114,34 @@ func TestAsyncCloseFlushesQueuedControlPackets(t *testing.T) {
 	}
 }
 
+func TestAsyncDisconnectIsFinalPacket(t *testing.T) {
+	rc := newRecordingConn(true)
+	conn := core.NewConnection(rc, 16, false)
+	ping := func() *v3.PingResp {
+		return &v3.PingResp{FixedHeader: packets.FixedHeader{PacketType: packets.PingRespType}}
+	}
+
+	require.NoError(t, conn.WritePacket(ping()))
+	rc.awaitWriteStart(t)
+	sent := make(chan struct{})
+	require.NoError(t, conn.WriteControlPacket(&v5.Disconnect{
+		FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType},
+	}, func() { close(sent) }))
+	require.NoError(t, conn.WriteDataPacket(publishPacket(1), nil))
+	require.NoError(t, conn.WritePacket(ping()))
+
+	rc.unblockWrites()
+	require.Eventually(t, rc.closed.Load, 2*time.Second, time.Millisecond)
+	require.Equal(t, byte(packets.PingRespType), packetType(rc.nextWrite(t)))
+	require.Equal(t, byte(packets.DisconnectType), packetType(rc.nextWrite(t)))
+	require.Empty(t, rc.writes)
+	select {
+	case <-sent:
+	default:
+		t.Fatal("DISCONNECT onSent callback did not run")
+	}
+}
+
 // TestAsyncCloseDoesNotBlockOnStalledPeer pins the bound on the close drain: a
 // peer that never reads must not hold Close up, and its socket must still be
 // closed once the drain timeout expires.
