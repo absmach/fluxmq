@@ -255,22 +255,25 @@ func (s *Server) releaseConnectionSlot() {
 func (s *Server) handleConnection(connCtx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer s.releaseConnectionSlot()
+	s.trackConn(conn)
+	defer s.untrackConn(conn)
 
 	// The raw socket is closed here only until the MQTT connection takes it
 	// over; from then on the MQTT connection closes it, after flushing any reply
-	// queued just before the close.
+	// queued just before the close. Keep its slot and shutdown tracking until
+	// the socket is closed.
 	var hc core.Connection
 	defer func() {
 		if hc != nil {
 			hc.Close() //nolint:errcheck // idempotent; the session normally closed it already
+			if draining, ok := hc.(interface{ WaitForClose() }); ok {
+				draining.WaitForClose()
+			}
 			return
 		}
 		conn.Close() //nolint:errcheck // best-effort close before hand-off
 	}()
 	defer connguard.Recover(s.config.Logger, "mqtt-tcp", conn.RemoteAddr().String())
-
-	s.trackConn(conn)
-	defer s.untrackConn(conn)
 
 	s.config.Logger.Debug("connection established",
 		slog.String("remote", conn.RemoteAddr().String()))
