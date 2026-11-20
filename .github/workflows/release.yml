@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-binaries-${{ github.ref }}
-  cancel-in-progress: false
+  group: release-binaries-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   snapshot:
@@ -52,7 +52,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

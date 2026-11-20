@@ -38,6 +38,9 @@ archives:
 checksum:
   name_template: checksums.txt
 
+release:
+  prerelease: auto
+
 changelog:
   sort: asc
   filters:
