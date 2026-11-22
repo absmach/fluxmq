@@ -130,24 +130,35 @@
   </section>{/if}
 <section class="panel client-subscriptions-panel" class:amqp-consumers={!mqtt}>
   <h2>
-    {mqtt ? 'Subscriptions' : 'Consumes from'}
-    {#if mqtt}<span class="count-tag">{client.subscription_count}</span>{/if}
+    {mqtt ? 'Subscriptions' : 'Consumers'}
+    <span
+      class="count-tag"
+      title={mqtt ? 'Distinct subscriptions' : 'Active consumers on this connection'}
+    >
+      {mqtt ? client.subscription_count : (client.consumer_count ?? '—')}
+    </span>
   </h2>
   {#if !mqtt}
     <div class="table-scroll">
       <table class="amqp-consumer-table">
         <thead>
           <tr>
-            <th>Queue / topic filter</th>{#if hasConsumerGroups}<th>Consumer group</th>{/if}
+            <th>Queue / topic filter</th>{#if hasConsumerGroups}<th>Consumer group</th>{/if}<th
+              class="numeric"
+            >
+              Consumers
+            </th>
           </tr>
         </thead>
         <tbody>
           {#each client.subscriptions ?? [] as sub}<tr>
               <td class="mono">{sub.filter}</td>
-              {#if hasConsumerGroups}<td>{sub.consumer_group || '—'}</td>{/if}
+              {#if hasConsumerGroups}<td>{sub.consumer_group || '—'}</td>{/if}<td class="numeric">
+                {sub.consumer_count ?? '—'}
+              </td>
             </tr>{:else}<tr>
-              <td colspan={hasConsumerGroups ? 2 : 1}>
-                <div class="empty-state">This connection has no active subscriptions.</div>
+              <td colspan={hasConsumerGroups ? 3 : 2}>
+                <div class="empty-state">This connection has no active consumers.</div>
               </td>
             </tr>{/each}
         </tbody>

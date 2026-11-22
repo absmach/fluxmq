@@ -75,6 +75,7 @@ export interface BrokerNode {
   outgoing: number;
 }
 export interface Session {
+  consumer_count?: number;
   connection_name?: string;
   state?: string;
   version?: number;
@@ -96,6 +97,7 @@ export interface Session {
   offline_queue_depth: number;
   connected_at?: string;
   subscriptions?: {
+    consumer_count?: number;
     filter: string;
     qos: number;
     no_local?: boolean;

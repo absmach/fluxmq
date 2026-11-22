@@ -66,6 +66,7 @@ type node struct {
 	Outgoing         float64         `json:"outgoing"`
 }
 type session struct {
+	ConsumerCount     *int                  `json:"consumer_count,omitempty"`
 	ConnectionName    string                `json:"connection_name,omitempty"`
 	State             string                `json:"state"`
 	Version           int                   `json:"version"`
@@ -89,6 +90,7 @@ type session struct {
 	Subscriptions     []sessionSubscription `json:"subscriptions,omitempty"`
 }
 type sessionSubscription struct {
+	ConsumerCount     *int    `json:"consumer_count,omitempty"`
 	NoLocal           *bool   `json:"no_local,omitempty"`
 	RetainAsPublished *bool   `json:"retain_as_published,omitempty"`
 	RetainHandling    *uint8  `json:"retain_handling,omitempty"`
