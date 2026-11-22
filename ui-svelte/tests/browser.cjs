@@ -15,10 +15,10 @@ fs.mkdirSync(shots, { recursive: true });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/dashboard`);
-  await page.getByText('All nodes responding', { exact: true }).waitFor();
+  await page.locator('.console-statusbar').getByText('Healthy', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('body').innerText(), /workspace/i);
   await page.getByRole('button', { name: 'Broker connection details' }).click();
-  await page.getByRole('heading', { name: 'Demo brokers. Real console.' }).waitFor();
+  await page.getByRole('heading', { name: 'Demo environment' }).waitFor();
   await page.getByRole('button', { name: 'Close broker connection details' }).click();
   assert.equal((await page.locator('.brand').innerText()).replace(/\s/g, ''), 'FluxMQ');
   assert.equal(await page.locator('.broker-connection').count(), 0);
@@ -76,6 +76,7 @@ fs.mkdirSync(shots, { recursive: true });
   await page.getByLabel('Cluster scope').selectOption('all');
 
   assert.equal(await page.locator('.health-card').count(), 3);
+  await page.screenshot({ path: path.join(shots, 'health-light.png'), fullPage: true });
   await page.getByLabel('Cluster scope').selectOption('eu-west-01');
   assert.equal(
     (await page.getByRole('button', { name: 'View all nodes', exact: true }).innerText()).trim(),
@@ -92,7 +93,7 @@ fs.mkdirSync(shots, { recursive: true });
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(shots, 'overview-dark.png'), fullPage: true });
   await page.reload();
-  await page.getByText('All nodes responding', { exact: true }).waitFor();
+  await page.locator('.console-statusbar').getByText('Healthy', { exact: true }).waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   const mobile = await browser.newPage({
     viewport: { width: 390, height: 844 },
@@ -102,7 +103,7 @@ fs.mkdirSync(shots, { recursive: true });
   });
   mobile.on('pageerror', (e) => errors.push(e.message));
   await mobile.goto(`${base}/dashboard`);
-  await mobile.getByText('DEMO DATA', { exact: true }).waitFor();
+  await mobile.getByRole('button', { name: 'Broker connection details', exact: true }).waitFor();
   assert.equal(
     await mobile.evaluate(() => document.documentElement.scrollWidth),
     390,

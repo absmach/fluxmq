@@ -14,24 +14,12 @@
     type Session,
   } from './lib/types';
 
-  const navigation: { id: Page; label: string; description: string }[] = [
-    { id: 'overview', label: 'Overview', description: 'Connections, traffic, and cluster health.' },
-    { id: 'sessions', label: 'Sessions', description: 'Every connection. One clear picture.' },
-    {
-      id: 'subscriptions',
-      label: 'Subscriptions',
-      description: 'Follow the conversations across your system.',
-    },
-    {
-      id: 'nodes',
-      label: 'Cluster nodes',
-      description: 'Configured brokers and their current status.',
-    },
-    {
-      id: 'health',
-      label: 'Broker health',
-      description: 'A closer look at the systems beneath the signal.',
-    },
+  const navigation: { id: Page; label: string }[] = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'sessions', label: 'Sessions' },
+    { id: 'subscriptions', label: 'Subscriptions' },
+    { id: 'nodes', label: 'Cluster nodes' },
+    { id: 'health', label: 'Broker health' },
   ];
   const pageFromURL = (): Page =>
     navigation.find((n) => n.id === location.pathname.split('/').filter(Boolean).at(-1))?.id ??
@@ -81,7 +69,6 @@
     received: nodes.reduce((v, n) => v + n.received, 0),
     sent: nodes.reduce((v, n) => v + n.sent, 0),
   });
-  let healthy = $derived(nodes.length > 0 && nodes.every((n) => n.healthy));
   let age = $derived(snapshot ? Math.max(0, Math.floor((clock - snapshot.timestamp) / 1000)) : 0);
   let stale = $derived(!paused && !!snapshot && age > 12);
   let filteredSessions = $derived(
@@ -371,8 +358,8 @@
     </div>
   </aside>
   <div class="console">
-    <header class="console-toolbar console-statusbar" aria-label="Console status">
-      <div class="cluster-status">
+    <header class="console-statusbar" aria-label="Console status">
+      <div class="header-context">
         {#if viewportWidth <= 800}<button
             class="icon-button"
             aria-label="Open navigation"
@@ -382,29 +369,14 @@
           >
             <Icon name="menu" />
           </button>{/if}
-        <span
-          class="status-label"
-          class:warning={connection !== 'connected' ||
-            stale ||
-            paused ||
-            !snapshot?.nodes.length ||
-            snapshot.nodes.some((n) => !n.healthy)}
-          role="status"
-        >
-          <span class="status-dot"></span>{connection === 'connecting'
-            ? 'Connecting'
-            : connection === 'reconnecting'
-              ? 'Reconnecting'
-              : paused
-                ? 'Updates paused'
-                : stale
-                  ? 'Data is stale'
-                  : !snapshot?.nodes.length
-                    ? 'Waiting for nodes'
-                    : snapshot.nodes.every((n) => n.healthy)
-                      ? 'All nodes responding'
-                      : 'Node unavailable'}
-        </span>
+        <label class="node-picker">
+          <Icon name="nodes" size={17} />
+          <select aria-label="Cluster scope" bind:value={scope} onchange={() => (tablePage = 1)}>
+            <option value="all">All nodes</option>
+            {#each snapshot?.nodes ?? [] as n}<option value={n.id}>{n.id}</option>{/each}
+          </select>
+          <Icon name="down" size={13} />
+        </label>
         <button
           class="cluster-count"
           onclick={() => {
@@ -417,40 +389,47 @@
           {snapshot?.nodes.length === 1 ? 'node' : 'nodes'}
         </button>
       </div>
-      <div class="scope-control">
-        <Icon name="nodes" size={16} /><select
-          aria-label="Cluster scope"
-          bind:value={scope}
-          onchange={() => (tablePage = 1)}
+      <div class="header-actions">
+        <span
+          class="cluster-health"
+          class:warning={connection !== 'connected' ||
+            stale ||
+            paused ||
+            !snapshot?.nodes.length ||
+            snapshot.nodes.some((n) => !n.healthy)}
+          role="status"
+          title="Reachability of all configured brokers. Paused or interrupted updates show the last collected data."
         >
-          <option value="all">All nodes</option>{#each snapshot?.nodes ?? [] as n}<option
-              value={n.id}
-            >
-              {n.id}
-            </option>{/each}
-        </select><Icon name="down" size={14} />
-      </div>
-      <div class="stream-controls">
+          <span class="status-dot"></span>{connection === 'connecting'
+            ? 'Connecting'
+            : connection === 'reconnecting'
+              ? 'Reconnecting'
+              : paused
+                ? 'Paused'
+                : stale
+                  ? 'Stale data'
+                  : !snapshot?.nodes.length
+                    ? 'No nodes'
+                    : snapshot.nodes.every((n) => n.healthy)
+                      ? 'Healthy'
+                      : 'Node unavailable'}
+        </span>
         {#if snapshot?.mode === 'demo'}<button
-            class="demo-badge"
+            class="header-demo"
             aria-label="Broker connection details"
+            title="Simulated broker data"
             onclick={() => connectionDialog.showModal()}
           >
-            DEMO DATA <Icon name="info" size={12} />
-          </button>{/if}<span class="stream-time">
-          {paused
-            ? 'Updates paused'
-            : snapshot
-              ? `Updated ${age < 2 ? 'just now' : `${age}s ago`}`
-              : 'Opening stream…'}
-        </span><button
-          class:paused
-          class="live-control"
+            Demo
+          </button>{/if}
+        <button
+          class="icon-button stream-toggle"
           onclick={togglePause}
           disabled={!snapshot}
           aria-label={paused ? 'Resume updates' : 'Pause updates'}
+          title={paused ? 'Resume live updates' : 'Pause live updates'}
         >
-          <Icon name={paused ? 'play' : 'pause'} size={13} />{paused ? 'Paused' : 'Live'}
+          <Icon name={paused ? 'play' : 'pause'} size={16} />
         </button>
       </div>
     </header>
@@ -532,11 +511,6 @@
                 filters
               </span>
             </div>
-            <div class="metric-bottom">
-              <span>Messages finding their way</span><span class="metric-decoration">
-                <Icon name="subscriptions" size={25} />
-              </span>
-            </div>
           </article>
         </section>
         <div class="overview-grid">
@@ -544,7 +518,6 @@
             <div class="panel-heading">
               <div>
                 <h2>Message traffic <span class="live-dot"></span></h2>
-                <p>The pulse of your infrastructure.</p>
               </div>
               <div class="segmented" aria-label="Chart time range">
                 {#each [1, 5, 15] as minutes}<button
@@ -583,7 +556,6 @@
             <div class="panel-heading">
               <div>
                 <h2>Session mix</h2>
-                <p>Different protocols. One platform.</p>
               </div>
               <Icon name="globe" size={18} />
             </div>
@@ -617,9 +589,7 @@
           <div class="panel-heading">
             <div class="heading-inline">
               <h2>Cluster nodes</h2>
-              <span class="count-tag">{nodes.length}</span><span class="panel-caption">
-                Built to work together.
-              </span>
+              <span class="count-tag">{nodes.length}</span>
             </div>
             <button class="text-button" onclick={() => navigate('nodes')}>
               Explore cluster <Icon name="nodes" size={15} />
@@ -865,25 +835,6 @@
           {@render nodeTable()}
         </section>
       {:else if page === 'health'}
-        <div class="health-banner" class:degraded={!healthy || stale || connection !== 'connected'}>
-          <span class="health-emblem"><Icon name="shield" size={32} /></span>
-          <div>
-            <h2>
-              {!snapshot
-                ? 'Connecting to the broker'
-                : connection !== 'connected' || stale
-                  ? 'Waiting for a fresh snapshot'
-                  : healthy
-                    ? 'Your brokers are in good shape.'
-                    : 'A broker needs your attention.'}
-            </h2>
-            <p>
-              {snapshot?.mode === 'demo'
-                ? 'You’re viewing a simulated environment. Connect a broker to monitor real health.'
-                : 'Health is based on successful Admin API responses from configured nodes.'}
-            </p>
-          </div>
-        </div>
         <section class="summary-strip">
           <div>
             <span>Available nodes</span><strong>
@@ -1085,7 +1036,7 @@
   </div>
   <img src="/brand/fluxmq-symbol.svg" alt="" width="48" height="48" />
   <h2>
-    {snapshot?.mode === 'demo' ? 'Demo brokers. Real console.' : 'Connected to your brokers.'}
+    {snapshot?.mode === 'demo' ? 'Demo environment' : 'Connected to your brokers.'}
   </h2>
   <p>
     {snapshot?.mode === 'demo'

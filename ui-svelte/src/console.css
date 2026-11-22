@@ -695,43 +695,145 @@ dialog::backdrop {
   font-weight: 500;
 }
 
-/* Console context stays visible across pages and while scrolling. */
+/* Persistent console context, with one group for scope and one for state. */
 .console-statusbar {
   position: sticky;
   top: 0;
   z-index: 20;
-  min-height: 60px;
-  margin: 0;
-  padding: 12px 38px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-.cluster-status {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
+  min-height: 64px;
+  padding: 12px 38px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--subtle-border);
 }
-.console-statusbar .status-label {
+.header-context,
+.header-actions {
   display: flex;
-  font-size: 0.75rem;
-  white-space: nowrap;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.header-actions {
+  gap: 12px;
+  flex-shrink: 0;
+}
+.node-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  color: var(--muted);
+  padding-left: 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--panel-raised);
+}
+.node-picker:hover,
+.node-picker:focus-within {
+  border-color: var(--border);
+}
+.node-picker select {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font:
+    500 0.8125rem 'IBM Plex Sans',
+    sans-serif;
+  height: 34px;
+  padding: 0 30px 0 0;
+  max-width: 200px;
+  cursor: pointer;
+}
+.node-picker select option {
+  background: var(--panel);
+  color: var(--text);
+}
+.node-picker > svg:last-child {
+  position: absolute;
+  right: 10px;
+  pointer-events: none;
 }
 .cluster-count {
   color: var(--muted);
   font-size: 0.75rem;
-  padding: 4px 0 4px 16px;
-  border-left: 1px solid var(--border);
+  padding: 6px 0;
   white-space: nowrap;
 }
 .cluster-count:hover {
   color: var(--accent);
 }
-.console-statusbar .scope-control {
-  margin-left: auto;
+.cluster-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--mint);
+  background: var(--mint-bg);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 5px;
+  white-space: nowrap;
 }
-.console-statusbar .stream-controls {
-  gap: 12px;
+.cluster-health.warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+.header-demo {
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 6px 0;
+}
+.header-demo:hover {
+  color: var(--text);
+}
+.stream-toggle {
+  border: 1px solid var(--border);
+  width: 30px;
+  height: 30px;
+  border-radius: 5px;
+}
+@media (max-width: 1250px) {
+  .console-statusbar {
+    padding-inline: 24px;
+  }
+}
+@media (max-width: 800px) {
+  .console-statusbar {
+    padding: 10px 20px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .header-context {
+    gap: 10px;
+  }
+  .header-actions {
+    margin-left: auto;
+  }
+  .node-picker select {
+    max-width: 160px;
+  }
+}
+@media (max-width: 620px) {
+  .console-statusbar {
+    padding: 10px 16px;
+  }
+  .header-context {
+    width: 100%;
+  }
+  .cluster-count {
+    margin-left: auto;
+  }
+  .header-actions {
+    width: 100%;
+  }
+  .cluster-health {
+    margin-right: auto;
+  }
 }
 .page-heading,
 .overview-heading {
@@ -772,37 +874,7 @@ dialog::backdrop {
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
-@media (max-width: 1250px) {
-  .console-statusbar {
-    padding-inline: 24px;
-  }
-  .console-statusbar .stream-time {
-    display: none;
-  }
-}
-@media (max-width: 800px) {
-  .console-statusbar {
-    padding: 10px 20px;
-    gap: 10px;
-  }
-  .cluster-status {
-    width: 100%;
-    gap: 12px;
-  }
-  .cluster-count {
-    margin-left: auto;
-  }
-  .console-statusbar .scope-control {
-    margin-left: 0;
-  }
-  .console-statusbar .stream-controls {
-    margin-left: auto;
-  }
-}
 @media (max-width: 620px) {
-  .console-statusbar {
-    padding-inline: 16px;
-  }
   .summary-strip {
     gap: 10px;
   }
