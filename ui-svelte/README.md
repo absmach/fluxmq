@@ -41,9 +41,8 @@ local or behind your existing authenticated management gateway.
 - Overview: node scope, live rates, 1/5/15-minute charts, protocol distribution.
 - Sessions: search, protocol/state filters, sorting, pagination, centered detail dialog.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, node scopes.
-- Cluster: canvas node map with pan, zoom, fit, node search, and health drilldown.
-  The map arranges configured nodes without implying network relationships.
-  The node inventory provides an accessible table alternative.
+- Cluster: node table with leader status, reachability, connections, throughput,
+  uptime, and health drilldown.
 - Health: broker reachability, uptime, cumulative error and message counters.
 - Light/dark appearance persisted locally, responsive sidebar navigation, CSV
   export, live pause/resume, and visible reconnect states. Search stays within
@@ -91,8 +90,7 @@ With the demo console running, `npm run test:browser` runs the Chromium smoke
 suite. Install its browser once with `npx playwright install chromium` if it is
 not already available. It checks streaming updates, pause/resume, navigation,
 filters, session details, pagination, CSV exports, theme persistence, and mobile
-overflow. The canvas suite also checks 500 nodes, pan hit-testing, search,
-keyboard controls, and empty/single-node layouts. Screenshots go to `/tmp/fluxmq-console-screenshots`; override with
+overflow. Screenshots go to `/tmp/fluxmq-console-screenshots`; override with
 `FLUXMQ_SCREENSHOT_DIR`. `FLUXMQ_TEST_URL` selects a different preview origin.
 
 Build the assets before Go commands: `server.go` embeds `dist/`.

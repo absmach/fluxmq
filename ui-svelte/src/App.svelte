@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import Icon from './lib/Icon.svelte';
   import TrafficChart from './lib/TrafficChart.svelte';
-  import NodeCanvas from './lib/NodeCanvas.svelte';
   import {
     number,
     compact,
@@ -852,13 +851,6 @@
           </div>
         </section>
       {:else if page === 'nodes'}
-        <NodeCanvas
-          {nodes}
-          oninspect={(id) => {
-            scope = id;
-            navigate('health');
-          }}
-        />
         <section class="panel">
           <div class="panel-heading">
             <h2>Node inventory</h2>
