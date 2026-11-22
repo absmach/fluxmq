@@ -428,9 +428,13 @@ type Message struct {
 	// Optional headers (metadata).
 	Headers map[string][]byte `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Delivery metadata (only set when consuming via consumer group).
-	DeliveryInfo  *DeliveryInfo `protobuf:"bytes,6,opt,name=delivery_info,json=deliveryInfo,proto3" json:"delivery_info,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DeliveryInfo *DeliveryInfo `protobuf:"bytes,6,opt,name=delivery_info,json=deliveryInfo,proto3" json:"delivery_info,omitempty"`
+	// Output only. Broker-recorded ingress protocol: mqtt, amqp (0.9.1),
+	// amqp1, http, or coap. Empty means the origin was not recorded.
+	// Independent of publisher-supplied headers and the consuming protocol.
+	SourceProtocol string `protobuf:"bytes,7,opt,name=source_protocol,json=sourceProtocol,proto3" json:"source_protocol,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Message) Reset() {
@@ -503,6 +507,13 @@ func (x *Message) GetDeliveryInfo() *DeliveryInfo {
 		return x.DeliveryInfo
 	}
 	return nil
+}
+
+func (x *Message) GetSourceProtocol() string {
+	if x != nil {
+		return x.SourceProtocol
+	}
+	return ""
 }
 
 // DeliveryInfo contains metadata about message delivery to a consumer.
@@ -603,7 +614,10 @@ type Queue struct {
 	// Last modification timestamp.
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	// Whether this is a reserved system queue.
-	Reserved      bool `protobuf:"varint,7,opt,name=reserved,proto3" json:"reserved,omitempty"`
+	Reserved bool `protobuf:"varint,7,opt,name=reserved,proto3" json:"reserved,omitempty"`
+	// Output only. Queue semantics: classic or stream.
+	// This is not protocol ownership; queues can carry mixed-protocol messages.
+	Type          string `protobuf:"bytes,8,opt,name=type,proto3" json:"type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -685,6 +699,13 @@ func (x *Queue) GetReserved() bool {
 		return x.Reserved
 	}
 	return false
+}
+
+func (x *Queue) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
 }
 
 type QueueConfig struct {
@@ -4543,14 +4564,15 @@ var File_queue_v1_queue_proto protoreflect.FileDescriptor
 
 const file_queue_v1_queue_proto_rawDesc = "" +
 	"\n" +
-	"\x14queue/v1/queue.proto\x12\x0ffluxmq.queue.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc4\x02\n" +
+	"\x14queue/v1/queue.proto\x12\x0ffluxmq.queue.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xed\x02\n" +
 	"\aMessage\x12\x16\n" +
 	"\x06offset\x18\x01 \x01(\x04R\x06offset\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\fR\x03key\x12\x14\n" +
 	"\x05value\x18\x04 \x01(\fR\x05value\x12?\n" +
 	"\aheaders\x18\x05 \x03(\v2%.fluxmq.queue.v1.Message.HeadersEntryR\aheaders\x12B\n" +
-	"\rdelivery_info\x18\x06 \x01(\v2\x1d.fluxmq.queue.v1.DeliveryInfoR\fdeliveryInfo\x1a:\n" +
+	"\rdelivery_info\x18\x06 \x01(\v2\x1d.fluxmq.queue.v1.DeliveryInfoR\fdeliveryInfo\x12'\n" +
+	"\x0fsource_protocol\x18\a \x01(\tR\x0esourceProtocol\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\xfa\x01\n" +
@@ -4560,7 +4582,7 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"\fdelivered_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vdeliveredAt\x12\x19\n" +
 	"\bgroup_id\x18\x04 \x01(\tR\agroupId\x12\x1f\n" +
 	"\vconsumer_id\x18\x05 \x01(\tR\n" +
-	"consumerId\"\xae\x02\n" +
+	"consumerId\"\xc2\x02\n" +
 	"\x05Queue\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06topics\x18\x02 \x03(\tR\x06topics\x124\n" +
@@ -4570,7 +4592,8 @@ const file_queue_v1_queue_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1a\n" +
-	"\breserved\x18\a \x01(\bR\breserved\"\xbb\x02\n" +
+	"\breserved\x18\a \x01(\bR\breserved\x12\x12\n" +
+	"\x04type\x18\b \x01(\tR\x04type\"\xbb\x02\n" +
 	"\vQueueConfig\x12>\n" +
 	"\tretention\x18\x01 \x01(\v2 .fluxmq.queue.v1.RetentionConfigR\tretention\x12B\n" +
 	"\vcompression\x18\x02 \x01(\x0e2 .fluxmq.queue.v1.CompressionTypeR\vcompression\x12(\n" +

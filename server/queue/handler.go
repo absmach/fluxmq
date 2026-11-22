@@ -1004,7 +1004,12 @@ func (h *Handler) queueToProto(config *types.QueueConfig) *queuev1.Queue {
 		replication = &queuev1.ReplicationConfig{Group: config.Replication.Group}
 	}
 
+	queueType := config.Type
+	if queueType == "" {
+		queueType = types.QueueTypeClassic
+	}
 	return &queuev1.Queue{
+		Type:   string(queueType),
 		Name:   config.Name,
 		Topics: config.Topics,
 		Config: &queuev1.QueueConfig{
@@ -1208,10 +1213,11 @@ func clampInt64ToUint32(value int64) uint32 {
 
 func (h *Handler) messageToProto(msg *coremessage.Envelope) *queuev1.Message {
 	protoMsg := &queuev1.Message{
-		Offset:    msg.BrokerMeta.Queue.Offset,
-		Timestamp: timestamppb.New(msg.BrokerMeta.Queue.CreatedAt),
-		Key:       msg.PublisherMeta.Key.Bytes(),
-		Value:     msg.StablePayload(),
+		SourceProtocol: string(msg.BrokerMeta.Source.Protocol),
+		Offset:         msg.BrokerMeta.Queue.Offset,
+		Timestamp:      timestamppb.New(msg.BrokerMeta.Queue.CreatedAt),
+		Key:            msg.PublisherMeta.Key.Bytes(),
+		Value:          msg.StablePayload(),
 	}
 
 	if msg.PublisherMeta.Headers.Len() > 0 || msg.PublisherMeta.Properties.Len() > 0 {

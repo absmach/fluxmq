@@ -1079,3 +1079,29 @@ func TestUpdateQueueRequiresConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestQueueReadMetadata(t *testing.T) {
+	h := &Handler{}
+	for _, queueType := range []types.QueueType{"", types.QueueTypeClassic, types.QueueTypeStream} {
+		cfg := types.DefaultQueueConfig("mixed", "events/#")
+		cfg.Type = queueType
+		want := string(queueType)
+		if want == "" {
+			want = "classic"
+		}
+		if got := h.queueToProto(&cfg).GetType(); got != want {
+			t.Fatalf("queue type: got %q want %q", got, want)
+		}
+	}
+	for _, protocol := range []message.Protocol{"", message.ProtocolMQTT, message.ProtocolAMQP091, message.ProtocolAMQP1, message.ProtocolHTTP, message.ProtocolCoAP} {
+		source := message.New("events/test", []byte("payload"))
+		source.BrokerMeta.Source.Protocol = protocol
+		// An untrusted publisher header must never override broker-recorded origin.
+		source.PublisherMeta.Headers = message.NewHeaderMap(map[string][]byte{"sourceProtocol": []byte("spoofed")})
+		converted := h.messageToProto(source)
+		message.Release(source)
+		if converted.SourceProtocol != string(protocol) {
+			t.Fatalf("origin: got %q want %q", converted.SourceProtocol, protocol)
+		}
+	}
+}

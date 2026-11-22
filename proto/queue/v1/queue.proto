@@ -163,6 +163,11 @@ message Message {
 
   // Delivery metadata (only set when consuming via consumer group).
   DeliveryInfo delivery_info = 6;
+
+  // Output only. Broker-recorded ingress protocol: mqtt, amqp (0.9.1),
+  // amqp1, http, or coap. Empty means the origin was not recorded.
+  // Independent of publisher-supplied headers and the consuming protocol.
+  string source_protocol = 7;
 }
 
 // DeliveryInfo contains metadata about message delivery to a consumer.
@@ -205,6 +210,10 @@ message Queue {
 
   // Whether this is a reserved system queue.
   bool reserved = 7;
+
+  // Output only. Queue semantics: classic or stream.
+  // This is not protocol ownership; queues can carry mixed-protocol messages.
+  string type = 8;
 }
 
 message QueueConfig {

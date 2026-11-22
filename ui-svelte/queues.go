@@ -133,7 +133,7 @@ func demoQueueRead(action, name, group, offset string) (any, bool) {
 		if name == n {
 			index = i
 		}
-		configs = append(configs, map[string]any{"name": n, "topics": []string{"devices/" + []string{"+/events", "+/telemetry", "+/commands"}[i]}, "config": map[string]any{"retention": map[string]any{"maxAge": "86400s", "maxBytes": "1073741824"}, "maxMessageSize": 1048576}})
+		configs = append(configs, map[string]any{"name": n, "type": []string{"classic", "stream", "classic"}[i], "topics": []string{"devices/" + []string{"+/events", "+/telemetry", "+/commands"}[i]}, "config": map[string]any{"retention": map[string]any{"maxAge": "86400s", "maxBytes": "1073741824"}, "maxMessageSize": 1048576}})
 	}
 	if action == "list" {
 		return map[string]any{"queues": configs}, true
@@ -186,7 +186,7 @@ func demoQueueRead(action, name, group, offset string) (any, bool) {
 		messages := []any{}
 		for i := start; i < tail && i-start < 20; i++ {
 			payload := fmt.Sprintf(`{"device":"sensor-%03d","temperature":22.4,"sequence":%d}`, i%64, i)
-			messages = append(messages, map[string]any{"offset": strconv.FormatUint(i, 10), "timestamp": time.Now().Add(-time.Duration(tail-i) * time.Second).UTC().Format(time.RFC3339), "value": base64.StdEncoding.EncodeToString([]byte(payload)), "headers": map[string]string{"content-type": base64.StdEncoding.EncodeToString([]byte("application/json"))}})
+			messages = append(messages, map[string]any{"sourceProtocol": []string{"mqtt", "amqp", "http"}[i%3], "offset": strconv.FormatUint(i, 10), "timestamp": time.Now().Add(-time.Duration(tail-i) * time.Second).UTC().Format(time.RFC3339), "value": base64.StdEncoding.EncodeToString([]byte(payload)), "headers": map[string]string{"content-type": base64.StdEncoding.EncodeToString([]byte("application/json"))}})
 		}
 		return map[string]any{"messages": messages}, true
 	}

@@ -5,6 +5,7 @@
   import { followLink } from './routes';
   type Queue = {
     name: string;
+    type?: string;
     topics?: string[];
     config?: {
       retention?: { maxAge?: string; maxBytes?: string; minMessages?: string };
@@ -20,6 +21,7 @@
   };
   type Message = {
     offset?: string;
+    sourceProtocol?: string;
     timestamp?: string;
     value?: string;
     key?: string;
@@ -55,12 +57,33 @@
   let loading = $state(false),
     error = $state(''),
     search = $state('');
+  let queueType = $state('all'),
+    sourceProtocol = $state('all');
+  const typeLabel = (value?: string) =>
+    (({ classic: 'Classic', stream: 'Stream' }) as Record<string, string>)[value ?? ''] ??
+    (value || 'Not reported');
+  const protocolLabel = (value?: string) =>
+    (
+      ({
+        mqtt: 'MQTT',
+        amqp: 'AMQP 0.9.1',
+        amqp1: 'AMQP 1.0',
+        http: 'HTTP',
+        coap: 'CoAP',
+      }) as Record<string, string>
+    )[value ?? ''] ??
+    (value || 'Not reported');
+  const origin = (m: Message) => m.sourceProtocol || '';
   let messages = $state<Message[]>([]),
     messageLoading = $state(false),
     messageError = $state(''),
     offset = $state(''),
     inspected = $state<Message | null>(null),
     hasRead = $state(false);
+  let protocols = $derived([...new Set(messages.map(origin))].sort());
+  let visibleMessages = $derived(
+    messages.filter((m) => sourceProtocol === 'all' || origin(m) === sourceProtocol),
+  );
   let pendingGroup = $state(''),
     pending = $state<Pending[]>([]),
     pendingError = $state(''),
@@ -95,10 +118,12 @@
   let pendingTotal = $derived(groups.reduce((n, g) => n + int(g.pendingCount), 0n));
   let consumerTotal = $derived(groups.reduce((n, g) => n + (g.consumers?.length ?? 0), 0));
   let filtered = $derived(
-    rows.filter((r) =>
-      `${r.name} ${r.node} ${(r.topics ?? []).join(' ')}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
+    rows.filter(
+      (r) =>
+        (queueType === 'all' || (r.type || '') === queueType) &&
+        `${r.name} ${r.node} ${(r.topics ?? []).join(' ')}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
     ),
   );
   const url = (name: string, node: string) =>
@@ -187,6 +212,7 @@
       groups = [];
       error = '';
       messages = [];
+      sourceProtocol = 'all';
       inspected = null;
       messageError = '';
       messageLoading = false;
@@ -320,13 +346,23 @@
     </button>
   </div>
 {:else}
-  <div class="queue-toolbar">
+  <div class="queue-toolbar inventory-toolbar">
     <label class="search-field">
       <Icon name="search" size={16} /><input
         aria-label="Find queues"
         placeholder="Find queues or topic routes…"
         bind:value={search}
       />
+    </label>
+    <label class="queue-filter">
+      Type
+      <select aria-label="Queue type" bind:value={queueType}>
+        <option value="all">All types</option><option value="classic">Classic</option><option
+          value="stream"
+        >
+          Stream
+        </option><option value="">Not reported</option>
+      </select>
     </label><button class="button" disabled={loading} onclick={() => load()}>
       <Icon name="refresh" size={15} />Refresh
     </button>
@@ -358,7 +394,7 @@
       <table>
         <thead>
           <tr>
-            <th>Queue</th><th>Node</th><th>Topic routes</th><th>Retention</th><th>
+            <th>Queue</th><th>Type</th><th>Node</th><th>Topic routes</th><th>Retention</th><th>
               <span class="sr-only">Inspect queue</span>
             </th>
           </tr>
@@ -372,7 +408,11 @@
                 >
                   <span class="client-icon"><Icon name="queues" size={16} /></span>{q.name}
                 </a>
-              </td><td class="mono muted">{q.node}</td><td>
+              </td><td><span class="protocol-tag">{typeLabel(q.type)}</span></td><td
+                class="mono muted"
+              >
+                {q.node}
+              </td><td>
                 {#each q.topics ?? [] as topic}<code class="topic-route mono muted">
                     {topic}
                   </code>{:else}<span class="muted"> Direct publishing </span>{/each}
@@ -388,11 +428,11 @@
               </td>
             </tr>
           {:else}<tr>
-              <td colspan="5">
+              <td colspan="6">
                 <div class="empty-state">
                   {loading
                     ? 'Loading…'
-                    : search
+                    : search || queueType !== 'all'
                       ? 'No matching queues'
                       : failures.length
                         ? 'Queue inventory unavailable'
@@ -404,7 +444,7 @@
       </table>
     </div>
     {#if Object.keys(next).length}<div class="queue-toolbar inset">
-        <span class="muted">Search covers loaded queues.</span><button
+        <span class="muted">Filters cover loaded queues.</span><button
           class="button"
           disabled={loading}
           onclick={() => load(true)}
@@ -604,27 +644,49 @@
     {#if messageLoading}<p class="inset" role="status">
         Reading messages…
       </p>{:else if messageError}<div class="notice" role="alert">{messageError}</div>{/if}
-    {#if hasRead}<div class="table-scroll message-scroll">
+    {#if hasRead}<div class="queue-toolbar inset">
+        <span class="muted">
+          {visibleMessages.length} of {messages.length} messages in this batch
+        </span>
+        <label class="queue-filter">
+          Source protocol
+          <select aria-label="Message source protocol" bind:value={sourceProtocol}>
+            <option value="all">All protocols</option>
+            {#each [...new Set( [...protocols, ...(sourceProtocol !== 'all' ? [sourceProtocol] : [])] )] as protocol}
+              <option value={protocol}>{protocolLabel(protocol)}</option>
+            {/each}
+          </select>
+        </label>
+      </div>
+      <div class="table-scroll message-scroll">
         <table>
           <thead>
             <tr>
-              <th>Offset</th><th>Appended</th><th>Payload preview</th><th class="numeric">Size</th>
+              <th>Offset</th><th>Appended</th><th>Source protocol</th><th>Payload preview</th><th
+                class="numeric"
+              >
+                Size
+              </th>
             </tr>
           </thead><tbody>
-            {#each messages as m}<tr>
+            {#each visibleMessages as m}<tr>
                 <td>
                   <button class="text-button mono" onclick={() => inspect(m)}>
                     {count(m.offset)}<Icon name="chevron" size={12} />
                   </button>
                 </td><td class="muted">{date(m.timestamp)}</td><td>
+                  <span class="protocol-tag">{protocolLabel(m.sourceProtocol)}</span>
+                </td><td>
                   <button class="payload-preview mono" onclick={() => inspect(m)}>
                     {preview(m.value)}
                   </button>
                 </td><td class="numeric">{bytes(decode(m.value).size)}</td>
               </tr>{:else}<tr>
-                <td colspan="4">
+                <td colspan="5">
                   <div class="empty-state">
-                    No messages at this offset. Retention may have advanced the log.
+                    {messages.length
+                      ? 'No messages from this protocol in the loaded batch.'
+                      : 'No messages at this offset. Retention may have advanced the log.'}
                   </div>
                 </td>
               </tr>{/each}
@@ -634,7 +696,9 @@
       {#if messages.length && int(messages.at(-1)?.offset) + 1n < tail}<div
           class="queue-toolbar inset"
         >
-          <span class="muted">20 messages per read</span><button
+          <span class="muted">
+            20 messages per read · Protocol filter applies to this batch
+          </span><button
             class="button"
             disabled={messageLoading}
             onclick={() => read((int(messages.at(-1)?.offset) + 1n).toString())}
@@ -653,6 +717,11 @@
             <Icon name="close" size={16} />
           </button>
         </div>
+        <p class="muted">
+          Source protocol <span class="protocol-tag">
+            {protocolLabel(inspected.sourceProtocol)}
+          </span>
+        </p>
         <span class="muted">
           {payload.binary ? 'Binary · Base64' : 'UTF-8'} · {bytes(payload.size)}
         </span>
@@ -672,6 +741,10 @@
     <section class="panel queue-config">
       <div class="panel-heading"><h2>Routing & retention</h2></div>
       <dl class="inspector-fields">
+        <div>
+          <dt>Queue type</dt>
+          <dd>{typeLabel(queue.type)}</dd>
+        </div>
         <div>
           <dt>Topic routes</dt>
           <dd>{(queue.topics ?? []).join(', ') || 'Direct publishing'}</dd>
@@ -731,6 +804,25 @@
 {/if}
 
 <style>
+  .inventory-toolbar .search-field {
+    margin-right: auto;
+  }
+  .queue-filter {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .queue-filter select {
+    min-width: 130px;
+    font: inherit;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+  }
   .queue-toolbar {
     display: flex;
     justify-content: space-between;
