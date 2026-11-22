@@ -79,7 +79,7 @@
           ></i>
         </span>
         <span class="state-counts">
-          <span>{number(row.connected)} connected</span>
+          <span class:has-connected={row.connected > 0}>{number(row.connected)} connected</span>
           <span class:has-disconnected={row.disconnected > 0}>
             {number(row.disconnected)} disconnected
           </span>
@@ -174,7 +174,7 @@
     transition: width 0.3s;
   }
   .connected {
-    background: var(--accent);
+    background: var(--mint);
   }
   .disconnected {
     background:
@@ -183,6 +183,9 @@
   }
   .disconnected.split {
     box-shadow: inset 2px 0 var(--panel);
+  }
+  .state-counts .has-connected {
+    color: var(--mint);
   }
   .state-counts .has-disconnected {
     color: var(--disconnected-color);

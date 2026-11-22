@@ -727,7 +727,7 @@
               </button>
             </div>{/if}
           {#if detail && !detailLoading && !detailError}<span
-              class:offline={!detail.connected}
+              class:disconnected={!detail.connected}
               class="state-tag client-page-status"
             >
               <i></i>{detail.connected ? 'Connected' : 'Disconnected'} · {protocolLabel(
@@ -1091,7 +1091,7 @@
                         </span>{s.client_id}
                       </a>
                     </td><td>
-                      <span class:offline={!s.connected} class="state-tag">
+                      <span class:disconnected={!s.connected} class="state-tag">
                         <i></i>{s.connected ? 'Connected' : 'Disconnected'}
                       </span>
                     </td><td><span class="protocol-tag">{protocolLabel(s.protocol)}</span></td><td

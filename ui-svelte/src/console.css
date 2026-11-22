@@ -29,7 +29,7 @@
   --muted: #a0aaba;
   --faint: #8491a5;
   --accent: #8baaff;
-  --disconnected-color: #ef9299;
+  --disconnected-color: #aab5c4;
   --accent-solid: #6389ed;
   --accent-bg: #6389ed14;
   --radius: 9px;
@@ -45,7 +45,7 @@
   --muted: #627188;
   --faint: #7c899e;
   --accent: #385fd0;
-  --disconnected-color: #b94c59;
+  --disconnected-color: #626d7c;
   --accent-solid: #5278dc;
   --accent-bg: #5278dc0d;
 }
@@ -1462,6 +1462,7 @@ a.text-button {
   color: var(--muted);
 }
 
-.disconnected-text {
+.disconnected-text,
+.state-tag.disconnected {
   color: var(--disconnected-color);
 }
