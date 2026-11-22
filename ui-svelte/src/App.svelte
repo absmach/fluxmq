@@ -40,6 +40,25 @@
     { id: 'nodes', label: 'Cluster nodes' },
     { id: 'health', label: 'Broker health' },
   ];
+  const navigationGroups = [
+    { label: '', items: navigation.slice(0, 1) },
+    { label: 'Messaging', items: navigation.slice(1, 4) },
+    { label: 'Cluster', items: navigation.slice(4) },
+  ];
+  const savedSidebarCollapsed = () => {
+    try {
+      return localStorage.getItem('fluxmq-sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  };
+  let sidebarCollapsed = $state(savedSidebarCollapsed());
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    try {
+      localStorage.setItem('fluxmq-sidebar-collapsed', String(sidebarCollapsed));
+    } catch {}
+  }
   const pageFromURL = (): Page => {
     if (location.pathname.startsWith('/dashboard/sessions/')) return 'sessions';
     if (location.pathname === '/dashboard/broker-info') return 'health';
@@ -51,6 +70,10 @@
   };
   let page = $state<Page>(pageFromURL());
   let viewportWidth = $state(window.innerWidth);
+  let iconRail = $derived(sidebarCollapsed && viewportWidth > 800);
+  $effect(() => {
+    if (viewportWidth > 800) mobileOpen = false;
+  });
   let snapshot = $state<Snapshot | null>(null);
   let histories = $state<Record<string, Point[]>>({});
   let connection = $state<'connecting' | 'connected' | 'reconnecting'>('connecting');
@@ -548,7 +571,7 @@
   <title>{pageTitle} · FluxMQ</title>
 </svelte:head>
 
-<div class="app-shell">
+<div class="app-shell" class:sidebar-collapsed={iconRail}>
   <a class="skip-link" href="#main">Skip to content</a>
   {#if mobileOpen}<button
       class="mobile-backdrop"
@@ -575,32 +598,47 @@
       </span>
     </a>
     <nav aria-label="Main navigation">
-      {#each navigation as item}<a
-          href={item.id === 'overview' ? '/dashboard' : `/dashboard/${item.id}`}
-          class:active={page === item.id}
-          aria-current={page === item.id ? 'page' : undefined}
-          onclick={(e) => {
-            e.preventDefault();
-            navigate(item.id);
-          }}
-        >
-          <Icon name={item.id} size={19} /><span>
-            {item.label}
-          </span>{#if item.id === 'nodes' && snapshot}<span class="nav-count">
-              {snapshot.nodes.length}
-            </span>{/if}
-        </a>{/each}
+      {#each navigationGroups as group}
+        <div class="navigation-group" role="group" aria-label={group.label || 'Overview'}>
+          {#if group.label}<h2 class="navigation-group-label">{group.label}</h2>{/if}
+          {#each group.items as item}<a
+              href={item.id === 'overview' ? '/dashboard' : `/dashboard/${item.id}`}
+              class:active={page === item.id}
+              aria-current={page === item.id ? 'page' : undefined}
+              aria-label={item.label}
+              title={iconRail ? item.label : undefined}
+              onclick={(e) => {
+                e.preventDefault();
+                navigate(item.id);
+              }}
+            >
+              <Icon name={item.id} size={19} /><span class="navigation-item-label">
+                {item.label}
+              </span>
+              {#if item.id === 'nodes' && snapshot}<span class="nav-count">
+                  {snapshot.nodes.length}
+                </span>{/if}
+            </a>{/each}
+        </div>
+      {/each}
     </nav>
     <div class="sidebar-bottom">
       <a
         class="utility-link"
+        aria-label="Documentation"
+        title={iconRail ? 'Documentation' : undefined}
         href="https://www.absmach.eu/docs/fluxmq"
         target="_blank"
         rel="noreferrer"
       >
         <Icon name="book" size={18} /><span>Documentation</span>
       </a>
-      <button class="utility-link" onclick={toggleTheme}>
+      <button
+        class="utility-link"
+        onclick={toggleTheme}
+        aria-label={theme === 'dark' ? 'Light appearance' : 'Dark appearance'}
+        title={iconRail ? (theme === 'dark' ? 'Light appearance' : 'Dark appearance') : undefined}
+      >
         <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
         <span>{theme === 'dark' ? 'Light appearance' : 'Dark appearance'}</span>
       </button>
@@ -627,6 +665,15 @@
             onclick={() => (mobileOpen = true)}
           >
             <Icon name="menu" />
+          </button>{:else}<button
+            class="icon-button sidebar-toggle"
+            aria-label={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!iconRail}
+            aria-controls="console-navigation"
+            onclick={toggleSidebar}
+          >
+            <Icon name={iconRail ? 'sidebar-expand' : 'sidebar-collapse'} size={19} />
           </button>{/if}
         {#if page === 'nodes'}<span class="inventory-context">
             <Icon name="nodes" size={18} />Cluster inventory

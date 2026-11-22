@@ -1466,3 +1466,90 @@ a.text-button {
 .state-tag.disconnected {
   color: var(--disconnected-color);
 }
+
+details > summary svg[data-icon='down'] {
+  transition: transform 150ms ease;
+}
+
+details[open] > summary svg[data-icon='down'] {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  details > summary svg[data-icon='down'] {
+    transition: none;
+  }
+}
+
+/* Keep the operator navigation grouped, with the same destinations in the icon rail. */
+.sidebar nav {
+  gap: 18px;
+  margin-top: 30px;
+}
+.navigation-group {
+  display: grid;
+  gap: 4px;
+}
+.navigation-group-label {
+  margin: 0;
+  padding: 0 14px 5px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.sidebar nav a {
+  padding-block: 10px;
+}
+.sidebar nav a > svg,
+.sidebar .utility-link > svg {
+  flex-shrink: 0;
+}
+.sidebar-toggle {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+@media (min-width: 801px) {
+  .sidebar-collapsed .sidebar {
+    width: 72px;
+    padding-inline: 12px;
+  }
+  .sidebar-collapsed .console {
+    margin-left: 72px;
+    width: calc(100% - 72px);
+  }
+  .sidebar-collapsed .brand {
+    padding: 0;
+    width: 100%;
+    justify-content: center;
+  }
+  .sidebar-collapsed .brand > span,
+  .sidebar-collapsed .navigation-item-label,
+  .sidebar-collapsed .nav-count,
+  .sidebar-collapsed .navigation-group-label,
+  .sidebar-collapsed .utility-link > span,
+  .sidebar-collapsed .company {
+    display: none;
+  }
+  .sidebar-collapsed .navigation-group + .navigation-group {
+    border-top: 1px solid var(--subtle-border);
+    padding-top: 14px;
+  }
+  .sidebar-collapsed nav {
+    gap: 14px;
+  }
+  .sidebar-collapsed nav a,
+  .sidebar-collapsed .utility-link {
+    justify-content: center;
+    padding: 12px 0;
+    min-height: 44px;
+  }
+  .sidebar-collapsed nav a.active::before {
+    left: -12px;
+  }
+  .sidebar-collapsed .sidebar-bottom {
+    padding-bottom: 18px;
+  }
+}

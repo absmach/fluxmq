@@ -29,6 +29,12 @@
     health: ['M3 12h4l3-7 4 14 3-7h4'],
     chevron: ['m9 5 7 7-7 7'],
     down: ['m6 9 6 6 6-6'],
+    'sidebar-collapse': [
+      'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM9 3v18m7-12-3 3 3 3',
+    ],
+    'sidebar-expand': [
+      'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM9 3v18m4-12 3 3-3 3',
+    ],
     search: ['M21 21l-5-5', 'M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0'],
     sun: [
       'M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5',
@@ -60,6 +66,7 @@
 </script>
 
 <svg
+  data-icon={name}
   width={size}
   height={size}
   viewBox="0 0 24 24"

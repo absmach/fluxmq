@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "format": "prettier --write .",
-    "test:browser": "node tests/browser.cjs && node tests/drilldown.cjs && node tests/operators.cjs && node tests/charts.cjs && node tests/health-summary.cjs && node tests/queue-protocols.cjs",
+    "test:browser": "node tests/browser.cjs && node tests/drilldown.cjs && node tests/operators.cjs && node tests/charts.cjs && node tests/health-summary.cjs && node tests/queue-protocols.cjs && node tests/sidebar.cjs",
     "test:charts": "node tests/chartCurve.mjs && node tests/charts.cjs",
     "test:filters": "node tests/filter-matrix.cjs && node tests/chart-edge-cases.cjs"
   },
