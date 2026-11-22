@@ -371,87 +371,99 @@
     </div>
   </aside>
   <div class="console">
-    {#if viewportWidth <= 800}
-      <header class="mobile-header">
-        <button
-          class="icon-button"
-          aria-label="Open navigation"
-          aria-expanded={mobileOpen}
-          aria-controls="console-navigation"
-          onclick={() => (mobileOpen = true)}
+    <header class="console-toolbar console-statusbar" aria-label="Console status">
+      <div class="cluster-status">
+        {#if viewportWidth <= 800}<button
+            class="icon-button"
+            aria-label="Open navigation"
+            aria-expanded={mobileOpen}
+            aria-controls="console-navigation"
+            onclick={() => (mobileOpen = true)}
+          >
+            <Icon name="menu" />
+          </button>{/if}
+        <span
+          class="status-label"
+          class:warning={connection !== 'connected' ||
+            stale ||
+            paused ||
+            !snapshot?.nodes.length ||
+            snapshot.nodes.some((n) => !n.healthy)}
+          role="status"
         >
-          <Icon name="menu" />
+          <span class="status-dot"></span>{connection === 'connecting'
+            ? 'Connecting'
+            : connection === 'reconnecting'
+              ? 'Reconnecting'
+              : paused
+                ? 'Updates paused'
+                : stale
+                  ? 'Data is stale'
+                  : !snapshot?.nodes.length
+                    ? 'Waiting for nodes'
+                    : snapshot.nodes.every((n) => n.healthy)
+                      ? 'All nodes responding'
+                      : 'Node unavailable'}
+        </span>
+        <button
+          class="cluster-count"
+          onclick={() => {
+            scope = 'all';
+            navigate('nodes');
+          }}
+          aria-label="View all nodes"
+        >
+          {snapshot ? snapshot.nodes.length : '—'}
+          {snapshot?.nodes.length === 1 ? 'node' : 'nodes'}
         </button>
-        <span>FluxMQ</span>
-      </header>
-    {/if}
+      </div>
+      <div class="scope-control">
+        <Icon name="nodes" size={16} /><select
+          aria-label="Cluster scope"
+          bind:value={scope}
+          onchange={() => (tablePage = 1)}
+        >
+          <option value="all">All nodes</option>{#each snapshot?.nodes ?? [] as n}<option
+              value={n.id}
+            >
+              {n.id}
+            </option>{/each}
+        </select><Icon name="down" size={14} />
+      </div>
+      <div class="stream-controls">
+        {#if snapshot?.mode === 'demo'}<button
+            class="demo-badge"
+            aria-label="Broker connection details"
+            onclick={() => connectionDialog.showModal()}
+          >
+            DEMO DATA <Icon name="info" size={12} />
+          </button>{/if}<span class="stream-time">
+          {paused
+            ? 'Updates paused'
+            : snapshot
+              ? `Updated ${age < 2 ? 'just now' : `${age}s ago`}`
+              : 'Opening stream…'}
+        </span><button
+          class:paused
+          class="live-control"
+          onclick={togglePause}
+          disabled={!snapshot}
+          aria-label={paused ? 'Resume updates' : 'Pause updates'}
+        >
+          <Icon name={paused ? 'play' : 'pause'} size={13} />{paused ? 'Paused' : 'Live'}
+        </button>
+      </div>
+    </header>
     <main id="main">
       <div class:overview-heading={page === 'overview'} class="page-heading">
         <div>
           <h1>
             {page === 'overview' ? 'Broker overview' : currentNav.label}
           </h1>
-          <p>{currentNav.description}</p>
         </div>
         <div class="heading-actions">
-          <span
-            class:warning={connection !== 'connected' || stale || !healthy}
-            class="status-label"
-          >
-            <span class="status-dot"></span>{connection === 'connecting'
-              ? 'Connecting'
-              : connection === 'reconnecting'
-                ? 'Reconnecting'
-                : stale
-                  ? 'Data is stale'
-                  : healthy
-                    ? 'All systems operational'
-                    : 'Broker needs attention'}
-          </span><button class="button" onclick={exportCSV} disabled={!snapshot}>
+          <button class="button" onclick={exportCSV} disabled={!snapshot}>
             <Icon name="download" size={16} />Export
-          </button>
-        </div>
-      </div>
-      <div class="console-toolbar">
-        <div class="scope-control">
-          <Icon name="nodes" size={16} /><select
-            aria-label="Cluster scope"
-            bind:value={scope}
-            onchange={() => (tablePage = 1)}
-          >
-            <option value="all">All nodes</option>{#each snapshot?.nodes ?? [] as n}<option
-                value={n.id}
-              >
-                {n.id}
-              </option>{/each}
-          </select><Icon name="down" size={14} /><span class="toolbar-divider"></span><span
-            class="scope-caption"
-          >
-            {nodes.length}
-            {nodes.length === 1 ? 'node' : 'nodes'} configured
-          </span>
-        </div>
-        <div class="stream-controls">
-          {#if snapshot?.mode === 'demo'}<button
-              class="demo-badge"
-              aria-label="Broker connection details"
-              onclick={() => connectionDialog.showModal()}
-            >
-              DEMO DATA <Icon name="info" size={12} />
-            </button>{/if}<span class="stream-time">
-            {paused
-              ? 'Updates paused'
-              : snapshot
-                ? `Updated ${age < 2 ? 'just now' : `${age}s ago`}`
-                : 'Opening stream…'}
-          </span><button
-            class:paused
-            class="live-control"
-            onclick={togglePause}
-            disabled={!snapshot}
-            aria-label={paused ? 'Resume updates' : 'Pause updates'}
-          >
-            <Icon name={paused ? 'play' : 'pause'} size={13} />{paused ? 'Paused' : 'Live'}
           </button>
         </div>
       </div>

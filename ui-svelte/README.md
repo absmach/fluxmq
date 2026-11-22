@@ -39,7 +39,7 @@ local or behind your existing authenticated management gateway.
 ## Views and interactions
 
 - Overview: node scope, live rates, 1/5/15-minute charts, protocol distribution.
-- Sessions: search, protocol/state filters, sorting, pagination, centered detail dialog.
+- Sessions: search, protocol/state filters, sorting, pagination, session detail drawer.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, node scopes.
 - Cluster: node table with leader status, reachability, connections, throughput,
   uptime, and health drilldown.
@@ -47,7 +47,9 @@ local or behind your existing authenticated management gateway.
 - Light/dark appearance persisted locally, responsive sidebar navigation, CSV
   export, live pause/resume, and visible reconnect states. Search stays within
   each data view; there is no global command palette. Documentation and
-  appearance controls are labeled items at the bottom of the sidebar.
+  appearance controls are labeled items at the bottom of the sidebar. A sticky
+  status bar keeps cluster-wide reachability, total node count, scope, and stream
+  controls visible on every page. Summary cards share the overview number scale.
 
 The charts use lightweight SVG. All fonts and brand assets are served locally.
 API strings are rendered as text, never injected as HTML.

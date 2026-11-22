@@ -212,7 +212,8 @@ main {
   font-size: 0.875rem;
   font-weight: 400;
 }
-.metric-value {
+.metric-value,
+.summary-strip strong {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -312,12 +313,6 @@ th {
 .tabular {
   font-family: var(--mono);
   font-size: 0.8125rem;
-}
-.summary-strip strong {
-  font-family: var(--mono);
-  font-size: 2rem;
-  font-weight: 400;
-  letter-spacing: -1px;
 }
 .console-footer {
   padding-top: 21px;
@@ -433,7 +428,8 @@ dialog::backdrop {
   font-size: 1.5rem;
 }
 @media (min-width: 1600px) {
-  .metric-value {
+  .metric-value,
+  .summary-strip strong {
     font-size: 2.75rem;
   }
   .metric-card {
@@ -447,7 +443,8 @@ dialog::backdrop {
   .metric-card {
     padding: 18px 15px 14px;
   }
-  .metric-value {
+  .metric-value,
+  .summary-strip strong {
     font-size: 2.15rem;
     gap: 5px;
     letter-spacing: -1.2px;
@@ -475,7 +472,8 @@ dialog::backdrop {
   }
 }
 @media (max-width: 1050px) {
-  .metric-value {
+  .metric-value,
+  .summary-strip strong {
     font-size: 2.6rem;
   }
   .metric-card {
@@ -524,7 +522,8 @@ dialog::backdrop {
   .page-heading p {
     font-size: 0.875rem;
   }
-  .metric-value {
+  .metric-value,
+  .summary-strip strong {
     font-size: 2.5rem;
   }
   .local-indicator {
@@ -573,7 +572,8 @@ dialog::backdrop {
   .metric-label {
     font-size: 0.75rem;
   }
-  .metric-value {
+  .metric-value,
+  .summary-strip strong {
     font-size: 2rem;
     letter-spacing: -1.3px;
     gap: 5px;
@@ -627,9 +627,6 @@ dialog::backdrop {
   }
   .donut-hole small {
     font-size: 0.625rem;
-  }
-  .summary-strip strong {
-    font-size: 1.8rem;
   }
   .detail-dialog {
     width: calc(100vw - 24px);
@@ -696,4 +693,147 @@ dialog::backdrop {
 .mobile-header > span {
   font-size: 1rem;
   font-weight: 500;
+}
+
+/* Console context stays visible across pages and while scrolling. */
+.console-statusbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 60px;
+  margin: 0;
+  padding: 12px 38px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.cluster-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.console-statusbar .status-label {
+  display: flex;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.cluster-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 4px 0 4px 16px;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+}
+.cluster-count:hover {
+  color: var(--accent);
+}
+.console-statusbar .scope-control {
+  margin-left: auto;
+}
+.console-statusbar .stream-controls {
+  gap: 12px;
+}
+.page-heading,
+.overview-heading {
+  min-height: 64px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.page-heading h1 {
+  margin: 0;
+}
+.heading-actions {
+  padding-top: 0;
+}
+.summary-strip {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  gap: 16px;
+}
+.summary-strip > div,
+.summary-strip > div:nth-child(2),
+.summary-strip > div:last-child {
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  min-width: 0;
+}
+.summary-strip > div > span {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.summary-strip strong {
+  display: block;
+  margin: 20px 0 0;
+  line-height: 1.2;
+  font-family: var(--mono);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 1250px) {
+  .console-statusbar {
+    padding-inline: 24px;
+  }
+  .console-statusbar .stream-time {
+    display: none;
+  }
+}
+@media (max-width: 800px) {
+  .console-statusbar {
+    padding: 10px 20px;
+    gap: 10px;
+  }
+  .cluster-status {
+    width: 100%;
+    gap: 12px;
+  }
+  .cluster-count {
+    margin-left: auto;
+  }
+  .console-statusbar .scope-control {
+    margin-left: 0;
+  }
+  .console-statusbar .stream-controls {
+    margin-left: auto;
+  }
+}
+@media (max-width: 620px) {
+  .console-statusbar {
+    padding-inline: 16px;
+  }
+  .summary-strip {
+    gap: 10px;
+  }
+  .summary-strip > div,
+  .summary-strip > div:nth-child(2),
+  .summary-strip > div:last-child {
+    padding: 16px 13px;
+  }
+  .summary-strip > div > span {
+    font-size: 0.75rem;
+  }
+}
+
+.detail-dialog {
+  width: 560px;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0 0 0 auto;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  padding: 28px;
+  box-shadow: -12px 0 40px #0002;
+}
+.detail-dialog::backdrop {
+  background: #08101d26;
+  backdrop-filter: none;
+}
+@media (max-width: 620px) {
+  .detail-dialog {
+    padding: 20px;
+  }
 }

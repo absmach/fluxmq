@@ -15,7 +15,7 @@ fs.mkdirSync(shots, { recursive: true });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${base}/dashboard`);
-  await page.getByText('All systems operational', { exact: true }).waitFor();
+  await page.getByText('All nodes responding', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('body').innerText(), /workspace/i);
   await page.getByRole('button', { name: 'Broker connection details' }).click();
   await page.getByRole('heading', { name: 'Demo brokers. Real console.' }).waitFor();
@@ -37,14 +37,25 @@ fs.mkdirSync(shots, { recursive: true });
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(shots, 'overview-light.png'), fullPage: true });
   await page.getByRole('link', { name: 'Sessions', exact: true }).click();
+  await page.screenshot({ path: path.join(shots, 'sessions-light.png'), fullPage: true });
+  await page.evaluate(() => window.scrollTo(0, 600));
+  assert.equal(
+    Math.round((await page.locator('.console-statusbar').boundingBox()).y),
+    0,
+    'cluster status stays visible while scrolling',
+  );
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.getByLabel('Search sessions').fill('edge-gateway');
   assert.equal(await page.locator('tbody tr').count(), 6);
   await page.locator('.client-link').first().click();
   await page.getByText('SESSION INSPECTOR').waitFor();
   await page.locator('.session-subscription').first().waitFor();
   const modal = await page.locator('.detail-dialog').boundingBox();
-  assert.ok(modal && Math.abs(modal.x + modal.width / 2 - 720) < 2, 'session detail is centered');
-  assert.ok(modal.y > 20 && modal.height < 800, 'session detail is a bounded dialog');
+  assert.ok(
+    modal && Math.abs(modal.x + modal.width - 1440) < 2,
+    'session details align to the right edge',
+  );
+  assert.ok(modal.y === 0 && modal.height === 1000, 'session drawer fills viewport height');
   await page.screenshot({ path: path.join(shots, 'session-detail.png'), fullPage: true });
   await page.getByRole('button', { name: 'Close session details' }).click();
   await page.getByLabel('Search sessions').fill('nothing-matches-xyz');
@@ -66,6 +77,11 @@ fs.mkdirSync(shots, { recursive: true });
 
   assert.equal(await page.locator('.health-card').count(), 3);
   await page.getByLabel('Cluster scope').selectOption('eu-west-01');
+  assert.equal(
+    (await page.getByRole('button', { name: 'View all nodes', exact: true }).innerText()).trim(),
+    '3 nodes',
+    'global node count is independent of scope',
+  );
   assert.equal(await page.locator('.health-card').count(), 1);
   await page.getByRole('link', { name: 'Overview', exact: true }).click();
   await page.getByLabel('Cluster scope').selectOption('all');
@@ -76,7 +92,7 @@ fs.mkdirSync(shots, { recursive: true });
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(shots, 'overview-dark.png'), fullPage: true });
   await page.reload();
-  await page.getByText('All systems operational', { exact: true }).waitFor();
+  await page.getByText('All nodes responding', { exact: true }).waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   const mobile = await browser.newPage({
     viewport: { width: 390, height: 844 },
