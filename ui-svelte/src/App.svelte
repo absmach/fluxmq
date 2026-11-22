@@ -1183,6 +1183,9 @@
           <div class="panel-heading">
             <div>
               <h2>Topic directory</h2>
+              <p class="topic-comparison-note">
+                Bars compare subscriber counts with the largest count in this list.
+              </p>
             </div>
             <label class="search-field">
               <Icon name="search" size={16} /><input
@@ -1194,12 +1197,12 @@
           </div>
           {@render inventoryNotice()}
           <div class="table-scroll">
-            <table>
+            <table class="topics-table">
               <thead>
                 <tr>
-                  <th>Topic filter</th><th>Subscriber distribution</th><th class="numeric">
-                    Subscribers
-                  </th><th>Max QoS</th><th>Nodes</th>
+                  <th>Topic filter</th><th class="numeric"> Subscribers </th><th>Max QoS</th><th>
+                    Nodes
+                  </th>
                 </tr>
               </thead><tbody>
                 {#each subscriptionRows.slice((tablePage - 1) * pageSize, tablePage * pageSize) as s}<tr>
@@ -1212,20 +1215,21 @@
                       >
                         <Icon name="subscriptions" size={17} />{s.filter}
                       </a>
-                    </td><td>
-                      <div class="distribution-track">
-                        <span
-                          style:width={`${(s.subscriber_count / Math.max(...subscriptionRows.map((s) => s.subscriber_count), 1)) * 100}%`}
-                        ></span>
-                      </div>
                     </td><td class="numeric">
-                      <button
-                        class="text-button"
-                        aria-label={`View ${s.subscriber_count} clients for ${s.filter}`}
-                        onclick={() => showSubscription(s.filter)}
-                      >
-                        {s.subscriber_count}<Icon name="chevron" size={14} />
-                      </button>
+                      <div class="subscriber-comparison">
+                        <div class="distribution-track" aria-hidden="true">
+                          <span
+                            style:width={`${(s.subscriber_count / Math.max(...subscriptionRows.map((s) => s.subscriber_count), 1)) * 100}%`}
+                          ></span>
+                        </div>
+                        <button
+                          class="text-button subscriber-count"
+                          aria-label={`View ${s.subscriber_count} clients for ${s.filter}`}
+                          onclick={() => showSubscription(s.filter)}
+                        >
+                          {s.subscriber_count}<Icon name="chevron" size={14} />
+                        </button>
+                      </div>
                     </td><td>
                       <span class="protocol-tag">QoS {s.max_qos}</span>
                     </td><td>
@@ -1236,7 +1240,7 @@
                       </div>
                     </td>
                   </tr>{:else}<tr>
-                    <td colspan="5">
+                    <td colspan="4">
                       <div class="empty-state">
                         <Icon name="subscriptions" size={28} />
                         <h3>

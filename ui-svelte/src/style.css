@@ -1407,9 +1407,31 @@ tbody tr:hover {
 .topic-name svg {
   color: var(--accent);
 }
+.topic-comparison-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.topics-table th:nth-child(2) {
+  text-align: right;
+}
+.topics-table td:nth-child(2) {
+  min-width: 220px;
+  width: 28%;
+}
+.subscriber-comparison {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) 64px;
+  gap: 18px;
+  align-items: center;
+}
+.subscriber-count {
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
 .distribution-track {
   height: 4px;
-  max-width: 190px;
   background: var(--border);
   border-radius: 3px;
 }
@@ -1418,7 +1440,6 @@ tbody tr:hover {
   height: 100%;
   border-radius: 3px;
   background: var(--accent);
-  opacity: 0.7;
 }
 .node-chips {
   display: flex;

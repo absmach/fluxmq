@@ -21,58 +21,42 @@
     onnode: (id: string) => void;
   } = $props();
   let range = $state(5),
-    selected = $state('mqtt'),
     metric = $state('messages');
   let available = $derived([
     ...new Set(nodes.flatMap((n) => Object.keys(n.protocol_metrics ?? {}))),
   ]);
-  let protocol = $derived(available.includes(selected) ? selected : (available[0] ?? 'mqtt'));
   let visible = $derived(
     points.filter((p) => p.time >= (points.at(-1)?.time ?? 0) - range * 60000),
   );
   let series = $derived(
-    metric === 'connections'
-      ? [
+    available.flatMap((protocol, index) => {
+      const name = label(protocol);
+      const colors = index === 0 ? ['var(--accent)', 'var(--mint)'] : ['var(--violet)', '#b66e9b'];
+      if (metric === 'connections')
+        return [
           {
             key: `protocol.${protocol}.connections.current`,
-            label: 'Connections',
-            color: 'var(--accent)',
+            label: `${name} connections`,
+            color: colors[0],
           },
-        ]
-      : metric === 'errors'
-        ? [
-            {
-              key: `protocol.${protocol}.errors.protocol`,
-              label: 'Protocol errors',
-              color: 'var(--violet)',
-            },
-            ...(protocol === 'mqtt'
-              ? [
-                  {
-                    key: 'protocol.mqtt.errors.auth',
-                    label: 'Authentication',
-                    color: 'var(--warning)',
-                  },
-                  {
-                    key: 'protocol.mqtt.errors.authz',
-                    label: 'Authorization',
-                    color: 'var(--accent)',
-                  },
-                ]
-              : []),
-          ]
-        : [
-            {
-              key: `protocol.${protocol}.${metric === 'bandwidth' ? 'bytes' : 'messages'}.received`,
-              label: 'Incoming',
-              color: 'var(--accent)',
-            },
-            {
-              key: `protocol.${protocol}.${metric === 'bandwidth' ? 'bytes' : 'messages'}.sent`,
-              label: 'Outgoing',
-              color: 'var(--mint)',
-            },
-          ],
+        ];
+      if (metric === 'errors')
+        return (
+          protocol === 'mqtt'
+            ? (['protocol', 'auth', 'authz', 'packet'] as const)
+            : (['protocol'] as const)
+        ).map((error, i) => ({
+          key: `protocol.${protocol}.errors.${error}`,
+          label: `${name} ${{ protocol: 'protocol', auth: 'authentication', authz: 'authorization', packet: 'packet' }[error]}`,
+          color: [colors[0], 'var(--warning)', colors[1], '#4c9cb5'][i],
+        }));
+      return ['received', 'sent'].map((direction, i) => ({
+        key: `protocol.${protocol}.${metric === 'bandwidth' ? 'bytes' : 'messages'}.${direction}`,
+        label: `${name} ${i === 0 ? 'incoming' : 'outgoing'}`,
+        color: colors[i],
+        dash: index ? '6 3' : undefined,
+      }));
+    }),
   );
   let rows = $derived(
     nodes.flatMap((n) =>
@@ -103,29 +87,20 @@
       </div>
     </div>
     <div class="protocol-chart-controls">
-      <div class="tabs" aria-label="Protocol chart metric">
-        {#each ['messages', 'bandwidth', 'connections', 'errors'] as option}<button
-            class:chosen={metric === option}
-            aria-pressed={metric === option}
-            onclick={() => (metric = option)}
-          >
-            {option[0].toUpperCase() + option.slice(1)}
-          </button>{/each}
-      </div>
-      <div class="protocol-switch" aria-label="Chart protocol">
-        {#each available as p}<button
-            class:chosen={protocol === p}
-            aria-pressed={protocol === p}
-            onclick={() => (selected = p)}
-          >
-            {label(p)}
-          </button>{/each}
-      </div>
+      <label>
+        Metric <select aria-label="Protocol chart metric" bind:value={metric}>
+          {#each ['messages', 'bandwidth', 'connections', 'errors'] as option}<option
+              value={option}
+            >
+              {option[0].toUpperCase() + option.slice(1)}
+            </option>{/each}
+        </select>
+      </label>
     </div>
     <DiagnosticChart
       points={visible}
       {series}
-      label={`${label(protocol)} ${metric} history`}
+      label={`Protocol ${metric} history`}
       unit={metric === 'connections' ? 'clients' : metric === 'messages' ? 'msg / s' : ' / s'}
       byteScale={metric === 'bandwidth'}
     />
@@ -254,41 +229,32 @@
     font-size: 13px;
     margin-top: 6px;
   }
+  .panel-heading {
+    padding: 18px 22px 12px;
+  }
   .protocol-chart-controls {
-    display: flex;
-    justify-content: space-between;
-    gap: 20px;
-    padding: 0 28px 16px;
-    flex-wrap: wrap;
+    padding: 0 22px 14px;
   }
-  .protocol-chart-controls .tabs {
-    flex-wrap: wrap;
-  }
-  .protocol-switch {
+  .protocol-chart-controls label {
     display: flex;
-    gap: 4px;
     align-items: center;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--panel-raised);
-  }
-  .protocol-switch button {
-    font-size: 11px;
-    padding: 7px 11px;
+    gap: 10px;
+    font-size: 12px;
     color: var(--muted);
-    border-radius: 5px;
   }
-  .protocol-switch button.chosen {
-    color: var(--accent);
+  .protocol-chart-controls select {
+    padding: 6px 28px 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
     background: var(--panel);
-    box-shadow: 0 1px 4px #0001;
+    color: var(--text);
+    font: inherit;
   }
   .diagnostic-chart-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 28px 24px;
+    padding: 0 22px 14px;
     color: var(--faint);
     font-size: 11px;
   }

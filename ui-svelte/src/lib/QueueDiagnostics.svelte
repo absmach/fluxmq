@@ -14,49 +14,64 @@
     onnode?: (id: string) => void;
   } = $props();
   let range = $state(5);
-  let metric = $state('pending');
   let visible = $derived(
     points.filter((p) => p.time >= (points.at(-1)?.time ?? 0) - range * 60000),
   );
-  const views: Record<
-    string,
-    { label: string; series: { key: string; label: string; color: string }[] }
-  > = {
-    pending: {
-      label: 'Pending',
-      series: [
-        { key: 'queue.pending.current', label: 'Awaiting acknowledgement', color: 'var(--accent)' },
-        {
-          key: 'queue.acknowledgments.poison_pending',
-          label: 'Poison pending',
-          color: 'var(--violet)',
-        },
-      ],
+  const series = [
+    { key: 'queue.pending.current', label: 'Pending', color: 'var(--accent)', unit: 'messages' },
+    {
+      key: 'queue.acknowledgments.poison_pending',
+      label: 'Poison pending',
+      color: 'var(--violet)',
+      unit: 'messages',
+      dash: '5 3',
     },
-    ack: {
-      label: 'Acknowledgements',
-      series: [{ key: 'queue.acknowledgments.ack', label: 'Acknowledged', color: 'var(--mint)' }],
+    {
+      key: 'queue.acknowledgments.ack',
+      label: 'ACK',
+      color: 'var(--mint)',
+      unit: 'msg/s',
+      axis: 'right' as const,
     },
-    retry: {
-      label: 'Retries & rejections',
-      series: [
-        {
-          key: 'queue.acknowledgments.nack',
-          label: 'Negative acknowledgements',
-          color: 'var(--accent)',
-        },
-        { key: 'queue.acknowledgments.reject', label: 'Rejected', color: 'var(--violet)' },
-        { key: 'queue.acknowledgments.dlq', label: 'Dead-lettered', color: 'var(--mint)' },
-      ],
+    {
+      key: 'queue.acknowledgments.nack',
+      label: 'NACK',
+      color: '#4c9cb5',
+      unit: 'msg/s',
+      axis: 'right' as const,
+      dash: '6 3',
     },
-    capture: {
-      label: 'Capture failures',
-      series: [
-        { key: 'queue.capture_failures', label: 'Failed capture', color: 'var(--violet)' },
-        { key: 'queue.capture_dropped', label: 'Dropped capture', color: 'var(--warning)' },
-      ],
+    {
+      key: 'queue.acknowledgments.reject',
+      label: 'Rejected',
+      color: '#b66e9b',
+      unit: 'msg/s',
+      axis: 'right' as const,
     },
-  };
+    {
+      key: 'queue.acknowledgments.dlq',
+      label: 'Dead-lettered',
+      color: '#8b85c6',
+      unit: 'msg/s',
+      axis: 'right' as const,
+      dash: '3 3',
+    },
+    {
+      key: 'queue.capture_failures',
+      label: 'Capture failed',
+      color: 'var(--warning)',
+      unit: 'msg/s',
+      axis: 'right' as const,
+    },
+    {
+      key: 'queue.capture_dropped',
+      label: 'Capture dropped',
+      color: '#9a7986',
+      unit: 'msg/s',
+      axis: 'right' as const,
+      dash: '6 3',
+    },
+  ];
   let reporting = $derived(nodes.filter((n) => !n.unmonitored && n.queue_metrics));
   const value = (node: BrokerNode, path: string): number | undefined => {
     let v: unknown = node.queue_metrics;
@@ -113,15 +128,6 @@
           </button>{/each}
       </div>
     </div>
-    <div class="diagnostic-tabs tabs" aria-label="Queue activity metric">
-      {#each Object.entries(views) as [key, view]}<button
-          class:chosen={metric === key}
-          aria-pressed={metric === key}
-          onclick={() => (metric = key)}
-        >
-          {view.label}
-        </button>{/each}
-    </div>
     {#if nodes.some((n) => !n.healthy && !n.unmonitored)}<p class="diagnostic-notice">
         Includes last-known values from unavailable nodes.
       </p>{/if}
@@ -133,12 +139,7 @@
             · {number(sum('acknowledgments.poison_pending_no_destination'))} have no dead-letter destination{/if}
         </span>
       </div>{/if}
-    <DiagnosticChart
-      points={visible}
-      series={views[metric].series}
-      label={`Queue ${views[metric].label.toLowerCase()} history`}
-      unit={metric === 'pending' ? 'messages' : ' / s'}
-    />
+    <DiagnosticChart points={visible} {series} label="Queue activity history" />
     <div class="diagnostic-chart-footer">
       <span>
         <Icon name="clock" size={13} />Last {range}
@@ -203,20 +204,19 @@
   .queue-diagnostics {
     margin-bottom: 24px;
   }
+  .panel-heading {
+    padding: 18px 22px;
+  }
   .panel-heading p {
     font-size: 13px;
     margin-top: 6px;
-  }
-  .diagnostic-tabs {
-    padding: 0 28px 16px;
-    flex-wrap: wrap;
   }
   .diagnostic-chart-footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
     color: var(--faint);
-    padding: 0 28px 24px;
+    padding: 0 22px 14px;
     font-size: 11px;
   }
   .diagnostic-chart-footer span {
@@ -250,7 +250,7 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 12px;
-    padding: 0 28px 24px;
+    padding: 0 22px 14px;
   }
   .signal-grid > div {
     display: flex;
@@ -300,9 +300,6 @@
     color: var(--text);
   }
   @media (max-width: 600px) {
-    .diagnostic-tabs {
-      padding: 0 16px 16px;
-    }
     .diagnostic-chart-footer {
       padding: 0 16px 18px;
     }

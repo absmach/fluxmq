@@ -63,15 +63,22 @@
         <button class="text-button protocol-name" onclick={() => onselect(row.protocol)}>
           {protocolLabel(row.protocol)}<Icon name="chevron" size={13} />
         </button>
-        <div
-          class="protocol-bar"
-          role="img"
-          aria-label={`${protocolLabel(row.protocol)}: ${row.connected} connected, ${row.disconnected} disconnected`}
-        >
-          <i class="connected" style:width={`${(100 * row.connected) / max}%`}></i><i
-            class="disconnected"
-            style:width={`${(100 * row.disconnected) / max}%`}
-          ></i>
+        <div class="protocol-state">
+          <div
+            class="protocol-bar"
+            role="img"
+            aria-label={`${protocolLabel(row.protocol)}: ${row.connected} connected, ${row.disconnected} disconnected`}
+          >
+            <i class="connected" style:width={`${(100 * row.connected) / max}%`}></i><i
+              class="disconnected"
+              style:width={`${(100 * row.disconnected) / max}%`}
+            ></i>
+          </div>
+          <div class="state-counts">
+            <span>{number(row.connected)} connected</span><span>
+              {number(row.disconnected)} disconnected
+            </span>
+          </div>
         </div>
         <span class="protocol-count">
           {number(row.connected + row.disconnected)} <small>clients</small>
@@ -117,7 +124,8 @@
     background: var(--accent);
   }
   .disconnected {
-    background: var(--border);
+    background:
+      repeating-linear-gradient(135deg, transparent 0 3px, #ffffff40 3px 5px), var(--violet);
   }
   .protocol-lanes {
     padding: 0 24px 16px;
@@ -133,6 +141,17 @@
   }
   .protocol-name {
     justify-content: space-between;
+  }
+  .state-counts {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+  .protocol-state {
+    min-width: 0;
   }
   .protocol-bar {
     display: flex;

@@ -113,7 +113,11 @@ sampled directly. Rates use consecutive healthy-node counter differences divided
 by actual elapsed time. First samples, counter resets and unavailable-node intervals
 produce gaps. Live history is never synthesized; demo counters are generated from
 integrated simulation curves. Detailed counters and node/protocol tables remain
-available in collapsed sections below the plots.
+available in collapsed sections below the plots. Compact plots overlay all series by
+default; the Series menu can isolate a metric or toggle any combination, and the
+legend also toggles visibility. Queue counts and event rates have separately
+labeled axes. Protocols overlay within a selected metric (messages, bandwidth,
+connections or errors), keeping units consistent.
 
 Subscription clients are fetched on demand from the broker's dedicated endpoint,
 200 per node per request. Continuation tokens support loading further pages;

@@ -12,7 +12,7 @@ fs.mkdirSync(shots, { recursive: true });
   await page.goto(base + '/dashboard/health');
   const queue = page.getByRole('region', { name: 'Queue delivery diagnostics' }),
     protocol = page.getByRole('region', { name: 'Protocol diagnostics' });
-  await queue.getByRole('img', { name: 'Queue pending history', exact: true }).waitFor();
+  await queue.getByRole('img', { name: 'Queue activity history', exact: true }).waitFor();
   await page.waitForFunction(
     () => document.querySelector('.queue-diagnostics .plot-main path') !== null,
   );
@@ -26,9 +26,29 @@ fs.mkdirSync(shots, { recursive: true });
   await page.waitForTimeout(250);
   await queue.screenshot({ path: shots + '/queue-chart-light.png' });
   await protocol.screenshot({ path: shots + '/protocol-chart-light.png' });
-  await queue.getByRole('button', { name: 'Acknowledgements', exact: true }).click();
-  await queue.getByRole('img', { name: 'Queue acknowledgements history', exact: true }).waitFor();
-  assert.doesNotMatch(await queue.locator('.series-readout').innerText(), /—/);
+  assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
+  assert.equal(await queue.locator('.plot-y-right').count(), 1);
+  assert.ok((await queue.boundingBox()).height < 490, 'queue panel stays compact');
+  await queue.locator('.series-menu summary').click();
+  await queue.getByRole('button', { name: 'Show only ACK', exact: true }).click();
+  assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 1);
+  assert.equal(await queue.locator('.plot-y-right').count(), 0, 'single unit uses one axis');
+  assert.match(await queue.locator('.axis-labels').innerText(), /msg/);
+  await queue.locator('.series-menu summary').click();
+  await queue.getByRole('button', { name: 'Hide all', exact: true }).click();
+  await queue.getByText('Choose a series to display', { exact: true }).waitFor();
+  await queue.getByRole('button', { name: 'Show all', exact: true }).click();
+  await queue.getByRole('checkbox').first().uncheck();
+  assert.equal(
+    await queue
+      .getByRole('button', { name: 'Toggle Pending', exact: true })
+      .getAttribute('aria-pressed'),
+    'false',
+  );
+  await page.keyboard.press('Escape');
+  assert.equal(await queue.locator('.series-menu').getAttribute('open'), null);
+  await queue.getByRole('button', { name: 'Toggle Pending', exact: true }).click();
+  assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
   await queue.getByRole('button', { name: '1m', exact: true }).click();
   await queue.getByText('Last 1 minute', { exact: true }).waitFor();
   const slider = queue.getByRole('slider');
@@ -39,11 +59,21 @@ fs.mkdirSync(shots, { recursive: true });
   await slider.press('ArrowRight');
   assert.equal(await slider.getAttribute('aria-valuenow'), '1');
   await slider.press('Escape');
-  await protocol.getByRole('button', { name: 'AMQP 0.9.1', exact: true }).click();
-  await protocol.getByRole('img', { name: 'AMQP 0.9.1 messages history', exact: true }).waitFor();
+  await protocol.getByRole('img', { name: 'Protocol messages history', exact: true }).waitFor();
+  assert.equal(
+    await protocol.locator('.series-readout button').count(),
+    4,
+    'both protocols overlay by default',
+  );
   assert.doesNotMatch(await protocol.locator('.series-readout').innerText(), /—/);
-  await protocol.getByRole('button', { name: 'Bandwidth', exact: true }).click();
-  await protocol.getByRole('img', { name: 'AMQP 0.9.1 bandwidth history', exact: true }).waitFor();
+  await protocol.locator('.series-menu summary').click();
+  await protocol
+    .getByRole('button', { name: 'Show only AMQP 0.9.1 incoming', exact: true })
+    .click();
+  assert.equal(await protocol.locator('.series-readout button[aria-pressed="true"]').count(), 1);
+  await protocol.getByRole('combobox', { name: 'Protocol chart metric' }).selectOption('bandwidth');
+  await protocol.getByRole('img', { name: 'Protocol bandwidth history', exact: true }).waitFor();
+  assert.equal(await protocol.locator('.series-readout button[aria-pressed="true"]').count(), 4);
   await page.getByRole('button', { name: 'Dark appearance', exact: true }).click();
   await page.waitForTimeout(250);
   await queue.screenshot({ path: shots + '/queue-chart-dark.png' });
@@ -54,16 +84,48 @@ fs.mkdirSync(shots, { recursive: true });
   await protocol.getByRole('columnheader', { name: 'Node / protocol', exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(base + '/dashboard/health');
-  await queue.getByRole('img', { name: 'Queue pending history', exact: true }).waitFor();
+  await queue.getByRole('img', { name: 'Queue activity history', exact: true }).waitFor();
   assert.ok(
     await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     'mobile overflow',
   );
   await queue.screenshot({ path: shots + '/queue-chart-mobile.png' });
+  await queue.locator('.series-menu summary').click();
+  const popup = await queue.locator('.series-popover').boundingBox();
+  assert.ok(popup.x >= 0 && popup.x + popup.width <= 390, 'series menu fits mobile');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(base + '/dashboard/sessions');
+  const delivery = page.getByRole('region', { name: 'Protocols & delivery' });
+  await delivery.getByText('3 disconnected', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Light appearance', exact: true }).click();
+  assert.notEqual(
+    await delivery
+      .locator('.protocol-legend .disconnected')
+      .evaluate((e) => getComputedStyle(e).backgroundColor),
+    await delivery
+      .locator('.protocol-bar')
+      .first()
+      .evaluate((e) => getComputedStyle(e).backgroundColor),
+  );
+  await delivery.screenshot({ path: shots + '/protocol-delivery-light.png' });
+  await page.goto(base + '/dashboard/subscriptions');
+  const topics = page.locator('.topics-table');
+  await topics.getByRole('columnheader', { name: 'Subscribers', exact: true }).waitFor();
+  assert.equal(await topics.locator('thead th').count(), 4);
+  await topics.locator('.subscriber-count').first().waitFor();
+  const header = await topics.locator('thead th').nth(1).boundingBox();
+  const cells = await topics.locator('tbody tr').first().locator('td').all();
+  assert.equal(cells.length, 4);
+  const count = await cells[1].locator('.subscriber-count').boundingBox();
+  assert.ok(
+    count.x >= header.x && count.x + count.width <= header.x + header.width,
+    'subscriber count sits under its header',
+  );
+  await topics.screenshot({ path: shots + '/topic-columns-light.png' });
   assert.deepEqual(errors, []);
   await browser.close();
   console.log(
-    'PASS: queue/protocol history charts, rate data, tabs, ranges, keyboard inspection, disclosure and responsive layouts',
+    'PASS: queue/protocol history charts, rate data, overlay controls, ranges, keyboard inspection, disclosure and responsive layouts',
   );
 })().catch((e) => {
   console.error(e);
