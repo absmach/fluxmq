@@ -500,11 +500,14 @@
           No consumer groups. Stored messages have no registered group to deliver to.
         </div>{/each}
     </div>
-    <p class="queue-caption inset">
-      Bars represent offset ranges; an uncommitted range can include acknowledgements received out
-      of order. Pending counts are per group. Acknowledgement does not remove a message from the
-      retained log.
-    </p>
+    <details class="delivery-help">
+      <summary>About delivery positions <Icon name="down" size={13} /></summary>
+      <p class="queue-caption inset">
+        Bars represent offset ranges; an uncommitted range can include acknowledgements received out
+        of order. Pending counts are per group. Acknowledgement does not remove a message from the
+        retained log.
+      </p>
+    </details>
   </section>
   {#if pendingGroup}<section class="panel pending-panel" aria-label="Pending deliveries">
       <div class="panel-heading">
@@ -560,9 +563,11 @@
     <div class="panel-heading">
       <div>
         <h2 id="message-browser">Message browser</h2>
-        <p class="muted">Read the log without consuming or acknowledging</p>
+        <p class="muted">Inspect payloads and headers</p>
       </div>
-      <span class="read-only"><Icon name="book" size={14} />Read only</span>
+      <span class="read-only" title="Reading does not consume or acknowledge messages">
+        <Icon name="book" size={14} />Read only
+      </span>
     </div>
     <form
       class="message-controls"
@@ -578,17 +583,17 @@
           placeholder={head.toString()}
           bind:value={offset}
         />
-      </label><button class="button primary" disabled={messageLoading} type="submit">
+      </label><button class="button" disabled={messageLoading} type="submit">
         Read messages
       </button><button
-        class="text-button"
+        class="button"
         disabled={messageLoading}
         type="button"
         onclick={() => read(head.toString())}
       >
         Oldest
       </button><button
-        class="text-button"
+        class="button"
         disabled={messageLoading}
         type="button"
         onclick={() => read((tail - head > 20n ? tail - 20n : head).toString())}
@@ -637,8 +642,8 @@
             Next messages <Icon name="chevron" size={14} />
           </button>
         </div>{/if}
-    {:else if !messageLoading}<p class="queue-caption inset">
-        Choose an offset or open the latest batch to inspect payloads and headers.
+    {:else if !messageLoading}<p class="message-hint">
+        Select Latest or enter a message offset.
       </p>{/if}
     {#if inspected}{@const payload = decode(inspected.value)}
       <div class="payload-detail">
@@ -665,7 +670,7 @@
   </section>
   <div class="queue-details-grid">
     <section class="panel queue-config">
-      <h2>Routing & retention</h2>
+      <div class="panel-heading"><h2>Routing & retention</h2></div>
       <dl class="inspector-fields">
         <div>
           <dt>Topic routes</dt>
@@ -702,15 +707,24 @@
       </dl>
     </section>
     <section class="panel queue-config">
-      <h2>Consumers</h2>
-      <div class="consumer-list">
-        {#each groups as g}{#each g.consumers ?? [] as c}<div class="consumer-row">
-              <Icon name="sessions" size={17} />
-              <div><strong>{c.consumerId}</strong><span>{g.groupId}</span></div>
-              <small title={date(c.lastHeartbeat)}>Heartbeat<br />{date(c.lastHeartbeat)}</small>
-            </div>{/each}{/each}{#if !consumerTotal}<p class="muted">
-            No registered consumers
-          </p>{/if}
+      <div class="panel-heading"><h2>Consumers</h2></div>
+      <div class="table-scroll consumer-list">
+        <table>
+          <thead><tr><th>Consumer</th><th>Group</th><th>Last heartbeat</th></tr></thead><tbody>
+            {#each groups as g}{#each g.consumers ?? [] as c}<tr>
+                  <td>
+                    <span class="consumer-identity">
+                      <Icon name="sessions" size={16} />{c.consumerId}
+                    </span>
+                  </td><td class="muted">{g.groupId}</td><td class="muted">
+                    {date(c.lastHeartbeat)}
+                  </td>
+                </tr>{/each}{/each}
+            {#if !consumerTotal}<tr>
+                <td colspan="3"><div class="empty-state">No registered consumers</div></td>
+              </tr>{/if}
+          </tbody>
+        </table>
       </div>
     </section>
   </div>
@@ -794,7 +808,7 @@
     grid-template-columns: 180px minmax(120px, 1fr) 150px;
     gap: 24px;
     align-items: center;
-    padding: 24px 0;
+    padding: 16px 0;
     border-top: 1px solid var(--subtle-border);
   }
   .group-label {
@@ -803,6 +817,9 @@
     gap: 7px;
     font-size: 13px;
     overflow-wrap: anywhere;
+  }
+  .group-label strong {
+    font-weight: 500;
   }
   .group-label span {
     font-size: 12px;
@@ -882,7 +899,7 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 0 24px 24px;
+    padding: 0 22px 16px;
     flex-wrap: wrap;
   }
   .message-controls label {
@@ -956,11 +973,37 @@
     gap: 24px;
   }
   .queue-config {
-    padding: 24px;
     min-width: 0;
   }
-  .queue-config h2 {
-    margin: 0 0 20px;
+  .queue-config .inspector-fields {
+    margin: 0;
+    padding: 0 22px 16px;
+  }
+  .message-hint {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 12px 22px 16px;
+    margin: 0;
+    border-top: 1px solid var(--subtle-border);
+  }
+  .delivery-help {
+    border-top: 1px solid var(--subtle-border);
+  }
+  .delivery-help summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 24px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .delivery-help summary::-webkit-details-marker {
+    display: none;
+  }
+  .delivery-help .queue-caption {
+    margin: 0;
+    padding-top: 0;
   }
   .queue-config dd {
     overflow-wrap: anywhere;
@@ -969,30 +1012,16 @@
     max-height: 400px;
     overflow: auto;
   }
-  .consumer-row {
+  .consumer-identity {
     display: flex;
-    gap: 12px;
     align-items: center;
-    padding: 16px 0;
-    border-bottom: 1px solid var(--subtle-border);
-    font-size: 12px;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 400;
   }
-  .consumer-row > div {
-    display: flex;
-    flex: 1;
-    min-width: 0;
-    flex-direction: column;
-    gap: 6px;
-    overflow-wrap: anywhere;
-  }
-  .consumer-row span,
-  .consumer-row small {
-    color: var(--muted);
-  }
-  .consumer-row small {
-    text-align: right;
-    font-size: 11px;
-    line-height: 1.7;
+  .consumer-identity :global(svg) {
+    color: var(--faint);
+    flex-shrink: 0;
   }
   .message-scroll {
     max-height: 420px;

@@ -29,6 +29,27 @@ fs.mkdirSync(shots, { recursive: true });
   assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
   assert.equal(await queue.locator('.plot-y-right').count(), 1);
   assert.ok((await queue.boundingBox()).height < 490, 'queue panel stays compact');
+  // Regression: ACK must not visually flatten the smaller rate series.
+  await page.getByRole('button', { name: 'Pause updates', exact: true }).click();
+  const nack = queue.locator('path[data-series="queue.acknowledgments.nack"]');
+  const rateScale = queue.getByRole('combobox', { name: 'Queue rate scale' });
+  assert.equal(await rateScale.inputValue(), 'log');
+  assert.ok(await nack.evaluate((p) => p.getBBox().y < 145), 'NACK visible with ACK enabled');
+  const readings = await queue.locator('.series-readout').innerText();
+  await queue.getByRole('button', { name: 'Toggle ACK', exact: true }).click();
+  await queue.getByRole('button', { name: 'Toggle ACK', exact: true }).click();
+  assert.ok(await nack.evaluate((p) => p.getBBox().y < 145), 're-enabling ACK keeps NACK visible');
+  assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
+  await rateScale.selectOption('linear');
+  assert.ok(await nack.evaluate((p) => p.getBBox().y > 168), 'linear retains absolute magnitude');
+  await rateScale.selectOption('log');
+  assert.equal(
+    await queue.locator('.series-readout').innerText(),
+    readings,
+    'scale never changes measured values',
+  );
+  assert.match(await queue.locator('.plot-y-right').innerText(), /10K/);
+  await page.getByRole('button', { name: 'Resume updates', exact: true }).click();
   await queue.locator('.series-menu summary').click();
   await queue.getByRole('button', { name: 'Show only ACK', exact: true }).click();
   assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 1);

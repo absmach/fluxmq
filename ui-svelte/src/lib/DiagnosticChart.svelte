@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Icon from './Icon.svelte';
   import { smoothPath } from './chartCurve.js';
+  import { scalePosition, scaleTicks } from './chartScale.js';
   import { compact, bytes, type Point } from './types';
   let {
     points,
@@ -9,6 +10,7 @@
     label,
     unit = ' / s',
     byteScale = false,
+    logRates = false,
   }: {
     points: Point[];
     series: {
@@ -22,6 +24,7 @@
     label: string;
     unit?: string;
     byteScale?: boolean;
+    logRates?: boolean;
   } = $props();
   const uid = $props.id();
   const width = 960,
@@ -39,6 +42,10 @@
     Math.max(1, ...points.flatMap((p) => items.map((s) => p.metrics?.[s.key] ?? 0))) * 1.16;
   let max = $derived(maximum(primary));
   let rightMax = $derived(maximum(rightSeries));
+  let leftLog = $derived(logRates && primary[0]?.axis === 'right');
+  let rightLog = $derived(logRates && dual);
+  let leftTicks = $derived(scaleTicks(max, leftLog));
+  let rightTicks = $derived(scaleTicks(rightMax, rightLog));
   const units = (s: (typeof series)[number]) => s.unit ?? unit;
   function toggle(key: string) {
     hidden = hidden.includes(key) ? hidden.filter((k) => k !== key) : [...hidden, key];
@@ -73,8 +80,10 @@
     points.some((p) => visibleSeries.some((s) => p.metrics?.[s.key] !== undefined)),
   );
   const x = (time: number) => ((time - start) / Math.max(1, end - start)) * width;
-  const y = (value: number, axis?: 'right') =>
-    height - (value / (dual && axis === 'right' ? rightMax : max)) * height;
+  const y = (value: number, axis?: 'right') => {
+    const right = dual && axis === 'right';
+    return height * (1 - scalePosition(value, right ? rightMax : max, right ? rightLog : leftLog));
+  };
   const time = (t: number) =>
     new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const format = (v: number | undefined) =>
@@ -156,14 +165,16 @@
     </details>
   </div>
   <div class="axis-labels">
-    <span>{primary.length ? units(primary[0]) : ''}</span>{#if dual}<span>
-        {units(rightSeries[0])}
+    <span>{primary.length ? units(primary[0]) : ''}{leftLog ? ' · log' : ''}</span>{#if dual}<span>
+        {units(rightSeries[0])}{rightLog ? ' · log' : ''}
       </span>{/if}
   </div>
   <div class="plot-layout">
     <div class="plot-y">
-      {#each [1, 0.75, 0.5, 0.25, 0] as f}<span style:top={`${(1 - f) * 100}%`}>
-          {format(max * f)}
+      {#each leftTicks as value}<span
+          style:top={`${(1 - scalePosition(value, max, leftLog)) * 100}%`}
+        >
+          {format(value)}
         </span>{/each}
     </div>
     <div class="plot-main">
@@ -188,11 +199,11 @@
               /><stop offset="100%" stop-color={s.color} stop-opacity="0" />
             </linearGradient>{/each}
         </defs>
-        {#each [0, 0.25, 0.5, 0.75, 1] as f}<line
+        {#each leftTicks as value}<line
             x1="0"
             x2={width}
-            y1={height * f}
-            y2={height * f}
+            y1={y(value)}
+            y2={y(value)}
             class="plot-grid"
           />{/each}
         {#each visibleSeries as s, i}{#each segments(s.key, s.axis) as group}<path
@@ -289,8 +300,10 @@
       </div>
     </div>
     {#if dual}<div class="plot-y plot-y-right" aria-label="Rate axis">
-        {#each [1, 0.75, 0.5, 0.25, 0] as f}<span style:top={`${(1 - f) * 100}%`}>
-            {format(rightMax * f)}
+        {#each rightTicks as value}<span
+            style:top={`${(1 - scalePosition(value, rightMax, rightLog)) * 100}%`}
+          >
+            {format(value)}
           </span>{/each}
       </div>{/if}
   </div>

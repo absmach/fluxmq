@@ -50,3 +50,17 @@ for (const samples of [
   });
 }
 console.log('PASS: interpolation preserves samples, continuous slopes and bounds');
+
+const { scalePosition, scaleTicks } = await import('../src/lib/chartScale.js');
+assert.equal(scalePosition(0, 15000, true), 0);
+assert.equal(scalePosition(15000, 15000, true), 1);
+assert.ok(scalePosition(5.5, 15000, true) * 170 > 30, 'NACK stays visible alongside ACK');
+assert.ok(scalePosition(1.5, 15000, true) * 170 > 15, 'low nonzero error rates remain visible');
+assert.ok(scalePosition(5.5, 15000, false) * 170 < 1, 'linear preserves absolute proportions');
+for (const maximum of [0.2, 1.16, 15, 15000]) {
+  const ticks = scaleTicks(maximum, true);
+  assert.equal(ticks.at(-1), 0);
+  assert.ok(ticks.every((value) => Number.isFinite(value) && value >= 0 && value <= maximum));
+  for (let i = 1; i < ticks.length; i++) assert.ok(ticks[i] < ticks[i - 1]);
+}
+console.log('PASS: rate scales preserve zero, actual units and small-rate visibility');

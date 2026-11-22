@@ -14,6 +14,7 @@
     onnode?: (id: string) => void;
   } = $props();
   let range = $state(5);
+  let rateScale = $state('log');
   let visible = $derived(
     points.filter((p) => p.time >= (points.at(-1)?.time ?? 0) - range * 60000),
   );
@@ -118,14 +119,24 @@
         <h2>Queue activity</h2>
         <p class="muted">{nodes.length === 1 ? nodes[0].id : 'Across reporting nodes'}</p>
       </div>
-      <div class="range-control segmented" aria-label="Queue history range">
-        {#each [1, 5, 15] as minutes}<button
-            class:chosen={range === minutes}
-            aria-pressed={range === minutes}
-            onclick={() => (range = minutes)}
-          >
-            {minutes}m
-          </button>{/each}
+      <div class="chart-controls">
+        <label
+          class="scale-control"
+          title="Logarithmic rate scale keeps small rates visible alongside high throughput. Zero remains zero; counts use a linear scale."
+        >
+          Rates <select aria-label="Queue rate scale" bind:value={rateScale}>
+            <option value="log">Log</option><option value="linear">Linear</option>
+          </select>
+        </label>
+        <div class="range-control segmented" aria-label="Queue history range">
+          {#each [1, 5, 15] as minutes}<button
+              class:chosen={range === minutes}
+              aria-pressed={range === minutes}
+              onclick={() => (range = minutes)}
+            >
+              {minutes}m
+            </button>{/each}
+        </div>
       </div>
     </div>
     {#if nodes.some((n) => !n.healthy && !n.unmonitored)}<p class="diagnostic-notice">
@@ -139,7 +150,12 @@
             · {number(sum('acknowledgments.poison_pending_no_destination'))} have no dead-letter destination{/if}
         </span>
       </div>{/if}
-    <DiagnosticChart points={visible} {series} label="Queue activity history" />
+    <DiagnosticChart
+      points={visible}
+      {series}
+      label="Queue activity history"
+      logRates={rateScale === 'log'}
+    />
     <div class="diagnostic-chart-footer">
       <span>
         <Icon name="clock" size={13} />Last {range}
@@ -201,6 +217,38 @@
 {/if}
 
 <style>
+  .chart-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .scale-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .scale-control select {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  @media (max-width: 600px) {
+    .panel-heading {
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .chart-controls {
+      gap: 10px;
+    }
+  }
+
   .queue-diagnostics {
     overflow: visible;
   }

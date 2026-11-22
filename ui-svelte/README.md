@@ -116,7 +116,10 @@ integrated simulation curves. Detailed counters and node/protocol tables remain
 available in collapsed sections below the plots. Compact plots overlay all series by
 default; the Series menu can isolate a metric or toggle any combination, and the
 legend also toggles visibility. Queue counts and event rates have separately
-labeled axes. Protocols overlay within a selected metric (messages, bandwidth,
+labeled axes. Queue rates default to a zero-preserving logarithmic scale (log1p),
+so low retry/error rates remain visible next to high ACK throughput. The Rates
+control restores a linear scale; counts always remain linear and tooltips retain
+actual measured values. Protocols overlay within a selected metric (messages, bandwidth,
 connections or errors), keeping units consistent.
 
 Subscription clients are fetched on demand from the broker's dedicated endpoint,
