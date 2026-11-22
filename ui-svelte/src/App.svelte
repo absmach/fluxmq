@@ -346,6 +346,18 @@
         </a>{/each}
     </nav>
     <div class="sidebar-bottom">
+      <a
+        class="utility-link"
+        href="https://www.absmach.eu/docs/fluxmq"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <Icon name="book" size={18} /><span>Documentation</span>
+      </a>
+      <button class="utility-link" onclick={toggleTheme}>
+        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
+        <span>{theme === 'dark' ? 'Light appearance' : 'Dark appearance'}</span>
+      </button>
       <a class="company" href="https://www.absmach.eu/" target="_blank" rel="noreferrer">
         <span class="company-copy">
           <small>A PRODUCT OF</small><img
@@ -397,24 +409,6 @@
                     : 'Broker needs attention'}
           </span><button class="button" onclick={exportCSV} disabled={!snapshot}>
             <Icon name="download" size={16} />Export
-          </button>
-          <a
-            class="icon-button top-utility"
-            href="https://www.absmach.eu/docs/fluxmq"
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Documentation"
-            title="Documentation"
-          >
-            <Icon name="book" size={18} />
-          </a>
-          <button
-            class="icon-button top-utility"
-            onclick={toggleTheme}
-            aria-label={theme === 'dark' ? 'Light appearance' : 'Dark appearance'}
-            title={theme === 'dark' ? 'Light appearance' : 'Dark appearance'}
-          >
-            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
           </button>
         </div>
       </div>

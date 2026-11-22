@@ -94,6 +94,10 @@ fs.mkdirSync(shots, { recursive: true });
   );
   await mobile.screenshot({ path: path.join(shots, 'mobile-dark.png'), fullPage: true });
   await mobile.getByRole('button', { name: 'Open navigation' }).click();
+  await mobile.getByRole('link', { name: 'Documentation', exact: true }).waitFor();
+  await mobile.getByRole('button', { name: 'Light appearance', exact: true }).click();
+  assert.equal(await mobile.locator('html').getAttribute('data-theme'), 'light');
+  await mobile.getByRole('button', { name: 'Dark appearance', exact: true }).click();
   await mobile.getByRole('link', { name: 'Sessions', exact: true }).click();
   assert.equal(
     await mobile.locator('.sidebar').evaluate((el) => el.classList.contains('open')),

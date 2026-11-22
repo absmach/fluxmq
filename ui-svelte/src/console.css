@@ -697,23 +697,3 @@ dialog::backdrop {
   font-size: 1rem;
   font-weight: 500;
 }
-
-.heading-actions {
-  gap: 8px;
-}
-.heading-actions .status-label {
-  margin-right: 10px;
-}
-.top-utility {
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-}
-@media (max-width: 800px) {
-  .page-heading {
-    flex-wrap: wrap;
-  }
-  .heading-actions {
-    padding-top: 0;
-  }
-}

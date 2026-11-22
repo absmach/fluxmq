@@ -47,7 +47,7 @@ local or behind your existing authenticated management gateway.
 - Light/dark appearance persisted locally, responsive sidebar navigation, CSV
   export, live pause/resume, and visible reconnect states. Search stays within
   each data view; there is no global command palette. Documentation and
-  appearance controls sit beside Export at the top of each page.
+  appearance controls are labeled items at the bottom of the sidebar.
 
 The charts use lightweight SVG. All fonts and brand assets are served locally.
 API strings are rendered as text, never injected as HTML.
