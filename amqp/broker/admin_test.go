@@ -59,7 +59,6 @@ func TestConnectionSubscriptionsDeduplicatesConsumersByFilter(t *testing.T) {
 	if subs[1].ConsumerCount != 2 {
 		t.Fatalf("expected count to decrease after cancellation, got %d", subs[1].ConsumerCount)
 	}
-
 }
 
 func TestListSubscriptionSnapshotsSortsAcrossConnections(t *testing.T) {
