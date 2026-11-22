@@ -731,13 +731,13 @@
                           : 'Healthy'
                         : 'Node unavailable'}
         </span>
-        {#if snapshot?.mode === 'demo'}<button
+        {#if snapshot}<button
             class="header-demo"
             aria-label="Broker connection details"
-            title="Simulated broker data"
+            title={snapshot.mode === 'demo' ? 'Simulated broker data' : 'Live broker Admin APIs'}
             onclick={() => connectionDialog.showModal()}
           >
-            Demo
+            {snapshot.mode === 'demo' ? 'Demo' : 'Live'}
           </button>{/if}
         <button
           class="icon-button stream-toggle"
@@ -1617,19 +1617,19 @@
   </div>
   <img src="/brand/fluxmq-symbol.svg" alt="" width="48" height="48" />
   <h2>
-    {snapshot?.mode === 'demo' ? 'Demo environment' : 'Connected to your brokers.'}
+    {snapshot?.mode === 'demo' ? 'Demo environment' : 'Broker connections'}
   </h2>
   <p>
     {snapshot?.mode === 'demo'
       ? 'No broker is connected in this preview. Traffic, clients, and nodes are simulated so you can try the console.'
-      : 'Your console reads metrics from the configured FluxMQ brokers. All views in this preview are read-only.'}
+      : 'Your console reads live metrics and inventory from the configured FluxMQ brokers. All views are read-only.'}
   </p>
   <div class="console-detail">
     <span>Data source</span><strong>
       {snapshot?.mode === 'demo' ? 'Demo simulation' : 'FluxMQ Admin API'}
-    </strong><span>Configured nodes</span><strong>{snapshot?.nodes.length ?? 0}</strong><span>
-      Update transport
-    </span><strong>Server-Sent Events</strong>
+    </strong><span>Configured nodes</span><strong>
+      {snapshot?.nodes.filter((n) => !n.unmonitored).length ?? 0}
+    </strong><span> Update transport </span><strong>Server-Sent Events</strong>
   </div>
   <button class="button primary" onclick={() => connectionDialog.close()}>Back to console</button>
 </dialog>

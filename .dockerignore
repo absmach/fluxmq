@@ -1,1 +1,6 @@
 /web
+.git
+**/node_modules
+ui-svelte/dist
+ui-svelte/fluxmq-console
+ui/.next

@@ -10,6 +10,10 @@ broker executable. The existing Next.js UI remains in `../ui` for comparison.
 
 ## Run the preview
 
+For real data, use the [live broker deployment](../deployments/console/README.md).
+It builds this console and the current backend together, with standalone and
+three-node configurations and a real MQTT/AMQP browser regression test.
+
 Requires Node.js 22.12+ and Go 1.23+.
 
 ```sh

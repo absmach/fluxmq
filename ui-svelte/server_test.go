@@ -153,3 +153,35 @@ func TestHistoryIsBoundedAndSlowSubscribersDoNotBlock(t *testing.T) {
 		t.Fatal("slow listener should receive the newest snapshot")
 	}
 }
+
+func TestRecoveryReplacesTemporaryNodeIdentity(t *testing.T) {
+	available := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+			return
+		}
+		if r.URL.Path == "/api/v1/overview" {
+			writeJSON(w, map[string]any{"node_id": "recovered-node"})
+		} else {
+			writeJSON(w, map[string]any{"sessions": []session{{ClientID: "live-client"}}})
+		}
+	}))
+	defer upstream.Close()
+	c := newCollector([]string{upstream.URL}, false)
+	c.publish(c.collect(context.Background(), false))
+	available = true
+	c.publish(c.collect(context.Background(), false))
+	if len(c.nodeURLs) != 1 || c.nodeURLs["recovered-node"] != upstream.URL {
+		t.Fatalf("stale identities after recovery: %+v", c.nodeURLs)
+	}
+	w := httptest.NewRecorder()
+	c.inventoryPage(w, httptest.NewRequest("GET", "/console-api/inventory?kind=sessions", nil))
+	var page inventoryPage
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Sessions) != 1 || page.Sessions[0].NodeID != "recovered-node" {
+		t.Fatalf("duplicate inventory after recovery: %+v", page)
+	}
+}

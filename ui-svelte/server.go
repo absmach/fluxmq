@@ -406,6 +406,7 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 		r := <-results
 		byURL[r.url] = r
 	}
+	nodeURLs := make(map[string]string, len(c.urls))
 	for _, base := range c.urls {
 		r := byURL[base]
 		n := r.node
@@ -438,15 +439,19 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 			all.BytesOut += p.BytesOut
 			all.Connections += p.Connections
 		}
-		c.mu.Lock()
-		c.nodeURLs[n.ID] = base
-		c.mu.Unlock()
+		nodeURLs[n.ID] = base
 		if inventory {
 			s.Sessions = append(s.Sessions, r.sessions...)
 			s.Subscriptions = append(s.Subscriptions, r.subscriptions...)
 			s.Limited = s.Limited || r.limited
 		}
 	}
+	// A broker may be unavailable at startup, then reveal its node ID on
+	// recovery. Replace the routing table so the temporary URL identity cannot
+	// keep fetching duplicate inventory or remain available for drill-downs.
+	c.mu.Lock()
+	c.nodeURLs = nodeURLs
+	c.mu.Unlock()
 	known := map[string]bool{}
 	for _, n := range s.Nodes {
 		known[n.ID] = true

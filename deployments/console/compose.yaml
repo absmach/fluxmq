@@ -1,0 +1,36 @@
+name: fluxmq-console
+
+services:
+  broker:
+    build:
+      context: ../..
+      dockerfile: deployments/console/Dockerfile
+    command: ["--config", "/etc/fluxmq/config.yaml"]
+    ports:
+      - "127.0.0.1:11883:1883" # MQTT 3.1.1
+      - "127.0.0.1:11884:1884" # MQTT 5
+      - "127.0.0.1:15672:5672" # AMQP 1.0
+      - "127.0.0.1:15682:5682" # AMQP 0.9.1
+      - "127.0.0.1:19082:8082" # Admin API
+    volumes:
+      - ./config.yaml:/etc/fluxmq/config.yaml:ro
+      - broker-data:/var/lib/fluxmq
+    restart: unless-stopped
+
+  console:
+    build:
+      context: ../../ui-svelte
+    ports:
+      - "127.0.0.1:${FLUXMQ_CONSOLE_PORT:-3002}:3002"
+    environment:
+      FLUXMQ_NODE_URLS: ${FLUXMQ_NODE_URLS:-http://broker:8082}
+    depends_on:
+      broker:
+        condition: service_healthy
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: unless-stopped
+
+volumes:
+  broker-data:

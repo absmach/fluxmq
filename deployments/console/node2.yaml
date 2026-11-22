@@ -1,0 +1,51 @@
+# Local real-data console deployment. No simulated sessions or traffic.
+server:
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+        protocol: "v3"
+      v5:
+        addr: ":1884"
+        protocol: "v5"
+  amqp:
+    plain:
+      addr: ":5672"
+  amqp091:
+    plain:
+      addr: ":5682"
+  admin_api_addr: ":8082"
+  health_enabled: true
+  health_addr: ":8081"
+
+storage:
+  type: badger
+  badger_dir: /var/lib/fluxmq/data
+
+cluster:
+  enabled: true
+  allow_insecure: true # Isolated local development network only.
+  node_id: node2
+  etcd:
+    data_dir: /var/lib/fluxmq/etcd
+    bind_addr: 192.168.240.12:2380
+    client_addr: 127.0.0.1:2379
+    initial_cluster: "node1=http://192.168.240.11:2380,node2=http://192.168.240.12:2380,node3=http://192.168.240.13:2380"
+    bootstrap: true
+  transport:
+    bind_addr: 192.168.240.12:7946
+    peers:
+      node1: 192.168.240.11:7946
+      node3: 192.168.240.13:7946
+
+log:
+  level: info
+  format: text
+
+queue_manager:
+  auto_commit_interval: 5s
+
+queues:
+  - name: mqtt
+    topics: ["$queue/#"]
+    reserved: true

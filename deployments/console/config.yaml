@@ -1,0 +1,38 @@
+# Local real-data console deployment. No simulated sessions or traffic.
+server:
+  mqtt:
+    tcp:
+      v3:
+        addr: ":1883"
+        protocol: "v3"
+      v5:
+        addr: ":1884"
+        protocol: "v5"
+  amqp:
+    plain:
+      addr: ":5672"
+  amqp091:
+    plain:
+      addr: ":5682"
+  admin_api_addr: ":8082"
+  health_enabled: true
+  health_addr: ":8081"
+
+storage:
+  type: badger
+  badger_dir: /var/lib/fluxmq/data
+
+cluster:
+  enabled: false
+
+log:
+  level: info
+  format: text
+
+queue_manager:
+  auto_commit_interval: 5s
+
+queues:
+  - name: mqtt
+    topics: ["$queue/#"]
+    reserved: true

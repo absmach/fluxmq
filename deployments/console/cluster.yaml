@@ -1,0 +1,62 @@
+# Combine with compose.yaml to run three real brokers on an isolated network.
+services:
+  broker:
+    volumes:
+      - ./node1.yaml:/etc/fluxmq/config.yaml:ro
+      - node1-data:/var/lib/fluxmq
+    networks:
+      default:
+        aliases: [node1]
+        ipv4_address: 192.168.240.11
+
+  node2:
+    image: fluxmq-console-broker
+    command: ["--config", "/etc/fluxmq/config.yaml"]
+    ports:
+      - "127.0.0.1:12883:1883"
+      - "127.0.0.1:12884:1884"
+      - "127.0.0.1:16682:5682"
+      - "127.0.0.1:19083:8082"
+    volumes:
+      - ./node2.yaml:/etc/fluxmq/config.yaml:ro
+      - node2-data:/var/lib/fluxmq
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: 192.168.240.12
+
+  node3:
+    image: fluxmq-console-broker
+    command: ["--config", "/etc/fluxmq/config.yaml"]
+    ports:
+      - "127.0.0.1:13883:1883"
+      - "127.0.0.1:13884:1884"
+      - "127.0.0.1:17682:5682"
+      - "127.0.0.1:19084:8082"
+    volumes:
+      - ./node3.yaml:/etc/fluxmq/config.yaml:ro
+      - node3-data:/var/lib/fluxmq
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: 192.168.240.13
+
+  console:
+    environment:
+      FLUXMQ_NODE_URLS: ${FLUXMQ_NODE_URLS:-http://node1:8082,http://node2:8082,http://node3:8082}
+    depends_on:
+      node2:
+        condition: service_healthy
+      node3:
+        condition: service_healthy
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 192.168.240.0/24
