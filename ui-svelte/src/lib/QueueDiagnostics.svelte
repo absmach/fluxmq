@@ -1,7 +1,62 @@
 <script lang="ts">
-  import { number, compact, type BrokerNode } from './types';
+  import { number, compact, type BrokerNode, type Point } from './types';
   import Icon from './Icon.svelte';
-  let { nodes, onnode }: { nodes: BrokerNode[]; onnode?: (id: string) => void } = $props();
+  import DiagnosticChart from './DiagnosticChart.svelte';
+  let {
+    nodes,
+    points = [],
+    demo = false,
+    onnode,
+  }: {
+    nodes: BrokerNode[];
+    points?: Point[];
+    demo?: boolean;
+    onnode?: (id: string) => void;
+  } = $props();
+  let range = $state(5);
+  let metric = $state('pending');
+  let visible = $derived(
+    points.filter((p) => p.time >= (points.at(-1)?.time ?? 0) - range * 60000),
+  );
+  const views: Record<
+    string,
+    { label: string; series: { key: string; label: string; color: string }[] }
+  > = {
+    pending: {
+      label: 'Pending',
+      series: [
+        { key: 'queue.pending.current', label: 'Awaiting acknowledgement', color: 'var(--accent)' },
+        {
+          key: 'queue.acknowledgments.poison_pending',
+          label: 'Poison pending',
+          color: 'var(--violet)',
+        },
+      ],
+    },
+    ack: {
+      label: 'Acknowledgements',
+      series: [{ key: 'queue.acknowledgments.ack', label: 'Acknowledged', color: 'var(--mint)' }],
+    },
+    retry: {
+      label: 'Retries & rejections',
+      series: [
+        {
+          key: 'queue.acknowledgments.nack',
+          label: 'Negative acknowledgements',
+          color: 'var(--accent)',
+        },
+        { key: 'queue.acknowledgments.reject', label: 'Rejected', color: 'var(--violet)' },
+        { key: 'queue.acknowledgments.dlq', label: 'Dead-lettered', color: 'var(--mint)' },
+      ],
+    },
+    capture: {
+      label: 'Capture failures',
+      series: [
+        { key: 'queue.capture_failures', label: 'Failed capture', color: 'var(--violet)' },
+        { key: 'queue.capture_dropped', label: 'Dropped capture', color: 'var(--warning)' },
+      ],
+    },
+  };
   let reporting = $derived(nodes.filter((n) => !n.unmonitored && n.queue_metrics));
   const value = (node: BrokerNode, path: string): number | undefined => {
     let v: unknown = node.queue_metrics;
@@ -11,15 +66,6 @@
   };
   const sum = (path: string) => reporting.reduce((n, node) => n + (value(node, path) ?? 0), 0);
   const reported = (path: string) => reporting.some((n) => value(n, path) !== undefined);
-  let outcomes = $derived(
-    [
-      { label: 'ACK', path: 'acknowledgments.ack', color: 'var(--mint)' },
-      { label: 'NACK', path: 'acknowledgments.nack', color: 'var(--accent)' },
-      { label: 'Rejected', path: 'acknowledgments.reject', color: 'var(--violet)' },
-      { label: 'Dead-lettered', path: 'acknowledgments.dlq', color: 'var(--warning)' },
-    ].map((o) => ({ ...o, value: sum(o.path), reported: reported(o.path) })),
-  );
-  let max = $derived(Math.max(1, ...outcomes.map((o) => o.value)));
   let faults = $derived([
     {
       label: 'Capture failures',
@@ -54,14 +100,27 @@
   <section class="panel queue-diagnostics" aria-label="Queue delivery diagnostics">
     <div class="panel-heading">
       <div>
-        <h2>Queue delivery</h2>
-        <p class="muted">
-          Node-local counters · {reporting.length} reporting {reporting.length === 1
-            ? 'node'
-            : 'nodes'}
-        </p>
+        <h2>Queue activity</h2>
+        <p class="muted">{nodes.length === 1 ? nodes[0].id : 'Across reporting nodes'}</p>
       </div>
-      <Icon name="queues" size={20} />
+      <div class="range-control segmented" aria-label="Queue history range">
+        {#each [1, 5, 15] as minutes}<button
+            class:chosen={range === minutes}
+            aria-pressed={range === minutes}
+            onclick={() => (range = minutes)}
+          >
+            {minutes}m
+          </button>{/each}
+      </div>
+    </div>
+    <div class="diagnostic-tabs tabs" aria-label="Queue activity metric">
+      {#each Object.entries(views) as [key, view]}<button
+          class:chosen={metric === key}
+          aria-pressed={metric === key}
+          onclick={() => (metric = key)}
+        >
+          {view.label}
+        </button>{/each}
     </div>
     {#if nodes.some((n) => !n.healthy && !n.unmonitored)}<p class="diagnostic-notice">
         Includes last-known values from unavailable nodes.
@@ -74,37 +133,37 @@
             · {number(sum('acknowledgments.poison_pending_no_destination'))} have no dead-letter destination{/if}
         </span>
       </div>{/if}
-    <div class="diagnostic-columns">
-      <div class="outcome-chart">
-        <h3>Cumulative outcomes</h3>
-        {#each outcomes as o}<div class="outcome-row">
-            <span>{o.label}</span>
-            <div class="outcome-track">
-              <i style:width={`${(o.value / max) * 100}%`} style:background={o.color}></i>
-            </div>
-            <strong title={o.reported ? number(o.value) : 'Not reported'}>
-              {o.reported ? compact(o.value) : '—'}
-            </strong>
-          </div>{/each}
-        <p class="diagnostic-note">
-          A message can have multiple outcomes across delivery attempts.
-        </p>
-      </div>
-      <div class="delivery-signals">
-        <div class="pending-gauge">
-          <Icon name="clock" size={18} /><span>Pending now</span><strong>
-            {reported('pending.current') ? number(sum('pending.current')) : '—'}
-          </strong><small>Classic queue pending entries</small>
-        </div>
-        <div class="signal-grid">
-          {#each faults as f}<div class:has-fault={sum(f.path) > 0} title={f.help}>
-              <span>{f.label}</span><strong>{reported(f.path) ? number(sum(f.path)) : '—'}</strong>
-            </div>{/each}
-        </div>
-      </div>
+    <DiagnosticChart
+      points={visible}
+      series={views[metric].series}
+      label={`Queue ${views[metric].label.toLowerCase()} history`}
+      unit={metric === 'pending' ? 'messages' : ' / s'}
+    />
+    <div class="diagnostic-chart-footer">
+      <span>
+        <Icon name="clock" size={13} />Last {range}
+        {range === 1 ? 'minute' : 'minutes'}
+      </span><span>{demo ? 'Simulated history' : 'Collected history'}</span>
     </div>
     <details>
-      <summary>Compare node diagnostics <Icon name="down" size={13} /></summary>
+      <summary>Counters & node comparison <Icon name="down" size={13} /></summary>
+      <div class="diagnostic-totals">
+        {#each [{ label: 'ACK', path: 'acknowledgments.ack' }, { label: 'NACK', path: 'acknowledgments.nack' }, { label: 'Rejected', path: 'acknowledgments.reject' }, { label: 'Dead-lettered', path: 'acknowledgments.dlq' }] as o}<div>
+            <span>{o.label}</span><strong
+              title={reported(o.path) ? number(sum(o.path)) : 'Not reported'}
+            >
+              {reported(o.path) ? compact(sum(o.path)) : '—'}
+            </strong>
+          </div>{/each}
+      </div>
+      <p class="diagnostic-note">
+        Cumulative outcomes; one message may have multiple delivery attempts.
+      </p>
+      <div class="signal-grid">
+        {#each faults as f}<div class:has-fault={sum(f.path) > 0} title={f.help}>
+            <span>{f.label}</span><strong>{reported(f.path) ? number(sum(f.path)) : '—'}</strong>
+          </div>{/each}
+      </div>
       <div class="table-scroll">
         <table>
           <thead>
@@ -145,80 +204,53 @@
     margin-bottom: 24px;
   }
   .panel-heading p {
-    font-size: 12px;
+    font-size: 13px;
     margin-top: 6px;
   }
-  .panel-heading > :global(svg) {
-    color: var(--muted);
+  .diagnostic-tabs {
+    padding: 0 28px 16px;
+    flex-wrap: wrap;
   }
-  .diagnostic-columns {
-    display: grid;
-    grid-template-columns: 1fr 1.1fr;
-    gap: 36px;
-    padding: 0 24px 24px;
-  }
-  .outcome-chart h3 {
-    font-size: 12px;
-    color: var(--muted);
-    font-weight: 400;
-    margin: 0 0 22px;
-  }
-  .outcome-row {
-    display: grid;
-    grid-template-columns: 85px 1fr 65px;
+  .diagnostic-chart-footer {
+    display: flex;
     align-items: center;
-    gap: 16px;
-    font-size: 12px;
-    margin: 18px 0;
+    justify-content: space-between;
+    color: var(--faint);
+    padding: 0 28px 24px;
+    font-size: 11px;
   }
-  .outcome-row strong {
-    text-align: right;
+  .diagnostic-chart-footer span {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+  .diagnostic-totals {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    padding: 24px 28px 16px;
+  }
+  .diagnostic-totals span {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .diagnostic-totals strong {
+    font-size: 24px;
     font-family: 'IBM Plex Mono', monospace;
     font-weight: 400;
-    font-size: 15px;
-  }
-  .outcome-track {
-    height: 8px;
-    border-radius: 3px;
-    background: var(--panel-raised);
-    overflow: hidden;
-  }
-  .outcome-track i {
-    height: 100%;
-    display: block;
-    transition: width 0.3s;
   }
   .diagnostic-note {
     font-size: 11px;
     color: var(--muted);
-    margin-top: 24px;
-  }
-  .pending-gauge {
-    display: grid;
-    grid-template-columns: 20px 1fr auto;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 18px;
-  }
-  .pending-gauge > :global(svg) {
-    color: var(--accent);
-  }
-  .pending-gauge strong {
-    font-size: 30px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 400;
-    grid-column: 3;
-    grid-row: 1/3;
-  }
-  .pending-gauge small {
-    font-size: 11px;
-    color: var(--muted);
-    grid-column: 2;
+    padding: 0 28px 20px;
   }
   .signal-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    padding: 0 28px 24px;
   }
   .signal-grid > div {
     display: flex;
@@ -238,10 +270,9 @@
   }
   .signal-grid .has-fault {
     color: var(--warning);
-    background: color-mix(in srgb, var(--warning) 8%, var(--panel));
   }
   .poison-warning {
-    margin: 0 24px 24px;
+    margin: 0 28px 24px;
     display: flex;
     gap: 10px;
     color: var(--warning);
@@ -253,10 +284,10 @@
   .diagnostic-notice {
     font-size: 12px;
     color: var(--warning);
-    padding: 0 24px 18px;
+    padding: 0 28px 18px;
   }
   summary {
-    padding: 14px 24px;
+    padding: 16px 28px;
     border-top: 1px solid var(--subtle-border);
     font-size: 12px;
     color: var(--muted);
@@ -268,18 +299,21 @@
   details[open] summary {
     color: var(--text);
   }
-  @media (max-width: 1000px) {
-    .diagnostic-columns {
-      grid-template-columns: 1fr;
-      gap: 24px;
+  @media (max-width: 600px) {
+    .diagnostic-tabs {
+      padding: 0 16px 16px;
     }
-  }
-  @media (max-width: 500px) {
+    .diagnostic-chart-footer {
+      padding: 0 16px 18px;
+    }
+    .diagnostic-totals {
+      grid-template-columns: 1fr 1fr;
+    }
     .signal-grid {
       grid-template-columns: 1fr;
     }
-    .outcome-row {
-      gap: 8px;
+    .panel-heading {
+      align-items: flex-start;
     }
   }
 </style>

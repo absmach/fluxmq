@@ -1,5 +1,6 @@
 export type Page = 'overview' | 'sessions' | 'subscriptions' | 'nodes' | 'health' | 'queues';
 export interface Point {
+  metrics?: Record<string, number>;
   time: number;
   incoming: number;
   outgoing: number;

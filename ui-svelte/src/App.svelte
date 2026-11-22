@@ -1272,7 +1272,12 @@
           </div>
         </section>
       {:else if page === 'queues'}
-        {#if !queueIdentity}<QueueDiagnostics {nodes} onnode={(id) => (nodeDetailID = id)} />{/if}
+        {#if !queueIdentity}<QueueDiagnostics
+            {nodes}
+            points={histories[scope] ?? []}
+            demo={snapshot?.mode === 'demo'}
+            onnode={(id) => (nodeDetailID = id)}
+          />{/if}
         <Queues
           nodes={snapshot?.nodes ?? []}
           {scope}
@@ -1323,8 +1328,15 @@
               </strong>
             </div>{/each}
         </section>
-        <QueueDiagnostics {nodes} onnode={(id) => (nodeDetailID = id)} /><ProtocolDiagnostics
+        <QueueDiagnostics
           {nodes}
+          points={histories[scope] ?? []}
+          demo={snapshot?.mode === 'demo'}
+          onnode={(id) => (nodeDetailID = id)}
+        /><ProtocolDiagnostics
+          {nodes}
+          points={histories[scope] ?? []}
+          demo={snapshot?.mode === 'demo'}
           onnode={(id) => (nodeDetailID = id)}
         />
         <div class="health-grid">

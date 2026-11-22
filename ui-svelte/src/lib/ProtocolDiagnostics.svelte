@@ -1,7 +1,79 @@
 <script lang="ts">
-  import { number, compact, bytes, type BrokerNode, type ProtocolMetrics } from './types';
+  import {
+    number,
+    compact,
+    bytes,
+    type BrokerNode,
+    type ProtocolMetrics,
+    type Point,
+  } from './types';
   import Icon from './Icon.svelte';
-  let { nodes, onnode }: { nodes: BrokerNode[]; onnode: (id: string) => void } = $props();
+  import DiagnosticChart from './DiagnosticChart.svelte';
+  let {
+    nodes,
+    points = [],
+    demo = false,
+    onnode,
+  }: {
+    nodes: BrokerNode[];
+    points?: Point[];
+    demo?: boolean;
+    onnode: (id: string) => void;
+  } = $props();
+  let range = $state(5),
+    selected = $state('mqtt'),
+    metric = $state('messages');
+  let available = $derived([
+    ...new Set(nodes.flatMap((n) => Object.keys(n.protocol_metrics ?? {}))),
+  ]);
+  let protocol = $derived(available.includes(selected) ? selected : (available[0] ?? 'mqtt'));
+  let visible = $derived(
+    points.filter((p) => p.time >= (points.at(-1)?.time ?? 0) - range * 60000),
+  );
+  let series = $derived(
+    metric === 'connections'
+      ? [
+          {
+            key: `protocol.${protocol}.connections.current`,
+            label: 'Connections',
+            color: 'var(--accent)',
+          },
+        ]
+      : metric === 'errors'
+        ? [
+            {
+              key: `protocol.${protocol}.errors.protocol`,
+              label: 'Protocol errors',
+              color: 'var(--violet)',
+            },
+            ...(protocol === 'mqtt'
+              ? [
+                  {
+                    key: 'protocol.mqtt.errors.auth',
+                    label: 'Authentication',
+                    color: 'var(--warning)',
+                  },
+                  {
+                    key: 'protocol.mqtt.errors.authz',
+                    label: 'Authorization',
+                    color: 'var(--accent)',
+                  },
+                ]
+              : []),
+          ]
+        : [
+            {
+              key: `protocol.${protocol}.${metric === 'bandwidth' ? 'bytes' : 'messages'}.received`,
+              label: 'Incoming',
+              color: 'var(--accent)',
+            },
+            {
+              key: `protocol.${protocol}.${metric === 'bandwidth' ? 'bytes' : 'messages'}.sent`,
+              label: 'Outgoing',
+              color: 'var(--mint)',
+            },
+          ],
+  );
   let rows = $derived(
     nodes.flatMap((n) =>
       Object.entries(n.protocol_metrics ?? {})
@@ -16,45 +88,91 @@
 
 {#if rows.length}<section class="panel protocol-diagnostics" aria-label="Protocol diagnostics">
     <div class="panel-heading">
-      <h2>Protocol diagnostics</h2>
-      <span class="muted">Reported by broker</span>
+      <div>
+        <h2>Protocol traffic</h2>
+        <p class="muted">{nodes.length === 1 ? nodes[0].id : 'Across reporting nodes'}</p>
+      </div>
+      <div class="range-control segmented" aria-label="Protocol history range">
+        {#each [1, 5, 15] as minutes}<button
+            class:chosen={range === minutes}
+            aria-pressed={range === minutes}
+            onclick={() => (range = minutes)}
+          >
+            {minutes}m
+          </button>{/each}
+      </div>
     </div>
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Node / protocol</th><th class="numeric">Connections</th><th class="numeric">
-              Messages in / out
-            </th><th class="numeric">Data in / out</th><th class="numeric">Errors</th>
-          </tr>
-        </thead><tbody>
-          {#each rows as r}<tr>
-              <td>
-                <button class="text-button" onclick={() => onnode(r.node)}>{r.node}</button><span
-                  class="protocol-label"
+    <div class="protocol-chart-controls">
+      <div class="tabs" aria-label="Protocol chart metric">
+        {#each ['messages', 'bandwidth', 'connections', 'errors'] as option}<button
+            class:chosen={metric === option}
+            aria-pressed={metric === option}
+            onclick={() => (metric = option)}
+          >
+            {option[0].toUpperCase() + option.slice(1)}
+          </button>{/each}
+      </div>
+      <div class="protocol-switch" aria-label="Chart protocol">
+        {#each available as p}<button
+            class:chosen={protocol === p}
+            aria-pressed={protocol === p}
+            onclick={() => (selected = p)}
+          >
+            {label(p)}
+          </button>{/each}
+      </div>
+    </div>
+    <DiagnosticChart
+      points={visible}
+      {series}
+      label={`${label(protocol)} ${metric} history`}
+      unit={metric === 'connections' ? 'clients' : metric === 'messages' ? 'msg / s' : ' / s'}
+      byteScale={metric === 'bandwidth'}
+    />
+    <div class="diagnostic-chart-footer">
+      <span>
+        <Icon name="clock" size={13} />Last {range}
+        {range === 1 ? 'minute' : 'minutes'}
+      </span><span>{demo ? 'Simulated history' : 'Collected history'}</span>
+    </div>
+    <details>
+      <summary>Compare node counters <Icon name="down" size={13} /></summary>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Node / protocol</th><th class="numeric">Connections</th><th class="numeric">
+                Messages in / out
+              </th><th class="numeric">Data in / out</th><th class="numeric">Errors</th>
+            </tr>
+          </thead><tbody>
+            {#each rows as r}<tr>
+                <td>
+                  <button class="text-button" onclick={() => onnode(r.node)}>{r.node}</button><span
+                    class="protocol-label"
+                  >
+                    {label(r.protocol)}{!r.healthy ? ' · Last known' : ''}
+                  </span>
+                </td><td class="numeric">{num(r.metrics.connections?.current)}</td><td
+                  class="numeric"
                 >
-                  {label(r.protocol)}{!r.healthy ? ' · Last known' : ''}
-                </span>
-              </td><td class="numeric">{num(r.metrics.connections?.current)}</td><td
-                class="numeric"
-              >
-                {r.metrics.messages?.received === undefined
-                  ? '—'
-                  : compact(r.metrics.messages.received)} / {r.metrics.messages?.sent === undefined
-                  ? '—'
-                  : compact(r.metrics.messages.sent)}
-              </td><td class="numeric">
-                {r.metrics.bytes?.received === undefined ? '—' : bytes(r.metrics.bytes.received)} / {r
-                  .metrics.bytes?.sent === undefined
-                  ? '—'
-                  : bytes(r.metrics.bytes.sent)}
-              </td><td class="numeric" class:has-errors={errors(r.metrics) > 0}>
-                {r.metrics.errors ? number(errors(r.metrics)) : '—'}
-              </td>
-            </tr>{/each}
-        </tbody>
-      </table>
-    </div>
+                  {r.metrics.messages?.received === undefined
+                    ? '—'
+                    : compact(r.metrics.messages.received)} / {r.metrics.messages?.sent ===
+                  undefined
+                    ? '—'
+                    : compact(r.metrics.messages.sent)}
+                </td><td class="numeric">
+                  {r.metrics.bytes?.received === undefined ? '—' : bytes(r.metrics.bytes.received)} /
+                  {r.metrics.bytes?.sent === undefined ? '—' : bytes(r.metrics.bytes.sent)}
+                </td><td class="numeric" class:has-errors={errors(r.metrics) > 0}>
+                  {r.metrics.errors ? number(errors(r.metrics)) : '—'}
+                </td>
+              </tr>{/each}
+          </tbody>
+        </table>
+      </div>
+    </details>
     <details>
       <summary>Protocol internals <Icon name="down" size={13} /></summary>
       <div class="protocol-internals">
@@ -124,14 +242,71 @@
             </dl>
           </article>{/each}
       </div>
+      <p class="footnote">
+        Cumulative error counters are not an event log. Protocols absent from the broker stats API
+        are not shown.
+      </p>
     </details>
-    <p class="footnote">
-      Cumulative error counters are not an event log. Protocols absent from the broker stats API are
-      not shown.
-    </p>
   </section>{/if}
 
 <style>
+  .panel-heading p {
+    font-size: 13px;
+    margin-top: 6px;
+  }
+  .protocol-chart-controls {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 0 28px 16px;
+    flex-wrap: wrap;
+  }
+  .protocol-chart-controls .tabs {
+    flex-wrap: wrap;
+  }
+  .protocol-switch {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--panel-raised);
+  }
+  .protocol-switch button {
+    font-size: 11px;
+    padding: 7px 11px;
+    color: var(--muted);
+    border-radius: 5px;
+  }
+  .protocol-switch button.chosen {
+    color: var(--accent);
+    background: var(--panel);
+    box-shadow: 0 1px 4px #0001;
+  }
+  .diagnostic-chart-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px 24px;
+    color: var(--faint);
+    font-size: 11px;
+  }
+  .diagnostic-chart-footer span {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+  @media (max-width: 600px) {
+    .protocol-chart-controls {
+      padding: 0 16px 16px;
+      gap: 12px;
+    }
+    .diagnostic-chart-footer {
+      padding: 0 16px 18px;
+    }
+  }
+
   .protocol-diagnostics {
     margin-bottom: 24px;
   }

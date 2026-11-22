@@ -45,7 +45,7 @@ local or behind your existing authenticated management gateway.
   subscriptions or AMQP consumers.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, per-node distribution/filtering,
   and a detail page with node filtering, client search, pagination, retry/load-more, and links to client details.
-- Queues: durable queue inventory; ACK/NACK/reject/dead-letter outcome bars;
+- Queues: durable queue inventory; queue-depth and ACK/NACK/reject/dead-letter rate charts;
   capture failures/drops; pending and poison-message gauges; consumer-group progress;
   pending delivery offsets, consumers, attempts and heartbeats; read-only payload,
   key and header inspection; routing, retention and replication-group configuration.
@@ -55,7 +55,8 @@ local or behind your existing authenticated management gateway.
   inspecting a node does not change scope or navigate away.
 - Health: broker reachability, uptime, cumulative message counters, and separate
   protocol/authentication/authorization/packet error counts, queue diagnostics,
-  and protocol internals (MQTT PUBLISH, AMQP channels/consumers and local-principal
+  and protocol traffic/bandwidth/connection/error charts with expandable internals
+  (MQTT PUBLISH, AMQP channels/consumers and local-principal
   authentication, authorization and reload results when reported).
 - Light/dark appearance persisted locally, responsive sidebar navigation, CSV
   export, live pause/resume, and visible reconnect states. Search stays within
@@ -105,6 +106,14 @@ responses fail explicitly. The current broker ignores ReadBatch.max_bytes, so th
 ceiling limits the console response, not work already performed in the broker.
 Group/pending RPCs return entire lists, subject to the same response ceiling.
 Decimal strings and browser BigInt preserve uint64 offsets.
+
+Queue and protocol charts use the shared 450-sample history, including reconnect
+replay and 1/5/15-minute ranges. Gauge values (pending entries and connections) are
+sampled directly. Rates use consecutive healthy-node counter differences divided
+by actual elapsed time. First samples, counter resets and unavailable-node intervals
+produce gaps. Live history is never synthesized; demo counters are generated from
+integrated simulation curves. Detailed counters and node/protocol tables remain
+available in collapsed sections below the plots.
 
 Subscription clients are fetched on demand from the broker's dedicated endpoint,
 200 per node per request. Continuation tokens support loading further pages;

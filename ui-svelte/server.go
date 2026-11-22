@@ -28,13 +28,14 @@ import (
 var assets embed.FS
 
 type point struct {
-	BytesIn     float64 `json:"bytes_in"`
-	BytesOut    float64 `json:"bytes_out"`
-	Time        int64   `json:"time"`
-	Incoming    float64 `json:"incoming"`
-	Outgoing    float64 `json:"outgoing"`
-	Bandwidth   float64 `json:"bandwidth"`
-	Connections int     `json:"connections"`
+	Metrics     map[string]float64 `json:"metrics,omitempty"`
+	BytesIn     float64            `json:"bytes_in"`
+	BytesOut    float64            `json:"bytes_out"`
+	Time        int64              `json:"time"`
+	Incoming    float64            `json:"incoming"`
+	Outgoing    float64            `json:"outgoing"`
+	Bandwidth   float64            `json:"bandwidth"`
+	Connections int                `json:"connections"`
 }
 type node struct {
 	QueueMetrics     json.RawMessage `json:"queue_metrics,omitempty"`
@@ -130,6 +131,7 @@ func newCollector(urls []string, demo bool) *collector {
 func (c *collector) publish(s snapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	addDiagnosticPoints(&s, c.current)
 	for id, p := range s.Points {
 		history := append(c.history[id], p)
 		if len(history) > 450 {
@@ -492,6 +494,15 @@ func demoSnapshot(at time.Time) snapshot {
 		connections := 810 + int(26*math.Sin(phase/4)) + i*45
 		p := point{Time: s.Timestamp, Incoming: in, Outgoing: out, Bandwidth: (in + out) * 420, BytesIn: in * 420, BytesOut: out * 420, Connections: connections}
 		n := node{ID: id, Address: fmt.Sprintf("10.0.1.%d:8082", 11+i), Leader: i == 0, Healthy: true, Uptime: 1209600 + math.Mod(t, 86400), Connections: connections, Subscriptions: 1350 + i*123, Received: 82400000 + float64(i)*1100000, Sent: 71500000 + float64(i)*1900000, BytesIn: 34e9, BytesOut: 29e9, Incoming: in, Outgoing: out}
+		// Integrals of the simulated traffic curves keep demo counter deltas
+		// consistent with the rates. Daily resets exercise reset handling.
+		day := math.Mod(t, 86400)
+		incomingTotal := 4700*day - 15200*math.Cos(phase) - 2500*math.Cos(t/5+float64(i)) - 323*math.Cos(t/1.9)
+		outgoingTotal := incomingTotal*.82 + 9600*math.Sin(phase/2)
+		n.Received += incomingTotal
+		n.Sent += outgoingTotal
+		n.BytesIn += incomingTotal * 420
+		n.BytesOut += outgoingTotal * 420
 		n.ClusterMode = valuePtr(true)
 		n.Version = "demo"
 		n.RetainedMessages = 120 + i*10
@@ -569,8 +580,8 @@ func demoSnapshot(at time.Time) snapshot {
 			"capture_failures": 0, "capture_dropped": 0,
 			"claims":          map[string]int{"attempts": 540, "successes": 540, "failures": 0},
 			"steals":          map[string]int{"attempts": 12, "successes": 12, "failures": 0},
-			"acknowledgments": map[string]int{"ack": 82410 + i*2140, "nack": 42, "reject": 7, "dlq": 7, "dlq_transfer_failures": 0, "poison_without_dlq": 0, "poison_pending": 0, "poison_pending_no_destination": 0},
-			"pending":         map[string]int{"current": 45, "high_water": 92},
+			"acknowledgments": map[string]int{"ack": int(n.Received * .8), "nack": int(420 + 2*math.Mod(t, 86400) - 12*math.Cos(t/20+float64(i))), "reject": int(70 + .2*math.Mod(t, 86400)), "dlq": int(70 + .15*math.Mod(t, 86400)), "dlq_transfer_failures": 0, "poison_without_dlq": 0, "poison_pending": 0, "poison_pending_no_destination": 0},
+			"pending":         map[string]int{"current": 45 + int(22*math.Sin(t/21+float64(i)*.5)+9*math.Sin(t/7+float64(i))), "high_water": 92},
 		})
 		n.ProtocolMetrics, _ = json.Marshal(map[string]any{
 			"mqtt": map[string]any{"connections": map[string]int{"current": n.Connections - 80, "total": 12000, "disconnections": 11000}, "messages": map[string]float64{"received": n.Received * .8, "sent": n.Sent * .8, "publish_received": n.Received * .7, "publish_sent": n.Sent * .7}, "bytes": map[string]float64{"received": n.BytesIn * .8, "sent": n.BytesOut * .8}, "errors": map[string]int{"protocol": 0, "auth": 0, "authz": 0, "packet": 0}},
