@@ -29,11 +29,15 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   await page.screenshot({ path: shots + '/sidebar-expanded-dark.png', animations: 'disabled' });
   const toggle = page.getByRole('button', { name: 'Collapse sidebar', exact: true });
   assert.equal(await page.locator('.console-statusbar .sidebar-toggle').count(), 0);
-  assert.equal(await page.locator('.sidebar-header .sidebar-toggle').count(), 1);
-  const brandBox = await page.locator('.sidebar-header .brand').boundingBox();
   const toggleBox = await toggle.boundingBox();
-  assert.ok(toggleBox.x >= brandBox.x + brandBox.width, 'collapse sits beside the logo');
-  assert.ok(toggleBox.x + toggleBox.width <= expanded.x, 'collapse stays inside the sidebar');
+  assert.ok(
+    Math.abs(toggleBox.x + toggleBox.width / 2 - expanded.x) < 1,
+    'toggle straddles sidebar edge',
+  );
+  assert.equal(
+    await toggle.locator('svg').evaluate((el) => getComputedStyle(el).transform),
+    'matrix(-1, 0, 0, -1, 0, 0)',
+  );
   await toggle.focus();
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Expand sidebar', exact: true }).waitFor();
@@ -47,17 +51,21 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
     await expand.evaluate((el) => el === document.activeElement),
     'toggle retains keyboard focus',
   );
-  assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '1');
+  const collapsedToggle = await expand.boundingBox();
+  assert.equal(collapsedToggle.y, toggleBox.y, 'toggle keeps its vertical position');
+  assert.ok(Math.abs(collapsedToggle.x + collapsedToggle.width / 2 - 72) < 1);
   await expand.evaluate((el) => el.blur());
   await page.mouse.move(500, 100);
-  assert.equal(await expand.locator('img').evaluate((el) => getComputedStyle(el).opacity), '1');
-  assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '0');
-  await expand.hover();
-  assert.equal(await expand.locator('img').evaluate((el) => getComputedStyle(el).opacity), '0');
   assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '1');
-  await page
-    .locator('.sidebar')
-    .screenshot({ path: shots + '/sidebar-expand-hover.png', animations: 'disabled' });
+  assert.equal(
+    await expand.locator('svg').evaluate((el) => getComputedStyle(el).transform),
+    'none',
+  );
+  assert.ok(
+    await page.getByRole('link', { name: 'FluxMQ overview', exact: true }).isVisible(),
+    'logo remains a navigation link',
+  );
+  assert.equal(await expand.locator('img').count(), 0, 'toggle is separate from branding');
   await expand.click();
   await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
 
@@ -129,8 +137,9 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
       .boundingBox();
     const sidebar = await page.locator('.sidebar').boundingBox();
     assert.ok(
-      collapse.x >= logo.x + logo.width && collapse.x + collapse.width <= sidebar.width,
-      'logo and collapse control fit narrower desktops',
+      Math.abs(collapse.x + collapse.width / 2 - sidebar.width) < 1 &&
+        collapse.y >= logo.y + logo.height,
+      'toggle stays on the edge without crowding the logo on narrower desktops',
     );
   }
   assert.deepEqual(errors, []);

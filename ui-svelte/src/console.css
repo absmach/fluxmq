@@ -1514,54 +1514,45 @@ details[open] > summary svg[data-icon='down'] {
   min-height: 40px;
   gap: 8px;
 }
+.app-shell {
+  --navigation-width: 232px;
+}
 .sidebar-toggle {
-  flex-shrink: 0;
-  color: var(--muted);
-  width: 32px;
-  height: 36px;
-}
-.sidebar-toggle.logo-toggle {
-  position: relative;
-  width: 48px;
-  height: 40px;
+  position: fixed;
+  top: 84px;
+  left: calc(var(--navigation-width) - 14px);
+  z-index: 45;
+  width: 28px;
+  height: 28px;
   padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--sidebar);
+  color: var(--muted);
 }
-.logo-toggle .rail-logo,
-.logo-toggle svg {
-  position: absolute;
-  inset: 0;
-  margin: auto;
+.sidebar-toggle:hover {
+  background: var(--panel-raised);
+  color: var(--text);
 }
-.logo-toggle svg {
-  opacity: 0;
+.sidebar-toggle.points-left svg {
+  transform: rotate(180deg);
 }
-.logo-toggle:hover .rail-logo,
-.logo-toggle:focus-visible .rail-logo {
-  opacity: 0;
-}
-.logo-toggle:hover svg,
-.logo-toggle:focus-visible svg {
-  opacity: 1;
-}
-@media (hover: none) {
-  .logo-toggle .rail-logo {
-    opacity: 0;
-  }
-  .logo-toggle svg {
-    opacity: 1;
+@media (max-width: 1250px) {
+  .app-shell {
+    --navigation-width: 210px;
   }
 }
 @media (min-width: 801px) {
-  .sidebar-header .brand {
+  .app-shell.sidebar-collapsed {
+    --navigation-width: 72px;
+  }
+  .sidebar-collapsed .brand {
     padding: 0;
-    gap: 8px;
+    width: 100%;
+    justify-content: center;
   }
-  .sidebar-header .brand img {
-    width: 32px;
-    height: 32px;
-  }
-  .sidebar-header .brand > span {
-    font-size: 28px;
+  .sidebar-collapsed .brand > span {
+    display: none;
   }
   .sidebar-collapsed .sidebar {
     width: 72px;
