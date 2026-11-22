@@ -49,6 +49,52 @@ fs.mkdirSync(shots, { recursive: true });
   assert.equal(await queue.locator('.series-menu').getAttribute('open'), null);
   await queue.getByRole('button', { name: 'Toggle Pending', exact: true }).click();
   assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
+  // Verify the actual plot and tooltip for every filter, including menu options
+  // that require scrolling; keep a selection through a real SSE update.
+  for (const [name, key] of [
+    ['Pending', 'queue.pending.current'],
+    ['Poison pending', 'queue.acknowledgments.poison_pending'],
+    ['ACK', 'queue.acknowledgments.ack'],
+    ['NACK', 'queue.acknowledgments.nack'],
+    ['Rejected', 'queue.acknowledgments.reject'],
+    ['Dead-lettered', 'queue.acknowledgments.dlq'],
+    ['Capture failed', 'queue.capture_failures'],
+    ['Capture dropped', 'queue.capture_dropped'],
+  ]) {
+    await queue.locator('.series-menu summary').click();
+    const option = queue.getByRole('button', { name: `Show only ${name}`, exact: true });
+    await option.scrollIntoViewIfNeeded();
+    assert.ok(
+      await option.evaluate((e) => {
+        const r = e.getBoundingClientRect();
+        return e.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+      }),
+      'filter option receives pointer events',
+    );
+    await option.click();
+    assert.deepEqual(
+      await queue
+        .locator('path[data-series]')
+        .evaluateAll((paths) => [...new Set(paths.map((p) => p.dataset.series))]),
+      [key],
+    );
+    await queue.getByRole('slider').focus();
+    await queue.getByRole('slider').press('End');
+    const tip = queue.locator('.plot-tooltip');
+    assert.equal(await tip.locator('span').count(), 1);
+    assert.ok((await tip.innerText()).includes(name));
+    await queue.getByRole('slider').press('Escape');
+  }
+  await page.waitForTimeout(2300);
+  assert.deepEqual(
+    await queue
+      .locator('path[data-series]')
+      .evaluateAll((paths) => [...new Set(paths.map((p) => p.dataset.series))]),
+    ['queue.capture_dropped'],
+  );
+  await queue.locator('.series-menu summary').click();
+  await queue.getByRole('button', { name: 'Show all', exact: true }).click();
+  await page.keyboard.press('Escape');
   await queue.getByRole('button', { name: '1m', exact: true }).click();
   await queue.getByText('Last 1 minute', { exact: true }).waitFor();
   const slider = queue.getByRole('slider');

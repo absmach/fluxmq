@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "format": "prettier --write .",
-    "test:browser": "node tests/browser.cjs && node tests/drilldown.cjs && node tests/operators.cjs && node tests/charts.cjs"
+    "test:browser": "node tests/browser.cjs && node tests/drilldown.cjs && node tests/operators.cjs && node tests/charts.cjs",
+    "test:charts": "node tests/chartCurve.mjs && node tests/charts.cjs"
   },
   "dependencies": {
     "svelte": "^5.0.0"

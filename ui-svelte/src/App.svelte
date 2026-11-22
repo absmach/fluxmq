@@ -801,7 +801,7 @@
       {:else if page === 'overview'}
         <section class="metric-grid" aria-label="Key metrics">
           <article class="metric-card">
-            <div class="metric-label">Active connections <Icon name="sessions" size={17} /></div>
+            <div class="metric-label">Active connections <Icon name="sessions" size={18} /></div>
             <div class="metric-value">
               {snapshot ? number(totals.connections) : '—'}<span class="metric-unit">clients</span>
             </div>
@@ -817,7 +817,7 @@
             </div>
           </article>
           <article class="metric-card">
-            <div class="metric-label">Messages in <Icon name="signal" size={17} /></div>
+            <div class="metric-label">Messages in <Icon name="receive" size={18} /></div>
             <div class="metric-value">
               {currentPoint ? compact(currentPoint.incoming) : '—'}<span class="metric-unit">
                 msg / s
@@ -829,7 +829,7 @@
             </div>
           </article>
           <article class="metric-card">
-            <div class="metric-label">Messages out <Icon name="signal" size={17} /></div>
+            <div class="metric-label">Messages out <Icon name="send" size={18} /></div>
             <div class="metric-value">
               {currentPoint ? compact(currentPoint.outgoing) : '—'}<span class="metric-unit">
                 msg / s
@@ -848,7 +848,7 @@
           </article>
           <article class="metric-card">
             <div class="metric-label">
-              Active subscriptions <Icon name="subscriptions" size={17} />
+              Active subscriptions <Icon name="subscriptions" size={18} />
             </div>
             <div class="metric-value">
               {snapshot ? number(totals.subscriptions) : '—'}<span class="metric-unit">
@@ -970,22 +970,31 @@
       {:else if page === 'sessions'}
         <section class="summary-strip">
           <div>
-            <span>
-              {inventory.hasMore || inventory.loading ? 'Loaded sessions' : 'Listed sessions'}
+            <span class="summary-label">
+              {inventory.hasMore || inventory.loading ? 'Loaded sessions' : 'Listed sessions'}<Icon
+                name="sessions"
+                size={18}
+              />
             </span><strong>{number(sessions.length)}</strong>
           </div>
           <div>
-            <span>Connected</span><strong class="mint-text">
+            <span class="summary-label">Connected<Icon name="connected" size={18} /></span><strong
+              class="mint-text"
+            >
               {number(sessions.filter((s) => s.connected).length)}
             </strong>
           </div>
           <div>
-            <span>Disconnected</span><strong>
+            <span class="summary-label">
+              Disconnected<Icon name="disconnected" size={18} />
+            </span><strong>
               {number(sessions.filter((s) => !s.connected).length)}
             </strong>
           </div>
           <div>
-            <span>MQTT offline queued</span><strong>
+            <span class="summary-label">
+              MQTT offline queued<Icon name="queues" size={18} />
+            </span><strong>
               {number(
                 sessions
                   .filter((s) => s.protocol.startsWith('mqtt'))
@@ -1161,14 +1170,22 @@
         </section>
       {:else if page === 'subscriptions'}
         <section class="summary-strip">
-          <div><span>Listed topic filters</span><strong>{subscriptionRows.length}</strong></div>
           <div>
-            <span>Subscription bindings</span><strong>
+            <span class="summary-label">
+              Listed topic filters<Icon name="subscriptions" size={18} />
+            </span><strong>{subscriptionRows.length}</strong>
+          </div>
+          <div>
+            <span class="summary-label">
+              Subscription bindings<Icon name="connected" size={18} />
+            </span><strong>
               {number(subscriptionRows.reduce((v, s) => v + s.subscriber_count, 0))}
             </strong>
           </div>
           <div>
-            <span>Wildcard filters</span><strong>
+            <span class="summary-label">
+              Wildcard filters<Icon name="hash" size={18} />
+            </span><strong>
               {subscriptionRows.filter((s) => /[+#]/.test(s.filter)).length}
             </strong>
           </div>
@@ -1302,23 +1319,35 @@
       {:else if page === 'health'}
         <section class="summary-strip">
           <div>
-            {#if scope === 'all'}<span>
+            {#if scope === 'all'}<span class="summary-label">
                 {snapshot?.nodes.some((n) => n.unmonitored)
                   ? 'Monitored nodes responding'
-                  : 'Available cluster nodes'}
+                  : 'Available cluster nodes'}<Icon name="nodes" size={18} />
               </span><strong>
                 {nodes.filter((n) => n.healthy).length} <small>/ {nodes.length}</small>
-              </strong>{:else}<span>Node uptime</span><strong>
+              </strong>{:else}<span class="summary-label">
+                Node uptime<Icon name="clock" size={18} />
+              </span><strong>
                 {nodes[0] ? uptime(nodes[0].uptime) : '—'}
               </strong>{/if}
           </div>
           <div>
-            <span>Protocol & auth errors</span><strong class:mint-text={totals.errors === 0}>
+            <span class="summary-label">
+              Protocol & auth errors<Icon name="alert" size={18} />
+            </span><strong class:mint-text={totals.errors === 0}>
               {number(totals.errors)}
             </strong>
           </div>
-          <div><span>Total messages received</span><strong>{compact(totals.received)}</strong></div>
-          <div><span>Total messages sent</span><strong>{compact(totals.sent)}</strong></div>
+          <div>
+            <span class="summary-label">
+              Total messages received<Icon name="receive" size={18} />
+            </span><strong>{compact(totals.received)}</strong>
+          </div>
+          <div>
+            <span class="summary-label">
+              Total messages sent<Icon name="send" size={18} />
+            </span><strong>{compact(totals.sent)}</strong>
+          </div>
         </section>
         <section class="panel error-breakdown" aria-label="Error breakdown">
           {#each [{ key: 'protocol_errors', label: 'Protocol' }, { key: 'auth_errors', label: 'Authentication' }, { key: 'authz_errors', label: 'Authorization' }, { key: 'packet_errors', label: 'Packet' }] as error}<div>

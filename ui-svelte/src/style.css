@@ -1106,8 +1106,8 @@ tbody tr:hover {
   font-variant-numeric: tabular-nums;
 }
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.6875rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
 }
 .muted {
   color: var(--muted);
@@ -2744,4 +2744,15 @@ th {
   .protocol-panel .panel-heading p {
     font-size: 0.6875rem;
   }
+}
+
+.summary-strip .summary-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.summary-label svg {
+  flex-shrink: 0;
+  color: var(--faint);
 }

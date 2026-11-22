@@ -366,20 +366,19 @@
           {#each filtered as q}<tr>
               <td>
                 <a
-                  class="queue-name"
+                  class="client-link"
                   href={url(q.name, q.node)}
                   onclick={(e) => followLink(e, () => onopen(q.name, q.node))}
                 >
-                  <span class="queue-symbol"><Icon name="queues" size={20} /></span>{q.name}
+                  <span class="client-icon"><Icon name="queues" size={16} /></span>{q.name}
                 </a>
               </td><td class="mono muted">{q.node}</td><td>
-                {#each q.topics ?? [] as topic}<code class="topic-route">{topic}</code>{:else}<span
-                    class="muted"
-                  >
-                    Direct publishing
-                  </span>{/each}
+                {#each q.topics ?? [] as topic}<code class="topic-route mono muted">
+                    {topic}
+                  </code>{:else}<span class="muted"> Direct publishing </span>{/each}
               </td><td>{retention(q.config?.retention?.maxAge)}</td><td>
                 <a
+                  class="icon-button"
                   aria-label={`Inspect queue ${q.name} on ${q.node}`}
                   href={url(q.name, q.node)}
                   onclick={(e) => followLink(e, () => onopen(q.name, q.node))}
@@ -421,24 +420,28 @@
 {:else if info && queue}
   <section class="summary-strip queue-metrics" aria-label="Queue metrics">
     <div>
-      <span><Icon name="archive" size={15} />Stored messages</span><strong>
+      <span class="summary-label">Stored messages<Icon name="archive" size={18} /></span><strong>
         {count(info.messageCount)}
       </strong>
     </div>
     <div>
-      <span><Icon name="clock" size={15} />Pending acknowledgements</span><strong
-        class:pending-value={pendingTotal > 0n}
-      >
+      <span class="summary-label">
+        Pending acknowledgements<Icon name="clock" size={18} />
+      </span><strong class:pending-value={pendingTotal > 0n}>
         {count(pendingTotal)}
       </strong>
     </div>
     <div>
-      <span><Icon name="subscriptions" size={15} />Consumer groups</span><strong>
+      <span class="summary-label">
+        Consumer groups<Icon name="subscriptions" size={18} />
+      </span><strong>
         {groups.length}
       </strong>
     </div>
     <div>
-      <span><Icon name="sessions" size={15} />Registered consumers</span><strong>
+      <span class="summary-label">
+        Registered consumers<Icon name="sessions" size={18} />
+      </span><strong>
         {consumerTotal}
       </strong>
     </div>
@@ -733,32 +736,9 @@
     color: var(--muted);
     margin: 12px 0 0;
   }
-  .queue-inventory td {
-    padding-top: 24px;
-    padding-bottom: 24px;
-  }
-  .queue-name {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-weight: 500;
-    white-space: nowrap;
-  }
-  .queue-symbol {
-    color: var(--accent);
-    background: var(--accent-bg);
-    padding: 10px;
-    display: flex;
-    border-radius: 8px;
-  }
   .topic-route {
-    font-size: 12px;
     display: block;
-  }
-  .queue-metrics span {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    line-height: 1.5;
   }
   .pending-value {
     color: var(--violet);

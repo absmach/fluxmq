@@ -202,6 +202,9 @@
 
 <style>
   .queue-diagnostics {
+    overflow: visible;
+  }
+  .queue-diagnostics {
     margin-bottom: 24px;
   }
   .panel-heading {

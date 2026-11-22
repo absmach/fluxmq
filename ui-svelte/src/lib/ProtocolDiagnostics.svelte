@@ -225,6 +225,9 @@
   </section>{/if}
 
 <style>
+  .protocol-diagnostics {
+    overflow: visible;
+  }
   .panel-heading p {
     font-size: 13px;
     margin-top: 6px;

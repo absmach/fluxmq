@@ -11,11 +11,13 @@ fs.mkdirSync(shots, { recursive: true });
   page.on('pageerror', (e) => errors.push(e.message));
   page.setDefaultTimeout(15000);
   await page.goto(base + '/dashboard/queues');
-  await page.waitForFunction(() => document.querySelectorAll('.queue-name').length === 9);
+  await page.waitForFunction(
+    () => document.querySelectorAll('.queue-inventory .client-link').length === 9,
+  );
   await page.getByRole('region', { name: 'Queue delivery diagnostics' }).waitFor();
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: shots + '/queue-diagnostics-dark.png', fullPage: true });
-  await page.locator('.queue-name').first().click();
+  await page.locator('.queue-inventory .client-link').first().click();
   await page.getByRole('heading', { name: 'Delivery progress', exact: true }).waitFor();
   assert.match(page.url(), /queue=device-events/);
   assert.equal(await page.locator('.group-lane').count(), 2);
@@ -48,7 +50,7 @@ fs.mkdirSync(shots, { recursive: true });
   await page.reload();
   await page.getByRole('heading', { name: 'Delivery progress', exact: true }).waitFor();
   await page.goBack();
-  await page.locator('.queue-name').first().waitFor();
+  await page.locator('.queue-inventory .client-link').first().waitFor();
   // Preserve exact uint64 offsets and render untrusted payloads as text.
   const huge = '9007199254740993';
   await page.route('**/console-api/queues?*', (route) => {

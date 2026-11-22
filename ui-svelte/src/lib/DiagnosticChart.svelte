@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from './Icon.svelte';
+  import { smoothPath } from './chartCurve.js';
   import { compact, bytes, type Point } from './types';
   let {
     points,
@@ -92,13 +93,7 @@
     if (group.length) groups.push(group);
     return groups.map((g) => ({
       points: g,
-      line: g
-        .map((p, i) =>
-          i === 0
-            ? `M ${p.x} ${p.y}`
-            : `C ${(g[i - 1].x + p.x) / 2} ${g[i - 1].y}, ${(g[i - 1].x + p.x) / 2} ${p.y}, ${p.x} ${p.y}`,
-        )
-        .join(' '),
+      line: smoothPath(g),
     }));
   }
   function pointer(e: PointerEvent) {
@@ -127,7 +122,9 @@
           <span class="series-label"><i style:background={s.color}></i>{s.label}</span><strong
             style:color={hidden.includes(s.key) ? 'var(--faint)' : s.color}
           >
-            {format(active?.metrics?.[s.key])}<small>{units(s)}</small>
+            {#if hidden.includes(s.key)}<small class="hidden-label">Hidden</small>{:else}{format(
+                active?.metrics?.[s.key],
+              )}<small>{units(s)}</small>{/if}
           </strong>
         </button>{/each}
     </div>
@@ -165,7 +162,9 @@
   </div>
   <div class="plot-layout">
     <div class="plot-y">
-      {#each [1, 0.75, 0.5, 0.25, 0] as f}<span>{format(max * f)}</span>{/each}
+      {#each [1, 0.75, 0.5, 0.25, 0] as f}<span style:top={`${(1 - f) * 100}%`}>
+          {format(max * f)}
+        </span>{/each}
     </div>
     <div class="plot-main">
       <svg
@@ -201,6 +200,7 @@
               fill={`url(#${uid}-fill-${i})`}
             /><path
               d={group.line}
+              data-series={s.key}
               fill="none"
               stroke={s.color}
               stroke-width="2.1"
@@ -289,7 +289,9 @@
       </div>
     </div>
     {#if dual}<div class="plot-y plot-y-right" aria-label="Rate axis">
-        {#each [1, 0.75, 0.5, 0.25, 0] as f}<span>{format(rightMax * f)}</span>{/each}
+        {#each [1, 0.75, 0.5, 0.25, 0] as f}<span style:top={`${(1 - f) * 100}%`}>
+            {format(rightMax * f)}
+          </span>{/each}
       </div>{/if}
   </div>
 </div>
@@ -344,6 +346,9 @@
     color: var(--muted);
     margin-left: 5px;
     font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .series-readout .hidden-label {
+    margin-left: 0;
   }
   .series-hidden {
     opacity: 0.45;
@@ -462,14 +467,15 @@
     width: 48px;
     flex-shrink: 0;
     height: 170px;
-    display: flex;
-    justify-content: space-between;
-    flex-direction: column;
+    position: relative;
     text-align: right;
     color: var(--faint);
     font-size: 11px;
   }
   .plot-y span {
+    position: absolute;
+    left: 0;
+    right: 0;
     transform: translateY(-50%);
   }
   .plot-main {
