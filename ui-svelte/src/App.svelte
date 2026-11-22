@@ -649,11 +649,6 @@
           </div>
           {@render nodeTable()}
         </section>
-        <div class="console-footer">
-          <span>
-            <span class="footer-brand">FluxMQ</span> Keep your systems in conversation.
-          </span><span><Icon name="shield" size={13} /> Engineered by Abstract Machines</span>
-        </div>
       {:else if page === 'sessions'}
         <section class="summary-strip">
           <div><span>Listed sessions</span><strong>{number(sessions.length)}</strong></div>
