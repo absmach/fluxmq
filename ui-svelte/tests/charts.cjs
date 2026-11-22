@@ -193,7 +193,8 @@ fs.mkdirSync(shots, { recursive: true });
   await page.getByRole('button', { name: 'Light appearance', exact: true }).click();
   assert.notEqual(
     await delivery
-      .locator('.protocol-legend .disconnected')
+      .locator('.protocol-bar .disconnected')
+      .first()
       .evaluate((e) => getComputedStyle(e).backgroundColor),
     await delivery
       .locator('.protocol-bar')
@@ -201,6 +202,47 @@ fs.mkdirSync(shots, { recursive: true });
       .evaluate((e) => getComputedStyle(e).backgroundColor),
   );
   await delivery.screenshot({ path: shots + '/protocol-delivery-light.png' });
+  assert.ok((await delivery.boundingBox()).height < 180, 'protocol summary stays compact');
+  const cardRows = await delivery
+    .locator('.protocol-lane')
+    .evaluateAll((es) => es.map((e) => e.getBoundingClientRect().top));
+  assert.ok(
+    cardRows.every((y) => y === cardRows[0]),
+    'protocols share one desktop row',
+  );
+  for (const [label, value] of [
+    ['MQTT 5.0', 'mqtt5'],
+    ['MQTT 3.1.1', 'mqtt3.1.1'],
+    ['AMQP 0.9.1', 'amqp0.9.1'],
+  ]) {
+    const card = delivery.getByRole('button', { name: 'Filter sessions by ' + label, exact: true });
+    await card.click();
+    assert.equal(await card.getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByLabel('Protocol', { exact: true }).inputValue(), value);
+    const protocols = await page.locator('tbody tr td:nth-child(3)').allTextContents();
+    assert.ok(
+      protocols.length && protocols.every((p) => p.trim() === label),
+      'card filters the client list',
+    );
+    await card.click();
+    assert.equal(await page.getByLabel('Protocol', { exact: true }).inputValue(), 'all');
+  }
+  const amqpCard = delivery.getByRole('button', {
+    name: 'Filter sessions by AMQP 0.9.1',
+    exact: true,
+  });
+  await amqpCard.locator('.delivery-unavailable').hover();
+  await amqpCard.getByRole('tooltip').waitFor();
+  await page.getByRole('heading', { name: 'Sessions', exact: true }).hover();
+  assert.equal(await amqpCard.getByRole('tooltip').isVisible(), false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await delivery.screenshot({
+    path: shots + '/protocol-delivery-mobile.png',
+    animations: 'disabled',
+  });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+
   await page.goto(base + '/dashboard/subscriptions');
   const topics = page.locator('.topics-table');
   await topics.getByRole('columnheader', { name: 'Subscribers', exact: true }).waitFor();

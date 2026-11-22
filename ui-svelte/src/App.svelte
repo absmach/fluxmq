@@ -1006,9 +1006,10 @@
         </section>
         <ProtocolDelivery
           {sessions}
+          selected={protocol}
           partial={inventory.hasMore || inventory.loading}
           onselect={(p) => {
-            protocol = p;
+            protocol = protocol === p ? 'all' : p;
             tablePage = 1;
           }}
           onqueues={() => navigate('queues', scope)}
