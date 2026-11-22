@@ -72,11 +72,17 @@
           aria-label={`${protocolLabel(row.protocol)}: ${row.connected} connected, ${row.disconnected} disconnected`}
         >
           <i class="connected" style:width={`${(100 * row.connected) / total}%`}></i>
-          <i class="disconnected" style:width={`${(100 * row.disconnected) / total}%`}></i>
+          <i
+            class="disconnected"
+            class:split={row.connected > 0}
+            style:width={`${(100 * row.disconnected) / total}%`}
+          ></i>
         </span>
         <span class="state-counts">
           <span>{number(row.connected)} connected</span>
-          <span>{number(row.disconnected)} disconnected</span>
+          <span class:has-disconnected={row.disconnected > 0}>
+            {number(row.disconnected)} disconnected
+          </span>
         </span>
         <span class="protocol-delivery-counts">
           {#if row.protocol.startsWith('mqtt')}
@@ -158,7 +164,7 @@
   .protocol-bar {
     display: flex;
     width: 100%;
-    height: 5px;
+    height: 8px;
     border-radius: 3px;
     overflow: hidden;
     background: var(--panel-raised);
@@ -172,7 +178,14 @@
   }
   .disconnected {
     background:
-      repeating-linear-gradient(135deg, transparent 0 3px, #ffffff40 3px 5px), var(--violet);
+      repeating-linear-gradient(135deg, transparent 0 4px, #00000020 4px 6px), var(--warning);
+  }
+  .disconnected.split {
+    box-shadow: inset 2px 0 var(--panel);
+  }
+  .state-counts .has-disconnected {
+    color: var(--warning);
+    font-weight: 500;
   }
   .state-counts {
     display: flex;
