@@ -39,7 +39,7 @@ local or behind your existing authenticated management gateway.
 ## Views and interactions
 
 - Overview: explicit cluster/node scope, per-node load comparison, message/bandwidth/connection history,
-  1/5/15-minute ranges, cumulative counters, retained messages, protocol distribution.
+  1/5/15-minute ranges, always-visible cumulative counters with directional icons and exact-value tooltips, retained messages, protocol distribution.
 - Sessions: per-node distribution/filtering, search by ID/name/node, protocol/state filters, sorting, configurable
   pagination, and a client detail page with connection details, MQTT settings, and
   subscriptions or AMQP consumers.

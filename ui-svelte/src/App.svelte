@@ -3,6 +3,7 @@
   import Icon from './lib/Icon.svelte';
   import { clientURL, subscriptionURL, followLink } from './lib/routes';
   import Pagination from './lib/Pagination.svelte';
+  import CumulativeCounters from './lib/CumulativeCounters.svelte';
   import NodeComparison from './lib/NodeComparison.svelte';
   import NodePicker from './lib/NodePicker.svelte';
   import NodeDetails from './lib/NodeDetails.svelte';
@@ -854,35 +855,7 @@
               </div>
             </section>{/if}
         </div>
-        <details class="panel broker-totals">
-          <summary>Cumulative counters <Icon name="down" size={16} /></summary>
-          <dl>
-            <div>
-              <dt>Messages received</dt>
-              <dd>{number(totals.received)}</dd>
-            </div>
-            <div>
-              <dt>Messages sent</dt>
-              <dd>{number(totals.sent)}</dd>
-            </div>
-            <div>
-              <dt>Bytes received</dt>
-              <dd>{bytes(nodes.reduce((sum, n) => sum + n.bytes_in, 0))}</dd>
-            </div>
-            <div>
-              <dt>Bytes sent</dt>
-              <dd>{bytes(nodes.reduce((sum, n) => sum + n.bytes_out, 0))}</dd>
-            </div>
-            <div>
-              <dt>Retained messages</dt>
-              <dd>{number(nodes.reduce((sum, n) => sum + (n.retained_messages ?? 0), 0))}</dd>
-            </div>
-            <div>
-              <dt>{nodes.length > 1 ? 'Shortest node uptime' : 'Uptime'}</dt>
-              <dd>{nodes.length ? uptime(Math.min(...nodes.map((n) => n.uptime))) : '—'}</dd>
-            </div>
-          </dl>
-        </details>
+        <CumulativeCounters {nodes} loaded={!!snapshot} />
         <section class="panel node-panel">
           <div class="panel-heading">
             <div class="heading-inline">

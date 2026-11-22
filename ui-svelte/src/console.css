@@ -1037,34 +1037,96 @@ dialog::backdrop {
 }
 .broker-totals {
   margin-bottom: 24px;
-  padding: 0 24px;
+  overflow: hidden;
 }
-.broker-totals summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 0;
-  cursor: pointer;
+.broker-totals h2 {
+  margin: 0;
+  padding: 20px 22px 0;
   font-size: 14px;
   font-weight: 500;
-  list-style: none;
-}
-.broker-totals summary::-webkit-details-marker {
-  display: none;
 }
 .broker-totals dl {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  padding-bottom: 24px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin: 20px 0 22px;
+}
+.counter-cell {
+  min-width: 0;
+  padding: 0 20px;
+  border-left: 1px solid var(--subtle-border);
+}
+.counter-cell:first-child {
+  border-left: 0;
 }
 .broker-totals dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .broker-totals dd {
-  margin: 10px 0 0;
-  font: 20px var(--mono);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+.counter-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.counter-icon.incoming {
+  color: var(--accent);
+}
+.counter-icon.outgoing {
+  color: var(--mint);
+}
+.counter-value {
+  font: 23px / 1.3 var(--mono);
+  letter-spacing: -0.7px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.counter-value small {
+  color: var(--muted);
+  font: 13px var(--mono);
+  letter-spacing: 0;
+  margin-left: 2px;
+}
+@media (max-width: 1350px) {
+  .broker-totals dl {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 24px;
+  }
+  .counter-cell:nth-child(3n + 1) {
+    border-left: 0;
+  }
+}
+@media (max-width: 620px) {
+  .broker-totals h2 {
+    padding: 18px 16px 0;
+  }
+  .broker-totals dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 20px 0;
+  }
+  .counter-cell {
+    padding-inline: 16px;
+  }
+  .counter-cell:nth-child(3n + 1) {
+    border-left: 1px solid var(--subtle-border);
+  }
+  .counter-cell:nth-child(2n + 1) {
+    border-left: 0;
+  }
+  .broker-totals dt {
+    font-size: 11px;
+  }
+  .broker-totals dd {
+    gap: 8px;
+  }
+  .counter-value {
+    font-size: 21px;
+  }
 }
 .detail-dialog > .session-heading {
   position: sticky;
@@ -1074,12 +1136,6 @@ dialog::backdrop {
   padding: 12px 0;
 }
 @media (max-width: 620px) {
-  .broker-totals dl {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .broker-totals dd {
-    font-size: 16px;
-  }
   .detail-dialog > .session-heading {
     top: -20px;
   }
