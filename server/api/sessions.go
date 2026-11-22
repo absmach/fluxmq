@@ -28,6 +28,7 @@ const (
 )
 
 type sessionSubscriptionResponse struct {
+	ConsumerCount     *int    `json:"consumer_count,omitempty"`
 	Filter            string  `json:"filter"`
 	QoS               byte    `json:"qos"`
 	NoLocal           bool    `json:"no_local"`
@@ -38,6 +39,7 @@ type sessionSubscriptionResponse struct {
 }
 
 type sessionResponse struct {
+	ConsumerCount     *int                          `json:"consumer_count,omitempty"`
 	ClientID          string                        `json:"client_id"`
 	ConnectionName    string                        `json:"connection_name,omitempty"`
 	State             string                        `json:"state"`
@@ -245,7 +247,12 @@ func amqpSessionResponse(
 	subscriptions []amqpbroker.SubscriptionSnapshot,
 	includeSubscriptions bool,
 ) sessionResponse {
+	consumerCount := 0
+	for _, sub := range subscriptions {
+		consumerCount += sub.ConsumerCount
+	}
 	resp := sessionResponse{
+		ConsumerCount:     &consumerCount,
 		ClientID:          clientID,
 		ConnectionName:    connectionName,
 		State:             sessionStateConnected,
@@ -257,9 +264,11 @@ func amqpSessionResponse(
 	if includeSubscriptions && len(subscriptions) > 0 {
 		resp.Subscriptions = make([]sessionSubscriptionResponse, 0, len(subscriptions))
 		for _, sub := range subscriptions {
+			count := sub.ConsumerCount
 			resp.Subscriptions = append(resp.Subscriptions, sessionSubscriptionResponse{
-				Filter: sub.Filter,
-				QoS:    sub.QoS,
+				ConsumerCount: &count,
+				Filter:        sub.Filter,
+				QoS:           sub.QoS,
 			})
 		}
 	}

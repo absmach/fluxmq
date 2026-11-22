@@ -10,9 +10,10 @@ import (
 
 // SubscriptionSnapshot is an active AMQP 0.9.1 consumer view for admin APIs.
 type SubscriptionSnapshot struct {
-	ClientID string
-	Filter   string
-	QoS      byte
+	ClientID      string
+	Filter        string
+	QoS           byte
+	ConsumerCount int
 }
 
 // ConnectionSubscriptions returns the active subscriptions for a connection.
@@ -61,12 +62,15 @@ func (c *Connection) subscriptionSnapshots() []SubscriptionSnapshot {
 		return nil
 	}
 
-	byFilter := make(map[string]byte)
+	byFilter := make(map[string]SubscriptionSnapshot)
 	for _, ch := range channels {
 		for _, sub := range ch.subscriptionSnapshots(clientID) {
-			if existing, ok := byFilter[sub.Filter]; !ok || sub.QoS > existing {
-				byFilter[sub.Filter] = sub.QoS
+			existing := byFilter[sub.Filter]
+			if sub.QoS > existing.QoS {
+				existing.QoS = sub.QoS
 			}
+			existing.ConsumerCount += sub.ConsumerCount
+			byFilter[sub.Filter] = existing
 		}
 	}
 
@@ -75,11 +79,12 @@ func (c *Connection) subscriptionSnapshots() []SubscriptionSnapshot {
 	}
 
 	snapshots := make([]SubscriptionSnapshot, 0, len(byFilter))
-	for filter, qos := range byFilter {
+	for filter, sub := range byFilter {
 		snapshots = append(snapshots, SubscriptionSnapshot{
-			ClientID: clientID,
-			Filter:   filter,
-			QoS:      qos,
+			ClientID:      clientID,
+			Filter:        filter,
+			QoS:           sub.QoS,
+			ConsumerCount: sub.ConsumerCount,
 		})
 	}
 
@@ -102,7 +107,7 @@ func (ch *Channel) subscriptionSnapshots(clientID string) []SubscriptionSnapshot
 	// a fixed QoS=1 matching the shared router integration level.
 	const amqpQoS byte = 1
 
-	filters := make(map[string]struct{})
+	filters := make(map[string]int)
 	for _, cons := range ch.consumers {
 		filter := cons.queue
 		if filter == "" {
@@ -111,7 +116,7 @@ func (ch *Channel) subscriptionSnapshots(clientID string) []SubscriptionSnapshot
 		if filter == "" {
 			continue
 		}
-		filters[filter] = struct{}{}
+		filters[filter]++
 	}
 
 	if len(filters) == 0 {
@@ -119,11 +124,12 @@ func (ch *Channel) subscriptionSnapshots(clientID string) []SubscriptionSnapshot
 	}
 
 	snapshots := make([]SubscriptionSnapshot, 0, len(filters))
-	for filter := range filters {
+	for filter, count := range filters {
 		snapshots = append(snapshots, SubscriptionSnapshot{
-			ClientID: clientID,
-			Filter:   filter,
-			QoS:      amqpQoS,
+			ClientID:      clientID,
+			Filter:        filter,
+			QoS:           amqpQoS,
+			ConsumerCount: count,
 		})
 	}
 

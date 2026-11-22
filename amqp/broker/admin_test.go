@@ -32,6 +32,9 @@ func TestConnectionSubscriptionsDeduplicatesConsumersByFilter(t *testing.T) {
 			},
 		},
 	}
+	conn.channels[2] = &Channel{consumers: map[string]*consumer{
+		"tag-4": {tag: "tag-4", queue: testOrdersStar},
+	}}
 	b.registerConnection(testConn1, conn)
 
 	subs := b.ConnectionSubscriptions(testConn1)
@@ -48,6 +51,15 @@ func TestConnectionSubscriptionsDeduplicatesConsumersByFilter(t *testing.T) {
 	if subs[1].Filter != testOrdersStar {
 		t.Fatalf("expected second filter orders.*, got %q", subs[1].Filter)
 	}
+	if subs[0].ConsumerCount != 1 || subs[1].ConsumerCount != 3 {
+		t.Fatalf("expected per-filter consumer counts 1 and 3 across channels, got %#v", subs)
+	}
+	delete(conn.channels[1].consumers, "tag-2")
+	subs = b.ConnectionSubscriptions(testConn1)
+	if subs[1].ConsumerCount != 2 {
+		t.Fatalf("expected count to decrease after cancellation, got %d", subs[1].ConsumerCount)
+	}
+
 }
 
 func TestListSubscriptionSnapshotsSortsAcrossConnections(t *testing.T) {
