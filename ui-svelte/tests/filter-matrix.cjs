@@ -54,7 +54,43 @@ const keys = [
       function fail(message, mask) {
         throw Error(`${message}; mask=${mask}; scale=${root.querySelector('select').value}`);
       }
+      // Establish the full-data geometry once. Every subset must retain it.
+      for (const button of buttons)
+        if (button.getAttribute('aria-pressed') !== 'true') button.click();
+      await flush();
+      const geometry = () => ({
+        height: root.getBoundingClientRect().height,
+        axes: [...root.querySelectorAll('.plot-y,.detail-y')].map((e) => e.textContent),
+        plots: [...root.querySelectorAll('.plot-main svg,.detail-main svg')].map((e) => {
+          const r = e.getBoundingClientRect();
+          return [r.width, r.height, r.top - root.getBoundingClientRect().top];
+        }),
+      });
+      const baseline = JSON.stringify(geometry());
+      const pathGeometry = new Map(
+        [...root.querySelectorAll('path[data-series],path[data-detail-series]')].map((p) => [
+          p.dataset.series
+            ? 'main:' + p.dataset.series
+            : 'detail:' +
+              p.closest('.linear-detail').dataset.maximum +
+              ':' +
+              p.dataset.detailSeries,
+          p.getAttribute('d'),
+        ]),
+      );
       function inspect(mask) {
+        if (JSON.stringify(geometry()) !== baseline)
+          fail('selection changed chart scales or layout', mask);
+        for (const p of root.querySelectorAll('path[data-series],path[data-detail-series]')) {
+          const key = p.dataset.series
+            ? 'main:' + p.dataset.series
+            : 'detail:' +
+              p.closest('.linear-detail').dataset.maximum +
+              ':' +
+              p.dataset.detailSeries;
+          if (p.getAttribute('d') !== pathGeometry.get(key))
+            fail('selection changed remaining curve geometry', mask);
+        }
         const expected = keys.filter((_, i) => mask & (1 << i));
         const paths = [...root.querySelectorAll('path[data-series]')];
         const actual = [...new Set(paths.map((p) => p.dataset.series))];

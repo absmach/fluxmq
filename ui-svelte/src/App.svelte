@@ -1198,12 +1198,7 @@
           />{/if}
         <section class="panel">
           <div class="panel-heading">
-            <div>
-              <h2>Topic directory</h2>
-              <p class="topic-comparison-note">
-                Bars compare subscriber counts with the largest count in this list.
-              </p>
-            </div>
+            <h2>Topic directory</h2>
             <label class="search-field">
               <Icon name="search" size={16} /><input
                 aria-label="Search topic filters"
@@ -1233,20 +1228,13 @@
                         <Icon name="subscriptions" size={17} />{s.filter}
                       </a>
                     </td><td class="numeric">
-                      <div class="subscriber-comparison">
-                        <div class="distribution-track" aria-hidden="true">
-                          <span
-                            style:width={`${(s.subscriber_count / Math.max(...subscriptionRows.map((s) => s.subscriber_count), 1)) * 100}%`}
-                          ></span>
-                        </div>
-                        <button
-                          class="text-button subscriber-count"
-                          aria-label={`View ${s.subscriber_count} clients for ${s.filter}`}
-                          onclick={() => showSubscription(s.filter)}
-                        >
-                          {s.subscriber_count}<Icon name="chevron" size={14} />
-                        </button>
-                      </div>
+                      <button
+                        class="text-button subscriber-count"
+                        aria-label={`View ${s.subscriber_count} clients for ${s.filter}`}
+                        onclick={() => showSubscription(s.filter)}
+                      >
+                        {s.subscriber_count}<Icon name="chevron" size={14} />
+                      </button>
                     </td><td>
                       <span class="protocol-tag">QoS {s.max_qos}</span>
                     </td><td>

@@ -1407,39 +1407,17 @@ tbody tr:hover {
 .topic-name svg {
   color: var(--accent);
 }
-.topic-comparison-note {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 6px;
-}
 .topics-table th:nth-child(2) {
   text-align: right;
 }
 .topics-table td:nth-child(2) {
-  min-width: 220px;
-  width: 28%;
-}
-.subscriber-comparison {
-  display: grid;
-  grid-template-columns: minmax(90px, 1fr) 64px;
-  gap: 18px;
-  align-items: center;
+  width: 120px;
 }
 .subscriber-count {
+  width: 100%;
   justify-content: flex-end;
   font-variant-numeric: tabular-nums;
   color: var(--text);
-}
-.distribution-track {
-  height: 4px;
-  background: var(--border);
-  border-radius: 3px;
-}
-.distribution-track span {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: var(--accent);
 }
 .node-chips {
   display: flex;

@@ -48,6 +48,18 @@ fs.mkdirSync(shots, { recursive: true });
       .evaluate((p) => p.getBBox().y < 50),
     'linear detail keeps NACK readable',
   );
+  const linearHeight = (await queue.boundingBox()).height;
+  const linearNack = await nack.getAttribute('d');
+  await queue.screenshot({ path: shots + '/queue-ack-on.png' });
+  await queue.getByRole('button', { name: 'Toggle ACK', exact: true }).click();
+  assert.equal(
+    (await queue.boundingBox()).height,
+    linearHeight,
+    'hiding ACK preserves card height',
+  );
+  assert.equal(await nack.getAttribute('d'), linearNack, 'hiding ACK preserves remaining curves');
+  await queue.screenshot({ path: shots + '/queue-ack-off.png' });
+  await queue.getByRole('button', { name: 'Toggle ACK', exact: true }).click();
   await rateScale.selectOption('log');
   assert.equal(
     await queue.locator('.series-readout').innerText(),
@@ -59,7 +71,11 @@ fs.mkdirSync(shots, { recursive: true });
   await queue.locator('.series-menu summary').click();
   await queue.getByRole('button', { name: 'Show only ACK', exact: true }).click();
   assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 1);
-  assert.equal(await queue.locator('.plot-y-right').count(), 0, 'single unit uses one axis');
+  assert.equal(
+    await queue.locator('.plot-y-right').count(),
+    1,
+    'isolating a series preserves axes',
+  );
   assert.match(await queue.locator('.axis-labels').innerText(), /msg/);
   await queue.locator('.series-menu summary').click();
   await queue.getByRole('button', { name: 'Hide all', exact: true }).click();
@@ -185,6 +201,7 @@ fs.mkdirSync(shots, { recursive: true });
   const topics = page.locator('.topics-table');
   await topics.getByRole('columnheader', { name: 'Subscribers', exact: true }).waitFor();
   assert.equal(await topics.locator('thead th').count(), 4);
+  assert.equal(await topics.locator('.distribution-track').count(), 0);
   await topics.locator('.subscriber-count').first().waitFor();
   const header = await topics.locator('thead th').nth(1).boundingBox();
   const cells = await topics.locator('tbody tr').first().locator('td').all();
@@ -195,6 +212,17 @@ fs.mkdirSync(shots, { recursive: true });
     'subscriber count sits under its header',
   );
   await topics.screenshot({ path: shots + '/topic-columns-light.png' });
+  const arrows = await topics
+    .locator('.subscriber-count svg')
+    .evaluateAll((es) => es.map((e) => e.getBoundingClientRect().right));
+  assert.ok(
+    arrows.every((x) => Math.abs(x - arrows[0]) < 1),
+    'subscriber drilldown arrows align',
+  );
+  await topics.locator('.subscriber-count').first().click();
+  await page.waitForURL(/subscription/);
+  await page.getByRole('heading', { name: 'system/health', exact: true }).waitFor();
+
   assert.deepEqual(errors, []);
   await browser.close();
   console.log(

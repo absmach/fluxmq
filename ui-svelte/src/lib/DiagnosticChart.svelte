@@ -37,8 +37,9 @@
   let hidden = $state<string[]>([]);
   let menu = $state<HTMLDetailsElement>();
   let visibleSeries = $derived(series.filter((s) => !hidden.includes(s.key)));
-  let leftSeries = $derived(visibleSeries.filter((s) => s.axis !== 'right'));
-  let rightSeries = $derived(visibleSeries.filter((s) => s.axis === 'right'));
+  // Visibility controls never change domains, axes, or detail layout.
+  let leftSeries = $derived(series.filter((s) => s.axis !== 'right'));
+  let rightSeries = $derived(series.filter((s) => s.axis === 'right'));
   let dual = $derived(leftSeries.length > 0 && rightSeries.length > 0);
   let primary = $derived(leftSeries.length ? leftSeries : rightSeries);
   const peak = (key: string) =>
@@ -49,11 +50,12 @@
   };
   let details = $derived(
     linearDetails(
-      visibleSeries.map((s) => ({ ...s, peak: peak(s.key) })),
+      series.map((s) => ({ ...s, peak: peak(s.key) })),
       logRates,
     ).map((group) => ({
       ...group,
-      series: visibleSeries.filter((s) => group.keys.includes(s.key)),
+      series: series.filter((s) => group.keys.includes(s.key)),
+      visible: visibleSeries.filter((s) => group.keys.includes(s.key)),
     })),
   );
   const zeroInRange = (key: string) =>
@@ -158,11 +160,12 @@
           <span class="series-label"><i style:background={s.color}></i>{s.label}</span><strong
             style:color={hidden.includes(s.key) ? 'var(--faint)' : s.color}
           >
-            {#if hidden.includes(s.key)}<small class="hidden-label">Hidden</small>{:else}{format(
-                active?.metrics?.[s.key],
-              )}<small>{units(s)}</small>{/if}
+            <span class:invisible={hidden.includes(s.key)}>
+              {format(active?.metrics?.[s.key])}<small>{units(s)}</small>
+            </span>
+            {#if hidden.includes(s.key)}<small class="hidden-label">Hidden</small>{/if}
           </strong>
-          {#if !hidden.includes(s.key) && zeroInRange(s.key)}<small class="zero-note">
+          {#if zeroInRange(s.key)}<small class="zero-note" class:invisible={hidden.includes(s.key)}>
               Zero reported
             </small>{/if}
         </button>{/each}
@@ -368,7 +371,7 @@
                 y2={fraction * 68}
                 class="plot-grid"
               />{/each}
-            {#each detail.series as s (s.key)}{#each segments(s.key, s.axis, detail.maximum) as group}<path
+            {#each detail.visible as s (s.key)}{#each segments(s.key, s.axis, detail.maximum) as group}<path
                   d={group.line}
                   data-detail-series={s.key}
                   fill="none"
@@ -390,6 +393,9 @@
                 class="plot-crosshair"
               />{/if}
           </svg>
+          {#if !detail.visible.length}<span class="detail-empty">
+              No selected series in this view
+            </span>{/if}
           {#if index === details.length - 1}<div class="plot-x">
               {#each [0, 0.25, 0.5, 0.75, 1] as f}<span>
                   {points.length ? time(start + (end - start) * f) : '—'}
@@ -451,7 +457,20 @@
     right: 0;
     transform: translateY(-50%);
   }
+  .invisible {
+    visibility: hidden;
+  }
+  .detail-empty {
+    position: absolute;
+    top: 24px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+  }
   .detail-main {
+    position: relative;
     flex: 1;
     min-width: 0;
   }
@@ -524,6 +543,7 @@
     flex-shrink: 0;
   }
   .series-readout strong {
+    position: relative;
     font-size: 18px;
     letter-spacing: -0.4px;
     font-weight: 400;
@@ -537,6 +557,9 @@
     font-family: 'IBM Plex Sans', sans-serif;
   }
   .series-readout .hidden-label {
+    position: absolute;
+    left: 0;
+    bottom: 0;
     margin-left: 0;
   }
   .series-hidden {
@@ -760,10 +783,10 @@
       gap: 10px 14px;
     }
     .series-readout > button {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: flex-start;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
       min-width: 90px;
     }
     .series-readout strong {

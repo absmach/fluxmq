@@ -150,7 +150,7 @@ const keys = [
   assert.ok(
     await queue
       .locator('path[data-series="queue.acknowledgments.nack"]')
-      .evaluate((p) => p.getBBox().y < 40),
+      .evaluate((p) => p.getBBox().y > 168),
   );
   await queue.getByRole('button', { name: 'Toggle ACK', exact: true }).click();
   assert.ok(
