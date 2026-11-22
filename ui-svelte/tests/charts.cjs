@@ -42,6 +42,12 @@ fs.mkdirSync(shots, { recursive: true });
   assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
   await rateScale.selectOption('linear');
   assert.ok(await nack.evaluate((p) => p.getBBox().y > 168), 'linear retains absolute magnitude');
+  assert.ok(
+    await queue
+      .locator('path[data-detail-series="queue.acknowledgments.nack"]')
+      .evaluate((p) => p.getBBox().y < 50),
+    'linear detail keeps NACK readable',
+  );
   await rateScale.selectOption('log');
   assert.equal(
     await queue.locator('.series-readout').innerText(),

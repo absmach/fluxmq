@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import Icon from './Icon.svelte';
   import { smoothPath } from './chartCurve.js';
-  import { scalePosition, scaleTicks } from './chartScale.js';
+  import { scalePosition, scaleTicks, linearDetails } from './chartScale.js';
   import { compact, bytes, type Point } from './types';
   let {
     points,
@@ -30,7 +30,10 @@
   const width = 960,
     height = 170;
   let hovered = $state<number | null>(null);
-  let active = $derived(hovered === null ? points.at(-1) : points[hovered]);
+  let inspectedIndex = $derived(
+    hovered === null ? null : Math.min(hovered, Math.max(0, points.length - 1)),
+  );
+  let active = $derived(inspectedIndex === null ? points.at(-1) : points[inspectedIndex]);
   let hidden = $state<string[]>([]);
   let menu = $state<HTMLDetailsElement>();
   let visibleSeries = $derived(series.filter((s) => !hidden.includes(s.key)));
@@ -38,8 +41,23 @@
   let rightSeries = $derived(visibleSeries.filter((s) => s.axis === 'right'));
   let dual = $derived(leftSeries.length > 0 && rightSeries.length > 0);
   let primary = $derived(leftSeries.length ? leftSeries : rightSeries);
-  const maximum = (items: typeof series) =>
-    Math.max(1, ...points.flatMap((p) => items.map((s) => p.metrics?.[s.key] ?? 0))) * 1.16;
+  const peak = (key: string) =>
+    points.reduce((value, p) => Math.max(value, p.metrics?.[key] ?? 0), 0);
+  const maximum = (items: typeof series) => {
+    const largest = Math.max(0, ...items.map((s) => peak(s.key)));
+    return largest > 0 ? largest * 1.16 : 1;
+  };
+  let details = $derived(
+    linearDetails(
+      visibleSeries.map((s) => ({ ...s, peak: peak(s.key) })),
+      logRates,
+    ).map((group) => ({
+      ...group,
+      series: visibleSeries.filter((s) => group.keys.includes(s.key)),
+    })),
+  );
+  const zeroInRange = (key: string) =>
+    points.some((p) => p.metrics?.[key] !== undefined) && peak(key) === 0;
   let max = $derived(maximum(primary));
   let rightMax = $derived(maximum(rightSeries));
   let leftLog = $derived(logRates && primary[0]?.axis === 'right');
@@ -47,12 +65,14 @@
   let leftTicks = $derived(scaleTicks(max, leftLog));
   let rightTicks = $derived(scaleTicks(rightMax, rightLog));
   const units = (s: (typeof series)[number]) => s.unit ?? unit;
+  const detailKind = (items: typeof series) =>
+    byteScale ? 'bandwidth' : /\/\s*s/.test(units(items[0])) ? 'rates' : 'counts';
   function toggle(key: string) {
     hidden = hidden.includes(key) ? hidden.filter((k) => k !== key) : [...hidden, key];
   }
   function only(key: string) {
     hidden = series.filter((s) => s.key !== key).map((s) => s.key);
-    if (menu) menu.open = false;
+    closeMenu();
   }
   function closeMenu() {
     if (menu?.open) {
@@ -87,8 +107,14 @@
   const time = (t: number) =>
     new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const format = (v: number | undefined) =>
-    v === undefined ? '—' : byteScale ? bytes(v) : compact(v);
-  function segments(key: string, axis?: 'right') {
+    v === undefined
+      ? '—'
+      : byteScale
+        ? bytes(v)
+        : v > 0 && v < 0.1
+          ? new Intl.NumberFormat('en-US', { maximumSignificantDigits: 2 }).format(v)
+          : compact(v);
+  function segments(key: string, axis?: 'right', detailMax?: number) {
     const groups: { x: number; y: number }[][] = [];
     let group: { x: number; y: number }[] = [];
     points.forEach((p, i) => {
@@ -97,7 +123,8 @@
         if (group.length) groups.push(group);
         group = [];
       }
-      if (value !== undefined) group.push({ x: x(p.time), y: y(value, axis) });
+      if (value !== undefined)
+        group.push({ x: x(p.time), y: detailMax ? 68 * (1 - value / detailMax) : y(value, axis) });
     });
     if (group.length) groups.push(group);
     return groups.map((g) => ({
@@ -118,7 +145,7 @@
   }
 </script>
 
-<div class="diagnostic-chart">
+<div class="diagnostic-chart" class:has-details={details.length > 0}>
   <div class="chart-toolbar">
     <div class="series-readout" aria-label="Chart legend">
       {#each series as s}<button
@@ -126,7 +153,7 @@
           aria-label={`Toggle ${s.label}`}
           aria-pressed={!hidden.includes(s.key)}
           onclick={() => toggle(s.key)}
-          title={`Click to ${hidden.includes(s.key) ? 'show' : 'hide'} ${s.label}`}
+          title={`${zeroInRange(s.key) ? 'All reported samples are zero. ' : ''}Click to ${hidden.includes(s.key) ? 'show' : 'hide'} ${s.label}`}
         >
           <span class="series-label"><i style:background={s.color}></i>{s.label}</span><strong
             style:color={hidden.includes(s.key) ? 'var(--faint)' : s.color}
@@ -135,6 +162,9 @@
                 active?.metrics?.[s.key],
               )}<small>{units(s)}</small>{/if}
           </strong>
+          {#if !hidden.includes(s.key) && zeroInRange(s.key)}<small class="zero-note">
+              Zero reported
+            </small>{/if}
         </button>{/each}
     </div>
     <details class="series-menu" bind:this={menu}>
@@ -206,10 +236,11 @@
             y2={y(value)}
             class="plot-grid"
           />{/each}
-        {#each visibleSeries as s, i}{#each segments(s.key, s.axis) as group}<path
+        {#each visibleSeries as s, i (s.key)}{#each segments(s.key, s.axis) as group}<path
               d={`${group.line} L ${group.points.at(-1)!.x} ${height} L ${group.points[0].x} ${height} Z`}
               fill={`url(#${uid}-fill-${i})`}
-            /><path
+            />{/each}{/each}
+        {#each visibleSeries as s (s.key)}{#each segments(s.key, s.axis) as group}<path
               d={group.line}
               data-series={s.key}
               fill="none"
@@ -218,7 +249,8 @@
               stroke-dasharray={s.dash}
               stroke-linecap="round"
               vector-effect="non-scaling-stroke"
-            />{#if group.points.length === 1}<circle
+            />
+            {#if group.points.length === 1}<circle
                 cx={group.points[0].x}
                 cy={group.points[0].y}
                 r="3"
@@ -246,7 +278,7 @@
         aria-label={`Inspect ${label}`}
         aria-valuemin="0"
         aria-valuemax={Math.max(0, points.length - 1)}
-        aria-valuenow={hovered ?? Math.max(0, points.length - 1)}
+        aria-valuenow={inspectedIndex ?? Math.max(0, points.length - 1)}
         aria-valuetext={active
           ? `${time(active.time)}: ${visibleSeries.map((s) => `${s.label} ${format(active.metrics?.[s.key])} ${units(s)}`).join(', ')}`
           : 'Collecting samples'}
@@ -267,7 +299,7 @@
                         0,
                         Math.min(
                           points.length - 1,
-                          (hovered ?? points.length - 1) + (e.key === 'ArrowLeft' ? -1 : 1),
+                          (inspectedIndex ?? points.length - 1) + (e.key === 'ArrowLeft' ? -1 : 1),
                         ),
                       );
           }
@@ -286,7 +318,7 @@
                   ? '—'
                   : byteScale
                     ? bytes(active.metrics[s.key])
-                    : new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(
+                    : new Intl.NumberFormat('en-US', { maximumSignificantDigits: 6 }).format(
                         active.metrics[s.key],
                       )}
                 {units(s)}
@@ -307,9 +339,149 @@
           </span>{/each}
       </div>{/if}
   </div>
+  {#each details as detail, index}
+    <div class="linear-detail" data-axis={detail.axis} data-maximum={detail.maximum}>
+      <div class="detail-heading">
+        <span>Magnified {detailKind(detail.series)} · linear</span><span>
+          {detail.series.map((s) => s.label).join(' · ')}
+        </span>
+      </div>
+      <div class="plot-layout">
+        <div class="detail-y">
+          {#each [1, 0.5, 0] as fraction}<span style:top={`${(1 - fraction) * 100}%`}>
+              {format(detail.maximum * fraction)}
+            </span>{/each}
+        </div>
+        <div class="detail-main">
+          <svg
+            viewBox={`0 0 ${width} 68`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`Magnified ${detailKind(detail.series)}: ${detail.series.map((s) => s.label).join(', ')}`}
+            onpointermove={pointer}
+            onpointerleave={() => (hovered = null)}
+          >
+            {#each [0, 0.5, 1] as fraction}<line
+                x1="0"
+                x2={width}
+                y1={fraction * 68}
+                y2={fraction * 68}
+                class="plot-grid"
+              />{/each}
+            {#each detail.series as s (s.key)}{#each segments(s.key, s.axis, detail.maximum) as group}<path
+                  d={group.line}
+                  data-detail-series={s.key}
+                  fill="none"
+                  stroke={s.color}
+                  stroke-width="2"
+                  stroke-dasharray={s.dash}
+                  vector-effect="non-scaling-stroke"
+                />{#if group.points.length === 1}<circle
+                    cx={group.points[0].x}
+                    cy={group.points[0].y}
+                    r="3"
+                    fill={s.color}
+                  />{/if}{/each}{/each}
+            {#if hovered !== null && active}<line
+                x1={x(active.time)}
+                x2={x(active.time)}
+                y1="0"
+                y2="68"
+                class="plot-crosshair"
+              />{/if}
+          </svg>
+          {#if index === details.length - 1}<div class="plot-x">
+              {#each [0, 0.25, 0.5, 0.75, 1] as f}<span>
+                  {points.length ? time(start + (end - start) * f) : '—'}
+                </span>{/each}
+            </div>{/if}
+        </div>
+        {#if dual}<span class="detail-unit">
+            {units(detail.series[0])}
+          </span>{/if}
+      </div>
+    </div>
+  {/each}
 </div>
 
 <style>
+  .series-readout .zero-note {
+    display: block;
+    margin: 3px 0 0;
+    font-size: 9px;
+    color: var(--faint);
+  }
+  .has-details .plot-main svg,
+  .has-details .plot-y {
+    height: 130px;
+  }
+  .has-details .plot-main .plot-x {
+    display: none;
+  }
+  .has-details .plot-input {
+    inset: 0;
+  }
+  .linear-detail {
+    margin-top: 22px;
+  }
+  .detail-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 10px;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .detail-heading > span:first-child {
+    color: var(--text);
+  }
+  .detail-y {
+    position: relative;
+    width: 48px;
+    height: 68px;
+    flex-shrink: 0;
+    color: var(--faint);
+    font-size: 10px;
+    text-align: right;
+  }
+  .detail-y span {
+    position: absolute;
+    left: 0;
+    right: 0;
+    transform: translateY(-50%);
+  }
+  .detail-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .detail-main svg {
+    height: 68px;
+    width: 100%;
+    display: block;
+    overflow: visible;
+    cursor: crosshair;
+  }
+  .detail-unit {
+    width: 48px;
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--faint);
+  }
+  @media (max-width: 600px) {
+    .detail-y,
+    .detail-unit {
+      width: 30px;
+    }
+    .detail-heading {
+      font-size: 9px;
+    }
+    .has-details .plot-main svg,
+    .has-details .plot-y {
+      height: 115px;
+    }
+  }
+
   .diagnostic-chart {
     padding: 0 22px 10px;
   }
@@ -328,6 +500,10 @@
     min-width: 0;
   }
   .series-readout > button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
     text-align: left;
     padding: 0;
     min-width: 90px;
@@ -584,6 +760,10 @@
       gap: 10px 14px;
     }
     .series-readout > button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
       min-width: 90px;
     }
     .series-readout strong {

@@ -25,3 +25,32 @@ export function scaleTicks(maximum, logarithmic) {
   }
   return ticks.reverse();
 }
+
+/** Preserve a linear overview while giving sub-pixel signals their own labeled
+ * detail scale. Zero/missing series are not magnified into invented activity.
+ * @param {{key:string, axis?:'right', peak:number}[]} series
+ * @param {boolean} logRates
+ */
+export function linearDetails(series, logRates) {
+  /** @type {{axis:'left'|'right', keys:string[], maximum:number}[]} */
+  const groups = [];
+  for (const axis of /** @type {const} */ (['left', 'right'])) {
+    let logarithmic = axis === 'right' && logRates;
+    let items = series.filter((s) => (s.axis ?? 'left') === axis && s.peak > 0);
+    while (items.length > 1) {
+      const largest = Math.max(...items.map((s) => s.peak));
+      const smaller = items.filter((s) =>
+        logarithmic ? scalePosition(s.peak, largest * 1.16, true) < 0.08 : s.peak / largest < 0.16,
+      );
+      if (!smaller.length) break;
+      groups.push({
+        axis,
+        keys: smaller.map((s) => s.key),
+        maximum: Math.max(...smaller.map((s) => s.peak)) * 1.16,
+      });
+      items = smaller;
+      logarithmic = false;
+    }
+  }
+  return groups;
+}

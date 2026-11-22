@@ -64,3 +64,34 @@ for (const maximum of [0.2, 1.16, 15, 15000]) {
   for (let i = 1; i < ticks.length; i++) assert.ok(ticks[i] < ticks[i - 1]);
 }
 console.log('PASS: rate scales preserve zero, actual units and small-rate visibility');
+
+const { linearDetails } = await import('../src/lib/chartScale.js');
+const signals = [120, 0.5, 12000, 6, 1.5, 0.02, 0, 0].map((peak, i) => ({
+  key: String(i),
+  axis: i > 1 ? 'right' : undefined,
+  peak,
+}));
+for (const log of [false, true])
+  for (let mask = 0; mask < 256; mask++) {
+    const selected = signals.filter((_, i) => mask & (1 << i));
+    const details = linearDetails(selected, log);
+    for (const detail of details) {
+      assert.ok(detail.maximum > 0);
+      assert.ok(
+        detail.keys.every((key) => selected.some((s) => s.key === key && s.peak > 0)),
+        'details contain only enabled positive signals',
+      );
+    }
+    for (const signal of selected.filter((s) => s.peak > 0)) {
+      const highest =
+        Math.max(...selected.filter((s) => s.axis === signal.axis).map((s) => s.peak)) * 1.16;
+      const main =
+        scalePosition(signal.peak, highest, log && signal.axis === 'right') *
+        (details.length ? 130 : 170);
+      const detail = details.some(
+        (d) => d.keys.includes(signal.key) && (signal.peak / d.maximum) * 68 >= 8,
+      );
+      assert.ok(main >= 8 || detail, `signal ${signal.key} readable for mask ${mask} log ${log}`);
+    }
+  }
+console.log('PASS: all 512 scale/subset combinations keep enabled positive signals readable');

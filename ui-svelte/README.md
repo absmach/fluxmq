@@ -119,7 +119,11 @@ legend also toggles visibility. Queue counts and event rates have separately
 labeled axes. Queue rates default to a zero-preserving logarithmic scale (log1p),
 so low retry/error rates remain visible next to high ACK throughput. The Rates
 control restores a linear scale; counts always remain linear and tooltips retain
-actual measured values. Protocols overlay within a selected metric (messages, bandwidth,
+actual measured values. Signals too small to read at the shared scale also appear
+in a compact, labeled linear detail plot; this applies to either mode and never
+rescales a signal silently. Zero samples are identified in the legend.
+`npm run test:filters` exhaustively checks every series subset and ACK transition
+across node scopes and time ranges, plus missing data and live refresh. Protocols overlay within a selected metric (messages, bandwidth,
 connections or errors), keeping units consistent.
 
 Subscription clients are fetched on demand from the broker's dedicated endpoint,
