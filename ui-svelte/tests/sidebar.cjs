@@ -29,10 +29,15 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   await page.screenshot({ path: shots + '/sidebar-expanded-dark.png', animations: 'disabled' });
   const toggle = page.getByRole('button', { name: 'Collapse sidebar', exact: true });
   assert.equal(await page.locator('.console-statusbar .sidebar-toggle').count(), 0);
+  assert.equal(await toggle.innerText(), '', 'toggle uses an icon without a visible text label');
+  assert.equal(await toggle.getAttribute('title'), 'Collapse sidebar');
   const toggleBox = await toggle.boundingBox();
   assert.ok(
-    Math.abs(toggleBox.x + toggleBox.width / 2 - expanded.x) < 1,
-    'toggle straddles sidebar edge',
+    toggleBox.y >=
+      (await page.locator('.sidebar-header').boundingBox()).y +
+        (await page.locator('.sidebar-header').boundingBox()).height &&
+      toggleBox.x + toggleBox.width <= expanded.x,
+    'toggle sits below the logo inside the sidebar',
   );
   assert.equal(
     await toggle.locator('svg').evaluate((el) => getComputedStyle(el).transform),
@@ -53,7 +58,7 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   );
   const collapsedToggle = await expand.boundingBox();
   assert.equal(collapsedToggle.y, toggleBox.y, 'toggle keeps its vertical position');
-  assert.ok(Math.abs(collapsedToggle.x + collapsedToggle.width / 2 - 72) < 1);
+  assert.ok(Math.abs(collapsedToggle.x + collapsedToggle.width / 2 - 36) < 1);
   await expand.evaluate((el) => el.blur());
   await page.mouse.move(500, 100);
   assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '1');
@@ -137,9 +142,10 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
       .boundingBox();
     const sidebar = await page.locator('.sidebar').boundingBox();
     assert.ok(
-      Math.abs(collapse.x + collapse.width / 2 - sidebar.width) < 1 &&
+      collapse.x >= sidebar.x &&
+        collapse.x + collapse.width <= sidebar.width &&
         collapse.y >= logo.y + logo.height,
-      'toggle stays on the edge without crowding the logo on narrower desktops',
+      'toggle stays below the logo inside narrower sidebars',
     );
   }
   assert.deepEqual(errors, []);

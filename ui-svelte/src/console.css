@@ -1511,23 +1511,19 @@ details[open] > summary svg[data-icon='down'] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 40px;
+  min-height: 44px;
   gap: 8px;
 }
-.app-shell {
-  --navigation-width: 232px;
-}
 .sidebar-toggle {
-  position: fixed;
-  top: 84px;
-  left: calc(var(--navigation-width) - 14px);
-  z-index: 45;
-  width: 28px;
-  height: 28px;
+  align-self: flex-start;
+  flex-shrink: 0;
+  width: 48px;
+  height: 32px;
+  margin-top: 8px;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--sidebar);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--muted);
 }
 .sidebar-toggle:hover {
@@ -1537,14 +1533,9 @@ details[open] > summary svg[data-icon='down'] {
 .sidebar-toggle.points-left svg {
   transform: rotate(180deg);
 }
-@media (max-width: 1250px) {
-  .app-shell {
-    --navigation-width: 210px;
-  }
-}
 @media (min-width: 801px) {
-  .app-shell.sidebar-collapsed {
-    --navigation-width: 72px;
+  .sidebar nav {
+    margin-top: 8px;
   }
   .sidebar-collapsed .brand {
     padding: 0;
