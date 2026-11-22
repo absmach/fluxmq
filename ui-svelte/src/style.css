@@ -1,17 +1,5 @@
-@font-face {
-  font-family: Manrope;
-  src: url('/fonts/manrope.woff2') format('woff2');
-  font-weight: 200 800;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'DM Sans';
-  src: url('/fonts/dm-sans.woff2') format('woff2');
-  font-weight: 100 1000;
-  font-display: swap;
-}
 :root {
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   color-scheme: dark;
   --bg: #14161a;
   --sidebar: #101215;
@@ -183,7 +171,7 @@ input::placeholder {
   width: max-content;
 }
 .brand > span {
-  font-family: Manrope, sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   font-size: 29px;
   font-weight: 800;
   letter-spacing: -1.4px;
@@ -300,7 +288,7 @@ input::placeholder {
 }
 .sidebar-note strong {
   display: block;
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-weight: 650;
   font-size: 0.875rem;
   letter-spacing: -0.2px;
@@ -481,7 +469,7 @@ main {
   opacity: 0.8;
 }
 h1 {
-  font-family: Manrope, sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   font-weight: 650;
   font-size: 2.15rem;
   letter-spacing: -1.25px;
@@ -667,7 +655,7 @@ h1 {
   color: var(--faint);
 }
 .metric-value {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 2rem;
   font-weight: 600;
   letter-spacing: -1px;
@@ -677,7 +665,7 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 .metric-unit {
-  font-family: 'DM Sans';
+  font-family: 'IBM Plex Sans';
   font-size: 0.6875rem;
   color: var(--faint);
   font-weight: 400;
@@ -758,7 +746,7 @@ h1 {
   gap: 14px;
 }
 .panel-heading h2 {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-weight: 650;
   font-size: 0.875rem;
   letter-spacing: -0.15px;
@@ -993,7 +981,7 @@ h1 {
   transform: rotate(85deg);
 }
 .donut-hole span {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 2.1rem;
   font-weight: 600;
   letter-spacing: -1.2px;
@@ -1228,7 +1216,7 @@ tbody tr:hover {
   gap: 7px;
 }
 .footer-brand {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 0.8125rem;
   letter-spacing: -0.5px;
   font-weight: 700;
@@ -1258,7 +1246,7 @@ tbody tr:hover {
   display: block;
 }
 .summary-strip strong {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 1.8rem;
   display: block;
   font-weight: 550;
@@ -1457,7 +1445,7 @@ tbody tr:hover {
   background-size: 18px 18px;
 }
 .cluster-hero h2 {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 2rem;
   letter-spacing: -1px;
   font-weight: 600;
@@ -1496,7 +1484,7 @@ tbody tr:hover {
   border: 1px solid var(--border);
   background: var(--panel);
   border-radius: 12px;
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 1.125rem;
 }
 .topology-lines {
@@ -1574,7 +1562,7 @@ tbody tr:hover {
 }
 .health-banner h2 {
   font-size: 1.25rem;
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-weight: 600;
   letter-spacing: -0.4px;
 }
@@ -1730,14 +1718,14 @@ dialog::backdrop {
   border-width: 0 0 0 1px;
   padding: 26px;
 }
-.drawer-heading {
+.session-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 30px;
 }
-.drawer-title {
+.session-title {
   padding-bottom: 27px;
 }
 .large-client-icon {
@@ -1751,9 +1739,9 @@ dialog::backdrop {
   color: var(--accent);
   margin-bottom: 20px;
 }
-.drawer-title h2 {
+.session-title h2 {
   font-size: 1.4rem;
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-weight: 600;
   letter-spacing: -0.5px;
   overflow-wrap: anywhere;
@@ -1762,7 +1750,7 @@ dialog::backdrop {
 .detail-list {
   padding: 0;
 }
-.drawer-subtitle {
+.session-subtitle {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1770,7 +1758,7 @@ dialog::backdrop {
   font-weight: 500;
   margin: 24px 0 18px;
 }
-.drawer-subscription {
+.session-subscription {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1781,11 +1769,11 @@ dialog::backdrop {
   border-radius: 6px;
   margin-bottom: 8px;
 }
-.drawer-subscription code {
+.session-subscription code {
   font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
-.drawer-copy {
+.session-copy {
   margin-top: 25px;
   width: 100%;
 }
@@ -1795,7 +1783,7 @@ dialog::backdrop {
   padding: 25px;
 }
 .connection-dialog h2 {
-  font-family: Manrope;
+  font-family: 'IBM Plex Sans';
   font-size: 1.5rem;
   letter-spacing: -0.5px;
   font-weight: 600;
@@ -2604,7 +2592,7 @@ th {
 .health-card .mono {
   font-size: 0.75rem;
 }
-.drawer-subscription code {
+.session-subscription code {
   font-size: 0.875rem;
 }
 .live-control {

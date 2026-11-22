@@ -39,7 +39,7 @@ local or behind your existing authenticated management gateway.
 ## Views and interactions
 
 - Overview: node scope, live rates, 1/5/15-minute charts, protocol distribution.
-- Sessions: search, protocol/state filters, sorting, pagination, detail drawer.
+- Sessions: search, protocol/state filters, sorting, pagination, centered detail dialog.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, node scopes.
 - Cluster: topology, node inventory, drilldown into health.
 - Health: broker reachability, uptime, cumulative error and message counters.
@@ -100,15 +100,14 @@ docker run --rm -p 127.0.0.1:3002:3002 fluxmq-console:preview \
 
 ## Identity
 
-Graphite surfaces, cool blue accents, and a geometric “F” built from two routed
-paths establish the new FluxMQ identity. The local-console interface combines
-pen-plotter artwork, monospace instrument labels, italic editorial typography,
-and subtle print texture. It has no accounts or workspace abstraction. Green
-denotes operational state.
-The logo is editable SVG at `public/brand/fluxmq-symbol.svg`; the wordmark is
-`public/brand/fluxmq-wordmark.svg` (Manrope should be installed when editing).
+FluxMQ uses a message-routing symbol and the exact product name **FluxMQ**.
+Graphite surfaces and cool blue accents accompany IBM Plex Sans interface text
+and larger IBM Plex Mono metric values. All graphics are upright and session
+details use a centered, responsive dialog. The sidebar is dedicated to navigation;
+there are no accounts or workspace controls. Green denotes operational state.
 
-Manrope, DM Sans, and the Abstract Machines logotype were sourced from the
-company's public website, https://www.absmach.eu/, on 2026-11-22. The console
-identifies FluxMQ as an Abstract Machines product. Typeface licenses are included
-alongside the font files.
+The logo is editable SVG at `public/brand/fluxmq-symbol.svg`; the wordmark is
+`public/brand/fluxmq-wordmark.svg` (IBM Plex Sans should be installed when editing).
+The Abstract Machines logotype was sourced from https://www.absmach.eu/.
+IBM Plex fonts were sourced through Google Fonts on 2026-11-22 and are hosted
+locally. Their SIL Open Font Licenses are included in `public/fonts/`.

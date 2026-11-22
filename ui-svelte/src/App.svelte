@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from './lib/Icon.svelte';
-  import SignalArt from './lib/SignalArt.svelte';
   import TrafficChart from './lib/TrafficChart.svelte';
   import {
     number,
@@ -16,7 +15,7 @@
   } from './lib/types';
 
   const navigation: { id: Page; label: string; description: string }[] = [
-    { id: 'overview', label: 'Overview', description: 'Your infrastructure, at a glance.' },
+    { id: 'overview', label: 'Overview', description: 'Connections, traffic, and cluster health.' },
     { id: 'sessions', label: 'Sessions', description: 'Every connection. One clear picture.' },
     {
       id: 'subscriptions',
@@ -277,7 +276,7 @@
     a.download = `fluxmq-${snapshot.mode}-${page}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    notify('Export ready. Happy digging.');
+    notify('Export ready.');
   }
   function keydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -342,27 +341,10 @@
       aria-label="FluxMQ overview"
     >
       <img src="/brand/fluxmq-symbol.svg" alt="" width="36" height="36" /><span>
-        flux<span class="brand-mq">mq</span>
+        Flux<span class="brand-mq">MQ</span>
       </span>
     </a>
-    <div class="broker-connection">
-      <span class="connection-terminal"><Icon name="terminal" size={17} /></span>
-      <div>
-        <strong>Local console</strong><small>
-          {snapshot?.mode === 'demo'
-            ? 'demo brokers / simulated data'
-            : `${snapshot?.nodes.length ?? 0} configured brokers`}
-        </small>
-      </div>
-      <button
-        class="icon-button"
-        aria-label="Broker connection details"
-        onclick={() => connectionDialog.showModal()}
-      >
-        <Icon name="info" size={15} />
-      </button>
-    </div>
-    <div class="nav-label">THE WORKBENCH</div>
+    <div class="nav-label">MONITOR</div>
     <nav aria-label="Main navigation">
       {#each navigation as item}<a
           href={item.id === 'overview' ? '/dashboard' : `/dashboard/${item.id}`}
@@ -381,15 +363,6 @@
         </a>{/each}
     </nav>
     <div class="sidebar-bottom">
-      <div class="sidebar-note">
-        <span class="note-symbol"><Icon name="bolt" size={19} /></span><strong>
-          Small packets. Big ideas.
-        </strong>
-        <p>For the things<br />you’re building next.</p>
-        <a href="https://www.absmach.eu/products/fluxmq/" target="_blank" rel="noreferrer">
-          Discover FluxMQ <Icon name="globe" size={13} />
-        </a>
-      </div>
       <a
         class="utility-link"
         href="https://www.absmach.eu/docs/fluxmq"
@@ -427,7 +400,7 @@
         <Icon name="menu" />
       </button>
       <div class="breadcrumb">
-        <span>Local console</span><span class="crumb-divider">/</span><strong>
+        <span>FluxMQ</span><span class="crumb-divider">/</span><strong>
           {currentNav.label}
         </strong>
       </div>
@@ -448,13 +421,12 @@
     <main id="main">
       <div class:overview-heading={page === 'overview'} class="page-heading">
         <div>
-          <div class="eyebrow">FLUXMQ / BROKER CONSOLE <span class="eyebrow-line"></span></div>
+          <div class="eyebrow">BROKER CONSOLE</div>
           <h1>
-            {#if page === 'overview'}Everything in <em>flow.</em>{:else}{currentNav.label}{/if}
+            {page === 'overview' ? 'Broker overview' : currentNav.label}
           </h1>
           <p>{currentNav.description}</p>
         </div>
-        {#if page === 'overview'}<SignalArt />{/if}
         <div class="heading-actions">
           <span
             class:warning={connection !== 'connected' || stale || !healthy}
@@ -494,9 +466,13 @@
           </span>
         </div>
         <div class="stream-controls">
-          {#if snapshot?.mode === 'demo'}<span class="demo-badge">DEMO DATA</span>{/if}<span
-            class="stream-time"
-          >
+          {#if snapshot?.mode === 'demo'}<button
+              class="demo-badge"
+              aria-label="Broker connection details"
+              onclick={() => connectionDialog.showModal()}
+            >
+              DEMO DATA <Icon name="info" size={12} />
+            </button>{/if}<span class="stream-time">
             {paused
               ? 'Updates paused'
               : snapshot
@@ -675,7 +651,7 @@
         </section>
         <div class="console-footer">
           <span>
-            <span class="footer-brand">fluxmq</span> Keep your systems in conversation.
+            <span class="footer-brand">FluxMQ</span> Keep your systems in conversation.
           </span><span><Icon name="shield" size={13} /> Engineered by Abstract Machines</span>
         </div>
       {:else if page === 'sessions'}
@@ -1098,18 +1074,19 @@
         </span><Icon name="chevron" size={16} />
       </button>{:else}<p class="empty-state">No matching pages.</p>{/each}
   </div>
-  <div class="command-footer">Less clicking. More tinkering.</div>
+  <div class="command-footer">Navigate the console with Ctrl / ⌘ K.</div>
 </dialog>
 
 <dialog
   bind:this={detailDialog}
   class="detail-dialog"
+  aria-labelledby="session-dialog-title"
   onclose={() => {
     detailController?.abort();
     detail = null;
   }}
 >
-  <div class="drawer-heading">
+  <div class="session-heading">
     <span class="eyebrow">SESSION INSPECTOR</span><button
       class="icon-button"
       aria-label="Close session details"
@@ -1118,9 +1095,9 @@
       <Icon name="close" />
     </button>
   </div>
-  {#if detail}<div class="drawer-title">
+  {#if detail}<div class="session-title">
       <span class="large-client-icon"><Icon name="terminal" size={28} /></span>
-      <h2>{detail.client_id}</h2>
+      <h2 id="session-dialog-title">{detail.client_id}</h2>
       <span class:offline={!detail.connected} class="state-tag">
         <i></i>{detail.connected ? 'Connected' : 'Disconnected'}
       </span>
@@ -1149,7 +1126,7 @@
         <dd>{detail.offline_queue_depth}</dd>
       </div>
     </dl>
-    <h3 class="drawer-subtitle">
+    <h3 class="session-subtitle">
       Subscriptions <span class="count-tag">{detail.subscription_count}</span>
     </h3>
     {#if detailLoading}<p class="muted">Loading session details…</p>{:else if detailError}<div
@@ -1157,12 +1134,12 @@
         role="alert"
       >
         {detailError}
-      </div>{:else}{#each detail.subscriptions ?? [] as sub}<div class="drawer-subscription">
+      </div>{:else}{#each detail.subscriptions ?? [] as sub}<div class="session-subscription">
           <code>{sub.filter}</code><span class="protocol-tag">QoS {sub.qos}</span>
         </div>{:else}<p class="muted">
           This session has no listed subscriptions.
         </p>{/each}{/if}<button
-      class="button drawer-copy"
+      class="button session-copy"
       onclick={async () => {
         try {
           await navigator.clipboard.writeText(detail!.client_id);
@@ -1177,7 +1154,7 @@
 </dialog>
 
 <dialog bind:this={connectionDialog} class="connection-dialog">
-  <div class="drawer-heading">
+  <div class="session-heading">
     <span class="eyebrow">BROKER CONNECTION</span><button
       class="icon-button"
       aria-label="Close broker connection details"
