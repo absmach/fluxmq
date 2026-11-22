@@ -200,12 +200,12 @@ fs.mkdirSync(shots, { recursive: true });
   await page.goto(base + '/dashboard/subscriptions');
   const topics = page.locator('.topics-table');
   await topics.getByRole('columnheader', { name: 'Subscribers', exact: true }).waitFor();
-  assert.equal(await topics.locator('thead th').count(), 4);
+  assert.equal(await topics.locator('thead th').count(), 5);
   assert.equal(await topics.locator('.distribution-track').count(), 0);
   await topics.locator('.subscriber-count').first().waitFor();
   const header = await topics.locator('thead th').nth(1).boundingBox();
   const cells = await topics.locator('tbody tr').first().locator('td').all();
-  assert.equal(cells.length, 4);
+  assert.equal(cells.length, 5);
   const count = await cells[1].locator('.subscriber-count').boundingBox();
   assert.ok(
     count.x >= header.x && count.x + count.width <= header.x + header.width,
@@ -213,7 +213,7 @@ fs.mkdirSync(shots, { recursive: true });
   );
   await topics.screenshot({ path: shots + '/topic-columns-light.png' });
   const arrows = await topics
-    .locator('.subscriber-count svg')
+    .locator('.topic-action svg')
     .evaluateAll((es) => es.map((e) => e.getBoundingClientRect().right));
   assert.ok(
     arrows.every((x) => Math.abs(x - arrows[0]) < 1),

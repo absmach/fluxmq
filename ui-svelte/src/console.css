@@ -309,8 +309,8 @@ th {
   border-radius: 6px;
   background: var(--panel-raised);
 }
-.numeric,
-.tabular {
+.numeric:not(th),
+.tabular:not(th) {
   font-family: var(--mono);
   font-size: 0.8125rem;
 }

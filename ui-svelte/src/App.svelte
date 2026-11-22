@@ -1210,11 +1210,15 @@
           {@render inventoryNotice()}
           <div class="table-scroll">
             <table class="topics-table">
+              <colgroup>
+                <col class="topic-column" /><col class="subscribers-column" />
+                <col class="qos-column" /><col /><col class="action-column" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Topic filter</th><th class="numeric"> Subscribers </th><th>Max QoS</th><th>
-                    Nodes
-                  </th>
+                  <th>Topic filter</th><th class="numeric">Subscribers</th><th class="topic-qos">
+                    Max QoS
+                  </th><th>Nodes</th><th><span class="sr-only">Details</span></th>
                 </tr>
               </thead><tbody>
                 {#each subscriptionRows.slice((tablePage - 1) * pageSize, tablePage * pageSize) as s}<tr>
@@ -1225,7 +1229,12 @@
                         href={subscriptionURL(s.filter, scope)}
                         onclick={(event) => followLink(event, () => showSubscription(s.filter))}
                       >
-                        <Icon name="subscriptions" size={17} />{s.filter}
+                        <Icon name="subscriptions" size={17} /><span
+                          class="topic-filter-text"
+                          title={s.filter}
+                        >
+                          {s.filter}
+                        </span>
                       </a>
                     </td><td class="numeric">
                       <button
@@ -1233,19 +1242,26 @@
                         aria-label={`View ${s.subscriber_count} clients for ${s.filter}`}
                         onclick={() => showSubscription(s.filter)}
                       >
-                        {s.subscriber_count}<Icon name="chevron" size={14} />
+                        {s.subscriber_count}
                       </button>
-                    </td><td>
-                      <span class="protocol-tag">QoS {s.max_qos}</span>
-                    </td><td>
+                    </td><td class="topic-qos tabular">{s.max_qos}</td><td>
                       <div class="node-chips">
                         {#each s.nodes as id}<button onclick={() => (nodeDetailID = id)}>
                             {id}
                           </button>{/each}
                       </div>
+                    </td><td class="topic-action">
+                      <a
+                        class="icon-button"
+                        aria-label={`Details for ${s.filter}`}
+                        href={subscriptionURL(s.filter, scope)}
+                        onclick={(event) => followLink(event, () => showSubscription(s.filter))}
+                      >
+                        <Icon name="chevron" size={16} />
+                      </a>
                     </td>
                   </tr>{:else}<tr>
-                    <td colspan="4">
+                    <td colspan="5">
                       <div class="empty-state">
                         <Icon name="subscriptions" size={28} />
                         <h3>

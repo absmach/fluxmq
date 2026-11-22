@@ -1407,11 +1407,42 @@ tbody tr:hover {
 .topic-name svg {
   color: var(--accent);
 }
-.topics-table th:nth-child(2) {
-  text-align: right;
+.topics-table {
+  table-layout: fixed;
+  min-width: 740px;
 }
-.topics-table td:nth-child(2) {
-  width: 120px;
+.topics-table .topic-column {
+  width: 34%;
+}
+.topics-table .subscribers-column {
+  width: 140px;
+}
+.topics-table .qos-column {
+  width: 100px;
+}
+.topics-table .action-column {
+  width: 48px;
+}
+.topics-table .topic-qos {
+  text-align: center;
+}
+.topics-table .topic-action {
+  padding-left: 0;
+  padding-right: 16px;
+}
+.topics-table .topic-name {
+  color: var(--text);
+  font-family: var(--mono);
+}
+.topic-filter-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topics-table .topic-name svg {
+  flex-shrink: 0;
+}
+.topics-table .node-chips {
+  flex-wrap: wrap;
 }
 .subscriber-count {
   width: 100%;
