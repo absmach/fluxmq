@@ -172,9 +172,13 @@ fs.mkdirSync(shots, { recursive: true });
     };
   }, snapshot);
   await diagnostic.goto(base + '/dashboard/health');
-  await diagnostic.getByText('3 poison messages pending', { exact: true }).waitFor();
+  await diagnostic.locator('.queue-health-summary').waitFor();
   assert.match(
-    await diagnostic.locator('.poison-warning').innerText(),
+    await diagnostic.locator('.pending-summary').innerText(),
+    /3 poison messages pending/,
+  );
+  assert.match(
+    await diagnostic.locator('.queue-health-summary').innerText(),
     /2 have no dead-letter destination/,
   );
   await diagnostic.getByRole('region', { name: 'Protocol diagnostics' }).waitFor();

@@ -9,7 +9,7 @@ fs.mkdirSync(shots, { recursive: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(base + '/dashboard/health');
+  await page.goto(base + '/dashboard/queues');
   const queue = page.getByRole('region', { name: 'Queue delivery diagnostics' }),
     protocol = page.getByRole('region', { name: 'Protocol diagnostics' });
   await queue.getByRole('img', { name: 'Queue activity history', exact: true }).waitFor();
@@ -17,15 +17,9 @@ fs.mkdirSync(shots, { recursive: true });
     () => document.querySelector('.queue-diagnostics .plot-main path') !== null,
   );
   assert.ok((await queue.locator('.plot-main path').count()) >= 2);
-  assert.equal(
-    await protocol.locator('.table-scroll').isVisible(),
-    false,
-    'tables start collapsed',
-  );
   await page.getByRole('button', { name: 'Light appearance', exact: true }).click();
   await page.waitForTimeout(250);
   await queue.screenshot({ path: shots + '/queue-chart-light.png' });
-  await protocol.screenshot({ path: shots + '/protocol-chart-light.png' });
   assert.equal(await queue.locator('.series-readout button[aria-pressed="true"]').count(), 8);
   assert.equal(await queue.locator('.plot-y-right').count(), 1);
   assert.ok((await queue.boundingBox()).height < 490, 'queue panel stays compact');
@@ -148,7 +142,20 @@ fs.mkdirSync(shots, { recursive: true });
   await slider.press('ArrowRight');
   assert.equal(await slider.getAttribute('aria-valuenow'), '1');
   await slider.press('Escape');
+  await queue.screenshot({ path: shots + '/queue-chart-dark.png' });
+  await queue.getByText('Counters & node comparison', { exact: true }).click();
+  await queue.getByRole('columnheader', { name: 'Node', exact: true }).waitFor();
+  await page.goto(base + '/dashboard/health');
   await protocol.getByRole('img', { name: 'Protocol messages history', exact: true }).waitFor();
+  assert.equal(await page.locator('.queue-diagnostics').count(), 0);
+  await page.getByRole('region', { name: 'Queue health summary' }).waitFor();
+  assert.equal(
+    await protocol.locator('.table-scroll').isVisible(),
+    false,
+    'tables start collapsed',
+  );
+  await protocol.screenshot({ path: shots + '/protocol-chart-light.png' });
+
   assert.equal(
     await protocol.locator('.series-readout button').count(),
     4,
@@ -165,14 +172,11 @@ fs.mkdirSync(shots, { recursive: true });
   assert.equal(await protocol.locator('.series-readout button[aria-pressed="true"]').count(), 4);
   await page.getByRole('button', { name: 'Dark appearance', exact: true }).click();
   await page.waitForTimeout(250);
-  await queue.screenshot({ path: shots + '/queue-chart-dark.png' });
   await protocol.screenshot({ path: shots + '/protocol-chart-dark.png' });
-  await queue.getByText('Counters & node comparison', { exact: true }).click();
-  await queue.getByRole('columnheader', { name: 'Node', exact: true }).waitFor();
   await protocol.getByText('Compare node counters', { exact: true }).click();
   await protocol.getByRole('columnheader', { name: 'Node / protocol', exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(base + '/dashboard/health');
+  await page.goto(base + '/dashboard/queues');
   await queue.getByRole('img', { name: 'Queue activity history', exact: true }).waitFor();
   assert.ok(
     await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),

@@ -155,18 +155,18 @@ const keys = [
       return 512;
     }, keys);
   }
-  for (const route of ['queues', 'health']) {
+  for (const route of ['queues']) {
     await page.goto(base + '/dashboard/' + route);
     await page.locator('.queue-diagnostics path[data-series]').first().waitFor();
     await page.getByRole('button', { name: 'Pause updates', exact: true }).click();
-    const scopeList = route === 'queues' ? scopes : ['all'];
+    const scopeList = scopes;
     for (const scope of scopeList) {
       await page.getByRole('button', { name: 'Select node scope', exact: true }).click();
       await page
         .getByRole('option', { name: scope === 'all' ? 'All nodes' : scope, exact: true })
         .click();
       const queue = page.locator('.queue-diagnostics');
-      for (const range of route === 'queues' ? [1, 5, 15] : [5]) {
+      for (const range of [1, 5, 15]) {
         await queue.getByRole('button', { name: `${range}m`, exact: true }).click();
         for (const scale of ['linear', 'log']) {
           await queue.getByRole('combobox', { name: 'Queue rate scale' }).selectOption(scale);

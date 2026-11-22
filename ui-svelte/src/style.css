@@ -2765,3 +2765,20 @@ th {
   flex-shrink: 0;
   color: var(--faint);
 }
+
+.health-activity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 24px;
+  margin-bottom: 24px;
+  align-items: start;
+}
+.health-activity-row > .panel {
+  min-width: 0;
+  margin-bottom: 0;
+}
+@media (max-width: 1150px) {
+  .health-activity-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

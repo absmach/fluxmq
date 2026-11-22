@@ -5,6 +5,7 @@
   import Queues from './lib/Queues.svelte';
   import ProtocolDelivery from './lib/ProtocolDelivery.svelte';
   import QueueDiagnostics from './lib/QueueDiagnostics.svelte';
+  import QueueHealthSummary from './lib/QueueHealthSummary.svelte';
   import ProtocolDiagnostics from './lib/ProtocolDiagnostics.svelte';
   import { clientURL, subscriptionURL, followLink } from './lib/routes';
   import Pagination from './lib/Pagination.svelte';
@@ -1365,17 +1366,22 @@
               </strong>
             </div>{/each}
         </section>
-        <QueueDiagnostics
-          {nodes}
-          points={histories[scope] ?? []}
-          demo={snapshot?.mode === 'demo'}
-          onnode={(id) => (nodeDetailID = id)}
-        /><ProtocolDiagnostics
-          {nodes}
-          points={histories[scope] ?? []}
-          demo={snapshot?.mode === 'demo'}
-          onnode={(id) => (nodeDetailID = id)}
-        />
+        <div class="health-activity-row">
+          <ProtocolDiagnostics
+            {nodes}
+            points={histories[scope] ?? []}
+            demo={snapshot?.mode === 'demo'}
+            onnode={(id) => (nodeDetailID = id)}
+          />
+          <QueueHealthSummary
+            {nodes}
+            points={histories[scope] ?? []}
+            href={scope === 'all'
+              ? '/dashboard/queues'
+              : `/dashboard/queues?${new URLSearchParams({ node: scope })}`}
+            onopen={(event) => followLink(event, () => navigate('queues', scope))}
+          />
+        </div>
         <div class="health-grid">
           {#each nodes as n}<section class="panel health-card">
               <div class="panel-heading">
