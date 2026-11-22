@@ -988,7 +988,7 @@
           <div>
             <span class="summary-label">
               Disconnected<Icon name="disconnected" size={18} />
-            </span><strong>
+            </span><strong class:disconnected-text={sessions.some((s) => !s.connected)}>
               {number(sessions.filter((s) => !s.connected).length)}
             </strong>
           </div>

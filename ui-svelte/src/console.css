@@ -29,6 +29,7 @@
   --muted: #a0aaba;
   --faint: #8491a5;
   --accent: #8baaff;
+  --disconnected-color: #ef9299;
   --accent-solid: #6389ed;
   --accent-bg: #6389ed14;
   --radius: 9px;
@@ -44,6 +45,7 @@
   --muted: #627188;
   --faint: #7c899e;
   --accent: #385fd0;
+  --disconnected-color: #b94c59;
   --accent-solid: #5278dc;
   --accent-bg: #5278dc0d;
 }
@@ -1458,4 +1460,8 @@ a.text-button {
   justify-content: space-between;
   font-size: 12px;
   color: var(--muted);
+}
+
+.disconnected-text {
+  color: var(--disconnected-color);
 }

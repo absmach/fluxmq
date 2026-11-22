@@ -178,13 +178,14 @@
   }
   .disconnected {
     background:
-      repeating-linear-gradient(135deg, transparent 0 4px, #00000020 4px 6px), var(--warning);
+      repeating-linear-gradient(135deg, transparent 0 4px, #00000020 4px 6px),
+      var(--disconnected-color);
   }
   .disconnected.split {
     box-shadow: inset 2px 0 var(--panel);
   }
   .state-counts .has-disconnected {
-    color: var(--warning);
+    color: var(--disconnected-color);
     font-weight: 500;
   }
   .state-counts {
