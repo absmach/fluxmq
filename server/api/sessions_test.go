@@ -477,3 +477,21 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 		}
 	}
 }
+
+func TestAMQPConsumerCountIsIndependentOfSubscriptionCount(t *testing.T) {
+	for _, include := range []bool{false, true} {
+		resp := amqpSessionResponse("amqp091:conn", "worker", []amqpbroker.SubscriptionSnapshot{
+			{Filter: "jobs", ConsumerCount: 3}, {Filter: "events", ConsumerCount: 1},
+		}, include)
+		if resp.SubscriptionCount != 2 || resp.ConsumerCount == nil || *resp.ConsumerCount != 4 {
+			t.Fatalf("include=%v: expected 2 subscriptions and 4 consumers, got %#v", include, resp)
+		}
+		if include && (resp.Subscriptions[0].ConsumerCount == nil || *resp.Subscriptions[0].ConsumerCount != 3) {
+			t.Fatalf("missing per-address consumer count: %#v", resp.Subscriptions)
+		}
+	}
+	empty := amqpSessionResponse("amqp091:publisher", "publisher", nil, true)
+	if empty.ConsumerCount == nil || *empty.ConsumerCount != 0 {
+		t.Fatalf("publisher must report zero consumers: %#v", empty)
+	}
+}
