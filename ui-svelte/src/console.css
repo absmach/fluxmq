@@ -1515,15 +1515,15 @@ details[open] > summary svg[data-icon='down'] {
   gap: 8px;
 }
 .sidebar-toggle {
-  align-self: flex-start;
+  align-self: center;
   flex-shrink: 0;
-  width: 48px;
+  width: 32px;
   height: 32px;
   margin-top: 8px;
   padding: 0;
-  border: 0;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: transparent;
+  background: var(--panel);
   color: var(--muted);
 }
 .sidebar-toggle:hover {
