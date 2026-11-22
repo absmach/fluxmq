@@ -1408,7 +1408,7 @@
             </span><strong>{compact(totals.sent)}</strong>
           </div>
         </section>
-        <details class="panel error-details" aria-label="Error breakdown">
+        <details class="panel error-details" aria-label="Error breakdown" open>
           <summary>
             <span>Error breakdown <small>Cumulative counters</small></span><Icon
               name="down"
@@ -1416,8 +1416,8 @@
             />
           </summary>
           <div class="error-breakdown">
-            {#each [{ key: 'protocol_errors', label: 'Protocol' }, { key: 'auth_errors', label: 'Authentication' }, { key: 'authz_errors', label: 'Authorization' }, { key: 'packet_errors', label: 'Packet' }] as error}<div>
-                <span>{error.label}</span><strong>
+            {#each [{ key: 'protocol_errors', label: 'Protocol', icon: 'terminal' }, { key: 'auth_errors', label: 'Authentication', icon: 'key' }, { key: 'authz_errors', label: 'Authorization', icon: 'shield' }, { key: 'packet_errors', label: 'Packet', icon: 'packet' }] as error}<div>
+                <span><Icon name={error.icon} size={16} />{error.label}</span><strong>
                   {number(
                     nodes.reduce(
                       (total, node) => total + (node[error.key as 'protocol_errors'] ?? 0),

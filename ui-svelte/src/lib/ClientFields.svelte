@@ -130,31 +130,25 @@
   </section>{/if}
 <section class="panel client-subscriptions-panel" class:amqp-consumers={!mqtt}>
   <h2>
-    {mqtt ? 'Subscriptions' : 'Consumers'}
-    <span class="count-tag">{client.subscription_count}</span>
+    {mqtt ? 'Subscriptions' : 'Consumes from'}
+    {#if mqtt}<span class="count-tag">{client.subscription_count}</span>{/if}
   </h2>
   {#if !mqtt}
     <div class="table-scroll">
       <table class="amqp-consumer-table">
         <thead>
           <tr>
-            <th>Topic filter</th>{#if hasConsumerGroups}<th>Consumer group</th>{/if}
+            <th>Queue / topic filter</th>{#if hasConsumerGroups}<th>Consumer group</th>{/if}
           </tr>
         </thead>
         <tbody>
           {#each client.subscriptions ?? [] as sub}<tr>
-              <td>
-                <a
-                  class="text-button mono"
-                  href={subscriptionURL(sub.filter, client.node_id)}
-                  onclick={(event) => followLink(event, () => onfilter(sub.filter, client.node_id))}
-                >
-                  {sub.filter}<Icon name="chevron" size={13} />
-                </a>
-              </td>
+              <td class="mono">{sub.filter}</td>
               {#if hasConsumerGroups}<td>{sub.consumer_group || '—'}</td>{/if}
             </tr>{:else}<tr>
-              <td colspan="2"><div class="empty-state">No listed consumers</div></td>
+              <td colspan={hasConsumerGroups ? 2 : 1}>
+                <div class="empty-state">This connection has no active subscriptions.</div>
+              </td>
             </tr>{/each}
         </tbody>
       </table>

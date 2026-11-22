@@ -1040,6 +1040,14 @@ dialog::backdrop {
   color: var(--muted);
   border-right: 1px solid var(--subtle-border);
 }
+.error-breakdown > div > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.error-breakdown > div > span svg {
+  flex-shrink: 0;
+}
 .error-breakdown > div:last-child {
   border-right: 0;
 }
@@ -1617,12 +1625,4 @@ details[open] > summary svg[data-icon='down'] {
 }
 .amqp-consumer-table th:first-child {
   width: 65%;
-}
-.amqp-consumer-table a {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.amqp-consumer-table svg {
-  flex-shrink: 0;
 }
