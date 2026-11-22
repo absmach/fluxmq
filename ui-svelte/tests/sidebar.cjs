@@ -28,6 +28,12 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   fs.mkdirSync(shots, { recursive: true });
   await page.screenshot({ path: shots + '/sidebar-expanded-dark.png', animations: 'disabled' });
   const toggle = page.getByRole('button', { name: 'Collapse sidebar', exact: true });
+  assert.equal(await page.locator('.console-statusbar .sidebar-toggle').count(), 0);
+  assert.equal(await page.locator('.sidebar-header .sidebar-toggle').count(), 1);
+  const brandBox = await page.locator('.sidebar-header .brand').boundingBox();
+  const toggleBox = await toggle.boundingBox();
+  assert.ok(toggleBox.x >= brandBox.x + brandBox.width, 'collapse sits beside the logo');
+  assert.ok(toggleBox.x + toggleBox.width <= expanded.x, 'collapse stays inside the sidebar');
   await toggle.focus();
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Expand sidebar', exact: true }).waitFor();
@@ -36,6 +42,25 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
     72,
   );
   assert.ok((await page.locator('.console').boundingBox()).width > expanded.width);
+  const expand = page.getByRole('button', { name: 'Expand sidebar', exact: true });
+  assert.ok(
+    await expand.evaluate((el) => el === document.activeElement),
+    'toggle retains keyboard focus',
+  );
+  assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '1');
+  await expand.evaluate((el) => el.blur());
+  await page.mouse.move(500, 100);
+  assert.equal(await expand.locator('img').evaluate((el) => getComputedStyle(el).opacity), '1');
+  assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '0');
+  await expand.hover();
+  assert.equal(await expand.locator('img').evaluate((el) => getComputedStyle(el).opacity), '0');
+  assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '1');
+  await page
+    .locator('.sidebar')
+    .screenshot({ path: shots + '/sidebar-expand-hover.png', animations: 'disabled' });
+  await expand.click();
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+
   assert.equal(new URL(page.url()).searchParams.get('node'), 'eu-west-02');
   assert.equal(
     await nav.getByRole('link', { name: 'Queues', exact: true }).getAttribute('aria-current'),
@@ -96,6 +121,18 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
     await page.locator('.sidebar').evaluate((el) => el.getBoundingClientRect().width),
     232,
   );
+  for (const width of [1024, 801]) {
+    await page.setViewportSize({ width, height: 900 });
+    const logo = await page.locator('.sidebar-header .brand').boundingBox();
+    const collapse = await page
+      .getByRole('button', { name: 'Collapse sidebar', exact: true })
+      .boundingBox();
+    const sidebar = await page.locator('.sidebar').boundingBox();
+    assert.ok(
+      collapse.x >= logo.x + logo.width && collapse.x + collapse.width <= sidebar.width,
+      'logo and collapse control fit narrower desktops',
+    );
+  }
   assert.deepEqual(errors, []);
   await browser.close();
   console.log(

@@ -584,19 +584,41 @@
     class="sidebar"
     inert={viewportWidth <= 800 && !mobileOpen}
   >
-    <a
-      class="brand"
-      href="/dashboard"
-      onclick={(e) => {
-        e.preventDefault();
-        navigate('overview');
-      }}
-      aria-label="FluxMQ overview"
-    >
-      <img src="/brand/fluxmq-symbol.svg" alt="" width="36" height="36" /><span>
-        Flux<span class="brand-mq">MQ</span>
-      </span>
-    </a>
+    <div class="sidebar-header">
+      {#if !iconRail}
+        <a
+          class="brand"
+          href="/dashboard"
+          onclick={(e) => {
+            e.preventDefault();
+            navigate('overview');
+          }}
+          aria-label="FluxMQ overview"
+        >
+          <img src="/brand/fluxmq-symbol.svg" alt="" width="36" height="36" /><span>
+            Flux<span class="brand-mq">MQ</span>
+          </span>
+        </a>
+      {/if}
+      {#if viewportWidth > 800}<button
+          class="icon-button sidebar-toggle"
+          class:logo-toggle={iconRail}
+          aria-label={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!iconRail}
+          aria-controls="console-navigation"
+          onclick={toggleSidebar}
+        >
+          {#if iconRail}<img
+              class="rail-logo"
+              src="/brand/fluxmq-symbol.svg"
+              alt=""
+              width="38"
+              height="38"
+            />{/if}
+          <Icon name={iconRail ? 'sidebar-expand' : 'sidebar-collapse'} size={20} />
+        </button>{/if}
+    </div>
     <nav aria-label="Main navigation">
       {#each navigationGroups as group}
         <div class="navigation-group" role="group" aria-label={group.label || 'Overview'}>
@@ -665,15 +687,6 @@
             onclick={() => (mobileOpen = true)}
           >
             <Icon name="menu" />
-          </button>{:else}<button
-            class="icon-button sidebar-toggle"
-            aria-label={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-expanded={!iconRail}
-            aria-controls="console-navigation"
-            onclick={toggleSidebar}
-          >
-            <Icon name={iconRail ? 'sidebar-expand' : 'sidebar-collapse'} size={19} />
           </button>{/if}
         {#if page === 'nodes'}<span class="inventory-context">
             <Icon name="nodes" size={18} />Cluster inventory

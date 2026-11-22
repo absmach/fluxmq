@@ -1507,11 +1507,62 @@ details[open] > summary svg[data-icon='down'] {
 .sidebar .utility-link > svg {
   flex-shrink: 0;
 }
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  gap: 8px;
+}
 .sidebar-toggle {
   flex-shrink: 0;
   color: var(--muted);
+  width: 32px;
+  height: 36px;
+}
+.sidebar-toggle.logo-toggle {
+  position: relative;
+  width: 48px;
+  height: 40px;
+  padding: 0;
+}
+.logo-toggle .rail-logo,
+.logo-toggle svg {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+.logo-toggle svg {
+  opacity: 0;
+}
+.logo-toggle:hover .rail-logo,
+.logo-toggle:focus-visible .rail-logo {
+  opacity: 0;
+}
+.logo-toggle:hover svg,
+.logo-toggle:focus-visible svg {
+  opacity: 1;
+}
+@media (hover: none) {
+  .logo-toggle .rail-logo {
+    opacity: 0;
+  }
+  .logo-toggle svg {
+    opacity: 1;
+  }
 }
 @media (min-width: 801px) {
+  .sidebar-header .brand {
+    padding: 0;
+    gap: 8px;
+  }
+  .sidebar-header .brand img {
+    width: 32px;
+    height: 32px;
+  }
+  .sidebar-header .brand > span {
+    font-size: 28px;
+  }
   .sidebar-collapsed .sidebar {
     width: 72px;
     padding-inline: 12px;
@@ -1520,12 +1571,6 @@ details[open] > summary svg[data-icon='down'] {
     margin-left: 72px;
     width: calc(100% - 72px);
   }
-  .sidebar-collapsed .brand {
-    padding: 0;
-    width: 100%;
-    justify-content: center;
-  }
-  .sidebar-collapsed .brand > span,
   .sidebar-collapsed .navigation-item-label,
   .sidebar-collapsed .nav-count,
   .sidebar-collapsed .navigation-group-label,
