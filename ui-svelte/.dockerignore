@@ -1,0 +1,4 @@
+node_modules
+dist
+fluxmq-console
+*.log
