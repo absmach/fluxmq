@@ -679,3 +679,21 @@ dialog::backdrop {
     display: none;
   }
 }
+
+/* Desktop navigation is in the sidebar. Only phones need a navigation header. */
+.sidebar nav {
+  margin-top: 36px;
+}
+.mobile-header {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.mobile-header > span {
+  font-size: 1rem;
+  font-weight: 500;
+}

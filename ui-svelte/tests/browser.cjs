@@ -62,9 +62,7 @@ fs.mkdirSync(shots, { recursive: true });
   assert.equal(await page.locator('.health-card').count(), 3);
   await page.getByLabel('Cluster scope').selectOption('eu-west-01');
   assert.equal(await page.locator('.health-card').count(), 1);
-  await page.keyboard.press('Control+k');
-  await page.getByLabel('Search pages').fill('overview');
-  await page.locator('.command-results button').click();
+  await page.getByRole('link', { name: 'Overview', exact: true }).click();
   await page.getByLabel('Cluster scope').selectOption('all');
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export', exact: true }).click();
@@ -101,7 +99,7 @@ fs.mkdirSync(shots, { recursive: true });
   await mobile.screenshot({ path: path.join(shots, 'mobile-detail.png'), fullPage: true });
   assert.deepEqual(errors, []);
   console.log(
-    'PASS: SSE refresh, pause/resume, ranges, theme persistence, search/filter, session detail, pagination, subscriptions, cluster, health, scope, command palette, CSV export, mobile navigation and overflow. No browser errors.',
+    'PASS: SSE refresh, pause/resume, ranges, theme persistence, search/filter, session detail, pagination, subscriptions, cluster, health, scope, CSV export, mobile navigation and overflow. No browser errors.',
   );
   await browser.close();
 })().catch((e) => {

@@ -43,8 +43,9 @@ local or behind your existing authenticated management gateway.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, node scopes.
 - Cluster: topology, node inventory, drilldown into health.
 - Health: broker reachability, uptime, cumulative error and message counters.
-- Light/dark appearance persisted locally, keyboard command palette (Ctrl/Cmd K),
-  responsive navigation, CSV export, live pause/resume, visible reconnect states.
+- Light/dark appearance persisted locally, responsive sidebar navigation, CSV
+  export, live pause/resume, and visible reconnect states. Search stays within
+  session and subscription tables; there is no global command palette.
 
 The charts use lightweight SVG. All fonts and brand assets are served locally.
 API strings are rendered as text, never injected as HTML.

@@ -53,8 +53,6 @@
   let tablePage = $state(1);
   let toast = $state('');
   let toastTimer: ReturnType<typeof setTimeout>;
-  let commandQuery = $state('');
-  let commandDialog: HTMLDialogElement;
   let detailDialog: HTMLDialogElement;
   let connectionDialog: HTMLDialogElement;
   let detail = $state<Session | null>(null);
@@ -143,12 +141,6 @@
         .join(',') || 'var(--border) 0% 100%'
     })`;
   });
-  let commands = $derived(
-    navigation.filter((n) =>
-      `${n.label} ${n.description}`.toLowerCase().includes(commandQuery.toLowerCase()),
-    ),
-  );
-
   $effect(() => {
     const max = Math.max(1, Math.ceil(filteredSessions.length / 10));
     if (tablePage > max) tablePage = max;
@@ -162,7 +154,6 @@
     protocol = 'all';
     tablePage = 1;
     mobileOpen = false;
-    commandDialog?.close();
     document.querySelector('main')?.scrollTo(0, 0);
   }
   function apply(s: Snapshot) {
@@ -278,13 +269,6 @@
     URL.revokeObjectURL(url);
     notify('Export ready.');
   }
-  function keydown(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-      e.preventDefault();
-      commandQuery = '';
-      commandDialog.showModal();
-    }
-  }
   onMount(() => {
     stream = new EventSource('/console-api/stream');
     stream.addEventListener('snapshot', (event) => {
@@ -315,7 +299,7 @@
   });
 </script>
 
-<svelte:window onkeydown={keydown} bind:innerWidth={viewportWidth} />
+<svelte:window bind:innerWidth={viewportWidth} />
 <svelte:head><title>{currentNav.label} · FluxMQ</title></svelte:head>
 
 <div class="app-shell">
@@ -344,7 +328,6 @@
         Flux<span class="brand-mq">MQ</span>
       </span>
     </a>
-    <div class="nav-label">MONITOR</div>
     <nav aria-label="Main navigation">
       {#each navigation as item}<a
           href={item.id === 'overview' ? '/dashboard' : `/dashboard/${item.id}`}
@@ -389,39 +372,23 @@
     </div>
   </aside>
   <div class="console">
-    <header class="topbar">
-      <button
-        class="icon-button mobile-toggle"
-        aria-label="Open navigation"
-        aria-expanded={mobileOpen}
-        aria-controls="console-navigation"
-        onclick={() => (mobileOpen = true)}
-      >
-        <Icon name="menu" />
-      </button>
-      <div class="breadcrumb">
-        <span>FluxMQ</span><span class="crumb-divider">/</span><strong>
-          {currentNav.label}
-        </strong>
-      </div>
-      <div class="topbar-actions">
+    {#if viewportWidth <= 800}
+      <header class="mobile-header">
         <button
-          class="search-trigger"
-          onclick={() => {
-            commandQuery = '';
-            commandDialog.showModal();
-          }}
+          class="icon-button"
+          aria-label="Open navigation"
+          aria-expanded={mobileOpen}
+          aria-controls="console-navigation"
+          onclick={() => (mobileOpen = true)}
         >
-          <Icon name="search" size={16} /><span>Find anything…</span><kbd>⌘ K</kbd>
+          <Icon name="menu" />
         </button>
-        <div class="topbar-divider"></div>
-        <span class="local-indicator"><Icon name="terminal" size={15} />local</span>
-      </div>
-    </header>
+        <span>FluxMQ</span>
+      </header>
+    {/if}
     <main id="main">
       <div class:overview-heading={page === 'overview'} class="page-heading">
         <div>
-          <div class="eyebrow">BROKER CONSOLE</div>
           <h1>
             {page === 'overview' ? 'Broker overview' : currentNav.label}
           </h1>
@@ -1051,26 +1018,6 @@
     </table>
   </div>
 {/snippet}
-
-<dialog bind:this={commandDialog} class="command-dialog">
-  <div class="command-input">
-    <Icon name="search" /><input
-      aria-label="Search pages"
-      placeholder="Where would you like to go?"
-      bind:value={commandQuery}
-    /><button class="key-button" onclick={() => commandDialog.close()}>Esc</button>
-  </div>
-  <div class="command-results">
-    <span class="nav-label">GO TO</span>{#each commands as command}<button
-        onclick={() => navigate(command.id)}
-      >
-        <span class="node-icon"><Icon name={command.id} /></span><span>
-          <strong>{command.label}</strong><small>{command.description}</small>
-        </span><Icon name="chevron" size={16} />
-      </button>{:else}<p class="empty-state">No matching pages.</p>{/each}
-  </div>
-  <div class="command-footer">Navigate the console with Ctrl / ⌘ K.</div>
-</dialog>
 
 <dialog
   bind:this={detailDialog}
