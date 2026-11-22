@@ -192,7 +192,7 @@ input::placeholder {
   font-weight: 500;
   color: var(--accent);
 }
-.workspace-switch {
+.console-switch {
   margin: 32px 0 30px;
   width: 100%;
   display: flex;
@@ -204,10 +204,10 @@ input::placeholder {
   background: var(--panel);
   padding: 11px 10px;
 }
-.workspace-switch:hover {
+.console-switch:hover {
   border-color: var(--faint);
 }
-.workspace-icon {
+.console-icon {
   height: 32px;
   width: 32px;
   display: grid;
@@ -217,18 +217,18 @@ input::placeholder {
   border-radius: 7px;
   color: var(--muted);
 }
-.workspace-switch strong {
+.console-switch strong {
   display: block;
   font-size: 0.8125rem;
   font-weight: 550;
 }
-.workspace-switch small {
+.console-switch small {
   font-size: 0.6875rem;
   color: var(--muted);
   display: block;
   margin-top: 3px;
 }
-.workspace-switch > svg:last-child {
+.console-switch > svg:last-child {
   margin-left: auto;
   color: var(--muted);
 }
@@ -385,7 +385,7 @@ input::placeholder {
   margin-left: auto;
   line-height: 1.5;
 }
-.workspace {
+.console {
   margin-left: 232px;
   width: calc(100% - 232px);
 }
@@ -551,7 +551,7 @@ h1 {
   background: var(--hover);
   color: var(--text);
 }
-.workspace-toolbar {
+.console-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1214,7 +1214,7 @@ tbody tr:hover {
 .nodes-table td:nth-child(4) {
   min-width: 175px;
 }
-.workspace-footer {
+.console-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1222,7 +1222,7 @@ tbody tr:hover {
   color: var(--faint);
   font-size: 0.5625rem;
 }
-.workspace-footer > span {
+.console-footer > span {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1626,7 +1626,7 @@ tbody tr:hover {
   text-align: right;
   overflow-wrap: anywhere;
 }
-.workspace-detail {
+.console-detail {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
@@ -1636,10 +1636,10 @@ tbody tr:hover {
   border-bottom: 1px solid var(--border);
   font-size: 0.8125rem;
 }
-.workspace-detail span {
+.console-detail span {
   color: var(--muted);
 }
-.workspace-detail strong {
+.console-detail strong {
   font-weight: 450;
   text-align: right;
 }
@@ -1884,7 +1884,7 @@ dialog::backdrop {
     width: 210px;
     padding-inline: 14px;
   }
-  .workspace {
+  .console {
     margin-left: 210px;
     width: calc(100% - 210px);
   }
@@ -2010,7 +2010,7 @@ dialog::backdrop {
   .scope-caption {
     display: none;
   }
-  .workspace-footer > span:last-child {
+  .console-footer > span:last-child {
     display: none;
   }
   .cluster-hero {
@@ -2054,7 +2054,7 @@ dialog::backdrop {
   .sidebar.open {
     transform: translateX(0);
   }
-  .workspace {
+  .console {
     margin-left: 0;
     width: 100%;
   }
@@ -2125,7 +2125,7 @@ dialog::backdrop {
   .stream-controls {
     gap: 10px;
   }
-  .workspace-toolbar {
+  .console-toolbar {
     margin-bottom: 18px;
   }
   .health-banner {
@@ -2178,7 +2178,7 @@ dialog::backdrop {
   .heading-actions {
     padding-top: 30px;
   }
-  .workspace-toolbar {
+  .console-toolbar {
     gap: 8px;
     align-items: center;
   }
@@ -2328,7 +2328,7 @@ dialog::backdrop {
   .nodes-table {
     min-width: 650px;
   }
-  .workspace-footer {
+  .console-footer {
     font-size: 0.5rem;
     padding-top: 18px;
   }
@@ -2480,24 +2480,24 @@ dialog::backdrop {
 }
 
 /* Keep operational labels readable; compact metadata stays secondary. */
-.workspace {
+.console {
   min-width: 0;
 }
 .table-scroll {
   position: relative;
 }
-.workspace-switch {
+.console-switch {
   gap: 8px;
 }
-.workspace-switch strong {
+.console-switch strong {
   white-space: nowrap;
   font-size: 0.8125rem;
 }
-.workspace-icon {
+.console-icon {
   width: 28px;
   flex-shrink: 0;
 }
-.workspace-switch > svg:last-child {
+.console-switch > svg:last-child {
   width: 12px;
 }
 .sidebar-note p,

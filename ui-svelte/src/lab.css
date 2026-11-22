@@ -1,0 +1,661 @@
+/* FluxMQ's workbench: pen-plotter graphics, editorial type, and instrument panels. */
+:root {
+  --bg: #151719;
+  --sidebar: #101214;
+  --panel: #1b1e21;
+  --panel-raised: #22262a;
+  --border: #353a40;
+  --subtle-border: #2b3035;
+  --text: #f0f1ef;
+  --muted: #a1a8af;
+  --faint: #858e98;
+  --accent: #99b1ff;
+  --accent-solid: #698eff;
+  --accent-bg: #91aaff12;
+  --radius: 5px;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+:root[data-theme='light'] {
+  --bg: #f3f5f7;
+  --sidebar: #fafbfc;
+  --panel: #ffffff;
+  --panel-raised: #eef1f5;
+  --border: #cdd3dc;
+  --subtle-border: #e8ebf0;
+  --text: #212a33;
+  --muted: #5e6a78;
+  --faint: #74808e;
+  --accent: #3c5dcc;
+  --accent-solid: #4769db;
+  --accent-bg: #4562c710;
+}
+body {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23888' opacity='.035' filter='url(%23n)' d='M0 0h180v180H0z'/%3E%3C/svg%3E");
+}
+.brand {
+  gap: 12px;
+}
+.brand img {
+  transform: rotate(-5deg);
+}
+.brand > span {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -1.8px;
+}
+.brand-mq {
+  font-weight: 450;
+}
+.sidebar {
+  border-right-style: dashed;
+  overflow-y: auto;
+}
+.broker-connection {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 32px 0 29px;
+  padding: 16px 4px;
+  border-block: 1px solid var(--border);
+}
+.connection-terminal {
+  display: flex;
+  color: var(--accent);
+}
+.broker-connection > div {
+  min-width: 0;
+  flex: 1;
+}
+.broker-connection strong {
+  display: block;
+  font: 500 0.8125rem var(--mono);
+}
+.broker-connection small {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.625rem;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.broker-connection .icon-button {
+  width: 23px;
+  flex-shrink: 0;
+}
+.nav-label,
+.eyebrow,
+.breadcrumb,
+.demo-badge,
+.count-tag,
+.leader-tag,
+.scope-control,
+.live-control,
+.stream-time,
+.chart-footer,
+.x-axis,
+.y-axis,
+.protocol-tag,
+.local-indicator {
+  font-family: var(--mono);
+}
+.nav-label {
+  font-size: 0.625rem;
+  letter-spacing: 1.2px;
+}
+.sidebar nav a {
+  border-radius: 3px;
+}
+.sidebar nav a.active {
+  background: var(--accent);
+  color: #171c2c;
+}
+.sidebar nav a.active::before {
+  background: var(--accent);
+  height: 25px;
+  width: 2px;
+}
+.sidebar nav a.active .nav-count {
+  color: #17203a;
+  background: #ffffff30;
+  border-color: #17203a30;
+}
+.sidebar-note {
+  position: relative;
+  border: 0;
+  border-radius: 2px;
+  background: #99b1ff;
+  color: #1d2942;
+  padding: 19px 17px;
+  transform: rotate(-2deg);
+  margin: 0 6px 26px;
+  box-shadow: 4px 5px 0 #0003;
+}
+.sidebar-note::before {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 60px;
+  width: 63px;
+  height: 15px;
+  transform: rotate(4deg);
+  background: #ffffff36;
+  border: 1px solid #ffffff17;
+}
+.sidebar-note .note-symbol {
+  color: #253551;
+  margin-bottom: 10px;
+}
+.sidebar-note strong {
+  font:
+    italic 500 1.35rem/1.15 Georgia,
+    'Times New Roman',
+    serif;
+  max-width: 120px;
+  letter-spacing: -0.5px;
+}
+.sidebar-note p {
+  font: 0.75rem/1.6 var(--mono);
+  color: #263d63;
+  margin-top: 12px;
+}
+.sidebar-note a {
+  color: #1d2942;
+  font: 0.6875rem var(--mono);
+}
+.sidebar-note a:hover {
+  text-decoration: underline;
+}
+.topbar {
+  background: transparent;
+  position: relative;
+}
+.topbar::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 38px;
+  width: 90px;
+  height: 5px;
+  background: repeating-linear-gradient(90deg, var(--faint) 0 1px, transparent 1px 9px);
+  opacity: 0.45;
+}
+.local-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+.overview-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px auto;
+  gap: 14px;
+  min-height: 172px;
+  padding-bottom: 4px;
+  margin-top: -8px;
+  margin-bottom: 23px;
+}
+.page-heading .eyebrow {
+  font-size: 0.625rem;
+  letter-spacing: 1.35px;
+  color: var(--accent);
+}
+h1 {
+  font-size: 2.5rem;
+  letter-spacing: -1.6px;
+  font-weight: 650;
+}
+.overview-heading h1 {
+  font-size: 2.8rem;
+  white-space: nowrap;
+  letter-spacing: -1.8px;
+  margin-block: 15px 9px;
+}
+h1 em {
+  display: inline-block;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 400;
+  font-size: 1.15em;
+  letter-spacing: -2px;
+  color: var(--accent);
+  transform: rotate(-4deg);
+  position: relative;
+}
+h1 em::after {
+  content: '';
+  position: absolute;
+  width: 102%;
+  height: 7px;
+  bottom: -2px;
+  left: -3%;
+  border-bottom: 2px solid var(--accent);
+  border-radius: 50%;
+  transform: rotate(-4deg);
+  opacity: 0.6;
+}
+.overview-heading .heading-actions {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 0;
+}
+.heading-actions .status-label {
+  font-size: 0.6875rem;
+}
+.signal-art {
+  width: 250px;
+  position: relative;
+  transform: rotate(-6deg);
+  padding-bottom: 19px;
+  color: var(--accent);
+}
+.signal-art svg {
+  width: 100%;
+  display: block;
+}
+.art-ribbon {
+  stroke: currentColor;
+  stroke-width: 0.65;
+}
+.art-axis {
+  stroke: var(--faint);
+  stroke-width: 0.5;
+  stroke-dasharray: 2 6;
+  opacity: 0.35;
+}
+.art-registration {
+  stroke: var(--muted);
+  stroke-width: 0.6;
+  opacity: 0.5;
+}
+.art-terminal {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+.signal-art text {
+  fill: var(--faint);
+  font: 7px var(--mono);
+  letter-spacing: 2px;
+}
+.art-caption {
+  position: absolute;
+  bottom: 2px;
+  left: 20px;
+  font:
+    italic 0.8125rem Georgia,
+    serif;
+  color: var(--muted);
+  transform: rotate(3deg);
+}
+.button,
+.search-field,
+.segmented,
+.segmented button,
+.live-control {
+  border-radius: 3px;
+}
+.console-toolbar {
+  border-bottom-style: dashed;
+  padding-bottom: 17px;
+}
+.metric-grid {
+  gap: 12px;
+}
+.metric-card {
+  border-radius: 4px;
+  border-top: 2px solid var(--faint);
+  padding-top: 18px;
+  background-image: linear-gradient(120deg, #ffffff02, transparent);
+}
+.metric-card:nth-child(2) {
+  border-top-color: var(--accent);
+}
+.metric-card:nth-child(3) {
+  border-top-color: var(--mint);
+}
+.metric-card::after {
+  content: '+';
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  font: 11px var(--mono);
+  color: var(--faint);
+  opacity: 0.45;
+}
+.metric-label {
+  padding-right: 4px;
+}
+.metric-value {
+  font-family: var(--mono);
+  font-weight: 400;
+  letter-spacing: -1.5px;
+  font-size: 2rem;
+}
+.metric-unit {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+.metric-bottom {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+.panel {
+  border-radius: 5px;
+}
+.panel-heading h2 {
+  font-weight: 550;
+  letter-spacing: -0.25px;
+}
+.panel-heading p {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+.traffic-panel {
+  position: relative;
+}
+.traffic-panel .chart-main {
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent calc(20% - 1px),
+    var(--subtle-border) calc(20% - 1px),
+    var(--subtle-border) 20%
+  );
+}
+.chart-legend > span {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+.chart-legend strong {
+  font-size: 0.8125rem;
+}
+.line-in {
+  stroke-width: 1.7;
+}
+.line-out {
+  stroke-width: 1.3;
+}
+.donut-orbit {
+  border-style: dotted;
+  border-color: var(--faint);
+}
+.donut-orbit::before,
+.donut-orbit::after {
+  content: '+';
+  position: absolute;
+  top: 50%;
+  left: -5px;
+  font: 12px var(--mono);
+  color: var(--muted);
+  background: var(--panel);
+}
+.donut-orbit::after {
+  left: auto;
+  right: -5px;
+}
+.donut {
+  padding: 8px;
+}
+.donut-hole span {
+  font-family: var(--mono);
+  font-weight: 400;
+}
+.protocol-list button {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+.node-icon {
+  border-radius: 3px;
+  background: transparent;
+}
+th {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.3px;
+}
+.node-identity strong {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+.company {
+  border-top-style: dashed;
+}
+.console-footer {
+  border-top: 1px dashed var(--border);
+  margin-top: 23px;
+  padding-top: 16px;
+  font-family: var(--mono);
+}
+.footer-brand {
+  font-family: Manrope, sans-serif;
+}
+[data-theme='light'] .sidebar-note {
+  background: #b9c9ff;
+}
+[data-theme='light'] .sidebar nav a.active {
+  color: #fff;
+}
+[data-theme='light'] .sidebar nav a.active .nav-count {
+  color: #fff;
+}
+[data-theme='light'] .metric-card {
+  border-top-color: #9aa6b8;
+}
+[data-theme='light'] .metric-card:nth-child(2) {
+  border-top-color: var(--accent);
+}
+[data-theme='light'] .metric-card:nth-child(3) {
+  border-top-color: var(--mint);
+}
+@media (min-width: 1600px) {
+  .overview-heading {
+    grid-template-columns: minmax(0, 1fr) 320px auto;
+  }
+  .signal-art {
+    width: 300px;
+  }
+  .overview-heading h1 {
+    font-size: 3.35rem;
+  }
+  .metric-value {
+    font-size: 2.3rem;
+  }
+}
+@media (max-width: 1250px) {
+  .overview-heading {
+    grid-template-columns: minmax(0, 1fr) 190px auto;
+  }
+  .signal-art {
+    width: 190px;
+  }
+  .overview-heading h1 {
+    font-size: 2.3rem;
+  }
+  .heading-actions .status-label {
+    font-size: 0.625rem;
+  }
+  .metric-value {
+    font-size: 1.8rem;
+  }
+  .metric-label {
+    font-size: 0.75rem;
+  }
+  .broker-connection {
+    gap: 6px;
+  }
+  .broker-connection small {
+    font-size: 0.5625rem;
+  }
+  .broker-connection .icon-button {
+    width: 19px;
+  }
+  .metric-bottom {
+    font-size: 0.5625rem;
+  }
+  .metric-unit {
+    font-size: 0.5625rem;
+  }
+}
+@media (max-width: 1100px) {
+  .signal-art {
+    display: none;
+  }
+  .overview-heading {
+    grid-template-columns: 1fr auto;
+    min-height: 145px;
+  }
+  .overview-heading h1 {
+    font-size: 2.7rem;
+  }
+  .metric-value {
+    font-size: 2rem;
+  }
+  .metric-label {
+    font-size: 0.875rem;
+  }
+  .metric-bottom {
+    font-size: 0.625rem;
+  }
+  .sidebar-note strong {
+    font-size: 1.2rem;
+  }
+}
+@media (max-width: 800px) {
+  .broker-connection {
+    gap: 9px;
+  }
+  .broker-connection small {
+    font-size: 0.625rem;
+  }
+  .sidebar-note {
+    display: block;
+    margin-top: 10px;
+    padding: 14px 17px;
+    margin-bottom: 16px;
+  }
+  .sidebar-note p {
+    display: none;
+  }
+  .sidebar-note .note-symbol {
+    display: none;
+  }
+  .sidebar-note strong {
+    max-width: none;
+    font-size: 1.2rem;
+    margin-bottom: 12px;
+  }
+  .sidebar-bottom {
+    padding-top: 20px;
+  }
+  .overview-heading {
+    min-height: 130px;
+    margin-top: 0;
+  }
+  .overview-heading h1 {
+    font-size: 2.5rem;
+  }
+  .page-heading .eyebrow {
+    font-size: 0.5625rem;
+  }
+  .topbar::after {
+    left: 20px;
+  }
+  .local-indicator {
+    font-size: 0.625rem;
+  }
+  .local-indicator svg {
+    display: none;
+  }
+}
+@media (max-width: 620px) {
+  .overview-heading {
+    grid-template-columns: minmax(0, 1fr) 34px;
+    min-height: 140px;
+    gap: 7px;
+  }
+  .overview-heading h1 {
+    font-size: 1.95rem;
+    letter-spacing: -1.2px;
+    white-space: normal;
+    line-height: 1.2;
+    max-width: 280px;
+  }
+  .overview-heading h1 em {
+    font-size: 1.13em;
+  }
+  .overview-heading .heading-actions {
+    padding-top: 25px;
+  }
+  .page-heading p {
+    font-size: 0.75rem;
+  }
+  .metric-label {
+    font-size: 0.75rem;
+  }
+  .metric-value {
+    font-size: 1.8rem;
+  }
+  .metric-unit {
+    font-size: 0.5625rem;
+  }
+  .metric-bottom {
+    font-size: 0.5625rem;
+  }
+  .console-toolbar {
+    margin-bottom: 18px;
+  }
+  .chart-legend > span {
+    font-size: 0.625rem;
+  }
+  .chart-legend strong {
+    font-size: 0.75rem;
+  }
+  .panel-heading p {
+    font-size: 0.625rem;
+  }
+  .protocol-list button {
+    font-size: 0.6875rem;
+  }
+  .scope-control select {
+    font-size: 0.75rem;
+  }
+  .breadcrumb {
+    font-size: 0.6875rem;
+    gap: 10px;
+  }
+  .local-indicator {
+    font-size: 0.5625rem;
+  }
+  .topbar-actions {
+    gap: 7px;
+  }
+  .topbar {
+    gap: 10px;
+  }
+  .sidebar-note {
+    margin-bottom: 12px;
+  }
+  .company {
+    padding-top: 16px;
+  }
+  .utility-link {
+    padding-block: 9px;
+  }
+  .console-footer {
+    font-size: 0.5rem;
+  }
+  .panel-caption {
+    display: none;
+  }
+  .signal-art {
+    display: none;
+  }
+}
+@media (max-height: 760px) and (min-width: 801px) {
+  .sidebar-note {
+    display: none;
+  }
+  .sidebar-bottom {
+    padding-top: 15px;
+  }
+}

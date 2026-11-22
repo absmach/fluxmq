@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 64" fill="none">
-  <rect y="8" width="48" height="48" rx="13" fill="#6294FF"/>
-  <path d="M18 18h22l-6 8H22L10 43H2l16-25Z M22 32h13l-6 8H16l6-8Z" fill="white"/>
-  <text x="63" y="44" font-family="Manrope,Arial,sans-serif" font-size="38" font-weight="750" letter-spacing="-2" fill="#F4F4F5">flux<tspan fill="#6294FF">mq</tspan></text>
+  <path d="M2 10h34l10 10v34H2V10Z" fill="#99B1FF"/>
+  <path d="M18 18h22l-6 8H22L10 43H2l16-25Z M22 32h13l-6 8H16l6-8Z" fill="#182033"/>
+  <text x="63" y="44" font-family="Manrope,Arial,sans-serif" font-size="38" font-weight="750" letter-spacing="-2" fill="#F4F4F5">flux<tspan fill="#99B1FF">mq</tspan></text>
 </svg>

@@ -101,7 +101,10 @@ docker run --rm -p 127.0.0.1:3002:3002 fluxmq-console:preview \
 ## Identity
 
 Graphite surfaces, cool blue accents, and a geometric “F” built from two routed
-paths establish the new FluxMQ identity. Green denotes operational state.
+paths establish the new FluxMQ identity. The local-console interface combines
+pen-plotter artwork, monospace instrument labels, italic editorial typography,
+and subtle print texture. It has no accounts or workspace abstraction. Green
+denotes operational state.
 The logo is editable SVG at `public/brand/fluxmq-symbol.svg`; the wordmark is
 `public/brand/fluxmq-wordmark.svg` (Manrope should be installed when editing).
 

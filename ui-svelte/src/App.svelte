@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from './lib/Icon.svelte';
+  import SignalArt from './lib/SignalArt.svelte';
   import TrafficChart from './lib/TrafficChart.svelte';
   import {
     number,
@@ -276,7 +277,7 @@
     a.download = `fluxmq-${snapshot.mode}-${page}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    notify('Your workspace export is ready.');
+    notify('Export ready. Happy digging.');
   }
   function keydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -326,7 +327,7 @@
       onclick={() => (mobileOpen = false)}
     ></button>{/if}
   <aside
-    id="workspace-navigation"
+    id="console-navigation"
     class:open={mobileOpen}
     class="sidebar"
     inert={viewportWidth <= 800 && !mobileOpen}
@@ -344,14 +345,24 @@
         flux<span class="brand-mq">mq</span>
       </span>
     </a>
-    <button class="workspace-switch" onclick={() => connectionDialog.showModal()}>
-      <span class="workspace-icon"><Icon name="globe" size={18} /></span><span>
-        <strong>{snapshot?.mode === 'demo' ? 'Demo workspace' : 'My workspace'}</strong><small>
-          {snapshot?.mode === 'demo' ? 'Explore FluxMQ' : 'Broker management'}
+    <div class="broker-connection">
+      <span class="connection-terminal"><Icon name="terminal" size={17} /></span>
+      <div>
+        <strong>Local console</strong><small>
+          {snapshot?.mode === 'demo'
+            ? 'demo brokers / simulated data'
+            : `${snapshot?.nodes.length ?? 0} configured brokers`}
         </small>
-      </span><Icon name="down" size={15} />
-    </button>
-    <div class="nav-label">WORKSPACE</div>
+      </div>
+      <button
+        class="icon-button"
+        aria-label="Broker connection details"
+        onclick={() => connectionDialog.showModal()}
+      >
+        <Icon name="info" size={15} />
+      </button>
+    </div>
+    <div class="nav-label">THE WORKBENCH</div>
     <nav aria-label="Main navigation">
       {#each navigation as item}<a
           href={item.id === 'overview' ? '/dashboard' : `/dashboard/${item.id}`}
@@ -372,9 +383,9 @@
     <div class="sidebar-bottom">
       <div class="sidebar-note">
         <span class="note-symbol"><Icon name="bolt" size={19} /></span><strong>
-          Built for the flow.
+          Small packets. Big ideas.
         </strong>
-        <p>Keep your systems<br />in conversation.</p>
+        <p>For the things<br />you’re building next.</p>
         <a href="https://www.absmach.eu/products/fluxmq/" target="_blank" rel="noreferrer">
           Discover FluxMQ <Icon name="globe" size={13} />
         </a>
@@ -404,19 +415,19 @@
       </a>
     </div>
   </aside>
-  <div class="workspace">
+  <div class="console">
     <header class="topbar">
       <button
         class="icon-button mobile-toggle"
         aria-label="Open navigation"
         aria-expanded={mobileOpen}
-        aria-controls="workspace-navigation"
+        aria-controls="console-navigation"
         onclick={() => (mobileOpen = true)}
       >
         <Icon name="menu" />
       </button>
       <div class="breadcrumb">
-        <span>Workspace</span><span class="crumb-divider">/</span><strong>
+        <span>Local console</span><span class="crumb-divider">/</span><strong>
           {currentNav.label}
         </strong>
       </div>
@@ -431,16 +442,19 @@
           <Icon name="search" size={16} /><span>Find anything…</span><kbd>⌘ K</kbd>
         </button>
         <div class="topbar-divider"></div>
-        <span class="avatar" title="Local workspace">AM</span>
+        <span class="local-indicator"><Icon name="terminal" size={15} />local</span>
       </div>
     </header>
     <main id="main">
-      <div class="page-heading">
+      <div class:overview-heading={page === 'overview'} class="page-heading">
         <div>
-          <div class="eyebrow">FLUXMQ CONTROL ROOM <span class="eyebrow-line"></span></div>
-          <h1>{page === 'overview' ? 'Everything in flow.' : currentNav.label}</h1>
+          <div class="eyebrow">FLUXMQ / BROKER CONSOLE <span class="eyebrow-line"></span></div>
+          <h1>
+            {#if page === 'overview'}Everything in <em>flow.</em>{:else}{currentNav.label}{/if}
+          </h1>
           <p>{currentNav.description}</p>
         </div>
+        {#if page === 'overview'}<SignalArt />{/if}
         <div class="heading-actions">
           <span
             class:warning={connection !== 'connected' || stale || !healthy}
@@ -460,7 +474,7 @@
           </button>
         </div>
       </div>
-      <div class="workspace-toolbar">
+      <div class="console-toolbar">
         <div class="scope-control">
           <Icon name="nodes" size={16} /><select
             aria-label="Cluster scope"
@@ -659,7 +673,7 @@
           </div>
           {@render nodeTable()}
         </section>
-        <div class="workspace-footer">
+        <div class="console-footer">
           <span>
             <span class="footer-brand">fluxmq</span> Keep your systems in conversation.
           </span><span><Icon name="shield" size={13} /> Engineered by Abstract Machines</span>
@@ -940,7 +954,7 @@
           <div>
             <h2>
               {!snapshot
-                ? 'Connecting to your workspace'
+                ? 'Connecting to the broker'
                 : connection !== 'connected' || stale
                   ? 'Waiting for a fresh snapshot'
                   : healthy
@@ -1084,7 +1098,7 @@
         </span><Icon name="chevron" size={16} />
       </button>{:else}<p class="empty-state">No matching pages.</p>{/each}
   </div>
-  <div class="command-footer">Your workspace, one shortcut away.</div>
+  <div class="command-footer">Less clicking. More tinkering.</div>
 </dialog>
 
 <dialog
@@ -1164,29 +1178,31 @@
 
 <dialog bind:this={connectionDialog} class="connection-dialog">
   <div class="drawer-heading">
-    <span class="eyebrow">YOUR WORKSPACE</span><button
+    <span class="eyebrow">BROKER CONNECTION</span><button
       class="icon-button"
-      aria-label="Close workspace details"
+      aria-label="Close broker connection details"
       onclick={() => connectionDialog.close()}
     >
       <Icon name="close" />
     </button>
   </div>
   <img src="/brand/fluxmq-symbol.svg" alt="" width="48" height="48" />
-  <h2>{snapshot?.mode === 'demo' ? 'Room to explore.' : 'Connected to your infrastructure.'}</h2>
+  <h2>
+    {snapshot?.mode === 'demo' ? 'Demo brokers. Real console.' : 'Connected to your brokers.'}
+  </h2>
   <p>
     {snapshot?.mode === 'demo'
-      ? 'This workspace uses simulated traffic, clients, and nodes. Explore the console freely; no real brokers are affected.'
+      ? 'No broker is connected in this preview. Traffic, clients, and nodes are simulated so you can try the console.'
       : 'Your console reads metrics from the configured FluxMQ brokers. All views in this preview are read-only.'}
   </p>
-  <div class="workspace-detail">
+  <div class="console-detail">
     <span>Data source</span><strong>
       {snapshot?.mode === 'demo' ? 'Demo simulation' : 'FluxMQ Admin API'}
     </strong><span>Configured nodes</span><strong>{snapshot?.nodes.length ?? 0}</strong><span>
       Update transport
     </span><strong>Server-Sent Events</strong>
   </div>
-  <button class="button primary" onclick={() => connectionDialog.close()}>Back to workspace</button>
+  <button class="button primary" onclick={() => connectionDialog.close()}>Back to console</button>
 </dialog>
 
 {#if toast}<div class="toast" role="status">

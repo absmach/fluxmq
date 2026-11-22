@@ -504,7 +504,7 @@ func main() {
 		}
 	}
 	if !*demo && len(urls) == 0 {
-		log.Fatal("set FLUXMQ_API_URL/FLUXMQ_NODE_URLS, or use -demo for a sample workspace")
+		log.Fatal("set FLUXMQ_API_URL/FLUXMQ_NODE_URLS, or use -demo for a sample console")
 	}
 	c := newCollector(urls, *demo)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
