@@ -37,28 +37,32 @@ type point struct {
 	Connections int     `json:"connections"`
 }
 type node struct {
-	RetainedMessages int     `json:"retained_messages"`
-	ClusterMode      *bool   `json:"cluster_mode,omitempty"`
-	Version          string  `json:"version,omitempty"`
-	TransportAddress string  `json:"transport_address,omitempty"`
-	ProtocolErrors   int     `json:"protocol_errors"`
-	AuthErrors       int     `json:"auth_errors"`
-	AuthzErrors      int     `json:"authz_errors"`
-	PacketErrors     int     `json:"packet_errors"`
-	ID               string  `json:"id"`
-	Address          string  `json:"address"`
-	Leader           bool    `json:"leader"`
-	Healthy          bool    `json:"healthy"`
-	Uptime           float64 `json:"uptime"`
-	Connections      int     `json:"connections"`
-	Subscriptions    int     `json:"subscriptions"`
-	Received         float64 `json:"received"`
-	Sent             float64 `json:"sent"`
-	BytesIn          float64 `json:"bytes_in"`
-	BytesOut         float64 `json:"bytes_out"`
-	Errors           int     `json:"errors"`
-	Incoming         float64 `json:"incoming"`
-	Outgoing         float64 `json:"outgoing"`
+	QueueMetrics     json.RawMessage `json:"queue_metrics,omitempty"`
+	ProtocolMetrics  json.RawMessage `json:"protocol_metrics,omitempty"`
+	Unmonitored      bool            `json:"unmonitored,omitempty"`
+	ReportedHealthy  *bool           `json:"reported_healthy,omitempty"`
+	RetainedMessages int             `json:"retained_messages"`
+	ClusterMode      *bool           `json:"cluster_mode,omitempty"`
+	Version          string          `json:"version,omitempty"`
+	TransportAddress string          `json:"transport_address,omitempty"`
+	ProtocolErrors   int             `json:"protocol_errors"`
+	AuthErrors       int             `json:"auth_errors"`
+	AuthzErrors      int             `json:"authz_errors"`
+	PacketErrors     int             `json:"packet_errors"`
+	ID               string          `json:"id"`
+	Address          string          `json:"address"`
+	Leader           bool            `json:"leader"`
+	Healthy          bool            `json:"healthy"`
+	Uptime           float64         `json:"uptime"`
+	Connections      int             `json:"connections"`
+	Subscriptions    int             `json:"subscriptions"`
+	Received         float64         `json:"received"`
+	Sent             float64         `json:"sent"`
+	BytesIn          float64         `json:"bytes_in"`
+	BytesOut         float64         `json:"bytes_out"`
+	Errors           int             `json:"errors"`
+	Incoming         float64         `json:"incoming"`
+	Outgoing         float64         `json:"outgoing"`
 }
 type session struct {
 	ConnectionName    string                `json:"connection_name,omitempty"`
@@ -223,14 +227,20 @@ func (c *collector) get(ctx context.Context, endpoint string, dst any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(dst)
 }
 
+type clusterPeer struct {
+	ID      string  `json:"id"`
+	Address string  `json:"address"`
+	Version string  `json:"version"`
+	Leader  bool    `json:"leader"`
+	Healthy *bool   `json:"healthy"`
+	Uptime  float64 `json:"uptime_seconds"`
+}
 type overview struct {
-	ClusterMode *bool `json:"cluster_mode"`
-	Cluster     struct {
-		Nodes []struct {
-			ID      string `json:"id"`
-			Address string `json:"address"`
-			Version string `json:"version"`
-		} `json:"nodes"`
+	RawProtocolMetrics json.RawMessage `json:"-"`
+	RawQueueMetrics    json.RawMessage `json:"-"`
+	ClusterMode        *bool           `json:"cluster_mode"`
+	Cluster            struct {
+		Nodes []clusterPeer `json:"nodes"`
 	} `json:"cluster"`
 	ID       string  `json:"node_id"`
 	Leader   bool    `json:"is_leader"`
@@ -269,6 +279,26 @@ type overview struct {
 	} `json:"stats"`
 }
 
+// Keep the protocol and queue diagnostic sections intact: absence means that
+// the broker does not report this capability, not a zero-valued counter.
+func (o *overview) UnmarshalJSON(data []byte) error {
+	type plain overview
+	if err := json.Unmarshal(data, (*plain)(o)); err != nil {
+		return err
+	}
+	var diagnostic struct {
+		Stats struct {
+			Protocol json.RawMessage `json:"by_protocol"`
+			Queues   json.RawMessage `json:"queues"`
+		} `json:"stats"`
+	}
+	if err := json.Unmarshal(data, &diagnostic); err != nil {
+		return err
+	}
+	o.RawProtocolMetrics, o.RawQueueMetrics = diagnostic.Stats.Protocol, diagnostic.Stats.Queues
+	return nil
+}
+
 func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 	now := time.Now()
 	c.mu.RLock()
@@ -289,6 +319,7 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 		limited        bool
 		err            error
 		inventoryError bool
+		peers          []clusterPeer
 	}
 	results := make(chan result, len(c.urls))
 	for _, base := range c.urls {
@@ -316,6 +347,8 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 			n := node{ID: id, Address: base, Leader: raw.Leader, Healthy: true, Uptime: raw.Uptime, Connections: raw.Sessions.Connected, Subscriptions: raw.Stats.ByProtocol.MQTT.Subscriptions.Active + raw.Stats.ByProtocol.AMQP.Consumers, Received: raw.Stats.Messages.Received, Sent: raw.Stats.Messages.Sent, BytesIn: raw.Stats.Bytes.Received, BytesOut: raw.Stats.Bytes.Sent, Errors: raw.Stats.Errors.Protocol + raw.Stats.ByProtocol.MQTT.Errors.Auth + raw.Stats.ByProtocol.MQTT.Errors.Authz + raw.Stats.ByProtocol.MQTT.Errors.Packet}
 			n.RetainedMessages = raw.Stats.ByProtocol.MQTT.Subscriptions.RetainedMessages
 			n.ClusterMode = raw.ClusterMode
+			n.QueueMetrics = raw.RawQueueMetrics
+			n.ProtocolMetrics = raw.RawProtocolMetrics
 			n.ProtocolErrors = raw.Stats.Errors.Protocol
 			n.AuthErrors = raw.Stats.ByProtocol.MQTT.Errors.Auth
 			n.AuthzErrors = raw.Stats.ByProtocol.MQTT.Errors.Authz
@@ -327,6 +360,7 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 				}
 			}
 			out.node = n
+			out.peers = raw.Cluster.Nodes
 			if inventory {
 				var list struct {
 					Sessions []session `json:"sessions"`
@@ -409,6 +443,33 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 			s.Sessions = append(s.Sessions, r.sessions...)
 			s.Subscriptions = append(s.Subscriptions, r.subscriptions...)
 			s.Limited = s.Limited || r.limited
+		}
+	}
+	known := map[string]bool{}
+	for _, n := range s.Nodes {
+		known[n.ID] = true
+	}
+	for _, base := range c.urls {
+		for _, peer := range byURL[base].peers {
+			if peer.ID == "" || known[peer.ID] {
+				continue
+			}
+			known[peer.ID] = true
+			s.Nodes = append(s.Nodes, node{ID: peer.ID, TransportAddress: peer.Address, Version: peer.Version, Leader: peer.Leader, ClusterMode: valuePtr(true), Uptime: peer.Uptime, Unmonitored: true, ReportedHealthy: peer.Healthy})
+		}
+	}
+	// Keep known membership when every overview request fails; do not hide peers
+	// just because the admin service is temporarily unreachable.
+	allFailed := len(c.urls) > 0
+	for _, r := range byURL {
+		allFailed = allFailed && r.err != nil
+	}
+	if allFailed {
+		for _, old := range previous.Nodes {
+			if old.Unmonitored && !known[old.ID] {
+				s.Nodes = append(s.Nodes, old)
+				known[old.ID] = true
+			}
 		}
 	}
 	s.Points["all"] = all
@@ -502,6 +563,20 @@ func demoSnapshot(at time.Time) snapshot {
 		}
 	}
 	s.Points["all"] = all
+	for i := range s.Nodes {
+		n := &s.Nodes[i]
+		n.QueueMetrics, _ = json.Marshal(map[string]any{
+			"capture_failures": 0, "capture_dropped": 0,
+			"claims":          map[string]int{"attempts": 540, "successes": 540, "failures": 0},
+			"steals":          map[string]int{"attempts": 12, "successes": 12, "failures": 0},
+			"acknowledgments": map[string]int{"ack": 82410 + i*2140, "nack": 42, "reject": 7, "dlq": 7, "dlq_transfer_failures": 0, "poison_without_dlq": 0, "poison_pending": 0, "poison_pending_no_destination": 0},
+			"pending":         map[string]int{"current": 45, "high_water": 92},
+		})
+		n.ProtocolMetrics, _ = json.Marshal(map[string]any{
+			"mqtt": map[string]any{"connections": map[string]int{"current": n.Connections - 80, "total": 12000, "disconnections": 11000}, "messages": map[string]float64{"received": n.Received * .8, "sent": n.Sent * .8, "publish_received": n.Received * .7, "publish_sent": n.Sent * .7}, "bytes": map[string]float64{"received": n.BytesIn * .8, "sent": n.BytesOut * .8}, "errors": map[string]int{"protocol": 0, "auth": 0, "authz": 0, "packet": 0}},
+			"amqp": map[string]any{"connections": map[string]int{"current": 80, "total": 200, "disconnections": 120}, "channels": 96, "consumers": 72, "messages": map[string]float64{"received": n.Received * .2, "sent": n.Sent * .2}, "bytes": map[string]float64{"received": n.BytesIn * .2, "sent": n.BytesOut * .2}, "errors": map[string]int{"protocol": 0}},
+		})
+	}
 	return s
 }
 func (c *collector) run(ctx context.Context) {
@@ -559,6 +634,8 @@ func handler(c *collector) http.Handler {
 	mux.HandleFunc("GET /console-api/snapshot", c.snapshotHandler)
 	mux.HandleFunc("GET /console-api/stream", c.stream)
 	mux.HandleFunc("GET /console-api/session", c.detail)
+	mux.HandleFunc("GET /console-api/inventory", c.inventoryPage)
+	mux.HandleFunc("GET /console-api/queues", c.queueRead)
 	mux.HandleFunc("GET /console-api/subscription-clients", c.subscriptionClients)
 	mux.HandleFunc("GET /console-api/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	dist, _ := fs.Sub(assets, "dist")

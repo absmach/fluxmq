@@ -65,6 +65,7 @@
     {#each rows as row}
       <button
         class="comparison-row"
+        disabled={row.unmonitored}
         onclick={() => onselect(row.id)}
         aria-label={`${kind === 'traffic' ? 'View dashboard for' : 'Filter by'} ${row.id}`}
       >
@@ -75,23 +76,29 @@
         </span>
         <span class="comparison-values">
           <strong>
-            {kind === 'traffic' && !row.healthy
-              ? 'Unavailable'
-              : kind === 'traffic' && metric !== 'connections'
-                ? compact(row.value)
-                : number(row.value)}
+            {row.unmonitored
+              ? 'Not monitored'
+              : kind === 'traffic' && !row.healthy
+                ? 'Unavailable'
+                : kind === 'traffic' && metric !== 'connections'
+                  ? compact(row.value)
+                  : number(row.value)}
           </strong><small>
-            {kind === 'traffic' && metric !== 'connections'
-              ? 'msg/s'
-              : kind === 'subscriptions'
-                ? 'bindings'
-                : 'clients'}
+            {row.unmonitored
+              ? ''
+              : kind === 'traffic' && metric !== 'connections'
+                ? 'msg/s'
+                : kind === 'subscriptions'
+                  ? 'bindings'
+                  : 'clients'}
           </small>
         </span>
         <span class="comparison-track" aria-hidden="true">
           <span style:width={`${total ? (row.value / total) * 100 : 0}%`}></span>
         </span>
-        <span class="comparison-share">{total ? ((row.value / total) * 100).toFixed(0) : 0}%</span>
+        <span class="comparison-share">
+          {row.unmonitored ? '—' : `${total ? ((row.value / total) * 100).toFixed(0) : 0}%`}
+        </span>
       </button>
     {/each}
   </div>

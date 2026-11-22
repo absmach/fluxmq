@@ -35,7 +35,9 @@
     }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
       e.preventDefault();
-      const options = [...panel!.querySelectorAll<HTMLButtonElement>('[role=option]')];
+      const options = [
+        ...panel!.querySelectorAll<HTMLButtonElement>('[role=option]:not(:disabled)'),
+      ];
       const i = options.indexOf(document.activeElement as HTMLButtonElement);
       const next =
         e.key === 'Home'
@@ -105,17 +107,24 @@
           onclick={() => choose('all')}
         >
           <Icon name="nodes" size={18} /><span>
-            All nodes<small>{nodes.length} configured</small>
+            All nodes<small>{nodes.length} known nodes</small>
           </span>{#if value === 'all'}<Icon name="check" size={16} />{/if}
         </button>
         {#each matches as n}<button
             role="option"
             aria-label={n.id}
             aria-selected={value === n.id}
+            disabled={n.unmonitored}
             onclick={() => choose(n.id)}
           >
             <i class:unavailable={!n.healthy}></i><span>
-              {n.id}<small>{n.leader && n.cluster_mode !== false ? 'Leader' : n.address}</small>
+              {n.id}<small>
+                {n.unmonitored
+                  ? 'Not monitored'
+                  : n.leader && n.cluster_mode !== false
+                    ? 'Leader'
+                    : n.address}
+              </small>
             </span>{#if value === n.id}<Icon name="check" size={16} />{/if}
           </button>{/each}
         {#if !matches.length}<p>No matching nodes</p>{/if}

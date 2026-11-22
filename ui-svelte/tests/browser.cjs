@@ -67,6 +67,7 @@ fs.mkdirSync(shots, { recursive: true });
   );
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.getByLabel('Search sessions').fill('edge-gateway');
+  await page.waitForFunction(() => document.querySelectorAll('.client-link').length === 6);
   assert.equal(await page.locator('tbody tr').count(), 6);
   await page.locator('.client-link').first().click();
   await page.locator('.client-detail-page').waitFor();
@@ -82,10 +83,14 @@ fs.mkdirSync(shots, { recursive: true });
   await page.getByLabel('Search sessions').fill('nothing-matches-xyz');
   await page.getByRole('heading', { name: 'No matching sessions' }).waitFor();
   await page.getByRole('button', { name: 'Clear filters' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.client-link').length === 10);
   await page.getByRole('button', { name: 'Next', exact: true }).click();
   assert.match(await page.locator('.pagination').textContent(), /2 \/ 4/);
   await page.getByRole('link', { name: 'Subscriptions', exact: true }).click();
   await page.getByLabel('Search topic filters').fill('factory');
+  await page
+    .getByRole('link', { name: 'View clients for factory/+/telemetry', exact: true })
+    .waitFor();
   assert.equal(await page.locator('tbody tr').count(), 1);
   await page
     .getByRole('link', { name: 'View clients for factory/+/telemetry', exact: true })
@@ -158,6 +163,7 @@ fs.mkdirSync(shots, { recursive: true });
   assert.equal((await page.locator('.scope-trigger').innerText()).trim(), 'All nodes');
   await page.getByRole('button', { name: 'Filter by eu-west-02', exact: true }).click();
   assert.equal((await page.locator('.scope-trigger').innerText()).trim(), 'eu-west-02');
+  await page.locator('.client-link').first().waitFor();
   for (const row of await page.locator('tbody tr').allTextContents())
     assert.ok(row.includes('eu-west-02'));
   await page.getByRole('link', { name: 'Overview', exact: true }).click();

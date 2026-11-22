@@ -78,7 +78,14 @@
         <dd>{client.offline_queue_depth}</dd>
       </div>
     </dl>
-  {/if}
+    <p class="inspector-context">
+      The session API reports buffer depth and inflight counts; it does not expose message payloads
+      or acknowledgement history.
+    </p>
+  {:else}<p class="inspector-context">
+      AMQP delivery counts and settlement details are not exposed by the session API. Durable
+      consumer-group deliveries can be inspected in Queues.
+    </p>{/if}
 </section>
 {#if mqtt}<section class="panel client-info-panel">
     <h2>Session settings</h2>

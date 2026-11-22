@@ -6,12 +6,20 @@
     total,
     onpage,
     onsize,
+    more = false,
+    busy = false,
+    onmore,
+    onlast,
   }: {
     page: number;
     size: number;
     total: number;
     onpage: (page: number) => void;
     onsize: (size: number) => void;
+    more?: boolean;
+    busy?: boolean;
+    onmore?: () => void;
+    onlast?: () => void;
   } = $props();
   let pages = $derived(Math.max(1, Math.ceil(total / size)));
 </script>
@@ -36,14 +44,20 @@
     <Icon name="chevron" size={14} /><Icon name="chevron" size={14} />
   </button>
   <button class="button" disabled={page <= 1} onclick={() => onpage(page - 1)}>Previous</button>
-  <span>{page} / {pages}</span>
-  <button class="button" disabled={page >= pages} onclick={() => onpage(page + 1)}>Next</button>
+  <span>{page} / {pages}{more ? '+' : ''}</span>
+  <button
+    class="button"
+    disabled={busy || (page >= pages && !more)}
+    onclick={() => (page >= pages && more ? onmore?.() : onpage(page + 1))}
+  >
+    Next
+  </button>
   <button
     class="icon-button last-page"
     aria-label="Last page"
     title="Last page"
-    disabled={page >= pages}
-    onclick={() => onpage(pages)}
+    disabled={busy || (page >= pages && !more)}
+    onclick={() => (more ? onlast?.() : onpage(pages))}
   >
     <Icon name="chevron" size={14} /><Icon name="chevron" size={14} />
   </button>

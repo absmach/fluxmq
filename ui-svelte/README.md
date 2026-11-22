@@ -45,12 +45,18 @@ local or behind your existing authenticated management gateway.
   subscriptions or AMQP consumers.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, per-node distribution/filtering,
   and a detail page with node filtering, client search, pagination, retry/load-more, and links to client details.
-- Cluster: node table with leader status, reachability, connections, throughput,
+- Queues: durable queue inventory; ACK/NACK/reject/dead-letter outcome bars;
+  capture failures/drops; pending and poison-message gauges; consumer-group progress;
+  pending delivery offsets, consumers, attempts and heartbeats; read-only payload,
+  key and header inspection; routing, retention and replication-group configuration.
+- Cluster: Activity/Counters comparison with leader status, reachability, connections, throughput,
   uptime, and a dedicated node drawer with metadata, counters, errors, and links
-  to that node’s dashboard, clients, and subscriptions. Inventory always shows every configured node;
+  to that node’s dashboard, clients, and subscriptions. Inventory includes configured nodes and reported cluster peers;
   inspecting a node does not change scope or navigate away.
 - Health: broker reachability, uptime, cumulative message counters, and separate
-  protocol/authentication/authorization/packet error counts.
+  protocol/authentication/authorization/packet error counts, queue diagnostics,
+  and protocol internals (MQTT PUBLISH, AMQP channels/consumers and local-principal
+  authentication, authorization and reload results when reported).
 - Light/dark appearance persisted locally, responsive sidebar navigation, CSV
   export, live pause/resume, and visible reconnect states. Search stays within
   each data view; there is no global command palette. Documentation and
@@ -66,7 +72,8 @@ API strings are rendered as text, never injected as HTML.
 One shared collector polls each configured broker's overview every two seconds
 after the previous collection completes. It refreshes session/subscription
 inventory every five cycles. All browser clients share this collector through
-Server-Sent Events; opening another tab does not add broker polling.
+Server-Sent Events; opening another tab does not add overview polling. On-demand
+inventory and queue inspection requests are per browser.
 
 The initial SSE event includes the in-memory history. Subsequent events include
 the newest sample. Reconnection supplies a fresh snapshot; resuming after a pause
@@ -76,12 +83,28 @@ excluded from current throughput. The console retains at most 450 samples per
 scope (about 15 minutes at the normal cadence); history is not durable and starts
 empty for real brokers. Demo mode seeds simulated history.
 
-Inventory is capped at 200 sessions and 200 subscription filters per node to
-bound collection work and stream size. A truncation notice is shown when the
-API returns a continuation token. Pagination/filtering applies to the collected
-inventory. A cluster-wide paginated inventory API and durable metrics history
-are future work, not implied by this preview. Only configured node URLs are
-collected; cluster membership is not automatically discovered.
+The shared SSE snapshot samples at most 200 sessions and 200 subscription filters
+per node to bound background collection and stream size. Sessions and Subscriptions
+use a separate paginated endpoint: one bounded 200-record page per node per request.
+Normal session browsing continues on demand; search and protocol/queue-depth sorting
+traverse all pages. Subscription aggregation also continues across pages. Incomplete
+counts are labeled as loaded. Query changes cancel requests; partial failures remain
+retryable. Active inventories refresh every 20 seconds and pause with the console.
+A six-query cache preserves loaded results on Back navigation.
+
+Reported cluster peers without configured admin endpoints appear as **Not monitored**.
+Their unavailable metrics are not rendered as zero. The console never probes discovered
+transport addresses; configure their admin URLs to monitor them.
+
+Queue details refresh metadata, log bounds and groups every ten seconds while live.
+Message reads and pending inspection are explicit snapshots. The adapter allowlists
+six read-only Connect RPCs, accepts only configured node IDs, and never calls Consume,
+Ack, Nack or cursor mutations. Queue listings use 100-item pages; message reads use
+20 records with an 8 MiB response ceiling and 16 KiB payload previews. Oversized
+responses fail explicitly. The current broker ignores ReadBatch.max_bytes, so the
+ceiling limits the console response, not work already performed in the broker.
+Group/pending RPCs return entire lists, subject to the same response ceiling.
+Decimal strings and browser BigInt preserve uint64 offsets.
 
 Subscription clients are fetched on demand from the broker's dedicated endpoint,
 200 per node per request. Continuation tokens support loading further pages;
@@ -113,14 +136,37 @@ session detail dialog, subscriptions directory, and subscription-client page.
 | Broker-info and subscription-detail bookmarks                   | Legacy paths continue to open the corresponding page                                                                              |
 | Remove Selected                                                 | The old button had no action handler; this console remains read-only                                                              |
 
-Two differences remain: the shared session/topic snapshot has the 200-record
-per-node cap described above (the old proxy fetched all pages), and the node
-inventory contains configured admin endpoints (the old overview also listed
-reported cluster peers without configured endpoints, with missing metrics).
-Configure each broker's admin URL to monitor it. These are explicit limits,
-not a claim of complete large-cluster inventory parity. Client IP addresses,
-usernames, and transport/TLS metadata are not exposed by the current session API
-and are not invented in the UI.
+Large-inventory continuation and reported cluster membership now cover the two
+previous gaps. MQTT inflight and offline-buffer counts share a Delivery column;
+AMQP shows unavailable rather than invented zeros. Node cumulative counters have
+an optional comparison view. The previous Remove Selected button had no handler.
+
+## Operator capability audit
+
+The console follows implemented handlers, not just protobuf declarations:
+
+| Operator question                                 | Code and presentation                                                                                                                               | API limits                                                                             |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Which nodes are unavailable or unmonitored?       | `server/api/cluster.go`: membership, role, address, version, uptime; node inventory and inspector                                                   | No consensus term, quorum, replication lag or election history                         |
+| Where are MQTT messages waiting?                  | `server/api/sessions.go`: offline/inflight counts, expiry, receive limits, Will, subscriptions; protocol lanes and client pages                     | No buffer payload peek, per-packet ACK history, client IP, username or TLS metadata    |
+| What is stored in durable queues?                 | `server/queue/handler.go`: GetQueue, GetQueueInfo, ReadBatch; message payload/key/header browser                                                    | Reader omits originating protocol and original topic; neither is inferred              |
+| Which groups are behind or awaiting ACK?          | ListConsumerGroups/GetPending; offset tracks, pending ownership, delivery attempts, heartbeats                                                      | Group mode/protocol absent; no invented active/stalled classification                  |
+| Are messages being dropped or repeatedly failing? | `server/api/stats.go`: capture failures/drops, ACK/NACK/reject/DLQ, DLQ transfer failures, poison-without-DLQ counters and poison gauges            | Counters are cumulative observations, not an event log                                 |
+| How do protocols differ?                          | MQTT connection/PUBLISH/error counters; AMQP 0.9.1 channel/consumer/local-principal counters; sessions distinguish MQTT versions and AMQP 1.0/0.9.1 | Stats handler has no separate AMQP 1.0, HTTP or CoAP section                           |
+| Can operators compare nodes?                      | Activity/Counters view, node dashboards, queue diagnostic comparison and protocol breakdown                                                         | Node-local counters may overlap across replicated copies; not a unique logical backlog |
+
+`queue/types/log.go` defines committed as the oldest unacknowledged offset (safe
+truncation point), and cursor as the next delivery offset. The graphic follows that
+implementation. Uncommitted ranges may contain out-of-order acknowledgements;
+range width is not the pending count. Acknowledgement does not remove retained log
+records. Stream groups may advance without pending entries. Consumer-group IDs
+are not assumed to equal client IDs. MQTT offline buffers remain distinct from
+durable queues.
+
+Useful backend additions: bounded MQTT offline-message peek; AMQP 1.0 connection
+and settlement diagnostics; explicit consumer-group mode/protocol metadata; and a
+structured event/alert feed correlated with nodes and messages. These are not
+fabricated from aggregate counters.
 
 ## Development
 
@@ -138,7 +184,8 @@ With the demo console running, `npm run test:browser` runs the Chromium smoke
 suite. Install its browser once with `npx playwright install chromium` if it is
 not already available. It checks streaming updates, pause/resume, navigation,
 filters, session details, pagination, CSV exports, theme persistence, and mobile
-overflow. Screenshots go to `/tmp/fluxmq-console-screenshots`; override with
+overflow. Operator tests cover queue/pending inspection, exact uint64 offsets,
+escaped payloads, inventory beyond 200 records, and protocol visuals. Screenshots go to `/tmp/fluxmq-console-screenshots`; override with
 `FLUXMQ_SCREENSHOT_DIR`. `FLUXMQ_TEST_URL` selects a different preview origin.
 
 Build the assets before Go commands: `server.go` embeds `dist/`.

@@ -1,4 +1,4 @@
-export type Page = 'overview' | 'sessions' | 'subscriptions' | 'nodes' | 'health';
+export type Page = 'overview' | 'sessions' | 'subscriptions' | 'nodes' | 'health' | 'queues';
 export interface Point {
   time: number;
   incoming: number;
@@ -8,7 +8,48 @@ export interface Point {
   bytes_out?: number;
   connections: number;
 }
+export interface QueueMetrics {
+  capture_failures?: number;
+  capture_dropped?: number;
+  claims?: { attempts?: number; successes?: number; failures?: number };
+  steals?: { attempts?: number; successes?: number; failures?: number };
+  acknowledgments?: {
+    ack?: number;
+    nack?: number;
+    reject?: number;
+    dlq?: number;
+    dlq_transfer_failures?: number;
+    poison_without_dlq?: number;
+    poison_pending?: number;
+    poison_pending_no_destination?: number;
+  };
+  pending?: { current?: number; high_water?: number };
+}
+export interface ProtocolMetrics {
+  connections?: { current?: number; total?: number; disconnections?: number };
+  messages?: { received?: number; sent?: number; publish_received?: number; publish_sent?: number };
+  bytes?: { received?: number; sent?: number };
+  channels?: number;
+  consumers?: number;
+  errors?: Record<string, number>;
+  local_principals?: {
+    active_connections?: number;
+    publish_timeouts?: number;
+    publish_rejections?: number;
+    authentication?: { success?: number; failure?: number };
+    authorization?: {
+      publish_denied?: number;
+      subscribe_denied?: number;
+      operation_denied?: number;
+    };
+    reloads?: { success?: number; failure?: number; forced_disconnects?: number };
+  };
+}
 export interface BrokerNode {
+  queue_metrics?: QueueMetrics;
+  protocol_metrics?: Record<string, ProtocolMetrics>;
+  unmonitored?: boolean;
+  reported_healthy?: boolean;
   retained_messages?: number;
   cluster_mode?: boolean;
   version?: string;
@@ -145,4 +186,8 @@ export interface ClientListState {
   page: number;
   pageSize: number;
   loaded: boolean;
+}
+
+export function nodeStatus(n: BrokerNode) {
+  return n.unmonitored ? 'Not monitored' : n.healthy ? 'Healthy' : 'Unavailable';
 }

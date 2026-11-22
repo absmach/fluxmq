@@ -1,6 +1,11 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
+  import { Inventory, type InventoryQuery } from './lib/inventory.svelte';
   import Icon from './lib/Icon.svelte';
+  import Queues from './lib/Queues.svelte';
+  import ProtocolDelivery from './lib/ProtocolDelivery.svelte';
+  import QueueDiagnostics from './lib/QueueDiagnostics.svelte';
+  import ProtocolDiagnostics from './lib/ProtocolDiagnostics.svelte';
   import { clientURL, subscriptionURL, followLink } from './lib/routes';
   import Pagination from './lib/Pagination.svelte';
   import CumulativeCounters from './lib/CumulativeCounters.svelte';
@@ -18,6 +23,7 @@
     protocolLabel,
     sessionProtocol,
     nodeRole,
+    nodeStatus,
     type Page,
     type Point,
     type Snapshot,
@@ -29,6 +35,7 @@
     { id: 'overview', label: 'Overview' },
     { id: 'sessions', label: 'Sessions' },
     { id: 'subscriptions', label: 'Subscriptions' },
+    { id: 'queues', label: 'Queues' },
     { id: 'nodes', label: 'Cluster nodes' },
     { id: 'health', label: 'Broker health' },
   ];
@@ -55,6 +62,8 @@
   let filter = $state('all');
   let protocol = $state('all');
   let sort = $state('client');
+  const inventory = new Inventory();
+  let nodeTableView = $state<'activity' | 'counters'>('activity');
   let tablePage = $state(1);
   let pageSize = $state(10);
   let toast = $state('');
@@ -80,6 +89,7 @@
   let detail = $state<Session | null>(null);
   let detailIdentity = $state<{ client_id: string; node_id: string } | null>(null);
   let nodeDetailID = $state('');
+  let queueIdentity = $state<{ name: string; node: string } | null>(null);
   let selectedNode = $derived(snapshot?.nodes.find((n) => n.id === nodeDetailID));
   let subscriptionDetail = $state<{ filter: string; node: string } | null>(null);
   let routeIsDetail = $derived(!!subscriptionDetail || !!detailIdentity);
@@ -91,9 +101,41 @@
   let newest: Snapshot | null = null;
   let stream: EventSource | undefined;
 
+  let inventoryQuery = $derived<InventoryQuery | null>(
+    !routeIsDetail && (page === 'sessions' || page === 'subscriptions')
+      ? {
+          kind: page,
+          node: scope,
+          q: search,
+          state: page === 'sessions' ? filter : 'connected',
+          protocol: page === 'sessions' ? protocol : 'all',
+          sort: page === 'sessions' ? sort : 'client',
+        }
+      : null,
+  );
+  let inventoryKey = $derived(inventoryQuery ? JSON.stringify(inventoryQuery) : '');
+  let inventoryCurrent = $derived(!!inventoryKey && inventory.key === inventoryKey);
+  let snapshotReady = $derived(!!snapshot);
+  $effect(() => {
+    const query = inventoryQuery;
+    if (!query || !snapshotReady) {
+      untrack(() => inventory.stop());
+      return;
+    }
+    untrack(() => inventory.select(query));
+    return () => inventory.stop();
+  });
+  async function moreInventory(last = false) {
+    await inventory.load(!inventory.ready, last);
+    const total = page === 'sessions' ? filteredSessions.length : subscriptionRows.length;
+    tablePage = last
+      ? Math.max(1, Math.ceil(total / pageSize))
+      : Math.min(tablePage + 1, Math.max(1, Math.ceil(total / pageSize)));
+  }
   let currentNav = $derived(navigation.find((n) => n.id === page)!);
   let pageTitle = $derived(
-    subscriptionDetail?.filter ??
+    queueIdentity?.name ??
+      subscriptionDetail?.filter ??
       detailIdentity?.client_id ??
       (page === 'overview'
         ? scope === 'all'
@@ -105,9 +147,23 @@
             : 'Node health'
           : currentNav.label),
   );
-  let nodes = $derived(snapshot?.nodes.filter((n) => scope === 'all' || n.id === scope) ?? []);
+  let nodes = $derived(
+    snapshot?.nodes.filter((n) => !n.unmonitored && (scope === 'all' || n.id === scope)) ?? [],
+  );
   let sessions = $derived(
-    snapshot?.sessions.filter((s) => scope === 'all' || s.node_id === scope) ?? [],
+    (page === 'sessions' && !routeIsDetail
+      ? inventoryCurrent
+        ? inventory.sessions
+        : []
+      : (snapshot?.sessions ?? [])
+    ).filter((s) => scope === 'all' || s.node_id === scope),
+  );
+  let subscriptionInventory = $derived(
+    page === 'subscriptions' && !routeIsDetail
+      ? inventoryCurrent
+        ? inventory.subscriptions
+        : []
+      : (snapshot?.subscriptions ?? []),
   );
   let currentPoint = $derived(snapshot?.points[scope]);
   let points = $derived(
@@ -149,7 +205,7 @@
       string,
       { filter: string; subscriber_count: number; max_qos: number; nodes: string[] }
     >();
-    for (const s of snapshot?.subscriptions ?? []) {
+    for (const s of subscriptionInventory) {
       if (scope !== 'all' && s.node_id !== scope) continue;
       const old = grouped.get(s.filter);
       if (old) {
@@ -193,7 +249,14 @@
         (page === 'subscriptions' ? subscriptionRows.length : filteredSessions.length) / pageSize,
       ),
     );
-    if (tablePage > max) tablePage = max;
+    if (
+      inventoryCurrent &&
+      inventory.ready &&
+      !inventory.loading &&
+      !inventory.hasMore &&
+      tablePage > max
+    )
+      tablePage = max;
   });
 
   function rememberView() {
@@ -265,6 +328,10 @@
     mobileOpen = false;
     subscriptionInitial = view?.subscription;
     subscriptionViewState = view?.subscription;
+    queueIdentity =
+      page === 'queues' && query.get('queue') && query.get('node')
+        ? { name: query.get('queue')!, node: query.get('node')! }
+        : null;
     subscriptionDetail = null;
     detailIdentity = null;
     detail = null;
@@ -356,13 +423,14 @@
     const rows: (string | number)[][] =
       page === 'sessions'
         ? [
-            ['Client', 'Node', 'Protocol', 'Status', 'Subscriptions', 'Queued'],
+            ['Client', 'Node', 'Protocol', 'Status', 'Subscriptions', 'Inflight', 'Queued'],
             ...filteredSessions.map((s) => [
               s.client_id,
               s.node_id,
               s.protocol,
               s.connected ? 'connected' : 'disconnected',
               s.subscription_count,
+              s.inflight_count,
               s.offline_queue_depth,
             ]),
           ]
@@ -385,13 +453,13 @@
                 n.id,
                 n.address,
                 nodeRole(n),
-                n.healthy ? 'healthy' : 'unavailable',
-                n.connections,
-                n.subscriptions,
-                n.received,
-                n.sent,
-                n.bytes_in,
-                n.bytes_out,
+                nodeStatus(n),
+                n.unmonitored ? '—' : n.connections,
+                n.unmonitored ? '—' : n.subscriptions,
+                n.unmonitored ? '—' : n.received,
+                n.unmonitored ? '—' : n.sent,
+                n.unmonitored ? '—' : n.bytes_in,
+                n.unmonitored ? '—' : n.bytes_out,
                 n.uptime,
               ]),
             ]
@@ -450,7 +518,17 @@
     stream.onerror = () => (connection = 'reconnecting');
     history.scrollRestoration = 'manual';
     readRoute(true);
-    const interval = setInterval(() => (clock = Date.now()), 1000);
+    const interval = setInterval(() => {
+      clock = Date.now();
+      if (
+        inventoryQuery &&
+        !paused &&
+        !inventory.loading &&
+        inventory.ready &&
+        clock - inventory.updated > 20000
+      )
+        void inventory.load(true, !inventory.hasMore, tablePage * pageSize);
+    }, 1000);
     const pop = () => readRoute(true);
     window.addEventListener('popstate', pop);
     return () => {
@@ -458,6 +536,7 @@
       clearInterval(interval);
       clearTimeout(toastTimer);
       detailController?.abort();
+      inventory.stop();
       window.removeEventListener('popstate', pop);
     };
   });
@@ -550,8 +629,8 @@
           </button>{/if}
         {#if page === 'nodes'}<span class="inventory-context">
             <Icon name="nodes" size={18} />Cluster inventory
-          </span>{:else if detailIdentity}<span class="inventory-context">
-            <Icon name="nodes" size={18} />{detailIdentity.node_id}
+          </span>{:else if detailIdentity || queueIdentity}<span class="inventory-context">
+            <Icon name="nodes" size={18} />{detailIdentity?.node_id ?? queueIdentity?.node}
           </span>{:else}<NodePicker
             nodes={snapshot?.nodes ?? []}
             value={scope}
@@ -576,9 +655,11 @@
             stale ||
             paused ||
             !snapshot?.nodes.length ||
-            snapshot.nodes.some((n) => !n.healthy)}
+            snapshot.nodes.some(
+              (n) => !n.healthy || (n.queue_metrics?.acknowledgments?.poison_pending ?? 0) > 0,
+            )}
           role="status"
-          title="Reachability of all configured brokers. Paused or interrupted updates show the last collected data."
+          title="Broker reachability and reported poison-message backlog. Paused or interrupted updates show the last collected data."
         >
           <span class="status-dot"></span>{connection === 'connecting'
             ? 'Connecting'
@@ -590,9 +671,15 @@
                   ? 'Stale data'
                   : !snapshot?.nodes.length
                     ? 'No nodes'
-                    : snapshot.nodes.every((n) => n.healthy)
-                      ? 'Healthy'
-                      : 'Node unavailable'}
+                    : snapshot.nodes.some((n) => n.unmonitored)
+                      ? 'Monitoring incomplete'
+                      : snapshot.nodes.every((n) => n.healthy)
+                        ? snapshot.nodes.some(
+                            (n) => (n.queue_metrics?.acknowledgments?.poison_pending ?? 0) > 0,
+                          )
+                          ? 'Delivery warning'
+                          : 'Healthy'
+                        : 'Node unavailable'}
         </span>
         {#if snapshot?.mode === 'demo'}<button
             class="header-demo"
@@ -632,7 +719,7 @@
           <h1 tabindex="-1" class:entity-title={routeIsDetail}>
             {pageTitle}
           </h1>
-          {#if scope !== 'all' && !routeIsDetail}<div class="scope-context">
+          {#if scope !== 'all' && !routeIsDetail && !queueIdentity}<div class="scope-context">
               <span><Icon name="nodes" size={15} />{scope}</span>
               <button class="text-button" onclick={() => setScope('all')}>
                 Clear node filter <Icon name="close" size={13} />
@@ -655,7 +742,7 @@
             >
               <Icon name="refresh" size={16} />Refresh client
             </button>
-          {:else if !subscriptionDetail}<button
+          {:else if !subscriptionDetail && page !== 'queues'}<button
               class="button"
               onclick={exportCSV}
               disabled={!snapshot}
@@ -664,6 +751,10 @@
             </button>{/if}
         </div>
       </div>
+      {#if snapshot?.nodes.some((n) => n.unmonitored)}<div class="notice" role="status">
+          Metrics cover {snapshot.nodes.filter((n) => !n.unmonitored).length} of {snapshot.nodes
+            .length} known nodes. Remaining nodes need an admin endpoint configured.
+        </div>{/if}
       {#if snapshot?.warning}<div class="notice" role="alert">
           <Icon name="info" size={18} />{snapshot.warning}
         </div>{/if}
@@ -672,7 +763,15 @@
           we reconnect.
         </div>{/if}
 
-      {#if subscriptionDetail}
+      {#if scope !== 'all' && snapshot?.nodes.some((n) => n.id === scope && n.unmonitored)}
+        <section class="panel empty-state">
+          <h2>Node metrics unavailable</h2>
+          <p>
+            This node is reported by cluster membership. Configure its admin endpoint to monitor it.
+          </p>
+          <button class="button" onclick={() => (nodeDetailID = scope)}>Inspect membership</button>
+        </section>
+      {:else if subscriptionDetail}
         {#key subscriptionDetail}<SubscriptionDetails
             filter={subscriptionDetail.filter}
             node={subscriptionDetail.node}
@@ -870,7 +969,11 @@
         </section>
       {:else if page === 'sessions'}
         <section class="summary-strip">
-          <div><span>Listed sessions</span><strong>{number(sessions.length)}</strong></div>
+          <div>
+            <span>
+              {inventory.hasMore || inventory.loading ? 'Loaded sessions' : 'Listed sessions'}
+            </span><strong>{number(sessions.length)}</strong>
+          </div>
           <div>
             <span>Connected</span><strong class="mint-text">
               {number(sessions.filter((s) => s.connected).length)}
@@ -882,15 +985,28 @@
             </strong>
           </div>
           <div>
-            <span>Queued messages</span><strong>
-              {number(sessions.reduce((v, s) => v + s.offline_queue_depth, 0))}
+            <span>MQTT offline queued</span><strong>
+              {number(
+                sessions
+                  .filter((s) => s.protocol.startsWith('mqtt'))
+                  .reduce((v, s) => v + s.offline_queue_depth, 0),
+              )}
             </strong>
           </div>
         </section>
+        <ProtocolDelivery
+          {sessions}
+          partial={inventory.hasMore || inventory.loading}
+          onselect={(p) => {
+            protocol = p;
+            tablePage = 1;
+          }}
+          onqueues={() => navigate('queues', scope)}
+        />
         {#if scope === 'all' && (snapshot?.nodes.length ?? 0) > 1}<NodeComparison
             kind="sessions"
             nodes={snapshot!.nodes}
-            sessions={snapshot!.sessions}
+            {sessions}
             onselect={setScope}
           />{/if}
         <section class="panel">
@@ -924,7 +1040,7 @@
               >
                 <option value="all">
                   All protocols
-                </option>{#each [...new Set(sessions.map((s) => s.protocol))] as p}<option
+                </option>{#each ['mqtt5', 'mqtt3.1.1', 'mqtt3.1', 'amqp0.9.1', 'amqp1.0', 'unknown'] as p}<option
                     value={p}
                   >
                     {protocolLabel(p)}
@@ -938,9 +1054,7 @@
               </select>
             </label><span>{filteredSessions.length} results</span>
           </div>
-          {#if snapshot?.inventory_limited}<div class="notice">
-              Showing up to 200 sessions per node. Narrow the scope to inspect a node.
-            </div>{/if}
+          {@render inventoryNotice()}
           <div class="table-scroll">
             <table>
               <thead>
@@ -949,7 +1063,9 @@
                     class="numeric"
                   >
                     Subscriptions
-                  </th><th class="numeric">Queued</th><th><span class="sr-only">Details</span></th>
+                  </th><th class="numeric">Delivery</th><th>
+                    <span class="sr-only">Details</span>
+                  </th>
                 </tr>
               </thead><tbody>
                 {#each pagedSessions as s}<tr>
@@ -972,7 +1088,18 @@
                     >
                       {s.node_id}
                     </td><td class="numeric">{s.subscription_count}</td><td class="numeric">
-                      {s.offline_queue_depth}
+                      {#if s.protocol.startsWith('mqtt')}<span class="delivery-counts">
+                          <span title="Inflight messages">
+                            {s.inflight_count}<small> inflight</small>
+                          </span><span title="Queued messages">
+                            {s.offline_queue_depth}<small> queued</small>
+                          </span>
+                        </span>{:else}<span
+                          class="muted"
+                          title="The session API does not expose AMQP delivery counts"
+                        >
+                          —
+                        </span>{/if}
                     </td><td>
                       <button
                         class="icon-button"
@@ -986,7 +1113,9 @@
                     <td colspan="7">
                       <div class="empty-state">
                         <Icon name="search" size={28} />
-                        <h3>No matching sessions</h3>
+                        <h3>
+                          {inventory.loading ? 'Searching sessions…' : 'No matching sessions'}
+                        </h3>
                         <p>Try another client name or adjust your filters.</p>
                         <button
                           class="button"
@@ -1009,7 +1138,8 @@
               {filteredSessions.length ? (tablePage - 1) * pageSize + 1 : 0}–{Math.min(
                 tablePage * pageSize,
                 filteredSessions.length,
-              )} of {filteredSessions.length} sessions{snapshot?.mode === 'demo'
+              )} of {filteredSessions.length}{inventory.hasMore ? '+' : ''} sessions{snapshot?.mode ===
+              'demo'
                 ? ' · Sample inventory'
                 : ''}
             </span>
@@ -1017,6 +1147,10 @@
               page={tablePage}
               size={pageSize}
               total={filteredSessions.length}
+              more={inventory.hasMore}
+              busy={inventory.loading}
+              onmore={() => moreInventory()}
+              onlast={() => moreInventory(true)}
               onpage={(n) => (tablePage = n)}
               onsize={(n) => {
                 pageSize = n;
@@ -1042,7 +1176,7 @@
         {#if scope === 'all' && (snapshot?.nodes.length ?? 0) > 1}<NodeComparison
             kind="subscriptions"
             nodes={snapshot!.nodes}
-            subscriptions={snapshot!.subscriptions}
+            subscriptions={subscriptionInventory}
             onselect={setScope}
           />{/if}
         <section class="panel">
@@ -1058,9 +1192,7 @@
               />
             </label>
           </div>
-          {#if snapshot?.inventory_limited}<div class="notice">
-              Inventory is limited to 200 records per node; some topic filters may not be listed.
-            </div>{/if}
+          {@render inventoryNotice()}
           <div class="table-scroll">
             <table>
               <thead>
@@ -1107,7 +1239,9 @@
                     <td colspan="5">
                       <div class="empty-state">
                         <Icon name="subscriptions" size={28} />
-                        <h3>No subscriptions found</h3>
+                        <h3>
+                          {inventory.loading ? 'Loading subscriptions…' : 'No subscriptions found'}
+                        </h3>
                         <p>Topic filters appear here when clients subscribe.</p>
                       </div>
                     </td>
@@ -1117,13 +1251,18 @@
           </div>
           <div class="table-footer">
             <span>
-              {subscriptionRows.length} topic filters{snapshot?.mode === 'demo'
+              {subscriptionRows.length}{inventory.hasMore ? '+' : ''} topic filters{snapshot?.mode ===
+              'demo'
                 ? ' · Sample inventory'
                 : ''}
             </span><Pagination
               page={tablePage}
               size={pageSize}
               total={subscriptionRows.length}
+              more={inventory.hasMore}
+              busy={inventory.loading}
+              onmore={() => moreInventory()}
+              onlast={() => moreInventory(true)}
               onpage={(n) => (tablePage = n)}
               onsize={(n) => {
                 pageSize = n;
@@ -1132,6 +1271,17 @@
             />
           </div>
         </section>
+      {:else if page === 'queues'}
+        {#if !queueIdentity}<QueueDiagnostics {nodes} onnode={(id) => (nodeDetailID = id)} />{/if}
+        <Queues
+          nodes={snapshot?.nodes ?? []}
+          {scope}
+          identity={queueIdentity}
+          {paused}
+          onopen={(name, node) =>
+            go(`/dashboard/queues?${new URLSearchParams({ queue: name, node })}`)}
+          onback={() => navigate('queues')}
+        />
       {:else if page === 'nodes'}
         <section class="panel">
           <div class="panel-heading">
@@ -1143,7 +1293,11 @@
       {:else if page === 'health'}
         <section class="summary-strip">
           <div>
-            {#if scope === 'all'}<span>Available cluster nodes</span><strong>
+            {#if scope === 'all'}<span>
+                {snapshot?.nodes.some((n) => n.unmonitored)
+                  ? 'Monitored nodes responding'
+                  : 'Available cluster nodes'}
+              </span><strong>
                 {nodes.filter((n) => n.healthy).length} <small>/ {nodes.length}</small>
               </strong>{:else}<span>Node uptime</span><strong>
                 {nodes[0] ? uptime(nodes[0].uptime) : '—'}
@@ -1169,6 +1323,10 @@
               </strong>
             </div>{/each}
         </section>
+        <QueueDiagnostics {nodes} onnode={(id) => (nodeDetailID = id)} /><ProtocolDiagnostics
+          {nodes}
+          onnode={(id) => (nodeDetailID = id)}
+        />
         <div class="health-grid">
           {#each nodes as n}<section class="panel health-card">
               <div class="panel-heading">
@@ -1180,7 +1338,7 @@
                     </button>
                   </h2>
                 </span><span class:offline={!n.healthy} class="state-tag">
-                  <i></i>{n.healthy ? 'Healthy' : 'Unavailable'}
+                  <i></i>{nodeStatus(n)}
                 </span>
               </div>
               <dl>
@@ -1216,14 +1374,58 @@
   </div>
 </div>
 
+{#snippet inventoryNotice()}
+  {#if inventory.loading}<div class="inventory-notice" role="status">
+      <Icon name="refresh" size={14} />{search ? 'Searching all records…' : 'Loading inventory…'}
+    </div>{/if}
+  {#if inventory.error || inventory.failed.length}<div class="notice" role="alert">
+      {inventory.error ||
+        `Incomplete results: ${inventory.failed.join(', ')} could not be reached.`}<button
+        class="text-button"
+        onclick={() => inventory.load(!inventory.ready)}
+      >
+        Retry
+      </button>
+    </div>{/if}
+  {#if inventory.hasMore && !inventory.loading}<div class="inventory-notice">
+      <span>More records available. Counts cover loaded records.</span><button
+        class="text-button"
+        onclick={() => inventory.load()}
+      >
+        Load more
+      </button>
+    </div>{/if}
+{/snippet}
+
 {#snippet nodeTable()}
+  <div class="node-table-toolbar">
+    <div class="tabs" aria-label="Node comparison view">
+      <button
+        class:chosen={nodeTableView === 'activity'}
+        aria-pressed={nodeTableView === 'activity'}
+        onclick={() => (nodeTableView = 'activity')}
+      >
+        Activity
+      </button><button
+        class:chosen={nodeTableView === 'counters'}
+        aria-pressed={nodeTableView === 'counters'}
+        onclick={() => (nodeTableView = 'counters')}
+      >
+        Counters
+      </button>
+    </div>
+  </div>
   <div class="table-scroll">
     <table class="nodes-table">
       <thead>
         <tr>
-          <th>Node</th><th>Status</th><th class="numeric">Connections</th><th>Incoming</th><th>
-            Uptime
-          </th><th><span class="sr-only">Inspect</span></th>
+          <th>Node</th><th>Status</th>{#if nodeTableView === 'counters'}<th class="numeric">
+              Subscriptions
+            </th><th class="numeric">Messages in / out</th><th class="numeric">
+              Data in / out
+            </th>{:else}<th class="numeric">Connections</th><th>Incoming</th><th>
+              Uptime
+            </th>{/if}<th><span class="sr-only">Inspect</span></th>
         </tr>
       </thead><tbody>
         {#each snapshot?.nodes ?? [] as n}<tr>
@@ -1235,27 +1437,39 @@
                 }}
               >
                 <span class="node-icon"><Icon name="nodes" size={18} /></span><span>
-                  <strong>{n.id}</strong><small>{n.address}</small>
+                  <strong>{n.id}</strong><small>
+                    {n.address || n.transport_address || 'Admin endpoint not configured'}
+                  </small>
                 </span>{#if n.leader && n.cluster_mode !== false}<span class="leader-tag">
                     LEADER
                   </span>{/if}
               </button>
             </td><td>
               <span class:offline={!n.healthy} class="state-tag">
-                <i></i>{n.healthy ? 'Healthy' : 'Unavailable'}
+                <i></i>{nodeStatus(n)}
               </span>
-            </td><td class="numeric tabular">{number(n.connections)}</td><td>
-              <div class="throughput-cell">
-                <span>{compact(n.incoming)} <small>msg/s</small></span>
-                <div class="throughput-bars" aria-hidden="true">
-                  {#each (histories[n.id] ?? []).slice(-12) as p}<i
-                      style:height={`${3 + Math.min(20, (p.incoming / Math.max(n.incoming, 1)) * 12)}px`}
-                    ></i>{/each}
-                </div>
-              </div>
-            </td><td class="muted tabular">{uptime(n.uptime)}</td><td>
+            </td>{#if nodeTableView === 'counters'}<td class="numeric tabular">
+                {n.unmonitored ? '—' : number(n.subscriptions)}
+              </td><td class="numeric tabular">
+                {n.unmonitored ? '—' : `${number(n.received)} / ${number(n.sent)}`}
+              </td><td class="numeric tabular">
+                {n.unmonitored ? '—' : `${bytes(n.bytes_in)} / ${bytes(n.bytes_out)}`}
+              </td>{:else}<td class="numeric tabular">
+                {n.unmonitored ? '—' : number(n.connections)}
+              </td><td>
+                {#if n.unmonitored}—{:else}<div class="throughput-cell">
+                    <span>{compact(n.incoming)} <small>msg/s</small></span>
+                    <div class="throughput-bars" aria-hidden="true">
+                      {#each (histories[n.id] ?? []).slice(-12) as p}<i
+                          style:height={`${3 + Math.min(20, (p.incoming / Math.max(n.incoming, 1)) * 12)}px`}
+                        ></i>{/each}
+                    </div>
+                  </div>
+                {/if}
+              </td><td class="muted tabular">{uptime(n.uptime)}</td>{/if}<td>
               <button
                 class="text-button node-dashboard-link"
+                disabled={n.unmonitored}
                 aria-label={`Dashboard for ${n.id}`}
                 onclick={() => navigate('overview', n.id)}
               >
