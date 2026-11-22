@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Icon from './lib/Icon.svelte';
   import TrafficChart from './lib/TrafficChart.svelte';
+  import NodeCanvas from './lib/NodeCanvas.svelte';
   import {
     number,
     compact,
@@ -25,7 +26,7 @@
     {
       id: 'nodes',
       label: 'Cluster nodes',
-      description: 'Distributed by design. Connected by FluxMQ.',
+      description: 'Configured brokers and their current status.',
     },
     {
       id: 'health',
@@ -346,19 +347,6 @@
         </a>{/each}
     </nav>
     <div class="sidebar-bottom">
-      <a
-        class="utility-link"
-        href="https://www.absmach.eu/docs/fluxmq"
-        target="_blank"
-        rel="noreferrer"
-      >
-        <Icon name="book" size={18} /><span>Documentation</span>
-      </a>
-      <button class="utility-link" onclick={toggleTheme}>
-        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} /><span>
-          {theme === 'dark' ? 'Light appearance' : 'Dark appearance'}
-        </span>
-      </button>
       <a class="company" href="https://www.absmach.eu/" target="_blank" rel="noreferrer">
         <span class="company-copy">
           <small>A PRODUCT OF</small><img
@@ -410,6 +398,24 @@
                     : 'Broker needs attention'}
           </span><button class="button" onclick={exportCSV} disabled={!snapshot}>
             <Icon name="download" size={16} />Export
+          </button>
+          <a
+            class="icon-button top-utility"
+            href="https://www.absmach.eu/docs/fluxmq"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Documentation"
+            title="Documentation"
+          >
+            <Icon name="book" size={18} />
+          </a>
+          <button
+            class="icon-button top-utility"
+            onclick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Light appearance' : 'Dark appearance'}
+            title={theme === 'dark' ? 'Light appearance' : 'Dark appearance'}
+          >
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
           </button>
         </div>
       </div>
@@ -846,39 +852,13 @@
           </div>
         </section>
       {:else if page === 'nodes'}
-        <section class="cluster-hero panel">
-          <div>
-            <span class="eyebrow">CONNECTED BY DESIGN</span>
-            <h2>One cluster.<br /><span>Many possibilities.</span></h2>
-            <p>
-              {nodes.filter((n) => n.healthy).length} of {nodes.length} configured nodes are responding.
-            </p>
-            <span class="state-tag">
-              <i></i>{snapshot?.mode === 'demo' ? 'Demo cluster' : 'Configured brokers'}
-            </span>
-          </div>
-          <div class="topology" aria-label="Cluster topology">
-            <div class="topology-core">
-              <img src="/brand/fluxmq-symbol.svg" width="46" height="46" alt="FluxMQ" /><span>
-                FluxMQ
-              </span>
-            </div>
-            <div class="topology-lines"></div>
-            <div class="topology-nodes">
-              {#each nodes as n}<button
-                  class:unhealthy={!n.healthy}
-                  onclick={() => {
-                    scope = n.id;
-                    navigate('health');
-                  }}
-                >
-                  <Icon name="nodes" size={20} /><strong>{n.id}</strong><small>
-                    {n.leader ? 'Leader' : 'Follower'}
-                  </small>
-                </button>{/each}
-            </div>
-          </div>
-        </section>
+        <NodeCanvas
+          {nodes}
+          oninspect={(id) => {
+            scope = id;
+            navigate('health');
+          }}
+        />
         <section class="panel">
           <div class="panel-heading">
             <h2>Node inventory</h2>
