@@ -4,9 +4,19 @@ export interface Point {
   incoming: number;
   outgoing: number;
   bandwidth: number;
+  bytes_in?: number;
+  bytes_out?: number;
   connections: number;
 }
 export interface BrokerNode {
+  retained_messages?: number;
+  cluster_mode?: boolean;
+  version?: string;
+  transport_address?: string;
+  protocol_errors?: number;
+  auth_errors?: number;
+  authz_errors?: number;
+  packet_errors?: number;
   id: string;
   address: string;
   leader: boolean;
@@ -23,6 +33,18 @@ export interface BrokerNode {
   outgoing: number;
 }
 export interface Session {
+  connection_name?: string;
+  state?: string;
+  version?: number;
+  clean_start?: boolean;
+  expiry_interval?: number;
+  disconnected_at?: string;
+  receive_maximum?: number;
+  max_packet_size?: number;
+  topic_alias_max?: number;
+  request_response?: boolean;
+  request_problem?: boolean;
+  has_will?: boolean;
   client_id: string;
   node_id: string;
   protocol: string;
@@ -31,7 +53,15 @@ export interface Session {
   inflight_count: number;
   offline_queue_depth: number;
   connected_at?: string;
-  subscriptions?: { filter: string; qos: number }[];
+  subscriptions?: {
+    filter: string;
+    qos: number;
+    no_local?: boolean;
+    retain_as_published?: boolean;
+    retain_handling?: number;
+    consumer_group?: string;
+    subscription_id?: number;
+  }[];
 }
 export interface Subscription {
   filter: string;
@@ -77,4 +107,42 @@ export function protocolLabel(p: string) {
       } as Record<string, string>
     )[p] || p
   );
+}
+
+export function nodeRole(n: BrokerNode) {
+  if (n.cluster_mode === false) return 'Standalone';
+  if (n.leader) return 'Leader';
+  return n.cluster_mode === true ? 'Follower' : 'Not reported';
+}
+export function sessionProtocol(s: Pick<Session, 'protocol' | 'version' | 'client_id'>) {
+  const raw = (s.protocol || '').trim().toLowerCase();
+  if (['mqtt5', 'mqtt 5', 'mqtt 5.0'].includes(raw) || s.version === 5) return 'mqtt5';
+  if (['mqtt3.1.1', 'mqtt 3.1.1', 'mqtt311'].includes(raw) || s.version === 4) return 'mqtt3.1.1';
+  if (['mqtt3.1', 'mqtt 3.1', 'mqtt31'].includes(raw) || s.version === 3) return 'mqtt3.1';
+  if (
+    ['amqp', 'amqp0.9.1', 'amqp 0.9.1', 'amqp091', 'amqp_0_9_1'].includes(raw) ||
+    s.client_id.startsWith('amqp091:')
+  )
+    return 'amqp0.9.1';
+  if (
+    ['amqp1', 'amqp1.0', 'amqp 1.0', 'amqp10', 'amqp_1_0'].includes(raw) ||
+    s.client_id.startsWith('amqp:')
+  )
+    return 'amqp1.0';
+  return raw || 'unknown';
+}
+
+export interface SubscriptionClient {
+  client_id: string;
+  node_id: string;
+  qos: number;
+}
+export interface ClientListState {
+  clients: SubscriptionClient[];
+  next: Record<string, string>;
+  failed: string[];
+  search: string;
+  page: number;
+  pageSize: number;
+  loaded: boolean;
 }

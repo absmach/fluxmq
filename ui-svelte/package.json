@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "format": "prettier --write .",
-    "test:browser": "node tests/browser.cjs"
+    "test:browser": "node tests/browser.cjs && node tests/drilldown.cjs"
   },
   "dependencies": {
     "svelte": "^5.0.0"

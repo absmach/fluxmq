@@ -1,6 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import Icon from './lib/Icon.svelte';
+  import { clientURL, subscriptionURL, followLink } from './lib/routes';
+  import Pagination from './lib/Pagination.svelte';
+  import NodeComparison from './lib/NodeComparison.svelte';
+  import NodePicker from './lib/NodePicker.svelte';
+  import NodeDetails from './lib/NodeDetails.svelte';
+  import SubscriptionDetails from './lib/SubscriptionDetails.svelte';
+  import ClientFields from './lib/ClientFields.svelte';
   import TrafficChart from './lib/TrafficChart.svelte';
   import {
     number,
@@ -8,10 +15,13 @@
     bytes,
     uptime,
     protocolLabel,
+    sessionProtocol,
+    nodeRole,
     type Page,
     type Point,
     type Snapshot,
     type Session,
+    type ClientListState,
   } from './lib/types';
 
   const navigation: { id: Page; label: string }[] = [
@@ -21,9 +31,15 @@
     { id: 'nodes', label: 'Cluster nodes' },
     { id: 'health', label: 'Broker health' },
   ];
-  const pageFromURL = (): Page =>
-    navigation.find((n) => n.id === location.pathname.split('/').filter(Boolean).at(-1))?.id ??
-    'overview';
+  const pageFromURL = (): Page => {
+    if (location.pathname.startsWith('/dashboard/sessions/')) return 'sessions';
+    if (location.pathname === '/dashboard/broker-info') return 'health';
+    if (location.pathname.startsWith('/dashboard/subscriptions/')) return 'subscriptions';
+    return (
+      navigation.find((n) => n.id === location.pathname.split('/').filter(Boolean).at(-1))?.id ??
+      'overview'
+    );
+  };
   let page = $state<Page>(pageFromURL());
   let viewportWidth = $state(window.innerWidth);
   let snapshot = $state<Snapshot | null>(null);
@@ -39,11 +55,34 @@
   let protocol = $state('all');
   let sort = $state('client');
   let tablePage = $state(1);
+  let pageSize = $state(10);
   let toast = $state('');
   let toastTimer: ReturnType<typeof setTimeout>;
-  let detailDialog: HTMLDialogElement;
+  type ViewState = {
+    scope: string;
+    search: string;
+    filter: string;
+    protocol: string;
+    sort: string;
+    tablePage: number;
+    pageSize: number;
+    scrollY: number;
+    subscription?: ClientListState;
+  };
+  type ParentRoute = { url: string; label: string };
+  let returnRoute = $state<ParentRoute | null>(null);
+  let subscriptionInitial = $state<ClientListState | undefined>();
+  let subscriptionViewState: ClientListState | undefined;
+  const localURL = () => location.pathname + location.search;
+
   let connectionDialog: HTMLDialogElement;
   let detail = $state<Session | null>(null);
+  let detailIdentity = $state<{ client_id: string; node_id: string } | null>(null);
+  let nodeDetailID = $state('');
+  let selectedNode = $derived(snapshot?.nodes.find((n) => n.id === nodeDetailID));
+  let subscriptionDetail = $state<{ filter: string; node: string } | null>(null);
+  let routeIsDetail = $derived(!!subscriptionDetail || !!detailIdentity);
+  let chartMode = $state<'messages' | 'bandwidth' | 'connections'>('messages');
   let detailLoading = $state(false);
   let detailError = $state('');
   let detailController: AbortController | undefined;
@@ -52,6 +91,19 @@
   let stream: EventSource | undefined;
 
   let currentNav = $derived(navigation.find((n) => n.id === page)!);
+  let pageTitle = $derived(
+    subscriptionDetail?.filter ??
+      detailIdentity?.client_id ??
+      (page === 'overview'
+        ? scope === 'all'
+          ? 'Cluster overview'
+          : 'Node overview'
+        : page === 'health'
+          ? scope === 'all'
+            ? 'Cluster health'
+            : 'Node health'
+          : currentNav.label),
+  );
   let nodes = $derived(snapshot?.nodes.filter((n) => scope === 'all' || n.id === scope) ?? []);
   let sessions = $derived(
     snapshot?.sessions.filter((s) => scope === 'all' || s.node_id === scope) ?? [],
@@ -75,7 +127,10 @@
     sessions
       .filter(
         (s) =>
-          (!search || `${s.client_id} ${s.node_id}`.toLowerCase().includes(search.toLowerCase())) &&
+          (!search ||
+            `${s.client_id} ${s.connection_name ?? ''} ${s.node_id}`
+              .toLowerCase()
+              .includes(search.toLowerCase())) &&
           (filter === 'all' || (filter === 'connected') === s.connected) &&
           (protocol === 'all' || s.protocol === protocol),
       )
@@ -85,7 +140,9 @@
           : a.client_id.localeCompare(b.client_id),
       ),
   );
-  let pagedSessions = $derived(filteredSessions.slice((tablePage - 1) * 10, tablePage * 10));
+  let pagedSessions = $derived(
+    filteredSessions.slice((tablePage - 1) * pageSize, tablePage * pageSize),
+  );
   let subscriptionRows = $derived.by(() => {
     const grouped = new Map<
       string,
@@ -129,21 +186,100 @@
     })`;
   });
   $effect(() => {
-    const max = Math.max(1, Math.ceil(filteredSessions.length / 10));
+    const max = Math.max(
+      1,
+      Math.ceil(
+        (page === 'subscriptions' ? subscriptionRows.length : filteredSessions.length) / pageSize,
+      ),
+    );
     if (tablePage > max) tablePage = max;
   });
 
-  function navigate(id: Page) {
-    page = id;
-    history.pushState(null, '', id === 'overview' ? '/dashboard' : `/dashboard/${id}`);
-    search = '';
-    filter = 'all';
-    protocol = 'all';
+  function rememberView() {
+    const view: ViewState = {
+      scope,
+      search,
+      filter,
+      protocol,
+      sort,
+      tablePage,
+      pageSize,
+      scrollY: window.scrollY,
+      subscription: subscriptionViewState,
+    };
+    history.replaceState({ ...history.state, view: $state.snapshot(view) }, '', localURL());
+  }
+  function routeLabel() {
+    return subscriptionDetail
+      ? subscriptionDetail.filter
+      : detailIdentity
+        ? detailIdentity.client_id
+        : currentNav.label;
+  }
+  function go(url: string, parent: ParentRoute | null = null) {
+    rememberView();
+    history.pushState({ parent }, '', url);
+    readRoute();
+  }
+  function navigate(id: Page, node = 'all') {
+    const url = id === 'overview' ? '/dashboard' : `/dashboard/${id}`;
+    go(url + (node !== 'all' && id !== 'nodes' ? `?${new URLSearchParams({ node })}` : ''));
+  }
+  function setScope(id: string) {
+    if (subscriptionDetail) {
+      history.replaceState(
+        { parent: history.state?.parent ?? null },
+        '',
+        subscriptionURL(subscriptionDetail.filter, id),
+      );
+      readRoute();
+      return;
+    }
+    scope = id;
     tablePage = 1;
+    const url = new URL(location.href);
+    if (id === 'all') url.searchParams.delete('node');
+    else url.searchParams.set('node', id);
+    history.replaceState(history.state, '', url.pathname + url.search);
+    rememberView();
+  }
+  function backToParent() {
+    if (returnRoute) history.back();
+    else navigate(page);
+  }
+  async function readRoute(restoring = false) {
+    detailController?.abort();
+    nodeDetailID = '';
+    page = pageFromURL();
+    const query = new URLSearchParams(location.search);
+    const view = history.state?.view as ViewState | undefined;
+    returnRoute = history.state?.parent ?? null;
+    scope = view?.scope ?? query.get('node') ?? 'all';
+    search = view?.search ?? '';
+    filter = view?.filter ?? 'all';
+    protocol = view?.protocol ?? 'all';
+    sort = view?.sort ?? 'client';
+    tablePage = view?.tablePage ?? 1;
+    pageSize = view?.pageSize ?? pageSize;
     mobileOpen = false;
-    document.querySelector('main')?.scrollTo(0, 0);
+    subscriptionInitial = view?.subscription;
+    subscriptionViewState = view?.subscription;
+    subscriptionDetail = null;
+    detailIdentity = null;
+    detail = null;
+    if (page === 'subscriptions' && query.has('filter')) {
+      subscriptionDetail = { filter: query.get('filter')!, node: query.get('node') || 'all' };
+      scope = subscriptionDetail.node;
+    } else if (page === 'sessions' && query.get('id') && query.get('node')) {
+      detailIdentity = { client_id: query.get('id')!, node_id: query.get('node')! };
+      loadSession(detailIdentity);
+    }
+    await tick();
+    if (!restoring) document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true });
+    window.scrollTo(0, view?.scrollY ?? 0);
   }
   function apply(s: Snapshot) {
+    s.sessions = s.sessions.map((client) => ({ ...client, protocol: sessionProtocol(client) }));
     snapshot = s;
     if (s.history) histories = s.history;
     else {
@@ -180,21 +316,34 @@
       localStorage.setItem('fluxmq-theme', theme);
     } catch {}
   }
-  async function showSession(s: Session) {
-    detail = s;
+  function showSubscription(filter: string, node = scope) {
+    go(subscriptionURL(filter, node), { url: localURL(), label: routeLabel() });
+  }
+  function openNodeList(id: string, destination: Page) {
+    nodeDetailID = '';
+    navigate(destination, id);
+  }
+  function showSession(s: Pick<Session, 'client_id' | 'node_id'>) {
+    go(clientURL(s), { url: localURL(), label: routeLabel() });
+  }
+  async function loadSession(s: Pick<Session, 'client_id' | 'node_id'>) {
+    detail =
+      snapshot?.sessions.find(
+        (client) => client.client_id === s.client_id && client.node_id === s.node_id,
+      ) ?? null;
     detailError = '';
     detailLoading = true;
     detailController?.abort();
     detailController = new AbortController();
     const controller = detailController;
-    detailDialog.showModal();
     try {
       const response = await fetch(
         `/console-api/session?id=${encodeURIComponent(s.client_id)}&node=${encodeURIComponent(s.node_id)}`,
         { signal: controller.signal },
       );
       if (!response.ok) throw new Error('Could not load this session. It may have disconnected.');
-      detail = await response.json();
+      const loaded: Session = await response.json();
+      if (!controller.signal.aborted) detail = { ...loaded, protocol: sessionProtocol(loaded) };
     } catch (error) {
       if (!controller.signal.aborted) detailError = (error as Error).message;
     } finally {
@@ -216,26 +365,55 @@
               s.offline_queue_depth,
             ]),
           ]
-        : page === 'subscriptions'
+        : page === 'nodes' || page === 'health'
           ? [
-              ['Topic filter', 'Subscribers', 'Max QoS', 'Nodes'],
-              ...subscriptionRows.map((s) => [
-                s.filter,
-                s.subscriber_count,
-                s.max_qos,
-                s.nodes.join(';'),
+              [
+                'Node',
+                'Admin endpoint',
+                'Role',
+                'Status',
+                'Connections',
+                'Subscriptions',
+                'Messages received',
+                'Messages sent',
+                'Bytes received',
+                'Bytes sent',
+                'Uptime seconds',
+              ],
+              ...(page === 'nodes' ? snapshot.nodes : nodes).map((n) => [
+                n.id,
+                n.address,
+                nodeRole(n),
+                n.healthy ? 'healthy' : 'unavailable',
+                n.connections,
+                n.subscriptions,
+                n.received,
+                n.sent,
+                n.bytes_in,
+                n.bytes_out,
+                n.uptime,
               ]),
             ]
-          : [
-              ['Time', 'Messages in/s', 'Messages out/s', 'Bandwidth bytes/s', 'Connections'],
-              ...points.map((p) => [
-                new Date(p.time).toISOString(),
-                p.incoming,
-                p.outgoing,
-                p.bandwidth,
-                p.connections,
-              ]),
-            ];
+          : page === 'subscriptions'
+            ? [
+                ['Topic filter', 'Subscribers', 'Max QoS', 'Nodes'],
+                ...subscriptionRows.map((s) => [
+                  s.filter,
+                  s.subscriber_count,
+                  s.max_qos,
+                  s.nodes.join(';'),
+                ]),
+              ]
+            : [
+                ['Time', 'Messages in/s', 'Messages out/s', 'Bandwidth bytes/s', 'Connections'],
+                ...points.map((p) => [
+                  new Date(p.time).toISOString(),
+                  p.incoming,
+                  p.outgoing,
+                  p.bandwidth,
+                  p.connections,
+                ]),
+              ];
     const csv = rows
       .map((r) =>
         r
@@ -269,12 +447,10 @@
       }
     });
     stream.onerror = () => (connection = 'reconnecting');
+    history.scrollRestoration = 'manual';
+    readRoute(true);
     const interval = setInterval(() => (clock = Date.now()), 1000);
-    const pop = () => {
-      page = pageFromURL();
-      search = '';
-      tablePage = 1;
-    };
+    const pop = () => readRoute(true);
     window.addEventListener('popstate', pop);
     return () => {
       stream?.close();
@@ -287,7 +463,9 @@
 </script>
 
 <svelte:window bind:innerWidth={viewportWidth} />
-<svelte:head><title>{currentNav.label} · FluxMQ</title></svelte:head>
+<svelte:head>
+  <title>{pageTitle} · FluxMQ</title>
+</svelte:head>
 
 <div class="app-shell">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -369,14 +547,15 @@
           >
             <Icon name="menu" />
           </button>{/if}
-        <label class="node-picker">
-          <Icon name="nodes" size={17} />
-          <select aria-label="Cluster scope" bind:value={scope} onchange={() => (tablePage = 1)}>
-            <option value="all">All nodes</option>
-            {#each snapshot?.nodes ?? [] as n}<option value={n.id}>{n.id}</option>{/each}
-          </select>
-          <Icon name="down" size={13} />
-        </label>
+        {#if page === 'nodes'}<span class="inventory-context">
+            <Icon name="nodes" size={18} />Cluster inventory
+          </span>{:else if detailIdentity}<span class="inventory-context">
+            <Icon name="nodes" size={18} />{detailIdentity.node_id}
+          </span>{:else}<NodePicker
+            nodes={snapshot?.nodes ?? []}
+            value={scope}
+            onchange={setScope}
+          />{/if}
         <button
           class="cluster-count"
           onclick={() => {
@@ -434,16 +613,54 @@
       </div>
     </header>
     <main id="main">
+      {#if routeIsDetail}
+        <nav class="detail-breadcrumb" aria-label="Detail navigation">
+          <a
+            href={returnRoute?.url ?? `/dashboard/${page}`}
+            onclick={(event) => followLink(event, backToParent)}
+          >
+            <span aria-hidden="true">←</span>
+            {returnRoute ? returnRoute.label : currentNav.label}
+          </a>
+          <span class="breadcrumb-divider" aria-hidden="true">/</span>
+          <span>{subscriptionDetail ? 'Subscription' : 'Client'}</span>
+        </nav>
+      {/if}
       <div class:overview-heading={page === 'overview'} class="page-heading">
         <div>
-          <h1>
-            {page === 'overview' ? 'Broker overview' : currentNav.label}
+          <h1 tabindex="-1" class:entity-title={routeIsDetail}>
+            {pageTitle}
           </h1>
+          {#if scope !== 'all' && !routeIsDetail}<div class="scope-context">
+              <span><Icon name="nodes" size={15} />{scope}</span>
+              <button class="text-button" onclick={() => setScope('all')}>
+                Clear node filter <Icon name="close" size={13} />
+              </button>
+            </div>{/if}
+          {#if detail && !detailLoading && !detailError}<span
+              class:offline={!detail.connected}
+              class="state-tag client-page-status"
+            >
+              <i></i>{detail.connected ? 'Connected' : 'Disconnected'} · {protocolLabel(
+                detail.protocol,
+              )}
+            </span>{/if}
         </div>
         <div class="heading-actions">
-          <button class="button" onclick={exportCSV} disabled={!snapshot}>
-            <Icon name="download" size={16} />Export
-          </button>
+          {#if detailIdentity}<button
+              class="button"
+              disabled={detailLoading}
+              onclick={() => detailIdentity && loadSession(detailIdentity)}
+            >
+              <Icon name="refresh" size={16} />Refresh client
+            </button>
+          {:else if !subscriptionDetail}<button
+              class="button"
+              onclick={exportCSV}
+              disabled={!snapshot}
+            >
+              <Icon name="download" size={16} />Export
+            </button>{/if}
         </div>
       </div>
       {#if snapshot?.warning}<div class="notice" role="alert">
@@ -454,7 +671,34 @@
           we reconnect.
         </div>{/if}
 
-      {#if page === 'overview'}
+      {#if subscriptionDetail}
+        {#key subscriptionDetail}<SubscriptionDetails
+            filter={subscriptionDetail.filter}
+            node={subscriptionDetail.node}
+            initial={subscriptionInitial}
+            onstate={(state) => (subscriptionViewState = state)}
+            onclient={showSession}
+          />{/key}
+      {:else if detailIdentity}
+        <section class="client-detail-page" aria-label="Client details">
+          {#if detailLoading}<div class="panel empty-state" role="status">
+              Loading client details…
+            </div>
+          {:else if detailError}<div class="notice" role="alert">
+              {detailError}<button
+                class="text-button"
+                onclick={() => detailIdentity && loadSession(detailIdentity)}
+              >
+                Retry
+              </button>
+            </div>
+          {:else if detail}<ClientFields
+              client={detail}
+              onfilter={showSubscription}
+              onnode={(id) => (nodeDetailID = id)}
+            />{/if}
+        </section>
+      {:else if page === 'overview'}
         <section class="metric-grid" aria-label="Key metrics">
           <article class="metric-card">
             <div class="metric-label">Active connections <Icon name="sessions" size={17} /></div>
@@ -517,7 +761,8 @@
           <section class="panel traffic-panel">
             <div class="panel-heading">
               <div>
-                <h2>Message traffic <span class="live-dot"></span></h2>
+                <h2>{scope === 'all' ? 'Cluster traffic' : 'Node traffic'}</h2>
+                <span class="chart-scope">{scope === 'all' ? 'All nodes combined' : scope}</span>
               </div>
               <div class="segmented" aria-label="Chart time range">
                 {#each [1, 5, 15] as minutes}<button
@@ -528,20 +773,40 @@
                   </button>{/each}
               </div>
             </div>
-            <div class="chart-legend">
-              <span>
-                <i class="legend-dot blue"></i>Incoming
-                <strong>{currentPoint ? number(currentPoint.incoming) : '—'}</strong><small>
-                  msg/s
-                </small>
-              </span><span>
-                <i class="legend-dot green"></i>Outgoing
-                <strong>{currentPoint ? number(currentPoint.outgoing) : '—'}</strong><small>
-                  msg/s
-                </small>
-              </span>
+            <div class="chart-mode tabs" aria-label="History metric">
+              {#each [{ id: 'messages', label: 'Messages' }, { id: 'bandwidth', label: 'Bandwidth' }, { id: 'connections', label: 'Connections' }] as metric}<button
+                  class:chosen={chartMode === metric.id}
+                  onclick={() => (chartMode = metric.id as typeof chartMode)}
+                >
+                  {metric.label}
+                </button>{/each}
             </div>
-            <TrafficChart {points} />
+            <div class="chart-legend">
+              {#if chartMode === 'connections'}<span>
+                  <i class="legend-dot blue"></i>Active connections
+                  <strong>{currentPoint ? number(currentPoint.connections) : '—'}</strong>
+                </span>
+              {:else}<span>
+                  <i class="legend-dot blue"></i>Incoming
+                  <strong>
+                    {currentPoint
+                      ? chartMode === 'bandwidth'
+                        ? bytes(currentPoint.bytes_in ?? 0)
+                        : number(currentPoint.incoming)
+                      : '—'}
+                  </strong><small>{chartMode === 'bandwidth' ? '/s' : 'msg/s'}</small>
+                </span><span>
+                  <i class="legend-dot green"></i>Outgoing
+                  <strong>
+                    {currentPoint
+                      ? chartMode === 'bandwidth'
+                        ? bytes(currentPoint.bytes_out ?? 0)
+                        : number(currentPoint.outgoing)
+                      : '—'}
+                  </strong><small>{chartMode === 'bandwidth' ? '/s' : 'msg/s'}</small>
+                </span>{/if}
+            </div>
+            <TrafficChart {points} mode={chartMode} label={`${chartMode} history`} />
             <div class="chart-footer">
               <span>
                 <Icon name="clock" size={13} />Last {range}
@@ -552,44 +817,77 @@
               </span>
             </div>
           </section>
-          <section class="panel protocol-panel">
-            <div class="panel-heading">
-              <div>
-                <h2>Session mix</h2>
-              </div>
-              <Icon name="globe" size={18} />
-            </div>
-            <div class="donut-container">
-              <div class="donut" style:background={donut}>
-                <div class="donut-hole">
-                  <span>{number(sessions.length)}</span><small>
-                    {snapshot?.mode === 'demo' ? 'sample clients' : 'listed clients'}
-                  </small>
+          {#if scope === 'all'}<NodeComparison
+              nodes={snapshot?.nodes ?? []}
+              onselect={(id) => setScope(id)}
+            />{:else}
+            <section class="panel protocol-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Session mix</h2>
                 </div>
+                <Icon name="globe" size={18} />
               </div>
-              <div class="donut-orbit"></div>
-            </div>
-            <div class="protocol-list">
-              {#each protocols as p}<button
-                  onclick={() => {
-                    navigate('sessions');
-                    protocol = p.name;
-                  }}
-                >
-                  <span>
-                    <i class="legend-dot" style:background={p.color}></i>{protocolLabel(p.name)}
-                  </span><strong>{p.percent.toFixed(0)}<small>%</small></strong>
-                </button>{/each}{#if protocols.length === 0}<p class="empty-inline">
-                  No sessions in this scope.
-                </p>{/if}
-            </div>
-          </section>
+              <div class="donut-container">
+                <div class="donut" style:background={donut}>
+                  <div class="donut-hole">
+                    <span>{number(sessions.length)}</span><small>
+                      {snapshot?.mode === 'demo' ? 'sample clients' : 'listed clients'}
+                    </small>
+                  </div>
+                </div>
+                <div class="donut-orbit"></div>
+              </div>
+              <div class="protocol-list">
+                {#each protocols as p}<button
+                    onclick={() => {
+                      navigate('sessions', scope);
+                      protocol = p.name;
+                    }}
+                  >
+                    <span>
+                      <i class="legend-dot" style:background={p.color}></i>{protocolLabel(p.name)}
+                    </span><strong>{p.percent.toFixed(0)}<small>%</small></strong>
+                  </button>{/each}{#if protocols.length === 0}<p class="empty-inline">
+                    No sessions in this scope.
+                  </p>{/if}
+              </div>
+            </section>{/if}
         </div>
+        <details class="panel broker-totals">
+          <summary>Cumulative counters <Icon name="down" size={16} /></summary>
+          <dl>
+            <div>
+              <dt>Messages received</dt>
+              <dd>{number(totals.received)}</dd>
+            </div>
+            <div>
+              <dt>Messages sent</dt>
+              <dd>{number(totals.sent)}</dd>
+            </div>
+            <div>
+              <dt>Bytes received</dt>
+              <dd>{bytes(nodes.reduce((sum, n) => sum + n.bytes_in, 0))}</dd>
+            </div>
+            <div>
+              <dt>Bytes sent</dt>
+              <dd>{bytes(nodes.reduce((sum, n) => sum + n.bytes_out, 0))}</dd>
+            </div>
+            <div>
+              <dt>Retained messages</dt>
+              <dd>{number(nodes.reduce((sum, n) => sum + (n.retained_messages ?? 0), 0))}</dd>
+            </div>
+            <div>
+              <dt>{nodes.length > 1 ? 'Shortest node uptime' : 'Uptime'}</dt>
+              <dd>{nodes.length ? uptime(Math.min(...nodes.map((n) => n.uptime))) : '—'}</dd>
+            </div>
+          </dl>
+        </details>
         <section class="panel node-panel">
           <div class="panel-heading">
             <div class="heading-inline">
               <h2>Cluster nodes</h2>
-              <span class="count-tag">{nodes.length}</span>
+              <span class="count-tag">{snapshot?.nodes.length ?? 0}</span>
             </div>
             <button class="text-button" onclick={() => navigate('nodes')}>
               Explore cluster <Icon name="nodes" size={15} />
@@ -616,6 +914,12 @@
             </strong>
           </div>
         </section>
+        {#if scope === 'all' && (snapshot?.nodes.length ?? 0) > 1}<NodeComparison
+            kind="sessions"
+            nodes={snapshot!.nodes}
+            sessions={snapshot!.sessions}
+            onselect={setScope}
+          />{/if}
         <section class="panel">
           <div class="table-toolbar">
             <div class="tabs">
@@ -640,7 +944,11 @@
           </div>
           <div class="filter-row">
             <label>
-              Protocol <select bind:value={protocol} onchange={() => (tablePage = 1)}>
+              Protocol <select
+                aria-label="Protocol"
+                bind:value={protocol}
+                onchange={() => (tablePage = 1)}
+              >
                 <option value="all">
                   All protocols
                 </option>{#each [...new Set(sessions.map((s) => s.protocol))] as p}<option
@@ -673,11 +981,15 @@
               </thead><tbody>
                 {#each pagedSessions as s}<tr>
                     <td>
-                      <button class="client-link" onclick={() => showSession(s)}>
+                      <a
+                        class="client-link"
+                        href={clientURL(s)}
+                        onclick={(event) => followLink(event, () => showSession(s))}
+                      >
                         <span class="client-icon">
                           <Icon name="terminal" size={16} />
                         </span>{s.client_id}
-                      </button>
+                      </a>
                     </td><td>
                       <span class:offline={!s.connected} class="state-tag">
                         <i></i>{s.connected ? 'Connected' : 'Disconnected'}
@@ -721,26 +1033,23 @@
           </div>
           <div class="table-footer">
             <span>
-              {filteredSessions.length ? (tablePage - 1) * 10 + 1 : 0}–{Math.min(
-                tablePage * 10,
+              {filteredSessions.length ? (tablePage - 1) * pageSize + 1 : 0}–{Math.min(
+                tablePage * pageSize,
                 filteredSessions.length,
               )} of {filteredSessions.length} sessions{snapshot?.mode === 'demo'
                 ? ' · Sample inventory'
                 : ''}
             </span>
-            <div class="pagination">
-              <button class="button" disabled={tablePage <= 1} onclick={() => tablePage--}>
-                Previous
-              </button><span>
-                {tablePage} / {Math.max(1, Math.ceil(filteredSessions.length / 10))}
-              </span><button
-                class="button"
-                disabled={tablePage * 10 >= filteredSessions.length}
-                onclick={() => tablePage++}
-              >
-                Next
-              </button>
-            </div>
+            <Pagination
+              page={tablePage}
+              size={pageSize}
+              total={filteredSessions.length}
+              onpage={(n) => (tablePage = n)}
+              onsize={(n) => {
+                pageSize = n;
+                tablePage = 1;
+              }}
+            />
           </div>
         </section>
       {:else if page === 'subscriptions'}
@@ -757,11 +1066,16 @@
             </strong>
           </div>
         </section>
+        {#if scope === 'all' && (snapshot?.nodes.length ?? 0) > 1}<NodeComparison
+            kind="subscriptions"
+            nodes={snapshot!.nodes}
+            subscriptions={snapshot!.subscriptions}
+            onselect={setScope}
+          />{/if}
         <section class="panel">
           <div class="panel-heading">
             <div>
               <h2>Topic directory</h2>
-              <p>Explore the routes that connect your applications.</p>
             </div>
             <label class="search-field">
               <Icon name="search" size={16} /><input
@@ -783,22 +1097,35 @@
                   </th><th>Max QoS</th><th>Nodes</th>
                 </tr>
               </thead><tbody>
-                {#each subscriptionRows as s}<tr>
+                {#each subscriptionRows.slice((tablePage - 1) * pageSize, tablePage * pageSize) as s}<tr>
                     <td>
-                      <span class="topic-name">
+                      <a
+                        class="topic-name text-button"
+                        aria-label={`View clients for ${s.filter}`}
+                        href={subscriptionURL(s.filter, scope)}
+                        onclick={(event) => followLink(event, () => showSubscription(s.filter))}
+                      >
                         <Icon name="subscriptions" size={17} />{s.filter}
-                      </span>
+                      </a>
                     </td><td>
                       <div class="distribution-track">
                         <span
                           style:width={`${(s.subscriber_count / Math.max(...subscriptionRows.map((s) => s.subscriber_count), 1)) * 100}%`}
                         ></span>
                       </div>
-                    </td><td class="numeric">{s.subscriber_count}</td><td>
+                    </td><td class="numeric">
+                      <button
+                        class="text-button"
+                        aria-label={`View ${s.subscriber_count} clients for ${s.filter}`}
+                        onclick={() => showSubscription(s.filter)}
+                      >
+                        {s.subscriber_count}<Icon name="chevron" size={14} />
+                      </button>
+                    </td><td>
                       <span class="protocol-tag">QoS {s.max_qos}</span>
                     </td><td>
                       <div class="node-chips">
-                        {#each s.nodes as id}<button onclick={() => (scope = id)}>
+                        {#each s.nodes as id}<button onclick={() => (nodeDetailID = id)}>
                             {id}
                           </button>{/each}
                       </div>
@@ -820,26 +1147,34 @@
               {subscriptionRows.length} topic filters{snapshot?.mode === 'demo'
                 ? ' · Sample inventory'
                 : ''}
-            </span><span>
-              QoS 0 · At most once &nbsp; / &nbsp; QoS 1 · At least once &nbsp; / &nbsp; QoS 2 ·
-              Exactly once
-            </span>
+            </span><Pagination
+              page={tablePage}
+              size={pageSize}
+              total={subscriptionRows.length}
+              onpage={(n) => (tablePage = n)}
+              onsize={(n) => {
+                pageSize = n;
+                tablePage = 1;
+              }}
+            />
           </div>
         </section>
       {:else if page === 'nodes'}
         <section class="panel">
           <div class="panel-heading">
             <h2>Node inventory</h2>
-            <span class="muted">Select a node to inspect its health</span>
+            <span class="muted">Select a node for details</span>
           </div>
           {@render nodeTable()}
         </section>
       {:else if page === 'health'}
         <section class="summary-strip">
           <div>
-            <span>Available nodes</span><strong>
-              {nodes.filter((n) => n.healthy).length} <small>/ {nodes.length}</small>
-            </strong>
+            {#if scope === 'all'}<span>Available cluster nodes</span><strong>
+                {nodes.filter((n) => n.healthy).length} <small>/ {nodes.length}</small>
+              </strong>{:else}<span>Node uptime</span><strong>
+                {nodes[0] ? uptime(nodes[0].uptime) : '—'}
+              </strong>{/if}
           </div>
           <div>
             <span>Protocol & auth errors</span><strong class:mint-text={totals.errors === 0}>
@@ -849,12 +1184,28 @@
           <div><span>Total messages received</span><strong>{compact(totals.received)}</strong></div>
           <div><span>Total messages sent</span><strong>{compact(totals.sent)}</strong></div>
         </section>
+        <section class="panel error-breakdown" aria-label="Error breakdown">
+          {#each [{ key: 'protocol_errors', label: 'Protocol' }, { key: 'auth_errors', label: 'Authentication' }, { key: 'authz_errors', label: 'Authorization' }, { key: 'packet_errors', label: 'Packet' }] as error}<div>
+              <span>{error.label}</span><strong>
+                {number(
+                  nodes.reduce(
+                    (total, node) => total + (node[error.key as 'protocol_errors'] ?? 0),
+                    0,
+                  ),
+                )}
+              </strong>
+            </div>{/each}
+        </section>
         <div class="health-grid">
           {#each nodes as n}<section class="panel health-card">
               <div class="panel-heading">
                 <span class="node-identity">
                   <span class="node-icon"><Icon name="nodes" /></span>
-                  <h2>{n.id}</h2>
+                  <h2>
+                    <button class="text-button" onclick={() => (nodeDetailID = n.id)}>
+                      {n.id}<Icon name="chevron" size={15} />
+                    </button>
+                  </h2>
                 </span><span class:offline={!n.healthy} class="state-tag">
                   <i></i>{n.healthy ? 'Healthy' : 'Unavailable'}
                 </span>
@@ -866,7 +1217,7 @@
                 </div>
                 <div>
                   <dt>Role</dt>
-                  <dd>{n.leader ? 'Leader' : 'Follower / standalone'}</dd>
+                  <dd>{nodeRole(n)}</dd>
                 </div>
                 <div>
                   <dt>Uptime</dt>
@@ -897,23 +1248,24 @@
     <table class="nodes-table">
       <thead>
         <tr>
-          <th>Node</th><th>Status</th><th class="numeric">Connections</th><th>Throughput</th><th>
+          <th>Node</th><th>Status</th><th class="numeric">Connections</th><th>Incoming</th><th>
             Uptime
           </th><th><span class="sr-only">Inspect</span></th>
         </tr>
       </thead><tbody>
-        {#each nodes as n}<tr>
+        {#each snapshot?.nodes ?? [] as n}<tr>
             <td>
               <button
                 class="node-identity"
                 onclick={() => {
-                  scope = n.id;
-                  navigate('health');
+                  nodeDetailID = n.id;
                 }}
               >
                 <span class="node-icon"><Icon name="nodes" size={18} /></span><span>
                   <strong>{n.id}</strong><small>{n.address}</small>
-                </span>{#if n.leader}<span class="leader-tag">LEADER</span>{/if}
+                </span>{#if n.leader && n.cluster_mode !== false}<span class="leader-tag">
+                    LEADER
+                  </span>{/if}
               </button>
             </td><td>
               <span class:offline={!n.healthy} class="state-tag">
@@ -930,11 +1282,17 @@
               </div>
             </td><td class="muted tabular">{uptime(n.uptime)}</td><td>
               <button
+                class="text-button node-dashboard-link"
+                aria-label={`Dashboard for ${n.id}`}
+                onclick={() => navigate('overview', n.id)}
+              >
+                Dashboard
+              </button>
+              <button
                 class="icon-button"
                 aria-label={`Inspect ${n.id}`}
                 onclick={() => {
-                  scope = n.id;
-                  navigate('health');
+                  nodeDetailID = n.id;
                 }}
               >
                 <Icon name="chevron" size={16} />
@@ -948,82 +1306,13 @@
   </div>
 {/snippet}
 
-<dialog
-  bind:this={detailDialog}
-  class="detail-dialog"
-  aria-labelledby="session-dialog-title"
-  onclose={() => {
-    detailController?.abort();
-    detail = null;
-  }}
->
-  <div class="session-heading">
-    <span class="eyebrow">SESSION INSPECTOR</span><button
-      class="icon-button"
-      aria-label="Close session details"
-      onclick={() => detailDialog.close()}
-    >
-      <Icon name="close" />
-    </button>
-  </div>
-  {#if detail}<div class="session-title">
-      <span class="large-client-icon"><Icon name="terminal" size={28} /></span>
-      <h2 id="session-dialog-title">{detail.client_id}</h2>
-      <span class:offline={!detail.connected} class="state-tag">
-        <i></i>{detail.connected ? 'Connected' : 'Disconnected'}
-      </span>
-    </div>
-    <dl class="detail-list">
-      <div>
-        <dt>Protocol</dt>
-        <dd>{protocolLabel(detail.protocol)}</dd>
-      </div>
-      <div>
-        <dt>Node</dt>
-        <dd>{detail.node_id}</dd>
-      </div>
-      <div>
-        <dt>Connected since</dt>
-        <dd>
-          {detail.connected_at ? new Date(detail.connected_at).toLocaleString() : 'Not reported'}
-        </dd>
-      </div>
-      <div>
-        <dt>Inflight messages</dt>
-        <dd>{detail.inflight_count}</dd>
-      </div>
-      <div>
-        <dt>Offline queue</dt>
-        <dd>{detail.offline_queue_depth}</dd>
-      </div>
-    </dl>
-    <h3 class="session-subtitle">
-      Subscriptions <span class="count-tag">{detail.subscription_count}</span>
-    </h3>
-    {#if detailLoading}<p class="muted">Loading session details…</p>{:else if detailError}<div
-        class="notice"
-        role="alert"
-      >
-        {detailError}
-      </div>{:else}{#each detail.subscriptions ?? [] as sub}<div class="session-subscription">
-          <code>{sub.filter}</code><span class="protocol-tag">QoS {sub.qos}</span>
-        </div>{:else}<p class="muted">
-          This session has no listed subscriptions.
-        </p>{/each}{/if}<button
-      class="button session-copy"
-      onclick={async () => {
-        try {
-          await navigator.clipboard.writeText(detail!.client_id);
-          notify('Client ID copied.');
-        } catch {
-          notify('Clipboard unavailable. Select and copy the client ID.');
-        }
-      }}
-    >
-      <Icon name="copy" size={16} />Copy client ID
-    </button>{/if}
-</dialog>
-
+{#if selectedNode}<NodeDetails
+    node={selectedNode}
+    onclose={() => (nodeDetailID = '')}
+    onoverview={() => openNodeList(selectedNode!.id, 'overview')}
+    onclients={() => openNodeList(selectedNode!.id, 'sessions')}
+    onsubscriptions={() => openNodeList(selectedNode!.id, 'subscriptions')}
+  />{/if}
 <dialog bind:this={connectionDialog} class="connection-dialog">
   <div class="session-heading">
     <span class="eyebrow">BROKER CONNECTION</span><button

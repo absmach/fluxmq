@@ -28,6 +28,8 @@ import (
 var assets embed.FS
 
 type point struct {
+	BytesIn     float64 `json:"bytes_in"`
+	BytesOut    float64 `json:"bytes_out"`
 	Time        int64   `json:"time"`
 	Incoming    float64 `json:"incoming"`
 	Outgoing    float64 `json:"outgoing"`
@@ -35,22 +37,42 @@ type point struct {
 	Connections int     `json:"connections"`
 }
 type node struct {
-	ID            string  `json:"id"`
-	Address       string  `json:"address"`
-	Leader        bool    `json:"leader"`
-	Healthy       bool    `json:"healthy"`
-	Uptime        float64 `json:"uptime"`
-	Connections   int     `json:"connections"`
-	Subscriptions int     `json:"subscriptions"`
-	Received      float64 `json:"received"`
-	Sent          float64 `json:"sent"`
-	BytesIn       float64 `json:"bytes_in"`
-	BytesOut      float64 `json:"bytes_out"`
-	Errors        int     `json:"errors"`
-	Incoming      float64 `json:"incoming"`
-	Outgoing      float64 `json:"outgoing"`
+	RetainedMessages int     `json:"retained_messages"`
+	ClusterMode      *bool   `json:"cluster_mode,omitempty"`
+	Version          string  `json:"version,omitempty"`
+	TransportAddress string  `json:"transport_address,omitempty"`
+	ProtocolErrors   int     `json:"protocol_errors"`
+	AuthErrors       int     `json:"auth_errors"`
+	AuthzErrors      int     `json:"authz_errors"`
+	PacketErrors     int     `json:"packet_errors"`
+	ID               string  `json:"id"`
+	Address          string  `json:"address"`
+	Leader           bool    `json:"leader"`
+	Healthy          bool    `json:"healthy"`
+	Uptime           float64 `json:"uptime"`
+	Connections      int     `json:"connections"`
+	Subscriptions    int     `json:"subscriptions"`
+	Received         float64 `json:"received"`
+	Sent             float64 `json:"sent"`
+	BytesIn          float64 `json:"bytes_in"`
+	BytesOut         float64 `json:"bytes_out"`
+	Errors           int     `json:"errors"`
+	Incoming         float64 `json:"incoming"`
+	Outgoing         float64 `json:"outgoing"`
 }
 type session struct {
+	ConnectionName    string                `json:"connection_name,omitempty"`
+	State             string                `json:"state"`
+	Version           int                   `json:"version"`
+	CleanStart        *bool                 `json:"clean_start,omitempty"`
+	ExpiryInterval    *uint32               `json:"expiry_interval,omitempty"`
+	DisconnectedAt    string                `json:"disconnected_at,omitempty"`
+	ReceiveMaximum    *uint16               `json:"receive_maximum,omitempty"`
+	MaxPacketSize     *uint32               `json:"max_packet_size,omitempty"`
+	TopicAliasMax     *uint16               `json:"topic_alias_max,omitempty"`
+	RequestResponse   *bool                 `json:"request_response,omitempty"`
+	RequestProblem    *bool                 `json:"request_problem,omitempty"`
+	HasWill           *bool                 `json:"has_will,omitempty"`
 	ClientID          string                `json:"client_id"`
 	NodeID            string                `json:"node_id"`
 	Protocol          string                `json:"protocol"`
@@ -62,8 +84,13 @@ type session struct {
 	Subscriptions     []sessionSubscription `json:"subscriptions,omitempty"`
 }
 type sessionSubscription struct {
-	Filter string `json:"filter"`
-	QoS    int    `json:"qos"`
+	NoLocal           *bool   `json:"no_local,omitempty"`
+	RetainAsPublished *bool   `json:"retain_as_published,omitempty"`
+	RetainHandling    *uint8  `json:"retain_handling,omitempty"`
+	ConsumerGroup     string  `json:"consumer_group,omitempty"`
+	SubscriptionID    *uint32 `json:"subscription_id,omitempty"`
+	Filter            string  `json:"filter"`
+	QoS               int     `json:"qos"`
 }
 type subscription struct {
 	Filter      string `json:"filter"`
@@ -197,6 +224,14 @@ func (c *collector) get(ctx context.Context, endpoint string, dst any) error {
 }
 
 type overview struct {
+	ClusterMode *bool `json:"cluster_mode"`
+	Cluster     struct {
+		Nodes []struct {
+			ID      string `json:"id"`
+			Address string `json:"address"`
+			Version string `json:"version"`
+		} `json:"nodes"`
+	} `json:"cluster"`
 	ID       string  `json:"node_id"`
 	Leader   bool    `json:"is_leader"`
 	Uptime   float64 `json:"uptime_seconds"`
@@ -218,7 +253,8 @@ type overview struct {
 		ByProtocol struct {
 			MQTT struct {
 				Subscriptions struct {
-					Active int `json:"active"`
+					Active           int `json:"active"`
+					RetainedMessages int `json:"retained_messages"`
 				} `json:"subscriptions"`
 				Errors struct {
 					Auth   int `json:"auth"`
@@ -278,6 +314,18 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 				id = base
 			}
 			n := node{ID: id, Address: base, Leader: raw.Leader, Healthy: true, Uptime: raw.Uptime, Connections: raw.Sessions.Connected, Subscriptions: raw.Stats.ByProtocol.MQTT.Subscriptions.Active + raw.Stats.ByProtocol.AMQP.Consumers, Received: raw.Stats.Messages.Received, Sent: raw.Stats.Messages.Sent, BytesIn: raw.Stats.Bytes.Received, BytesOut: raw.Stats.Bytes.Sent, Errors: raw.Stats.Errors.Protocol + raw.Stats.ByProtocol.MQTT.Errors.Auth + raw.Stats.ByProtocol.MQTT.Errors.Authz + raw.Stats.ByProtocol.MQTT.Errors.Packet}
+			n.RetainedMessages = raw.Stats.ByProtocol.MQTT.Subscriptions.RetainedMessages
+			n.ClusterMode = raw.ClusterMode
+			n.ProtocolErrors = raw.Stats.Errors.Protocol
+			n.AuthErrors = raw.Stats.ByProtocol.MQTT.Errors.Auth
+			n.AuthzErrors = raw.Stats.ByProtocol.MQTT.Errors.Authz
+			n.PacketErrors = raw.Stats.ByProtocol.MQTT.Errors.Packet
+			for _, peer := range raw.Cluster.Nodes {
+				if peer.ID == id {
+					n.Version = peer.Version
+					n.TransportAddress = peer.Address
+				}
+			}
 			out.node = n
 			if inventory {
 				var list struct {
@@ -337,7 +385,9 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 			if old.ID == n.ID && old.Healthy && n.Healthy && elapsed > 0 {
 				p.Incoming = math.Max(0, n.Received-old.Received) / elapsed
 				p.Outgoing = math.Max(0, n.Sent-old.Sent) / elapsed
-				p.Bandwidth = math.Max(0, n.BytesIn+n.BytesOut-old.BytesIn-old.BytesOut) / elapsed
+				p.BytesIn = math.Max(0, n.BytesIn-old.BytesIn) / elapsed
+				p.BytesOut = math.Max(0, n.BytesOut-old.BytesOut) / elapsed
+				p.Bandwidth = p.BytesIn + p.BytesOut
 			}
 		}
 		n.Incoming = p.Incoming
@@ -348,6 +398,8 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 			all.Incoming += p.Incoming
 			all.Outgoing += p.Outgoing
 			all.Bandwidth += p.Bandwidth
+			all.BytesIn += p.BytesIn
+			all.BytesOut += p.BytesOut
 			all.Connections += p.Connections
 		}
 		c.mu.Lock()
@@ -365,6 +417,8 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 
 var demoTopics = []string{"factory/+/telemetry", "devices/+/status", "fleet/+/location", "events/orders/#", "sensors/+/temperature", "system/health", "energy/+/readings", "commands/+/ack"}
 
+func valuePtr[T any](value T) *T { return &value }
+
 func demoSnapshot(at time.Time) snapshot {
 	s := snapshot{Mode: "demo", Timestamp: at.UnixMilli(), Nodes: []node{}, Sessions: []session{}, Subscriptions: []subscription{}, Points: map[string]point{}}
 	t := float64(at.UnixMilli()) / 1000
@@ -375,26 +429,76 @@ func demoSnapshot(at time.Time) snapshot {
 		in := 4700 + 950*math.Sin(phase) + 500*math.Sin(t/5+float64(i)) + 170*math.Sin(t/1.9)
 		out := in*.82 + 300*math.Cos(phase/2)
 		connections := 810 + int(26*math.Sin(phase/4)) + i*45
-		p := point{Time: s.Timestamp, Incoming: in, Outgoing: out, Bandwidth: (in + out) * 420, Connections: connections}
+		p := point{Time: s.Timestamp, Incoming: in, Outgoing: out, Bandwidth: (in + out) * 420, BytesIn: in * 420, BytesOut: out * 420, Connections: connections}
 		n := node{ID: id, Address: fmt.Sprintf("10.0.1.%d:8082", 11+i), Leader: i == 0, Healthy: true, Uptime: 1209600 + math.Mod(t, 86400), Connections: connections, Subscriptions: 1350 + i*123, Received: 82400000 + float64(i)*1100000, Sent: 71500000 + float64(i)*1900000, BytesIn: 34e9, BytesOut: 29e9, Incoming: in, Outgoing: out}
+		n.ClusterMode = valuePtr(true)
+		n.Version = "demo"
+		n.RetainedMessages = 120 + i*10
+		n.TransportAddress = fmt.Sprintf("10.0.1.%d:7946", 11+i)
 		s.Nodes = append(s.Nodes, n)
 		s.Points[id] = p
 		all.Incoming += in
 		all.Outgoing += out
 		all.Bandwidth += p.Bandwidth
+		all.BytesIn += p.BytesIn
+		all.BytesOut += p.BytesOut
 		all.Connections += connections
 		for j := 0; j < 12; j++ {
 			protocol := []string{"mqtt5", "mqtt5", "mqtt3.1.1", "amqp0.9.1"}[j%4]
 			connected := j != 10
 			client := fmt.Sprintf("%s-%03d", []string{"edge-gateway", "factory-sensor", "fleet-tracker", "order-service", "energy-meter", "warehouse-hub"}[j%6], i*12+j+1)
 			item := session{ClientID: client, NodeID: id, Protocol: protocol, Connected: connected, SubscriptionCount: 2, InflightCount: (j + i) % 4, ConnectedAt: at.Add(-time.Duration(j+3) * time.Hour).UTC().Format(time.RFC3339), Subscriptions: []sessionSubscription{{Filter: demoTopics[j%8], QoS: 1}, {Filter: "system/health", QoS: 0}}}
+			item.State = "connected"
+			if strings.HasPrefix(protocol, "mqtt") {
+				item.Version = 5
+				if protocol == "mqtt3.1.1" {
+					item.Version = 4
+				}
+				item.CleanStart = valuePtr(false)
+				item.ExpiryInterval = valuePtr(uint32(86400))
+				item.ReceiveMaximum = valuePtr(uint16(64))
+				item.MaxPacketSize = valuePtr(uint32(1048576))
+				item.TopicAliasMax = valuePtr(uint16(16))
+				item.HasWill = valuePtr(true)
+				item.RequestResponse = valuePtr(false)
+				item.RequestProblem = valuePtr(true)
+				for k := range item.Subscriptions {
+					item.Subscriptions[k].NoLocal = valuePtr(false)
+					item.Subscriptions[k].RetainAsPublished = valuePtr(false)
+					item.Subscriptions[k].RetainHandling = valuePtr(uint8(0))
+				}
+			} else {
+				item.ConnectionName = "Orders worker " + client
+			}
 			if !connected {
+				item.State = "disconnected"
+				item.DisconnectedAt = at.Add(-time.Hour).UTC().Format(time.RFC3339)
 				item.OfflineQueueDepth = 18
 			}
 			s.Sessions = append(s.Sessions, item)
 		}
-		for j, topic := range demoTopics {
-			s.Subscriptions = append(s.Subscriptions, subscription{Filter: topic, Subscribers: 12 + j*7 + i*3, QoS: j % 3, NodeID: id})
+		for _, topic := range demoTopics {
+			count, qos := 0, 0
+			for _, client := range s.Sessions {
+				if client.NodeID != id || !client.Connected {
+					continue
+				}
+				found := false
+				for _, sub := range client.Subscriptions {
+					if sub.Filter == topic {
+						found = true
+						if sub.QoS > qos {
+							qos = sub.QoS
+						}
+					}
+				}
+				if found {
+					count++
+				}
+			}
+			if count > 0 {
+				s.Subscriptions = append(s.Subscriptions, subscription{Filter: topic, Subscribers: count, QoS: qos, NodeID: id})
+			}
 		}
 	}
 	s.Points["all"] = all
@@ -455,6 +559,7 @@ func handler(c *collector) http.Handler {
 	mux.HandleFunc("GET /console-api/snapshot", c.snapshotHandler)
 	mux.HandleFunc("GET /console-api/stream", c.stream)
 	mux.HandleFunc("GET /console-api/session", c.detail)
+	mux.HandleFunc("GET /console-api/subscription-clients", c.subscriptionClients)
 	mux.HandleFunc("GET /console-api/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	dist, _ := fs.Sub(assets, "dist")
 	files := http.FileServer(http.FS(dist))

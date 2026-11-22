@@ -2,14 +2,20 @@
   let {
     name,
     size = 20,
-    stroke = 1.7,
+    stroke = 1.8,
   }: { name: string; size?: number; stroke?: number } = $props();
   const paths: Record<string, string[]> = {
-    overview: ['M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z'],
-    sessions: ['M8 7V3m8 4V3M6 7h12v5a6 6 0 0 1-12 0V7Zm6 11v4'],
-    subscriptions: ['M4 5h16v14H4zM4 9h16M8 13h4m-4 3h7'],
-    nodes: ['M3 3h7v6H3zM14 15h7v6h-7zM3 15h7v6H3zM6.5 9v6M6.5 12h11v3'],
-    health: ['M3 12h4l3-8 4 16 3-8h4'],
+    overview: [
+      'M5 3h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm11 0h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM5 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Zm11 0h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z',
+    ],
+    sessions: [
+      'M15 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM3 21v-2a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v2M18 4a4 4 0 0 1 0 7m3 10v-2a7 7 0 0 0-2-5',
+    ],
+    subscriptions: ['m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5'],
+    nodes: [
+      'M5 3h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 10h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2ZM7 7h.01M7 17h.01M15 7h2m-2 10h2',
+    ],
+    health: ['M3 12h4l3-7 4 14 3-7h4'],
     chevron: ['m9 5 7 7-7 7'],
     down: ['m6 9 6 6 6-6'],
     search: ['M21 21l-5-5', 'M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0'],

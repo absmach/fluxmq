@@ -38,12 +38,19 @@ local or behind your existing authenticated management gateway.
 
 ## Views and interactions
 
-- Overview: node scope, live rates, 1/5/15-minute charts, protocol distribution.
-- Sessions: search, protocol/state filters, sorting, pagination, session detail drawer.
-- Subscriptions: aggregated topic filters, QoS, subscriber counts, node scopes.
+- Overview: explicit cluster/node scope, per-node load comparison, message/bandwidth/connection history,
+  1/5/15-minute ranges, cumulative counters, retained messages, protocol distribution.
+- Sessions: per-node distribution/filtering, search by ID/name/node, protocol/state filters, sorting, configurable
+  pagination, and a client detail page with connection details, MQTT settings, and
+  subscriptions or AMQP consumers.
+- Subscriptions: aggregated topic filters, QoS, subscriber counts, per-node distribution/filtering,
+  and a detail page with node filtering, client search, pagination, retry/load-more, and links to client details.
 - Cluster: node table with leader status, reachability, connections, throughput,
-  uptime, and health drilldown.
-- Health: broker reachability, uptime, cumulative error and message counters.
+  uptime, and a dedicated node drawer with metadata, counters, errors, and links
+  to that node’s dashboard, clients, and subscriptions. Inventory always shows every configured node;
+  inspecting a node does not change scope or navigate away.
+- Health: broker reachability, uptime, cumulative message counters, and separate
+  protocol/authentication/authorization/packet error counts.
 - Light/dark appearance persisted locally, responsive sidebar navigation, CSV
   export, live pause/resume, and visible reconnect states. Search stays within
   each data view; there is no global command palette. Documentation and
@@ -76,6 +83,45 @@ inventory. A cluster-wide paginated inventory API and durable metrics history
 are future work, not implied by this preview. Only configured node URLs are
 collected; cluster membership is not automatically discovered.
 
+Subscription clients are fetched on demand from the broker's dedicated endpoint,
+200 per node per request. Continuation tokens support loading further pages;
+partial failures remain visible and retryable. Clients are identified by both
+node ID and client ID, and detail lookup works beyond the sampled session list.
+Demo topic counts are derived from the connected sample sessions so drilldown
+counts agree with the displayed subscription inventory.
+
+Sidebar navigation starts at cluster scope. Explicit node actions open that node’s
+dashboard, clients, or subscriptions. Node scope is encoded in the URL; a node
+view identifies its scope beside the heading and offers a return to all nodes.
+Health shows cluster availability at cluster scope and node uptime at node scope.
+
+## Previous UI coverage audit
+
+Compared the Next.js dashboard, node table, broker-info page, sessions page and
+session detail dialog, subscriptions directory, and subscription-client page.
+
+| Previous capability                                             | Current coverage                                                                                                                  |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Message, directional bandwidth, and active-session trends       | Restored as selectable history metrics with the same time window                                                                  |
+| Message/byte totals, retained messages, uptime                  | Overview cumulative counters and per-node details; cluster uptime is explicitly the shortest node uptime                          |
+| Node address, role, counters, uptime                            | Dedicated drawer; cluster address and version are retained when reported                                                          |
+| Protocol, authentication, authorization, packet errors          | Separate health counters and per-node detail fields                                                                               |
+| Client connection name, protocol, timestamps, MQTT settings     | Preserved through the Go adapter and shown on the client page; AMQP uses consumer-specific presentation                           |
+| Client subscriptions and QoS                                    | Shown with available subscription options and a link to connected clients                                                         |
+| Subscription → clients → client details                         | Restored, including direct lookup outside the sampled inventory, multi-node identity, partial-failure reporting, and continuation |
+| Search, state/scope filtering, page size, first/last navigation | Available on relevant tables; node inspection no longer mutates scope                                                             |
+| Broker-info and subscription-detail bookmarks                   | Legacy paths continue to open the corresponding page                                                                              |
+| Remove Selected                                                 | The old button had no action handler; this console remains read-only                                                              |
+
+Two differences remain: the shared session/topic snapshot has the 200-record
+per-node cap described above (the old proxy fetched all pages), and the node
+inventory contains configured admin endpoints (the old overview also listed
+reported cluster peers without configured endpoints, with missing metrics).
+Configure each broker's admin URL to monitor it. These are explicit limits,
+not a claim of complete large-cluster inventory parity. Client IP addresses,
+usernames, and transport/TLS metadata are not exposed by the current session API
+and are not invented in the UI.
+
 ## Development
 
 Run the Go demo server, then `npm run dev`. Vite proxies `/console-api` to the
@@ -107,8 +153,9 @@ docker run --rm -p 127.0.0.1:3002:3002 fluxmq-console:preview \
 
 FluxMQ uses a message-routing symbol and the exact product name **FluxMQ**.
 Graphite surfaces and cool blue accents accompany IBM Plex Sans interface text
-and larger IBM Plex Mono metric values. All graphics are upright and session
-details use a centered, responsive dialog. The sidebar is dedicated to navigation;
+and larger IBM Plex Mono metric values. All graphics are upright. Client and subscription details use full pages with
+addressable URLs and return navigation that preserves filters, pagination, and
+scroll position. Node inspection uses a responsive side drawer. The sidebar is dedicated to navigation;
 there are no accounts or workspace controls. Green denotes operational state.
 
 The logo is editable SVG at `public/brand/fluxmq-symbol.svg`; the wordmark is
