@@ -116,7 +116,8 @@
   let queueIdentity = $state<{ name: string; node: string } | null>(null);
   let selectedNode = $derived(snapshot?.nodes.find((n) => n.id === nodeDetailID));
   let subscriptionDetail = $state<{ filter: string; node: string } | null>(null);
-  let routeIsDetail = $derived(!!subscriptionDetail || !!detailIdentity);
+  let routeIsDetail = $derived(!!subscriptionDetail || !!detailIdentity || !!queueIdentity);
+  let queueView: { refresh: () => void } | undefined = $state();
   let chartMode = $state<'messages' | 'bandwidth' | 'connections'>('messages');
   let detailLoading = $state(false);
   let detailError = $state('');
@@ -160,7 +161,7 @@
   let pageTitle = $derived(
     queueIdentity?.name ??
       subscriptionDetail?.filter ??
-      detailIdentity?.client_id ??
+      (detailIdentity ? detail?.connection_name || detailIdentity.client_id : undefined) ??
       (page === 'overview'
         ? scope === 'all'
           ? 'Cluster overview'
@@ -761,7 +762,7 @@
             {returnRoute ? returnRoute.label : currentNav.label}
           </a>
           <span class="breadcrumb-divider" aria-hidden="true">/</span>
-          <span>{subscriptionDetail ? 'Subscription' : 'Client'}</span>
+          <span>{queueIdentity ? 'Queue' : subscriptionDetail ? 'Subscription' : 'Client'}</span>
         </nav>
       {/if}
       <div class:overview-heading={page === 'overview'} class="page-heading">
@@ -791,6 +792,9 @@
               onclick={() => detailIdentity && loadSession(detailIdentity)}
             >
               <Icon name="refresh" size={16} />Refresh client
+            </button>
+          {:else if queueIdentity}<button class="button" onclick={() => queueView?.refresh()}>
+              <Icon name="refresh" size={16} />Refresh queue
             </button>
           {:else if !subscriptionDetail && page !== 'queues'}<button
               class="button"
@@ -1355,13 +1359,13 @@
             onnode={(id) => (nodeDetailID = id)}
           />{/if}
         <Queues
+          bind:this={queueView}
           nodes={snapshot?.nodes ?? []}
           {scope}
           identity={queueIdentity}
           {paused}
           onopen={(name, node) =>
             go(`/dashboard/queues?${new URLSearchParams({ queue: name, node })}`)}
-          onback={() => navigate('queues')}
         />
       {:else if page === 'nodes'}
         <section class="panel">
@@ -1404,18 +1408,26 @@
             </span><strong>{compact(totals.sent)}</strong>
           </div>
         </section>
-        <section class="panel error-breakdown" aria-label="Error breakdown">
-          {#each [{ key: 'protocol_errors', label: 'Protocol' }, { key: 'auth_errors', label: 'Authentication' }, { key: 'authz_errors', label: 'Authorization' }, { key: 'packet_errors', label: 'Packet' }] as error}<div>
-              <span>{error.label}</span><strong>
-                {number(
-                  nodes.reduce(
-                    (total, node) => total + (node[error.key as 'protocol_errors'] ?? 0),
-                    0,
-                  ),
-                )}
-              </strong>
-            </div>{/each}
-        </section>
+        <details class="panel error-details" aria-label="Error breakdown">
+          <summary>
+            <span>Error breakdown <small>Cumulative counters</small></span><Icon
+              name="down"
+              size={13}
+            />
+          </summary>
+          <div class="error-breakdown">
+            {#each [{ key: 'protocol_errors', label: 'Protocol' }, { key: 'auth_errors', label: 'Authentication' }, { key: 'authz_errors', label: 'Authorization' }, { key: 'packet_errors', label: 'Packet' }] as error}<div>
+                <span>{error.label}</span><strong>
+                  {number(
+                    nodes.reduce(
+                      (total, node) => total + (node[error.key as 'protocol_errors'] ?? 0),
+                      0,
+                    ),
+                  )}
+                </strong>
+              </div>{/each}
+          </div>
+        </details>
         <div class="health-activity-row">
           <ProtocolDiagnostics
             {nodes}

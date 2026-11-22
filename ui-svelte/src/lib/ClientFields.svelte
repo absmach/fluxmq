@@ -14,6 +14,7 @@
   let protocol = $derived(sessionProtocol(client));
   let mqtt = $derived(protocol.startsWith('mqtt'));
   let copyStatus = $state('');
+  let hasConsumerGroups = $derived(client.subscriptions?.some((sub) => !!sub.consumer_group));
   async function copyID() {
     try {
       await navigator.clipboard.writeText(client.client_id);
@@ -83,8 +84,7 @@
       or acknowledgement history.
     </p>
   {:else}<p class="inspector-context">
-      AMQP delivery counts and settlement details are not exposed by the session API. Durable
-      consumer-group deliveries can be inspected in Queues.
+      Inspect pending deliveries and acknowledgements in Queues.
     </p>{/if}
 </section>
 {#if mqtt}<section class="panel client-info-panel">
@@ -128,44 +128,72 @@
       </div>
     </dl>
   </section>{/if}
-<section class="panel client-subscriptions-panel">
+<section class="panel client-subscriptions-panel" class:amqp-consumers={!mqtt}>
   <h2>
     {mqtt ? 'Subscriptions' : 'Consumers'}
     <span class="count-tag">{client.subscription_count}</span>
   </h2>
-  {#each client.subscriptions ?? [] as sub}
-    <div class="session-subscription subscription-info">
-      <div>
-        <a
-          class="text-button"
-          href={subscriptionURL(sub.filter, client.node_id)}
-          onclick={(event) => followLink(event, () => onfilter(sub.filter, client.node_id))}
-        >
-          <code>{sub.filter}</code>
-        </a><span class="protocol-tag">QoS {sub.qos}</span>
-      </div>
-      {#if mqtt}<dl class="inspector-fields compact-fields">
-          <div>
-            <dt>No local</dt>
-            <dd>{flag(sub.no_local)}</dd>
-          </div>
-          <div>
-            <dt>Retain as published</dt>
-            <dd>{flag(sub.retain_as_published)}</dd>
-          </div>
-          <div>
-            <dt>Retain handling</dt>
-            <dd>{sub.retain_handling ?? 'Not reported'}</dd>
-          </div>
-          {#if sub.subscription_id !== undefined}<div>
-              <dt>Subscription ID</dt>
-              <dd>{sub.subscription_id}</dd>
-            </div>{/if}
-          {#if sub.consumer_group}<div>
-              <dt>Consumer group</dt>
-              <dd>{sub.consumer_group}</dd>
-            </div>{/if}
-        </dl>{/if}
+  {#if !mqtt}
+    <div class="table-scroll">
+      <table class="amqp-consumer-table">
+        <thead>
+          <tr>
+            <th>Topic filter</th>{#if hasConsumerGroups}<th>Consumer group</th>{/if}
+          </tr>
+        </thead>
+        <tbody>
+          {#each client.subscriptions ?? [] as sub}<tr>
+              <td>
+                <a
+                  class="text-button mono"
+                  href={subscriptionURL(sub.filter, client.node_id)}
+                  onclick={(event) => followLink(event, () => onfilter(sub.filter, client.node_id))}
+                >
+                  {sub.filter}<Icon name="chevron" size={13} />
+                </a>
+              </td>
+              {#if hasConsumerGroups}<td>{sub.consumer_group || '—'}</td>{/if}
+            </tr>{:else}<tr>
+              <td colspan="2"><div class="empty-state">No listed consumers</div></td>
+            </tr>{/each}
+        </tbody>
+      </table>
     </div>
-  {:else}<p class="inspector-context">No listed {mqtt ? 'subscriptions' : 'consumers'}.</p>{/each}
+  {:else}
+    {#each client.subscriptions ?? [] as sub}
+      <div class="session-subscription subscription-info">
+        <div>
+          <a
+            class="text-button"
+            href={subscriptionURL(sub.filter, client.node_id)}
+            onclick={(event) => followLink(event, () => onfilter(sub.filter, client.node_id))}
+          >
+            <code>{sub.filter}</code>
+          </a><span class="protocol-tag">QoS {sub.qos}</span>
+        </div>
+        {#if mqtt}<dl class="inspector-fields compact-fields">
+            <div>
+              <dt>No local</dt>
+              <dd>{flag(sub.no_local)}</dd>
+            </div>
+            <div>
+              <dt>Retain as published</dt>
+              <dd>{flag(sub.retain_as_published)}</dd>
+            </div>
+            <div>
+              <dt>Retain handling</dt>
+              <dd>{sub.retain_handling ?? 'Not reported'}</dd>
+            </div>
+            {#if sub.subscription_id !== undefined}<div>
+                <dt>Subscription ID</dt>
+                <dd>{sub.subscription_id}</dd>
+              </div>{/if}
+            {#if sub.consumer_group}<div>
+                <dt>Consumer group</dt>
+                <dd>{sub.consumer_group}</dd>
+              </div>{/if}
+          </dl>{/if}
+      </div>
+    {:else}<p class="inspector-context">No listed {mqtt ? 'subscriptions' : 'consumers'}.</p>{/each}
+  {/if}
 </section>

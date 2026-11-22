@@ -1006,24 +1006,48 @@ dialog::backdrop {
 .chart-mode {
   padding: 0 24px 12px;
 }
+.error-details {
+  margin-bottom: 24px;
+}
+.error-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 22px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.error-details summary::-webkit-details-marker {
+  display: none;
+}
+.error-details summary small {
+  font-size: 12px;
+  color: var(--faint);
+  margin-left: 12px;
+}
 .error-breakdown {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  padding: 0 22px 20px;
   gap: 20px;
-  padding: 20px;
-  margin-bottom: 24px;
 }
 .error-breakdown > div {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   font-size: 13px;
   color: var(--muted);
+  border-right: 1px solid var(--subtle-border);
+}
+.error-breakdown > div:last-child {
+  border-right: 0;
 }
 .error-breakdown strong {
   color: var(--text);
   font-family: var(--mono);
   font-weight: 400;
+  font-size: 22px;
 }
 @media (max-width: 620px) {
   .error-breakdown {
@@ -1572,4 +1596,33 @@ details[open] > summary svg[data-icon='down'] {
   .sidebar-collapsed .sidebar-bottom {
     padding-bottom: 18px;
   }
+}
+
+/* AMQP has connection details and consumers, without MQTT session settings. */
+.client-subscriptions-panel.amqp-consumers {
+  grid-column: auto;
+  align-self: start;
+  padding: 0;
+}
+.amqp-consumers h2 {
+  padding: 20px 22px;
+  margin: 0;
+}
+.amqp-consumer-table {
+  white-space: normal;
+}
+.amqp-consumer-table td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+.amqp-consumer-table th:first-child {
+  width: 65%;
+}
+.amqp-consumer-table a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.amqp-consumer-table svg {
+  flex-shrink: 0;
 }

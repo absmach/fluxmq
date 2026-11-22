@@ -39,14 +39,12 @@
     identity,
     paused,
     onopen,
-    onback,
   }: {
     nodes: BrokerNode[];
     scope: string;
     identity: { name: string; node: string } | null;
     paused: boolean;
     onopen: (name: string, node: string) => void;
-    onback: () => void;
   } = $props();
   let rows = $state<(Queue & { node: string })[]>([]),
     next = $state<Record<string, string>>({}),
@@ -140,6 +138,9 @@
     );
     if (!response.ok) throw new Error((await response.text()).trim() || 'Queue data unavailable');
     return response.json();
+  }
+  export function refresh() {
+    void load();
   }
   async function load(more = false) {
     if (loading) return;
@@ -337,15 +338,7 @@
   }
 </script>
 
-{#if identity}
-  <div class="queue-toolbar">
-    <a class="text-button" href="/dashboard/queues" onclick={(e) => followLink(e, onback)}>
-      ← All queues
-    </a><button class="button" disabled={loading} onclick={() => load()}>
-      <Icon name="refresh" size={15} />Refresh
-    </button>
-  </div>
-{:else}
+{#if !identity}
   <div class="queue-toolbar inventory-toolbar">
     <label class="search-field">
       <Icon name="search" size={16} /><input
@@ -492,53 +485,73 @@
         <h2 id="delivery-progress">Delivery progress</h2>
         <p class="muted">Consumer positions in the retained log</p>
       </div>
-      <span class="queue-log-range mono">{count(head)} <span>→</span> {count(tail)}</span>
+      <span class="queue-log-range">
+        <span>Offsets</span><b>{count(head)}</b> → <b>{count(tail)}</b>
+      </span>
     </div>
     <div class="progress-legend">
       <span><i class="committed"></i>Committed range</span><span>
         <i class="delivered"></i>Uncommitted range
       </span><span><i class="waiting"></i>Not delivered</span>
     </div>
-    <div class="group-lanes">
-      {#each groups as g}
-        <div class="group-lane">
-          <div class="group-label">
-            <strong>{g.groupId}</strong><span class="muted">
-              {g.consumers?.length ?? 0}
-              {g.consumers?.length === 1 ? 'consumer' : 'consumers'}
-            </span>
-          </div>
-          <div class="group-progress">
-            <div
-              class="progress-track"
-              role="img"
-              aria-label={`${g.groupId}: committed position ${g.cursor?.committed ?? '0'}, next delivery ${g.cursor?.cursor ?? '0'}, ${count(waiting(g))} retained offsets not delivered, ${count(g.pendingCount)} pending acknowledgements`}
-            >
-              <span class="committed" style:width={`${percent(int(g.cursor?.committed))}%`}
-              ></span><span
-                class="delivered"
-                style:width={`${Math.max(0, percent(int(g.cursor?.cursor)) - percent(int(g.cursor?.committed)))}%`}
-              ></span>
-              <span class="cursor-marker" style:left={`${percent(int(g.cursor?.cursor))}%`}></span>
-            </div>
-            <div class="group-positions">
-              <span>Committed <b>{count(g.cursor?.committed)}</b></span><span>
-                Next delivery <b>{count(g.cursor?.cursor)}</b>
-              </span>
-            </div>
-          </div>
-          <div class="group-counts">
-            <span><strong>{count(waiting(g))}</strong> not delivered</span><button
-              class="pending-link"
-              onclick={() => showPending(g.groupId)}
-            >
-              <strong>{count(g.pendingCount)}</strong> pending <Icon name="chevron" size={12} />
-            </button>
-          </div>
-        </div>
-      {:else}<div class="empty-state">
-          No consumer groups. Stored messages have no registered group to deliver to.
-        </div>{/each}
+    <div class="table-scroll group-lanes">
+      <table class="delivery-table">
+        <thead>
+          <tr>
+            <th>Consumer group</th><th>Delivery position</th><th class="numeric">
+              Not delivered
+            </th><th class="numeric">Pending ACKs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each groups as g}<tr class="group-lane">
+              <td>
+                <div class="group-label">
+                  <strong>{g.groupId}</strong><span class="muted">
+                    {g.consumers?.length ?? 0}
+                    {g.consumers?.length === 1 ? 'consumer' : 'consumers'}
+                  </span>
+                </div>
+              </td>
+              <td class="group-progress">
+                <div
+                  class="progress-track"
+                  role="img"
+                  aria-label={`${g.groupId}: committed position ${g.cursor?.committed ?? '0'}, next delivery ${g.cursor?.cursor ?? '0'}, ${count(waiting(g))} retained offsets not delivered, ${count(g.pendingCount)} pending acknowledgements`}
+                >
+                  <span class="committed" style:width={`${percent(int(g.cursor?.committed))}%`}
+                  ></span><span
+                    class="delivered"
+                    style:width={`${Math.max(0, percent(int(g.cursor?.cursor)) - percent(int(g.cursor?.committed)))}%`}
+                  ></span>
+                  <span class="cursor-marker" style:left={`${percent(int(g.cursor?.cursor))}%`}
+                  ></span>
+                </div>
+                <div class="group-positions">
+                  <span>Committed <b>{count(g.cursor?.committed)}</b></span><span>
+                    Next <b>{count(g.cursor?.cursor)}</b>
+                  </span>
+                </div>
+              </td>
+              <td class="numeric">{count(waiting(g))}</td>
+              <td class="numeric">
+                <button
+                  class="pending-link"
+                  onclick={() => showPending(g.groupId)}
+                  aria-label={`Inspect ${count(g.pendingCount)} pending acknowledgements for ${g.groupId}`}
+                >
+                  {count(g.pendingCount)}<Icon name="chevron" size={12} />
+                </button>
+              </td>
+            </tr>{:else}<tr>
+              <td colspan="4">
+                <div class="empty-state">
+                  No consumer groups. Stored messages have no registered group to deliver to.
+                </div>
+              </td>
+            </tr>{/each}
+        </tbody>
+      </table>
     </div>
     <details class="delivery-help">
       <summary>About delivery positions <Icon name="down" size={13} /></summary>
@@ -743,11 +756,11 @@
       <dl class="inspector-fields">
         <div>
           <dt>Queue type</dt>
-          <dd>{typeLabel(queue.type)}</dd>
+          <dd><span class="protocol-tag">{typeLabel(queue.type)}</span></dd>
         </div>
         <div>
           <dt>Topic routes</dt>
-          <dd>{(queue.topics ?? []).join(', ') || 'Direct publishing'}</dd>
+          <dd class="mono">{(queue.topics ?? []).join(', ') || 'Direct publishing'}</dd>
         </div>
         <div>
           <dt>Maximum age</dt>
@@ -861,15 +874,22 @@
   .queue-log-range {
     font-size: 14px;
     white-space: nowrap;
+    color: var(--muted);
+  }
+  .queue-log-range b {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text);
   }
   .queue-log-range span {
     color: var(--muted);
-    padding: 0 12px;
+    padding-right: 8px;
   }
   .progress-legend {
     display: flex;
     gap: 22px;
-    padding: 0 24px 24px;
+    padding: 0 22px 16px;
     font-size: 12px;
     color: var(--muted);
   }
@@ -892,16 +912,26 @@
   .waiting {
     background: var(--border);
   }
-  .group-lanes {
-    padding: 0 24px;
+  .delivery-table {
+    table-layout: fixed;
+    min-width: 700px;
   }
-  .group-lane {
-    display: grid;
-    grid-template-columns: 180px minmax(120px, 1fr) 150px;
-    gap: 24px;
-    align-items: center;
-    padding: 16px 0;
-    border-top: 1px solid var(--subtle-border);
+  .delivery-table th:first-child {
+    width: 26%;
+  }
+  .delivery-table th:nth-child(2) {
+    width: 44%;
+  }
+  .delivery-table th:nth-child(3),
+  .delivery-table th:nth-child(4) {
+    width: 15%;
+  }
+  .delivery-table td {
+    vertical-align: middle;
+    padding-block: 16px;
+  }
+  .delivery-table .numeric {
+    font-size: 13px;
   }
   .group-label {
     display: flex;
@@ -917,9 +947,9 @@
     font-size: 12px;
   }
   .progress-track {
-    height: 16px;
+    height: 8px;
     border-radius: 4px;
-    background: var(--panel-raised);
+    background: var(--border);
     position: relative;
     display: flex;
     border: 1px solid var(--border);
@@ -945,7 +975,7 @@
     gap: 12px;
     font-size: 11px;
     color: var(--muted);
-    margin-top: 14px;
+    margin-top: 10px;
   }
   .group-positions b {
     font-family: 'IBM Plex Mono', monospace;
@@ -953,29 +983,12 @@
     color: var(--text);
     margin-left: 5px;
   }
-  .group-counts {
-    font-size: 12px;
-    display: flex;
-    align-items: flex-end;
-    flex-direction: column;
-    gap: 10px;
-    color: var(--muted);
-  }
-  .group-counts strong {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 17px;
-    font-weight: 500;
-    color: var(--text);
-    margin-right: 4px;
-  }
   .pending-link {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     color: var(--violet);
-  }
-  .pending-link strong {
-    color: inherit;
+    font: inherit;
   }
   .pending-link:hover {
     text-decoration: underline;
@@ -990,7 +1003,7 @@
   .message-controls {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
     padding: 0 22px 16px;
     flex-wrap: wrap;
   }
@@ -1006,7 +1019,8 @@
     background: var(--panel-raised);
     border-radius: 6px;
     padding: 9px 12px;
-    max-width: 180px;
+    width: 140px;
+    max-width: 100%;
     color: var(--text);
     font-family: 'IBM Plex Mono', monospace;
   }
@@ -1099,12 +1113,36 @@
   }
   .queue-config dd {
     overflow-wrap: anywhere;
+    font-family: inherit;
+    font-size: 13px;
+  }
+  .queue-config dd.mono {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .queue-config .inspector-fields > div:last-child {
+    border-bottom: 0;
+  }
+  .consumer-list table {
+    table-layout: fixed;
+    white-space: normal;
+  }
+  .consumer-list th:first-child {
+    width: 44%;
+  }
+  .consumer-list th:nth-child(2) {
+    width: 28%;
+  }
+  .consumer-list td {
+    overflow-wrap: anywhere;
+    vertical-align: top;
   }
   .consumer-list {
     max-height: 400px;
     overflow: auto;
   }
   .consumer-identity {
+    overflow-wrap: anywhere;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1145,26 +1183,11 @@
     width: 100%;
   }
   @media (max-width: 1050px) {
-    .group-lane {
-      grid-template-columns: 140px 1fr;
-    }
-    .group-counts {
-      grid-column: 2;
-      flex-direction: row;
-      justify-content: space-between;
-    }
     .queue-details-grid {
       grid-template-columns: 1fr;
     }
   }
   @media (max-width: 600px) {
-    .group-lane {
-      grid-template-columns: 1fr;
-      gap: 18px;
-    }
-    .group-counts {
-      grid-column: auto;
-    }
     .progress-legend {
       flex-wrap: wrap;
       gap: 12px;
