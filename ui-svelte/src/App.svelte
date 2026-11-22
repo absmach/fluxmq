@@ -599,17 +599,6 @@
         </span>
       </a>
     </div>
-    {#if viewportWidth > 800}<button
-        class="icon-button sidebar-toggle"
-        class:points-left={!iconRail}
-        aria-label={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
-        aria-expanded={!iconRail}
-        aria-controls="console-navigation"
-        onclick={toggleSidebar}
-      >
-        <Icon name="chevrons" size={19} />
-      </button>{/if}
     <nav aria-label="Main navigation">
       {#each navigationGroups as group}
         <div class="navigation-group" role="group" aria-label={group.label || 'Overview'}>
@@ -678,6 +667,15 @@
             onclick={() => (mobileOpen = true)}
           >
             <Icon name="menu" />
+          </button>{:else}<button
+            class="icon-button sidebar-toggle"
+            aria-label={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={iconRail ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!iconRail}
+            aria-controls="console-navigation"
+            onclick={toggleSidebar}
+          >
+            <Icon name={iconRail ? 'sidebar-expand' : 'sidebar-collapse'} size={19} />
           </button>{/if}
         {#if page === 'nodes'}<span class="inventory-context">
             <Icon name="nodes" size={18} />Cluster inventory

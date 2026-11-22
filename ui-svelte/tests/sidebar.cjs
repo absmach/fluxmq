@@ -28,21 +28,22 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   fs.mkdirSync(shots, { recursive: true });
   await page.screenshot({ path: shots + '/sidebar-expanded-dark.png', animations: 'disabled' });
   const toggle = page.getByRole('button', { name: 'Collapse sidebar', exact: true });
-  assert.equal(await page.locator('.console-statusbar .sidebar-toggle').count(), 0);
+  assert.equal(await page.locator('.console-statusbar .sidebar-toggle').count(), 1);
+  assert.equal(await page.locator('.sidebar .sidebar-toggle').count(), 0);
   assert.equal(await toggle.innerText(), '', 'toggle uses an icon without a visible text label');
   assert.equal(await toggle.getAttribute('title'), 'Collapse sidebar');
   const toggleBox = await toggle.boundingBox();
+  const headerBox = await page.locator('.console-statusbar').boundingBox();
+  const pickerBox = await page.locator('.scope-picker').boundingBox();
   assert.ok(
-    toggleBox.y >=
-      (await page.locator('.sidebar-header').boundingBox()).y +
-        (await page.locator('.sidebar-header').boundingBox()).height &&
-      toggleBox.x + toggleBox.width <= expanded.x,
-    'toggle sits below the logo inside the sidebar',
+    toggleBox.x >= expanded.x &&
+      toggleBox.y >= headerBox.y &&
+      toggleBox.y + toggleBox.height <= headerBox.y + headerBox.height,
+    'toggle sits inside the content header',
   );
-  assert.equal(
-    await toggle.locator('svg').evaluate((el) => getComputedStyle(el).transform),
-    'matrix(-1, 0, 0, -1, 0, 0)',
-  );
+  assert.ok(toggleBox.x + toggleBox.width <= pickerBox.x, 'toggle precedes node selection');
+  assert.equal(await toggle.locator('svg').getAttribute('data-icon'), 'sidebar-collapse');
+  assert.equal(await toggle.evaluate((el) => getComputedStyle(el).borderTopWidth), '0px');
   await toggle.focus();
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Expand sidebar', exact: true }).waitFor();
@@ -58,14 +59,11 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   );
   const collapsedToggle = await expand.boundingBox();
   assert.equal(collapsedToggle.y, toggleBox.y, 'toggle keeps its vertical position');
-  assert.ok(Math.abs(collapsedToggle.x + collapsedToggle.width / 2 - 36) < 1);
+  assert.ok(Math.abs(collapsedToggle.x - 72 - (toggleBox.x - expanded.x)) < 1);
   await expand.evaluate((el) => el.blur());
   await page.mouse.move(500, 100);
   assert.equal(await expand.locator('svg').evaluate((el) => getComputedStyle(el).opacity), '1');
-  assert.equal(
-    await expand.locator('svg').evaluate((el) => getComputedStyle(el).transform),
-    'none',
-  );
+  assert.equal(await expand.locator('svg').getAttribute('data-icon'), 'sidebar-expand');
   assert.ok(
     await page.getByRole('link', { name: 'FluxMQ overview', exact: true }).isVisible(),
     'logo remains a navigation link',
@@ -136,16 +134,17 @@ const shots = process.env.FLUXMQ_SCREENSHOT_DIR || '/tmp/fluxmq-console-screensh
   );
   for (const width of [1024, 801]) {
     await page.setViewportSize({ width, height: 900 });
-    const logo = await page.locator('.sidebar-header .brand').boundingBox();
+    const header = await page.locator('.console-statusbar').boundingBox();
     const collapse = await page
       .getByRole('button', { name: 'Collapse sidebar', exact: true })
       .boundingBox();
     const sidebar = await page.locator('.sidebar').boundingBox();
     assert.ok(
-      collapse.x >= sidebar.x &&
-        collapse.x + collapse.width <= sidebar.width &&
-        collapse.y >= logo.y + logo.height,
-      'toggle stays below the logo inside narrower sidebars',
+      collapse.x >= sidebar.width &&
+        collapse.x + collapse.width <= header.x + header.width &&
+        collapse.y >= header.y &&
+        collapse.y + collapse.height <= header.y + header.height,
+      'toggle stays in the header on narrower desktops',
     );
   }
   assert.deepEqual(errors, []);

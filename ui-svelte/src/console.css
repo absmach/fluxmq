@@ -1519,24 +1519,17 @@ details[open] > summary svg[data-icon='down'] {
   flex-shrink: 0;
   width: 32px;
   height: 32px;
-  margin-top: 8px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 6px;
-  background: var(--panel);
+  background: transparent;
   color: var(--muted);
 }
 .sidebar-toggle:hover {
   background: var(--panel-raised);
   color: var(--text);
 }
-.sidebar-toggle.points-left svg {
-  transform: rotate(180deg);
-}
 @media (min-width: 801px) {
-  .sidebar nav {
-    margin-top: 8px;
-  }
   .sidebar-collapsed .brand {
     padding: 0;
     width: 100%;
