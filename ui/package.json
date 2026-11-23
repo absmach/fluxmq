@@ -24,25 +24,25 @@
 		"chart.js": "^4.6.1",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
-		"lucide-react": "^1.72.0",
+		"lucide-react": "^1.77.0",
 		"next": "^16.4.6",
 		"next-themes": "^0.4.6",
 		"react": "^19.3.1",
 		"react-chartjs-2": "^5.3.1",
 		"react-dom": "^19.3.1",
-		"recharts": "^3.10.1",
-		"tailwind-merge": "^3.7.0"
+		"recharts": "^3.11.0",
+		"tailwind-merge": "^3.7.1"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.6.7",
+		"@biomejs/biome": "2.6.8",
 		"@tailwindcss/postcss": "^4.3.5",
 		"@types/node": "^26.6.6",
 		"@types/react": "^19.3.0",
 		"@types/react-dom": "^19.3.0",
-		"autoprefixer": "^10.6.2",
-		"eslint": "^10.14.0",
+		"autoprefixer": "^10.7.0",
+		"eslint": "^10.15.0",
 		"eslint-config-next": "16.4.6",
-		"postcss": "^8.5.32",
+		"postcss": "^8.5.33",
 		"tailwindcss": "^4.3.5",
 		"typescript": "^6.0.3"
 	}
