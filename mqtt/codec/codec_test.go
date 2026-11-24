@@ -455,9 +455,11 @@ func TestDecodeBytesErrors(t *testing.T) {
 			err:   io.ErrUnexpectedEOF,
 		},
 		{
+			// The prefix promised a body; its absence is a truncated field,
+			// not the end of input, or field-list loops accept it as complete.
 			desc:  "decode with length but no data",
 			input: []byte{0x00, 0x05},
-			err:   io.EOF,
+			err:   io.ErrUnexpectedEOF,
 		},
 		{
 			desc:  "decode with length larger than available data",
@@ -492,9 +494,11 @@ func TestDecodeStringErrors(t *testing.T) {
 			err:   io.ErrUnexpectedEOF,
 		},
 		{
+			// The prefix promised a body; its absence is a truncated field,
+			// not the end of input, or field-list loops accept it as complete.
 			desc:  "decode with length but no data",
 			input: []byte{0x00, 0x05},
-			err:   io.EOF,
+			err:   io.ErrUnexpectedEOF,
 		},
 	}
 

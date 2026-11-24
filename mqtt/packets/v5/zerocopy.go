@@ -3,7 +3,11 @@
 
 package v5
 
-import "github.com/absmach/fluxmq/mqtt/codec"
+import (
+	"fmt"
+
+	"github.com/absmach/fluxmq/mqtt/codec"
+)
 
 // UnpackBytes parses a Publish packet from a byte slice using zero-copy semantics.
 // The TopicName will be allocated (Go strings are immutable), but Payload
@@ -113,6 +117,8 @@ func (p *PublishProperties) unpackBytes(data []byte) error {
 				return err
 			}
 			p.SubscriptionID = &si
+		default:
+			return fmt.Errorf("invalid property type %d for publish packet", prop)
 		}
 	}
 	return nil
@@ -295,6 +301,8 @@ func (p *ConnectProperties) unpackBytes(data []byte) error {
 			}
 			p.AuthData = make([]byte, len(ad))
 			copy(p.AuthData, ad)
+		default:
+			return fmt.Errorf("invalid property type %d for connect packet", prop)
 		}
 	}
 	return nil
@@ -355,6 +363,8 @@ func (p *WillProperties) unpackBytes(data []byte) error {
 				return err
 			}
 			p.User = append(p.User, User{Key: k, Value: v})
+		default:
+			return fmt.Errorf("invalid will property type %d", prop)
 		}
 	}
 	return nil
@@ -398,16 +408,10 @@ func (pkt *Subscribe) UnpackBytes(data []byte) error {
 		if err != nil {
 			return err
 		}
-		opt := SubOption{
-			Topic:  topic,
-			MaxQoS: flags & 0x03,
+		opt := SubOption{Topic: topic}
+		if err := opt.decodeFlags(flags); err != nil {
+			return err
 		}
-		noLocal := (flags & (1 << 2)) != 0
-		retainAsPublished := (flags & (1 << 3)) != 0
-		rh := (flags >> 4) & 0x03
-		opt.NoLocal = &noLocal
-		opt.RetainAsPublished = &retainAsPublished
-		opt.RetainHandling = &rh
 		pkt.Opts = append(pkt.Opts, opt)
 	}
 	return nil
@@ -439,6 +443,8 @@ func (p *SubscribeProperties) unpackBytes(data []byte) error {
 				return err
 			}
 			p.User = append(p.User, User{Key: k, Value: v})
+		default:
+			return fmt.Errorf("invalid property type %d for subscribe packet", prop)
 		}
 	}
 	return nil
@@ -453,23 +459,13 @@ func ReadPacketBytes(data []byte) (ControlPacket, int, error) {
 		return nil, 0, codec.ErrBufferTooShort
 	}
 
-	// Fixed header
+	// Fixed header, validated exactly as the streaming reader validates it.
 	var fh FixedHeader
-	fh.PacketType = data[0] >> 4
-	fh.Dup = (data[0]>>3)&0x01 > 0
-	fh.QoS = (data[0] >> 1) & 0x03
-	fh.Retain = data[0]&0x01 > 0
-
-	// Remaining length (VBI)
-	r := codec.NewZeroCopyReader(data[1:])
-	remainingLen, err := r.ReadVBI()
+	headerLen, err := fh.DecodeFromBytes(data)
 	if err != nil {
 		return nil, 0, err
 	}
-	fh.RemainingLength = remainingLen
-
-	headerLen := 1 + r.Offset()
-	totalLen := headerLen + remainingLen
+	totalLen := headerLen + fh.RemainingLength
 
 	if len(data) < totalLen {
 		return nil, 0, codec.ErrBufferTooShort

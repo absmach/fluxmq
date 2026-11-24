@@ -198,7 +198,7 @@ func (pkt *Disconnect) Unpack(r io.Reader) error {
 		return nil
 	}
 	buf := make([]byte, length)
-	if _, err := r.Read(buf); err != nil {
+	if _, err := io.ReadFull(r, buf); err != nil {
 		return err
 	}
 	p := DisconnectProperties{}

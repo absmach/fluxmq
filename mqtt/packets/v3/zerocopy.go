@@ -144,23 +144,13 @@ func ReadPacketBytes(data []byte) (ControlPacket, int, error) {
 		return nil, 0, codec.ErrBufferTooShort
 	}
 
-	// Fixed header
+	// Fixed header, validated exactly as the streaming reader validates it.
 	var fh FixedHeader
-	fh.PacketType = data[0] >> 4
-	fh.Dup = (data[0]>>3)&0x01 > 0
-	fh.QoS = (data[0] >> 1) & 0x03
-	fh.Retain = data[0]&0x01 > 0
-
-	// Remaining length (VBI)
-	r := codec.NewZeroCopyReader(data[1:])
-	remainingLen, err := r.ReadVBI()
+	headerLen, err := fh.DecodeFromBytes(data)
 	if err != nil {
 		return nil, 0, err
 	}
-	fh.RemainingLength = remainingLen
-
-	headerLen := 1 + r.Offset()
-	totalLen := headerLen + remainingLen
+	totalLen := headerLen + fh.RemainingLength
 
 	if len(data) < totalLen {
 		return nil, 0, codec.ErrBufferTooShort
