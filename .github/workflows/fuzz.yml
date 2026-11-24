@@ -1,0 +1,69 @@
+name: Fuzz
+
+# Pull requests fuzz only the targets whose package, or an in-module package it
+# depends on, changed; a go.mod or go.sum change runs every target. The nightly
+# run fuzzes everything for longer. Seed corpora run on every push regardless,
+# as ordinary tests under `make test`.
+on:
+  pull_request:
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - scripts/fuzz_changed.sh
+      - .github/workflows/fuzz.yml
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: Time per fuzz target
+        default: 5m
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The merge base with the target branch is needed to see what changed.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Fuzz changed packages
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: origin/${{ github.base_ref }}
+          FUZZTIME: 30s
+        run: ./scripts/fuzz_changed.sh
+
+      - name: Fuzz all packages
+        if: github.event_name != 'pull_request'
+        env:
+          BASE: ""
+          FUZZTIME: ${{ inputs.fuzztime || '5m' }}
+        run: ./scripts/fuzz_changed.sh
+
+      # A failing input is written under the package's testdata/fuzz directory.
+      # Committing it there makes it a permanent regression seed.
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
