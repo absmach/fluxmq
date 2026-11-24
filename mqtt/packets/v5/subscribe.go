@@ -61,15 +61,24 @@ func (s *SubOption) Unpack(r io.Reader) error {
 	}
 	var b [1]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
+		// The topic was read, so its options byte is owed: plain io.EOF would
+		// read as the clean end of the subscription list.
+		if errors.Is(err, io.EOF) {
+			return io.ErrUnexpectedEOF
+		}
 		return err
 	}
 	s.Topic = topic
-	flags := b[0]
+	return s.decodeFlags(b[0])
+}
+
+// decodeFlags sets the subscription options from their wire byte, rejecting
+// values the protocol reserves [MQTT-3.8.3-5]. Both decoders use it.
+func (s *SubOption) decodeFlags(flags byte) error {
 	s.MaxQoS = flags & 0x03
 	if s.MaxQoS > 2 {
 		return fmt.Errorf("invalid subscribe option qos: %d", s.MaxQoS)
 	}
-	// MQTT 5.0 subscription options
 	noLocal := (flags & (1 << 2)) != 0
 	retainAsPublished := (flags & (1 << 3)) != 0
 	rh := (flags >> 4) & 0x03
@@ -82,7 +91,6 @@ func (s *SubOption) Unpack(r io.Reader) error {
 	s.NoLocal = &noLocal
 	s.RetainAsPublished = &retainAsPublished
 	s.RetainHandling = &rh
-
 	return nil
 }
 
@@ -192,7 +200,7 @@ func (pkt *Subscribe) Unpack(r io.Reader) error {
 	}
 	if length != 0 {
 		buf := make([]byte, length)
-		if _, err := r.Read(buf); err != nil {
+		if _, err := io.ReadFull(r, buf); err != nil {
 			return err
 		}
 		p := SubscribeProperties{}

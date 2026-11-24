@@ -50,6 +50,11 @@ func DecodeBytes(r io.Reader) ([]byte, error) {
 	}
 	field := make([]byte, fieldLength)
 	_, err = io.ReadFull(r, field)
+	// The length was read, so a missing body is a truncated field. Plain io.EOF
+	// would read as a clean end of input to callers that loop over fields.
+	if errors.Is(err, io.EOF) {
+		return nil, io.ErrUnexpectedEOF
+	}
 	if err != nil {
 		return nil, err
 	}

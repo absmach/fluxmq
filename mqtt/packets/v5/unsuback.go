@@ -84,7 +84,7 @@ func (pkt *UnsubAck) Unpack(r io.Reader) error {
 	}
 	if length != 0 {
 		buf := make([]byte, length)
-		if _, err := r.Read(buf); err != nil {
+		if _, err := io.ReadFull(r, buf); err != nil {
 			return err
 		}
 		p := BasicProperties{}

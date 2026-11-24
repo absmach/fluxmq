@@ -48,19 +48,21 @@ func (pkt *PubComp) Encode() []byte {
 	// - Remaining Length 3: Packet ID + Reason Code (no properties)
 	// - Remaining Length >= 4: Packet ID + Reason Code + Property Length + Properties
 	// If properties are present, reason code MUST be included
+	// Properties that encode to nothing are written as no properties, so the
+	// same packet always has one encoding.
+	var props []byte
 	if pkt.Properties != nil {
-		props := pkt.Properties.Encode()
-		if len(props) > 0 || pkt.ReasonCode != nil {
-			// Include reason code (use 0x00 if nil)
-			if pkt.ReasonCode != nil {
-				ret = append(ret, *pkt.ReasonCode)
-			} else {
-				ret = append(ret, 0x00)
-			}
-			proplen := codec.EncodeVBI(len(props))
-			ret = append(ret, proplen...)
-			ret = append(ret, props...)
+		props = pkt.Properties.Encode()
+	}
+	if len(props) > 0 {
+		// Include reason code (use 0x00 if nil)
+		if pkt.ReasonCode != nil {
+			ret = append(ret, *pkt.ReasonCode)
+		} else {
+			ret = append(ret, 0x00)
 		}
+		ret = append(ret, codec.EncodeVBI(len(props))...)
+		ret = append(ret, props...)
 	} else if pkt.ReasonCode != nil && *pkt.ReasonCode != 0x00 {
 		// Only include reason code if non-zero (minimal format optimization)
 		ret = append(ret, *pkt.ReasonCode)
@@ -106,7 +108,7 @@ func (pkt *PubComp) Unpack(r io.Reader) error {
 		return nil
 	}
 	buf := make([]byte, length)
-	if _, err := r.Read(buf); err != nil {
+	if _, err := io.ReadFull(r, buf); err != nil {
 		return err
 	}
 	p := BasicProperties{}

@@ -6,6 +6,7 @@ package codec
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 )
 
 // Errors for zero-copy decoding.
@@ -177,8 +178,11 @@ func (r *ZeroCopyReader) PeekByte() (byte, error) {
 // Read implements io.Reader interface.
 // This allows ZeroCopyReader to be used with functions expecting io.Reader.
 func (r *ZeroCopyReader) Read(p []byte) (n int, err error) {
+	// io.Reader reports exhaustion with io.EOF: io.ReadAll and io.ReadFull
+	// treat anything else as a failure, so a packet body read to its end would
+	// be rejected.
 	if r.offset >= len(r.data) {
-		return 0, ErrBufferTooShort
+		return 0, io.EOF
 	}
 	n = copy(p, r.data[r.offset:])
 	r.offset += n
