@@ -195,6 +195,9 @@ func (h *Handler) UpdateQueue(ctx context.Context, req *connect.Request[queuev1.
 
 	if h.manager != nil {
 		if err := h.manager.UpdateQueue(ctx, updated); err != nil {
+			if errors.Is(err, queue.ErrReplicationPlacementImmutable) {
+				return nil, newConnectError(queue.ErrorCodeFailedPrecondition, err)
+			}
 			return nil, newConnectError(queue.ErrorCodeInternal, err)
 		}
 		current, err := h.queueStore.GetQueue(ctx, updated.Name)

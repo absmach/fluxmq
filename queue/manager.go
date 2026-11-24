@@ -85,6 +85,11 @@ var (
 	// ErrReplicationWritePolicy rejects local and unknown policies for queues
 	// whose contract promises replicated writes.
 	ErrReplicationWritePolicy = errors.New("invalid write policy for replicated queue")
+	// ErrReplicationPlacementImmutable rejects an update that would enable or
+	// disable replication for a queue or move it to another Raft group. Its
+	// records and consumer state live in the current placement; moving them is
+	// a migration, not a configuration update.
+	ErrReplicationPlacementImmutable = errors.New("queue replication placement is fixed at creation")
 )
 
 type queueReplicationValidator interface {
@@ -886,12 +891,18 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	if err := m.protected.validateMutationLocked(config); err != nil {
 		return err
 	}
-	if err := m.validateQueueReplication(ctx, config); err != nil {
-		return err
-	}
 
+	// Placement is checked before replication validation, which records the
+	// queue's group with the coordinator: a refused move must not have
+	// reassigned the queue already.
 	current, err := m.queueStore.GetQueue(ctx, config.Name)
 	if err != nil {
+		return err
+	}
+	if replicationPlacement(*current) != replicationPlacement(config) {
+		return fmt.Errorf("%w: queue %q", ErrReplicationPlacementImmutable, config.Name)
+	}
+	if err := m.validateQueueReplication(ctx, config); err != nil {
 		return err
 	}
 
@@ -916,10 +927,8 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 		}
 	}
 
-	// Always sync the coordinator's queue→group mapping. UpdateQueue on the
-	// coordinator captures the previous group before overwriting, so it can
-	// release dynamic groups that are no longer referenced by any queue
-	// (e.g. group A→B migration, or replication being disabled).
+	// Keep the coordinator's view of the queue's settings current. Its group
+	// cannot change here; placement was checked above.
 	if m.coordinator() != nil {
 		if err := m.coordinator().UpdateQueue(ctx, config); err != nil {
 			return err
@@ -927,6 +936,18 @@ func (m *Manager) UpdateQueue(ctx context.Context, config types.QueueConfig) err
 	}
 
 	return nil
+}
+
+// replicationPlacement names where a queue's records live: locally, or in one
+// Raft group, with an unnamed group meaning the default one.
+func replicationPlacement(config types.QueueConfig) string {
+	if !config.Replication.Enabled {
+		return ""
+	}
+	if group := strings.TrimSpace(config.Replication.Group); group != "" {
+		return group
+	}
+	return raft.DefaultGroupID
 }
 
 // GetOrCreateQueue gets or creates a queue with default configuration.
