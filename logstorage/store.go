@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -55,6 +53,10 @@ func NewStore(baseDir string, config StoreConfig) (*Store, error) {
 		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 
+	if err := migrateLegacyQueues(baseDir); err != nil {
+		return nil, fmt.Errorf("failed to migrate queue layout: %w", err)
+	}
+
 	if config.RecoverOnStartup {
 		recoverAllQueues(baseDir, config.RecoveryLogger)
 	}
@@ -87,7 +89,7 @@ func recoverAllQueues(baseDir string, logFn func(string, ...any)) {
 	}
 
 	for _, queueName := range queueNames {
-		segDir := filepath.Join(baseDir, "queues", filepath.FromSlash(queueName), "segments")
+		segDir := filepath.Join(queueDirIn(baseDir, queueName), segmentsDirName)
 
 		result, err := RecoverSegments(segDir)
 		if err != nil {
@@ -125,63 +127,10 @@ func (s *Store) loadQueues() error {
 	return nil
 }
 
-// discoverQueueNames finds queue roots by their segment files instead of by
-// the first directory below queues/. Queue names are allowed to contain '/'
-// (dead-letter queues use "$dlq/<source>"), so those queue roots can be nested.
-// Looking for valid segment files also avoids mistaking an intermediate path
-// component named "segments" for a queue root.
-func discoverQueueNames(baseDir string) ([]string, error) {
-	queuesDir := filepath.Join(baseDir, "queues")
-	if _, err := os.Stat(queuesDir); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	names := make(map[string]struct{})
-	err := filepath.WalkDir(queuesDir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || filepath.Ext(entry.Name()) != SegmentExtension {
-			return nil
-		}
-		if _, err := ParseSegmentName(entry.Name()); err != nil {
-			return nil
-		}
-
-		segmentsDir := filepath.Dir(path)
-		if filepath.Base(segmentsDir) != "segments" {
-			return nil
-		}
-		queueDir := filepath.Dir(segmentsDir)
-		rel, err := filepath.Rel(queuesDir, queueDir)
-		if err != nil {
-			return err
-		}
-		if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil
-		}
-		names[filepath.ToSlash(rel)] = struct{}{}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	queueNames := make([]string, 0, len(names))
-	for name := range names {
-		queueNames = append(queueNames, name)
-	}
-	sort.Strings(queueNames)
-	return queueNames, nil
-}
-
 // loadQueue loads a queue's segment manager.
 func (s *Store) loadQueue(queueName string) error {
-	queueDir := filepath.Join(s.baseDir, "queues", queueName)
-	segmentsDir := filepath.Join(queueDir, "segments")
+	queueDir := s.queueDir(queueName)
+	segmentsDir := s.segmentsDir(queueName)
 
 	// Check if segments directory exists
 	if _, err := os.Stat(segmentsDir); os.IsNotExist(err) {
@@ -207,12 +156,12 @@ func (s *Store) loadQueue(queueName string) error {
 
 // queueDir returns the directory for a queue.
 func (s *Store) queueDir(queueName string) string {
-	return filepath.Join(s.baseDir, "queues", queueName)
+	return queueDirIn(s.baseDir, queueName)
 }
 
 // segmentsDir returns the segments directory for a queue.
 func (s *Store) segmentsDir(queueName string) string {
-	return filepath.Join(s.queueDir(queueName), "segments")
+	return filepath.Join(s.queueDir(queueName), segmentsDirName)
 }
 
 // getOrCreateQueue gets or creates a queue's segment manager.
@@ -228,6 +177,9 @@ func (s *Store) getOrCreateQueue(queueName string) (*SegmentManager, error) {
 	if !ok {
 		if !s.config.AutoCreate {
 			return nil, ErrQueueNotFound
+		}
+		if err := validateStorageName(queueName); err != nil {
+			return nil, err
 		}
 
 		// Create consumer manager for new queue
@@ -773,6 +725,9 @@ func (s *Store) CreateQueue(queueName string) error {
 
 	if _, ok := s.queues[queueName]; ok {
 		return ErrAlreadyExists
+	}
+	if err := validateStorageName(queueName); err != nil {
+		return err
 	}
 
 	segDir := s.segmentsDir(queueName)

@@ -162,7 +162,7 @@ func TestStore_DeleteQueue(t *testing.T) {
 	_, err = store.Append("q1", []byte("v1"), nil, nil)
 	require.NoError(t, err)
 
-	queueDir := filepath.Join(dir, "queues", "q1")
+	queueDir := filepath.Join(dir, queueLogsDir, "q1")
 	_, err = os.Stat(queueDir)
 	require.NoError(t, err)
 

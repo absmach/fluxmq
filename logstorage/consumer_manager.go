@@ -28,7 +28,11 @@ type ConsumerManager struct {
 
 // NewConsumerManager creates a new consumer manager for a queue.
 func NewConsumerManager(baseDir string, config ConsumerStateConfig) (*ConsumerManager, error) {
-	dir := filepath.Join(baseDir, "consumers")
+	if err := migrateLegacyGroups(baseDir); err != nil {
+		return nil, fmt.Errorf("failed to migrate consumer group layout: %w", err)
+	}
+
+	dir := filepath.Join(baseDir, consumerGroupsDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create consumers directory: %w", err)
 	}
@@ -50,20 +54,12 @@ func NewConsumerManager(baseDir string, config ConsumerStateConfig) (*ConsumerMa
 
 // loadGroups discovers and loads existing consumer groups.
 func (cm *ConsumerManager) loadGroups() error {
-	entries, err := os.ReadDir(cm.dir)
+	groupIDs, err := decodedDirNames(cm.dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		groupID := entry.Name()
+	for _, groupID := range groupIDs {
 		state, err := NewConsumerState(cm.dir, groupID, cm.config)
 		if err != nil {
 			return fmt.Errorf("failed to load consumer group %s: %w", groupID, err)
@@ -85,6 +81,9 @@ func (cm *ConsumerManager) GetOrCreate(groupID string) (*ConsumerState, error) {
 
 	if state, ok := cm.groups[groupID]; ok {
 		return state, nil
+	}
+	if err := validateStorageName(groupID); err != nil {
+		return nil, err
 	}
 
 	state, err := NewConsumerState(cm.dir, groupID, cm.config)
@@ -117,7 +116,7 @@ func (cm *ConsumerManager) Delete(groupID string) error {
 	delete(cm.groups, groupID)
 
 	// Remove directory
-	groupDir := filepath.Join(cm.dir, groupID)
+	groupDir := filepath.Join(cm.dir, encodePathComponent(groupID))
 	return os.RemoveAll(groupDir)
 }
 
