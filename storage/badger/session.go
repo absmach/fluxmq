@@ -68,15 +68,31 @@ func (s *SessionStore) Save(session *storage.Session) error {
 
 	return s.db.Update(func(txn *badger.Txn) error {
 		entry := badger.NewEntry(key, data)
-
-		// Set TTL if session has expiry interval
-		if session.ExpiryInterval > 0 {
-			ttl := time.Duration(session.ExpiryInterval) * time.Second
+		if ttl, ok := sessionTTL(session, time.Now()); ok {
 			entry = entry.WithTTL(ttl)
 		}
-
 		return txn.SetEntry(entry)
 	})
+}
+
+// sessionTTL returns how long a stored session record may outlive its client.
+//
+// The expiry interval runs from the moment the client disconnects
+// [MQTT-3.1.2-23], so a connected session never expires: its record must
+// survive a broker crash however long the connection lasted. A disconnected
+// session keeps only what remains of its interval. One that has already run
+// out keeps a second, long enough for an explicit cleanup to find it.
+func sessionTTL(session *storage.Session, now time.Time) (time.Duration, bool) {
+	if session.Connected || session.ExpiryInterval == 0 {
+		return 0, false
+	}
+
+	interval := time.Duration(session.ExpiryInterval) * time.Second
+	disconnectedAt := session.DisconnectedAt
+	if disconnectedAt.IsZero() {
+		disconnectedAt = now
+	}
+	return max(disconnectedAt.Add(interval).Sub(now), time.Second), true
 }
 
 // Delete removes a session.
