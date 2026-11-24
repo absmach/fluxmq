@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/absmach/fluxmq/storage"
+	"github.com/absmach/fluxmq/topics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -155,4 +156,37 @@ func TestUnsubscribe_PreservesOtherClients(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, matched, 1)
 	assert.Equal(t, "c2", matched[0].ClientID)
+}
+
+func TestMatch_DollarTopics(t *testing.T) {
+	const uptime = "$SYS/broker/uptime"
+	cases := []struct {
+		name   string
+		filter string
+		topic  string
+		want   bool
+	}{
+		{"hash/excludes $SYS", "#", uptime, false},
+		{"plus/excludes $SYS", "+/broker/uptime", uptime, false},
+		{"plus-hash/excludes $SYS", "+/#", uptime, false},
+		{"hash/excludes single-level $ topic", "#", "$SYS", false},
+		{"explicit/$SYS hash", "$SYS/#", uptime, true},
+		{"explicit/$SYS plus", "$SYS/+/uptime", uptime, true},
+		{"hash/matches ordinary topic", "#", "sensors/temp", true},
+		{"hash/matches $ below the first level", "#", "sensors/$raw", true},
+		{"plus/matches $ below the first level", "sensors/+", "sensors/$raw", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRouter()
+			require.NoError(t, r.Subscribe("client", tc.filter, 0, storage.SubscribeOptions{}))
+
+			matched, err := r.Match(tc.topic)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, len(matched) == 1)
+			assert.Equal(t, topics.TopicMatch(tc.filter, tc.topic), tc.want,
+				"the trie must agree with topics.TopicMatch")
+		})
+	}
 }
