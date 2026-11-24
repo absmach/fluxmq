@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { subscriptionURL, followLink } from './routes';
-  import { bytes, protocolLabel, sessionProtocol, type Session } from './types';
+  import { bytes, protocolLabel, transportLabel, sessionProtocol, type Session } from './types';
   let {
     client,
     onfilter,
@@ -50,6 +50,10 @@
     <div>
       <dt>Protocol</dt>
       <dd>{protocolLabel(protocol)}</dd>
+    </div>
+    <div>
+      <dt>Transport</dt>
+      <dd>{transportLabel(client.transport)}</dd>
     </div>
     <div>
       <dt>Node</dt>

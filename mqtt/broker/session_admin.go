@@ -36,6 +36,7 @@ type SessionSubscription struct {
 
 // SessionSnapshot is a point-in-time session view for management APIs.
 type SessionSnapshot struct {
+	Transport         string
 	ClientID          string
 	ExternalID        string
 	State             string
@@ -204,6 +205,13 @@ func (b *Broker) collectSessionListEntries() ([]sessionListEntry, error) {
 
 func (b *Broker) snapshotFromLiveSession(s *session.Session) (*SessionSnapshot, error) {
 	info := s.Info()
+	transport := ""
+	if conn := s.Conn(); conn != nil {
+		transport = "tcp"
+		if labeled, ok := conn.(interface{ Transport() string }); ok {
+			transport = labeled.Transport()
+		}
+	}
 	subs, err := b.subscriptionsForClient(s.ID, s)
 	if err != nil {
 		return nil, err
@@ -211,6 +219,7 @@ func (b *Broker) snapshotFromLiveSession(s *session.Session) (*SessionSnapshot, 
 
 	return &SessionSnapshot{
 		ClientID:          s.ID,
+		Transport:         transport,
 		ExternalID:        s.ExternalID,
 		State:             s.State().String(),
 		Connected:         s.IsConnected(),

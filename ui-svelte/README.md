@@ -48,7 +48,8 @@ local or behind your existing authenticated management gateway.
   publish rates, payload totals and history for MQTT TCP, MQTT WebSocket, HTTP,
   CoAP and both AMQP versions. This is independent of session inventory.
 - Sessions: per-node distribution/filtering, search by ID/name/node, protocol/state filters, sorting, configurable
-  pagination, and a client detail page with connection details, MQTT settings, and
+  pagination, TCP/WebSocket transport counts and filtering, and a client detail
+  page with connection details, transport, MQTT settings, and
   subscriptions or AMQP consumers.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, per-node distribution/filtering,
   and a detail page with node filtering, client search, pagination, retry/load-more, and links to client details.

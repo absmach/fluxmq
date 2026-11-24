@@ -477,3 +477,12 @@ func createSessionWithVersion(t *testing.T, b *mqttbroker.Broker, store *memory.
 		}
 	}
 }
+
+func TestSessionResponsePreservesTransport(t *testing.T) {
+	for _, transport := range []string{"tcp", "websocket", ""} {
+		got := sessionToResponse(mqttbroker.SessionSnapshot{ClientID: "client", Version: 5, Transport: transport})
+		if got.Transport != transport || got.Protocol != "mqtt5" {
+			t.Fatalf("lost protocol/transport: %+v", got)
+		}
+	}
+}

@@ -23,6 +23,7 @@
     bytes,
     uptime,
     protocolLabel,
+    transportLabel,
     sessionProtocol,
     nodeRole,
     nodeStatus,
@@ -86,6 +87,7 @@
   let search = $state('');
   let filter = $state('all');
   let protocol = $state('all');
+  let transport = $state('all');
   let sort = $state('client');
   const inventory = new Inventory();
   let nodeTableView = $state<'activity' | 'counters'>('activity');
@@ -98,6 +100,7 @@
     search: string;
     filter: string;
     protocol: string;
+    transport: string;
     sort: string;
     tablePage: number;
     pageSize: number;
@@ -135,6 +138,7 @@
           q: search,
           state: page === 'sessions' ? filter : 'connected',
           protocol: page === 'sessions' ? protocol : 'all',
+          transport: page === 'sessions' ? transport : 'all',
           sort: page === 'sessions' ? sort : 'client',
         }
       : null,
@@ -215,7 +219,10 @@
               .toLowerCase()
               .includes(search.toLowerCase())) &&
           (filter === 'all' || (filter === 'connected') === s.connected) &&
-          (protocol === 'all' || s.protocol === protocol),
+          (protocol === 'all' || s.protocol === protocol) &&
+          (transport === 'all' ||
+            s.transport === transport ||
+            (transport === 'unknown' && !s.transport)),
       )
       .sort((a, b) =>
         sort === 'queued'
@@ -291,6 +298,7 @@
       search,
       filter,
       protocol,
+      transport,
       sort,
       tablePage,
       pageSize,
@@ -348,6 +356,7 @@
     search = view?.search ?? '';
     filter = view?.filter ?? 'all';
     protocol = view?.protocol ?? 'all';
+    transport = view?.transport ?? 'all';
     sort = view?.sort ?? 'client';
     tablePage = view?.tablePage ?? 1;
     pageSize = view?.pageSize ?? pageSize;
@@ -449,11 +458,21 @@
     const rows: (string | number)[][] =
       page === 'sessions'
         ? [
-            ['Client', 'Node', 'Protocol', 'Status', 'Subscriptions', 'Inflight', 'Queued'],
+            [
+              'Client',
+              'Node',
+              'Protocol',
+              'Transport',
+              'Status',
+              'Subscriptions',
+              'Inflight',
+              'Queued',
+            ],
             ...filteredSessions.map((s) => [
               s.client_id,
               s.node_id,
               s.protocol,
+              transportLabel(s.transport),
               s.connected ? 'connected' : 'disconnected',
               s.subscription_count,
               s.inflight_count,
@@ -1113,6 +1132,18 @@
                   </option>{/each}
               </select>
             </label><label>
+              Transport <select
+                aria-label="Transport"
+                bind:value={transport}
+                onchange={() => (tablePage = 1)}
+              >
+                <option value="all">All transports</option><option value="tcp">TCP</option><option
+                  value="websocket"
+                >
+                  WebSocket
+                </option><option value="unknown">Not reported</option>
+              </select>
+            </label><label>
               Sort by <select bind:value={sort}>
                 <option value="client">Client name</option><option value="queued">
                   Queued messages
@@ -1125,11 +1156,9 @@
             <table>
               <thead>
                 <tr>
-                  <th>Client ID</th><th>Status</th><th>Protocol</th><th>Node</th><th
-                    class="numeric"
-                  >
-                    Subscriptions
-                  </th><th class="numeric">Delivery</th><th>
+                  <th>Client ID</th><th>Status</th><th>Protocol</th><th>Transport</th><th>
+                    Node
+                  </th><th class="numeric"> Subscriptions </th><th class="numeric">Delivery</th><th>
                     <span class="sr-only">Details</span>
                   </th>
                 </tr>
@@ -1149,9 +1178,9 @@
                       <span class:disconnected={!s.connected} class="state-tag">
                         <i></i>{s.connected ? 'Connected' : 'Disconnected'}
                       </span>
-                    </td><td><span class="protocol-tag">{protocolLabel(s.protocol)}</span></td><td
-                      class="muted mono"
-                    >
+                    </td><td><span class="protocol-tag">{protocolLabel(s.protocol)}</span></td><td>
+                      {transportLabel(s.transport)}
+                    </td><td class="muted mono">
                       {s.node_id}
                     </td><td class="numeric">{s.subscription_count}</td><td class="numeric">
                       {#if s.protocol.startsWith('mqtt')}<span class="delivery-counts">
@@ -1176,7 +1205,7 @@
                       </button>
                     </td>
                   </tr>{:else}<tr>
-                    <td colspan="7">
+                    <td colspan="8">
                       <div class="empty-state">
                         <Icon name="search" size={28} />
                         <h3>
@@ -1189,6 +1218,7 @@
                             search = '';
                             filter = 'all';
                             protocol = 'all';
+                            transport = 'all';
                           }}
                         >
                           Clear filters

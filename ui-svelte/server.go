@@ -67,6 +67,7 @@ type node struct {
 	Outgoing         float64         `json:"outgoing"`
 }
 type session struct {
+	Transport         string                `json:"transport,omitempty"`
 	ConsumerCount     *int                  `json:"consumer_count,omitempty"`
 	ConnectionName    string                `json:"connection_name,omitempty"`
 	State             string                `json:"state"`

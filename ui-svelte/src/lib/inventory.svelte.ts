@@ -5,6 +5,7 @@ export type InventoryQuery = {
   q: string;
   state: string;
   protocol: string;
+  transport?: string;
   sort: string;
 };
 type Saved = {
@@ -104,6 +105,7 @@ export class Inventory {
           q: query.q,
           state: query.state,
           protocol: query.protocol,
+          transport: query.transport ?? 'all',
         });
         if (query.node !== 'all') params.set('node', query.node);
         if (cursor) params.set('cursor', JSON.stringify(cursor));
@@ -139,6 +141,7 @@ export class Inventory {
         (all ||
           !!query.q ||
           query.protocol !== 'all' ||
+          (!!query.transport && query.transport !== 'all') ||
           query.sort === 'queued' ||
           query.kind === 'subscriptions' ||
           sessions.length < minimum)

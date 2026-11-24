@@ -23,6 +23,9 @@
         disconnected: number;
         inflight: number;
         queued: number;
+        tcp: number;
+        websocket: number;
+        unknown: number;
       }
     >();
     for (const s of sessions) {
@@ -33,8 +36,12 @@
         disconnected: 0,
         inflight: 0,
         queued: 0,
+        tcp: 0,
+        websocket: 0,
+        unknown: 0,
       };
       row[s.connected ? 'connected' : 'disconnected']++;
+      row[s.transport === 'websocket' ? 'websocket' : s.transport === 'tcp' ? 'tcp' : 'unknown']++;
       if (p.startsWith('mqtt')) {
         row.inflight += s.inflight_count;
         row.queued += s.offline_queue_depth;
@@ -84,6 +91,11 @@
             {number(row.disconnected)} disconnected
           </span>
         </span>
+        <span class="state-counts transport-counts">
+          {#if row.tcp}<span>{number(row.tcp)} TCP</span>{/if}
+          {#if row.websocket}<span>{number(row.websocket)} WebSocket</span>{/if}
+          {#if row.unknown}<span>{number(row.unknown)} transport not reported</span>{/if}
+        </span>
         <span class="protocol-delivery-counts">
           {#if row.protocol.startsWith('mqtt')}
             <span title="MQTT inflight messages"><b>{number(row.inflight)}</b> inflight</span>
@@ -102,6 +114,10 @@
       </button>
     {:else}<p class="empty-protocols muted">No clients in the current inventory.</p>{/each}
   </div>
+  <p class="muted" style="font-size: 12px; margin: 10px 0">
+    Session inventory includes MQTT over TCP/WebSocket and AMQP 0.9.1. AMQP 1.0 traffic is shown on
+    Overview; its session inventory is not reported.
+  </p>
   <div class="protocol-footer">
     {#if partial}<span>Loaded sessions · inventory incomplete</span>{/if}
     <button class="text-button" onclick={onqueues}>

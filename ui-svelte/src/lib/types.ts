@@ -76,6 +76,7 @@ export interface BrokerNode {
   outgoing: number;
 }
 export interface Session {
+  transport?: string;
   consumer_count?: number;
   connection_name?: string;
   state?: string;
@@ -195,3 +196,6 @@ export interface ClientListState {
 export function nodeStatus(n: BrokerNode) {
   return n.unmonitored ? 'Not monitored' : n.healthy ? 'Healthy' : 'Unavailable';
 }
+
+export const transportLabel = (transport?: string) =>
+  transport === 'websocket' ? 'WebSocket' : transport === 'tcp' ? 'TCP' : 'Not reported';

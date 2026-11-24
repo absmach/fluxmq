@@ -128,3 +128,46 @@ func TestReportedClusterMembersAreNotProbed(t *testing.T) {
 		t.Fatal("outage hid known membership")
 	}
 }
+
+func TestTransportFilterRetainsPaginationAndDoesNotGuessMissingTransport(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page_token") == "next" {
+			writeJSON(w, map[string]any{"sessions": []session{{ClientID: "ws", Protocol: "mqtt5", Transport: "websocket", Connected: true}}})
+			return
+		}
+		writeJSON(w, map[string]any{"sessions": []session{{ClientID: "tcp", Protocol: "mqtt5", Transport: "tcp", Connected: true}, {ClientID: "unknown", Protocol: "mqtt5"}}, "next_page_token": "next"})
+	}))
+	defer upstream.Close()
+	c := newCollector(nil, false)
+	c.nodeURLs = map[string]string{"n": upstream.URL}
+	get := func(query string) inventoryPage {
+		t.Helper()
+		w := httptest.NewRecorder()
+		c.inventoryPage(w, httptest.NewRequest("GET", "/?kind=sessions&"+query, nil))
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		var page inventoryPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	first := get("transport=websocket")
+	if len(first.Sessions) != 0 || first.Next["n"] != "next" {
+		t.Fatalf("lost continuation: %+v", first)
+	}
+	cursor, _ := json.Marshal(first.Next)
+	last := get("transport=websocket&cursor=" + url.QueryEscape(string(cursor)))
+	if len(last.Sessions) != 1 || last.Sessions[0].Transport != "websocket" {
+		t.Fatalf("lost WS: %+v", last)
+	}
+	tcp := get("transport=tcp")
+	if len(tcp.Sessions) != 1 || tcp.Sessions[0].ClientID != "tcp" {
+		t.Fatalf("guessed unknown transport: %+v", tcp)
+	}
+	unknown := get("transport=unknown")
+	if len(unknown.Sessions) != 1 || unknown.Sessions[0].ClientID != "unknown" {
+		t.Fatalf("lost unknown: %+v", unknown)
+	}
+}

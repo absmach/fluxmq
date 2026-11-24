@@ -38,6 +38,7 @@ type sessionSubscriptionResponse struct {
 }
 
 type sessionResponse struct {
+	Transport         string                        `json:"transport,omitempty"`
 	ClientID          string                        `json:"client_id"`
 	ConnectionName    string                        `json:"connection_name,omitempty"`
 	State             string                        `json:"state"`
@@ -251,6 +252,7 @@ func amqpSessionResponse(
 		State:             sessionStateConnected,
 		Connected:         true,
 		Protocol:          protocolAMQP091,
+		Transport:         "tcp",
 		SubscriptionCount: len(subscriptions),
 	}
 
@@ -294,6 +296,7 @@ func sessionToResponse(snapshot mqttbroker.SessionSnapshot) sessionResponse {
 		State:             snapshot.State,
 		Connected:         snapshot.Connected,
 		Protocol:          protocolLabel(snapshot.ClientID, snapshot.Version),
+		Transport:         snapshot.Transport,
 		Version:           int(snapshot.Version),
 		CleanStart:        snapshot.CleanStart,
 		ExpiryInterval:    snapshot.ExpiryInterval,

@@ -63,3 +63,36 @@ func TestIngressSeparatesBridgesAndWebSocketFromMQTT(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionSnapshotReportsTransportThroughConnectionWrapper(t *testing.T) {
+	b := NewBroker(memory.New(), nil)
+	defer b.Close()
+	s, _, err := b.CreateSession("transport-client", 5, session.Options{CleanStart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ws, cancel := bindConnectionContext(context.Background(), &ingressWebSocket{})
+	defer cancel()
+	if _, err = s.Connect(ws); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := b.GetSessionSnapshot(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Transport != "websocket" {
+		t.Fatalf("WebSocket reported as %q", snap.Transport)
+	}
+	_, tcp, cancelTCP := bindConnectionContext(context.Background(), &mockConnection{})
+	defer cancelTCP()
+	if _, err = s.Connect(tcp); err != nil {
+		t.Fatal(err)
+	}
+	snap, err = b.GetSessionSnapshot(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Transport != "tcp" {
+		t.Fatalf("reconnect transport stale: %q", snap.Transport)
+	}
+}

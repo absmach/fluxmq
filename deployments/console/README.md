@@ -70,7 +70,10 @@ and byte totals count payloads. MQTT control packets and forwarded deliveries
 are excluded. MQTT and WebSocket each combine MQTT 3.1.1 and MQTT 5 traffic.
 Session inventory still covers MQTT and AMQP 0.9.1; HTTP and CoAP do not create
 MQTT sessions, and AMQP 1.0 session inventory is not exposed. Older brokers
-without ingress counters do not show the new panel.
+without ingress counters do not show the new panel. Connected MQTT sessions
+report TCP or WebSocket as a separate transport in the Sessions table, filters,
+summary cards, CSV export and client details. Persisted sessions without a live
+connection have no stored transport and display **Not reported**.
 
 ## Real integration regression
 

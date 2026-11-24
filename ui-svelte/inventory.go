@@ -108,6 +108,7 @@ func (c *collector) inventoryPage(w http.ResponseWriter, r *http.Request) {
 		}(id, base, token)
 	}
 	term, protocol := strings.ToLower(query.Get("q")), query.Get("protocol")
+	transport := query.Get("transport")
 	for range requested {
 		out := <-results
 		if out.failed {
@@ -122,7 +123,9 @@ func (c *collector) inventoryPage(w http.ResponseWriter, r *http.Request) {
 			for _, s := range out.sessions {
 				s.NodeID = out.id
 				s.Protocol = normalizedProtocol(s)
-				if (protocol == "" || protocol == "all" || s.Protocol == protocol) && strings.Contains(strings.ToLower(s.ClientID+" "+s.ConnectionName+" "+s.NodeID), term) {
+				matchesTransport := transport == "" || transport == "all" || s.Transport == transport || (transport == "unknown" && s.Transport == "")
+				if matchesTransport && (protocol == "" || protocol == "all" || s.Protocol == protocol) &&
+					strings.Contains(strings.ToLower(s.ClientID+" "+s.ConnectionName+" "+s.NodeID), term) {
 					page.Sessions = append(page.Sessions, s)
 				}
 			}
