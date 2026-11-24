@@ -340,7 +340,7 @@ func TestAdapter_CreateQueueRestoresMetadataLostAfterCrash(t *testing.T) {
 
 	// A crash between the log directory reaching disk and its metadata doing so
 	// leaves the acknowledged record present but the queue invisible.
-	require.NoError(t, os.Remove(filepath.Join(dir, "config", "queues.json")))
+	require.NoError(t, os.Remove(filepath.Join(dir, "config", queueConfigsDir, "audit"+queueConfigExt)))
 
 	reopened, err := NewAdapter(dir, DefaultAdapterConfig())
 	require.NoError(t, err)
