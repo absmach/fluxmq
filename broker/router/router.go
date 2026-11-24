@@ -136,6 +136,12 @@ func matchLevel(n *node, levels []string, index int, matched *[]*storage.Subscri
 		matchLevel(child, levels, index+1, matched)
 	}
 
+	// A filter starting with a wildcard does not match a topic whose first
+	// level starts with '$' [MQTT-4.7.2-1]: "#" must not receive $SYS.
+	if index == 0 && level != "" && level[0] == '$' {
+		return
+	}
+
 	// Check single-level wildcard '+'
 	if child, ok := n.children["+"]; ok {
 		matchLevel(child, levels, index+1, matched)
