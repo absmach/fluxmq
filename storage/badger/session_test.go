@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/storage"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -283,5 +284,65 @@ func setupSessionStore(t *testing.T) *SessionStore {
 func cleanupSessionStore(t *testing.T, store *SessionStore) {
 	if store != nil && store.db != nil {
 		store.db.Close() //nolint:errcheck // test teardown
+	}
+}
+
+func TestSessionStore_RecordLifetime(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name    string
+		session storage.Session
+		// expiresWithin is zero when the record must not expire at all.
+		expiresWithin time.Duration
+		notBefore     time.Duration
+	}{
+		{
+			name:    "connected/longer than interval keeps record",
+			session: storage.Session{ExpiryInterval: 60, Connected: true, ConnectedAt: now.Add(-time.Hour)},
+		},
+		{
+			name:    "disconnected/no interval keeps record",
+			session: storage.Session{DisconnectedAt: now},
+		},
+		{
+			name:          "disconnected/interval runs from disconnect",
+			session:       storage.Session{ExpiryInterval: 300, DisconnectedAt: now.Add(-200 * time.Second)},
+			expiresWithin: 101 * time.Second,
+			notBefore:     98 * time.Second,
+		},
+		{
+			name:          "disconnected/already expired keeps a second for cleanup",
+			session:       storage.Session{ExpiryInterval: 60, DisconnectedAt: now.Add(-time.Hour)},
+			expiresWithin: 2 * time.Second,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := setupSessionStore(t)
+			t.Cleanup(func() { cleanupSessionStore(t, store) })
+
+			tc.session.ClientID = "client"
+			require.NoError(t, store.Save(&tc.session))
+
+			var expiresAt uint64
+			require.NoError(t, store.db.View(func(txn *badger.Txn) error {
+				item, err := txn.Get([]byte("session:client"))
+				if err != nil {
+					return err
+				}
+				expiresAt = item.ExpiresAt()
+				return nil
+			}))
+
+			if tc.expiresWithin == 0 {
+				assert.Zero(t, expiresAt, "record must not carry a TTL")
+				return
+			}
+			require.NotZero(t, expiresAt)
+			remaining := time.Until(time.Unix(int64(expiresAt), 0))
+			assert.LessOrEqual(t, remaining, tc.expiresWithin)
+			assert.GreaterOrEqual(t, remaining, tc.notBefore)
+		})
 	}
 }
