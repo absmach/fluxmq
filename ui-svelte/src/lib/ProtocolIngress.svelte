@@ -67,6 +67,7 @@
         <article data-protocol={protocol.key}>
           <button
             class="protocol-filter"
+            style:--series-color={protocol.color}
             class:series-hidden={!shown}
             aria-label={`Toggle ${protocol.label}`}
             aria-pressed={shown}
@@ -140,20 +141,16 @@
     height: 100%;
     padding: 12px 10px;
     text-align: left;
-    border: 1px solid var(--border);
+    border: 0;
     border-radius: 8px;
-    background: var(--panel);
+    background: transparent;
   }
-  .protocol-filter:hover,
-  .protocol-filter:focus-visible {
-    border-color: var(--accent);
+  .protocol-filter:hover {
+    background: var(--hover);
   }
   .protocol-filter:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-  }
-  .protocol-filter.series-hidden {
-    background: var(--panel-raised);
   }
   .series-hidden .protocol-name {
     text-decoration: line-through;
@@ -184,6 +181,7 @@
     flex-shrink: 0;
   }
   strong {
+    color: var(--series-color);
     display: flex;
     align-items: baseline;
     gap: 6px;
