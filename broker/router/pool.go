@@ -22,8 +22,19 @@ func acquireTopicLevels() *[]string {
 	return topicLevelsPool.Get().(*[]string)
 }
 
+// Pooled slices above these capacities are dropped rather than reused: one
+// unusually deep topic or wide match must not pin its backing array for every
+// later small one.
+const (
+	maxPooledTopicLevels   = 64
+	maxPooledSubscriptions = 4096
+)
+
 func releaseTopicLevels(s *[]string) {
-	if s == nil {
+	// The stale level strings are left in place: they only reference the topic
+	// that was split, and the next split overwrites them. Clearing them costs
+	// more on the match path than the short strings it would release.
+	if s == nil || cap(*s) > maxPooledTopicLevels {
 		return
 	}
 	*s = (*s)[:0]
@@ -64,10 +75,11 @@ func AcquireSubscriptionSlice() *[]*storage.Subscription {
 // ReleaseSubscriptionSlice returns a subscription slice to the pool after resetting it.
 // The slice must not be used after calling this function.
 func ReleaseSubscriptionSlice(s *[]*storage.Subscription) {
-	if s == nil {
+	if s == nil || cap(*s) > maxPooledSubscriptions {
 		return
 	}
-	// Clear the slice but keep capacity for reuse
+	// Drop the subscription pointers so pooling does not keep them alive.
+	clear(*s)
 	*s = (*s)[:0]
 	subscriptionSlicePool.Put(s)
 }
