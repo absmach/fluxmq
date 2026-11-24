@@ -93,7 +93,7 @@
             {#if reporting.some((n) => !n.healthy)}<span class="stale">
                 Includes last-known totals
               </span>{/if}
-            <span class="filter-state">{shown ? 'Shown in chart' : 'Hidden from chart'}</span>
+            <span class="filter-state">{shown ? '' : 'Hidden'}</span>
           </button>
         </article>
       {/each}
@@ -161,10 +161,7 @@
   }
   .protocol-filter > .filter-state {
     margin-top: 8px;
-    color: var(--accent);
-  }
-  .series-hidden > .filter-state {
-    color: var(--muted);
+    min-height: 1.6em;
   }
   .protocol-name {
     display: flex;
