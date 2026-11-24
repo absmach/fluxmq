@@ -87,7 +87,8 @@ func (s *QueueConfigStore) Save(config types.QueueConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.configs[config.Name] = &config
+	stored := config.Clone()
+	s.configs[config.Name] = &stored
 	s.dirty = true
 
 	return s.saveUnlocked()
@@ -98,12 +99,13 @@ func (s *QueueConfigStore) Get(queueName string) (*types.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	config, ok := s.configs[queueName]
+	stored, ok := s.configs[queueName]
 	if !ok {
 		return nil, ErrQueueNotFound
 	}
 
-	return config, nil
+	config := stored.Clone()
+	return &config, nil
 }
 
 // Delete removes a queue config.
@@ -124,7 +126,7 @@ func (s *QueueConfigStore) List() ([]types.QueueConfig, error) {
 
 	configs := make([]types.QueueConfig, 0, len(s.configs))
 	for _, config := range s.configs {
-		configs = append(configs, *config)
+		configs = append(configs, config.Clone())
 	}
 
 	return configs, nil

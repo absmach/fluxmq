@@ -6,6 +6,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +93,14 @@ type QueueConfig struct {
 	DeliveryTimeout  time.Duration
 	BatchSize        int
 	HeartbeatTimeout time.Duration
+}
+
+// Clone returns a copy of c that shares no memory with it. Stores hand out
+// clones so a caller editing a configuration cannot change the stored one
+// without going through its update path.
+func (c QueueConfig) Clone() QueueConfig {
+	c.Topics = slices.Clone(c.Topics)
+	return c
 }
 
 // QueueType defines the queue behavior mode.
