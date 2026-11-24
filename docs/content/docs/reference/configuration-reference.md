@@ -354,7 +354,7 @@ rather than the events it named. Fix the filter rather than work around the erro
 
 | Field              | Description                                                                                                                |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `max_message_size` | Queue-level max payload size in bytes.                                                                                     |
+| `max_message_size` | Queue-level max payload size in bytes. A replicated queue accepts at most `67108864` (64 MiB).                             |
 | `max_depth`        | Max queued message count.                                                                                                  |
 | `message_ttl`      | Per-message TTL. Messages older than this are skipped at delivery time. `0` disables per-message expiry (default: `168h`). |
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/queue/raft"
 	memlog "github.com/absmach/fluxmq/queue/storage/memory/log"
 	"github.com/absmach/fluxmq/queue/types"
 	"github.com/stretchr/testify/assert"
@@ -131,6 +132,50 @@ func TestUpdateQueueKeepsReplicationPlacement(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, time.Hour, stored.MessageTTL)
+		})
+	}
+}
+
+func TestReplicatedQueueMessageSizeFitsSnapshot(t *testing.T) {
+	const bigQueue = "big"
+	cases := []struct {
+		name           string
+		maxMessageSize int64
+		wantErr        bool
+	}{
+		{name: "default", maxMessageSize: types.DefaultQueueConfig("q").MaxMessageSize},
+		{name: "at limit", maxMessageSize: raft.MaxReplicatedMessageSize},
+		{name: "over limit", maxMessageSize: raft.MaxReplicatedMessageSize + 1, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			config := DefaultConfig()
+			config.WritePolicy = WritePolicyReject
+			m := NewManager(memlog.New(), newMockGroupStore(), nil, config,
+				slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+			m.SetRaftCoordinator(&mockQueueCoordinator{
+				enabled:           true,
+				replicatedByQueue: map[string]bool{bigQueue: true},
+				leaderByQueue:     map[string]bool{bigQueue: true},
+				leaderIDByQueue:   map[string]string{bigQueue: node1},
+			})
+
+			cfg := types.DefaultQueueConfig(bigQueue, "big/#")
+			cfg.Replication.Enabled = true
+			cfg.MaxMessageSize = tc.maxMessageSize
+			err := m.CreateQueue(ctx, cfg)
+			if tc.wantErr {
+				require.ErrorIs(t, err, types.ErrInvalidConfig)
+				return
+			}
+			require.NoError(t, err)
+
+			// A local queue is not bounded by snapshots.
+			local := types.DefaultQueueConfig("local-big", "local-big/#")
+			local.MaxMessageSize = raft.MaxReplicatedMessageSize * 4
+			require.NoError(t, m.CreateQueue(ctx, local))
 		})
 	}
 }

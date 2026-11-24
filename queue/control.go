@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/absmach/fluxmq/queue/raft"
 	"github.com/absmach/fluxmq/queue/storage"
 	"github.com/absmach/fluxmq/queue/types"
 )
@@ -162,6 +163,10 @@ func (c *queueControl) validateQueueReplication(ctx context.Context, queueCfg ty
 	}
 	if !queueCfg.Replication.Enabled {
 		return nil
+	}
+	if queueCfg.MaxMessageSize > raft.MaxReplicatedMessageSize {
+		return fmt.Errorf("%w: queue %q max_message_size %d exceeds the %d bytes a replicated queue can snapshot",
+			types.ErrInvalidConfig, queueCfg.Name, queueCfg.MaxMessageSize, raft.MaxReplicatedMessageSize)
 	}
 	if c.writePolicy != WritePolicyReject && c.writePolicy != WritePolicyForward {
 		return fmt.Errorf("%w: queue %q requires reject or forward, got %q", ErrReplicationWritePolicy, queueCfg.Name, c.writePolicy)
