@@ -34,17 +34,18 @@ If you are only dealing with durable queues, `logstorage/` is the primary place 
 ```
 <base>/queue/
   config/
-    queues.json
+    queues/
+      <queue-name>.json
   groups/
     <queue-name>/
       <group-id>.json
-  queues/
+  queue-logs/
     <queue-name>/
       segments/
         00000000000000000000.seg
         00000000000000000000.idx
         00000000000000000000.tix
-      consumers/
+      consumer-groups/
         <group-id>/
           state.json
           pel_0.json
@@ -52,6 +53,14 @@ If you are only dealing with durable queues, `logstorage/` is the primary place 
           ops.log
 ```
 
+Queue names and group IDs are percent-encoded into a single path element:
+`/`, `\` and `%` become `%2F`, `%5C` and `%25`, and the names `.` and `..`
+become `%2E` and `%2E%2E`. A queue such as `$dlq/orders` is therefore stored in
+`queue-logs/$dlq%2Forders/`, never nested inside another queue's directory,
+and no name can resolve outside the store. Stores written by earlier releases
+(`queues/`, `consumers/` and a single `config/queues.json`) are migrated into
+this layout when the broker opens them; older releases do not read the new
+layout.
 <Mermaid
 chart="
 flowchart TB
@@ -59,11 +68,11 @@ flowchart TB
   Segments --> Seg[**base**.seg]
   Seg --> Idx[**base**.idx]
   Seg --> Tix[**base**.tix]
-  Queue --> Consumers[consumers/_group_/]
+  Queue --> Consumers[consumer-groups/_group_/]
   Consumers --> State[state.json]
   Consumers --> PEL[pel_**n**.json]
   Consumers --> Ops[ops.log]
-  Meta[config/queues.json] --> Queue
+  Meta[config/queues/**queue**.json] --> Queue
   GroupMeta[groups/**queue**/**group**.json] --> Queue"
 />
 
@@ -133,7 +142,8 @@ Compaction rewrites snapshots and truncates `ops.log` after a configurable numbe
 
 ## Queue and Group Metadata
 
-- `config/queues.json` stores all queue configs in one versioned file.
+- `config/queues/<queue>.json` stores one queue's config. Creating, updating or
+  deleting a queue writes only its own file, synced before the call returns.
 - `groups/<queue>/<group>.json` stores the API-level group state (cursor, consumers, PEL map). The log storage adapter syncs cursor/PEL from the low-level consumer state when you read this file through the APIs.
 
 ## Retention and Truncation
