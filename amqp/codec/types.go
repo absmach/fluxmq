@@ -6,6 +6,7 @@ package codec
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math"
 
@@ -120,14 +121,40 @@ func WriteShortStr(w io.Writer, s string) error {
 	return err
 }
 
+// readSized reads a field whose length the peer declared. The length is a
+// 32-bit value inside a frame that is itself bounded, so it is never trusted
+// for an allocation: a reader that knows how much it holds rejects a longer
+// claim before anything is allocated, and any other reader's buffer grows only
+// as bytes actually arrive.
+func readSized(r io.Reader, length uint32) ([]byte, error) {
+	if sized, ok := r.(interface{ Len() int }); ok {
+		if uint64(length) > uint64(sized.Len()) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		buf := make([]byte, length)
+		_, err := io.ReadFull(r, buf)
+		return buf, err
+	}
+
+	var buf bytes.Buffer
+	n, err := io.CopyN(&buf, r, int64(length))
+	if err != nil {
+		if errors.Is(err, io.EOF) && n < int64(length) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // ReadLongStr reads a long string.
 func ReadLongStr(r io.Reader) (string, error) {
 	length, err := ReadLong(r)
 	if err != nil {
 		return "", err
 	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	buf, err := readSized(r, length)
+	if err != nil {
 		return "", err
 	}
 	return string(buf), nil
@@ -150,8 +177,8 @@ func ReadTable(r io.Reader) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	buf, err := readSized(r, length)
+	if err != nil {
 		return nil, err
 	}
 	b := new(bytes.Buffer)
@@ -253,11 +280,7 @@ func ReadFieldValue(r io.Reader) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		buf := make([]byte, length)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return nil, err
-		}
-		return buf, nil
+		return readSized(r, length)
 	default:
 		return nil, NewErr(FrameError, "unsupported field type", nil)
 	}
@@ -369,8 +392,8 @@ func ReadArray(r io.Reader) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	buf, err := readSized(r, length)
+	if err != nil {
 		return nil, err
 	}
 	b := new(bytes.Buffer)
