@@ -28,7 +28,7 @@ func TestNewStore_RecoverOnStartup_CorruptedSegment(t *testing.T) {
 	require.NoError(t, store.Close())
 
 	// Phase 2: corrupt the segment by appending garbage.
-	segDir := filepath.Join(dir, "queues", "q1", "segments")
+	segDir := filepath.Join(dir, queueLogsDir, "q1", segmentsDirName)
 	segFiles, _ := filepath.Glob(filepath.Join(segDir, "*"+SegmentExtension))
 	require.NotEmpty(t, segFiles)
 

@@ -118,9 +118,13 @@ func ConsumerShardKey(consumerID string, numShards int) int {
 	return int(h.Sum32() % uint32(numShards))
 }
 
-// NewConsumerState creates or opens consumer state for a group.
+// NewConsumerState creates or opens consumer state for a group in its own
+// directory below baseDir.
 func NewConsumerState(baseDir, groupID string, config ConsumerStateConfig) (*ConsumerState, error) {
-	dir := filepath.Join(baseDir, groupID)
+	if err := validateStorageName(groupID); err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(baseDir, encodePathComponent(groupID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create consumer state directory: %w", err)
 	}
@@ -150,7 +154,7 @@ func NewConsumerState(baseDir, groupID string, config ConsumerStateConfig) (*Con
 	}
 
 	// Open operation log for incremental persistence
-	cs.opLogPath = filepath.Join(dir, "ops.log")
+	cs.opLogPath = filepath.Join(dir, consumerOpLogName)
 	var err error
 	cs.opLog, err = os.OpenFile(cs.opLogPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
