@@ -11,6 +11,7 @@
     unit = ' / s',
     byteScale = false,
     logRates = false,
+    showReadout = true,
   }: {
     points: Point[];
     series: {
@@ -25,6 +26,7 @@
     unit?: string;
     byteScale?: boolean;
     logRates?: boolean;
+    showReadout?: boolean;
   } = $props();
   const uid = $props.id();
   const width = 960,
@@ -148,28 +150,33 @@
 </script>
 
 <div class="diagnostic-chart" class:has-details={details.length > 0}>
-  <div class="chart-toolbar">
-    <div class="series-readout" aria-label="Chart legend">
-      {#each series as s}<button
-          class:series-hidden={hidden.includes(s.key)}
-          aria-label={`Toggle ${s.label}`}
-          aria-pressed={!hidden.includes(s.key)}
-          onclick={() => toggle(s.key)}
-          title={`${zeroInRange(s.key) ? 'All reported samples are zero. ' : ''}Click to ${hidden.includes(s.key) ? 'show' : 'hide'} ${s.label}`}
-        >
-          <span class="series-label"><i style:background={s.color}></i>{s.label}</span><strong
-            style:color={hidden.includes(s.key) ? 'var(--faint)' : s.color}
+  <div class="chart-toolbar" class:controls-only={!showReadout}>
+    {#if showReadout}
+      <div class="series-readout" aria-label="Chart legend">
+        {#each series as s}<button
+            class:series-hidden={hidden.includes(s.key)}
+            aria-label={`Toggle ${s.label}`}
+            aria-pressed={!hidden.includes(s.key)}
+            onclick={() => toggle(s.key)}
+            title={`${zeroInRange(s.key) ? 'All reported samples are zero. ' : ''}Click to ${hidden.includes(s.key) ? 'show' : 'hide'} ${s.label}`}
           >
-            <span class:invisible={hidden.includes(s.key)}>
-              {format(active?.metrics?.[s.key])}<small>{units(s)}</small>
-            </span>
-            {#if hidden.includes(s.key)}<small class="hidden-label">Hidden</small>{/if}
-          </strong>
-          {#if zeroInRange(s.key)}<small class="zero-note" class:invisible={hidden.includes(s.key)}>
-              Zero reported
-            </small>{/if}
-        </button>{/each}
-    </div>
+            <span class="series-label"><i style:background={s.color}></i>{s.label}</span><strong
+              style:color={hidden.includes(s.key) ? 'var(--faint)' : s.color}
+            >
+              <span class:invisible={hidden.includes(s.key)}>
+                {format(active?.metrics?.[s.key])}<small>{units(s)}</small>
+              </span>
+              {#if hidden.includes(s.key)}<small class="hidden-label">Hidden</small>{/if}
+            </strong>
+            {#if zeroInRange(s.key)}<small
+                class="zero-note"
+                class:invisible={hidden.includes(s.key)}
+              >
+                Zero reported
+              </small>{/if}
+          </button>{/each}
+      </div>
+    {/if}
     <details class="series-menu" bind:this={menu}>
       <summary aria-label={`Choose series for ${label}`}>
         <Icon name="settings" size={14} />Series
@@ -510,6 +517,9 @@
     justify-content: space-between;
     gap: 16px;
     margin: 0 0 16px;
+  }
+  .chart-toolbar.controls-only {
+    justify-content: flex-end;
   }
   .series-readout {
     display: flex;

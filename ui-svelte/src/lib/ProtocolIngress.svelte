@@ -82,6 +82,7 @@
     <DiagnosticChart
       points={visible}
       {series}
+      showReadout={false}
       label="Incoming publishes by protocol"
       unit="msg / s"
     />
