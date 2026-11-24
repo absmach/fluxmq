@@ -388,6 +388,7 @@ func NewEtcdCluster(cfg *EtcdConfig, localStore storage.Store, logger *slog.Logg
 			func(ctx context.Context, nodeID string, items []QueueDelivery) error {
 				return c.transport.SendRouteQueueBatch(ctx, nodeID, items)
 			},
+			withItemRelease(func(delivery QueueDelivery) { message.Release(delivery.Message) }),
 		)
 	}
 
@@ -2247,7 +2248,13 @@ func (c *EtcdCluster) RouteQueueBatch(ctx context.Context, nodeID string, delive
 		return ErrTransportNotConfigured
 	}
 	if c.queueBatcher != nil {
-		return c.queueBatcher.Enqueue(ctx, nodeID, deliveries)
+		// The batcher can outlive this call, and the caller releases its
+		// envelopes when it returns. Hand the batcher its own references.
+		owned := make([]QueueDelivery, len(deliveries))
+		for i, delivery := range deliveries {
+			owned[i] = QueueDelivery{ClientID: delivery.ClientID, Message: delivery.Message.Clone()}
+		}
+		return c.queueBatcher.Enqueue(ctx, nodeID, owned)
 	}
 	return c.transport.SendRouteQueueBatch(ctx, nodeID, deliveries)
 }

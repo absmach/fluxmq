@@ -996,6 +996,54 @@ func TestDeliverStreamKeepsRemoteConsumerWhenCoalescedBatchErrorFallsBackSuccess
 	}
 }
 
+func TestDeliverStreamDoesNotResendBatchWithUnknownOutcome(t *testing.T) {
+	remote := &batchRemoteRouter{
+		// The batch was admitted but its result never came back; it may still
+		// arrive, so a per-message resend would deliver it twice.
+		batchErr: errors.Join(cluster.ErrBatchOutcomeUnknown, context.DeadlineExceeded),
+	}
+
+	engine, logStore, groupStore := newTestEngine(t, nil, remote)
+	ctx := context.Background()
+
+	queueCfg := types.DefaultQueueConfig("events", "$queue/events/#")
+	queueCfg.Type = types.QueueTypeStream
+	logStore.CreateQueue(ctx, queueCfg) //nolint:errcheck // test setup
+
+	group := types.NewConsumerGroupState("events", "readers", "")
+	group.Mode = types.GroupModeStream
+	group.SetConsumer(testRemoteConsumerID, &types.ConsumerInfo{
+		ID:          testRemoteConsumerID,
+		ClientID:    testRemoteClientID,
+		ProxyNodeID: testNode2,
+	})
+	groupStore.CreateConsumerGroup(ctx, group) //nolint:errcheck // test setup
+
+	logStore.Append(ctx, "events", newQueueEnvelope("1", testEventsTopic, []byte("payload"))) //nolint:errcheck // test setup
+
+	if engine.DeliverQueue(ctx, "events") {
+		t.Fatal("an unknown outcome must not count as a delivery")
+	}
+
+	remote.mu.Lock()
+	routed := len(remote.routed)
+	remote.mu.Unlock()
+	if routed != 1 {
+		t.Fatalf("expected only the batch send, got %d sends", routed)
+	}
+
+	updated, err := groupStore.GetConsumerGroup(ctx, "events", "readers")
+	if err != nil {
+		t.Fatalf("get group failed: %v", err)
+	}
+	if _, registered := updated.GetConsumer(testRemoteConsumerID); !registered {
+		t.Fatal("expected remote consumer to remain registered")
+	}
+	if cursor := updated.CursorView().Cursor; cursor != 0 {
+		t.Fatalf("expected cursor to stay at 0, got %d", cursor)
+	}
+}
+
 func TestDeliverQueueAllExpiredReturnsNoDelivery(t *testing.T) {
 	var mu sync.Mutex
 	deliveryCount := 0
