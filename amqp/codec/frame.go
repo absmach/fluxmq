@@ -32,8 +32,10 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 		return nil, err
 	}
 
-	payload := make([]byte, size)
-	if _, err := io.ReadFull(r, payload); err != nil {
+	// No frame maximum is known here, so the payload grows as it arrives
+	// rather than being reserved from the advertised size.
+	payload, err := readSized(r, size)
+	if err != nil {
 		return nil, err
 	}
 
