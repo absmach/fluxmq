@@ -396,6 +396,9 @@ func newWSConnection(ws *websocket.Conn, remoteAddr string, protocolVersion, max
 	}
 }
 
+// Transport identifies MQTT over WebSocket to broker ingress telemetry.
+func (c *wsConnection) Transport() string { return "websocket" }
+
 func (c *wsConnection) ReadPacket() (packets.ControlPacket, error) {
 	c.Touch()
 

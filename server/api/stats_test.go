@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	"github.com/absmach/fluxmq/message"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/queue"
@@ -295,5 +296,57 @@ func TestStatsOmitsQueuesWithoutManager(t *testing.T) {
 	}
 	if _, present := body["queues"]; present {
 		t.Fatal("queues must be omitted when no queue manager is configured")
+	}
+}
+
+func TestStatsIngressIncludesBridgesAndBothAMQPVersions(t *testing.T) {
+	b := mqttbroker.NewBroker(memory.New(), nil)
+	defer b.Close()
+	for _, protocol := range []message.Protocol{message.ProtocolHTTP, message.ProtocolCoAP} {
+		msg := message.New("metrics/test", []byte("data"))
+		msg.BrokerMeta.Source.Protocol = protocol
+		if err := b.Publish(context.Background(), msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ab := amqpbroker.New(nil, slog.Default())
+	ast := ab.GetStats()
+	ast.IncrementMessagesReceived()
+	ast.AddBytesReceived(7)
+	defer ab.Close()
+	a1st := amqp1broker.NewStats()
+	a1st.IncrementMessagesReceived()
+	a1st.AddBytesReceived(9)
+	a1b := amqp1broker.New(nil, a1st, slog.Default())
+	defer a1b.Close()
+	srv := New(Config{}, b, ab, nil, nil, nil, nil, slog.Default())
+	srv.SetAMQP1Broker(a1b)
+	for _, path := range []string{"/api/v1/stats", "/api/v1/overview"} {
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatal(rec.Code, rec.Body.String())
+		}
+		var data map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+			t.Fatal(err)
+		}
+		if path == "/api/v1/overview" {
+			if err := json.Unmarshal(data["stats"], &data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var counters map[string]mqttbroker.IngressCounters
+		if err := json.Unmarshal(data["ingress"], &counters); err != nil {
+			t.Fatal(err)
+		}
+		for key, size := range map[string]uint64{"http": 4, "coap": 4, "amqp": 7, "amqp1": 9} {
+			if counters[key].Publishes != 1 || counters[key].PayloadBytes != size {
+				t.Fatalf("%s %s: %+v", path, key, counters[key])
+			}
+		}
+		if counters["mqtt"].Publishes != 0 || counters["websocket"].Publishes != 0 {
+			t.Fatal("bridges counted as MQTT or WebSocket")
+		}
 	}
 }

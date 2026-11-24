@@ -10,6 +10,8 @@ import (
 
 // Stats tracks detailed broker statistics.
 type Stats struct {
+	ingress [4]ingressCounter
+
 	startTime time.Time
 
 	// Connection stats

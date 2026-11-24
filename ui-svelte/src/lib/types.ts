@@ -47,6 +47,7 @@ export interface ProtocolMetrics {
   };
 }
 export interface BrokerNode {
+  ingress_metrics?: Record<string, { publishes: number; payload_bytes: number }>;
   queue_metrics?: QueueMetrics;
   protocol_metrics?: Record<string, ProtocolMetrics>;
   unmonitored?: boolean;

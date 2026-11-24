@@ -44,6 +44,9 @@ local or behind your existing authenticated management gateway.
 
 - Overview: explicit cluster/node scope, per-node load comparison, message/bandwidth/connection history,
   1/5/15-minute ranges, always-visible cumulative counters with directional icons and exact-value tooltips, retained messages, protocol distribution.
+- Publish traffic by protocol on Overview: separate measured incoming
+  publish rates, payload totals and history for MQTT TCP, MQTT WebSocket, HTTP,
+  CoAP and both AMQP versions. This is independent of session inventory.
 - Sessions: per-node distribution/filtering, search by ID/name/node, protocol/state filters, sorting, configurable
   pagination, and a client detail page with connection details, MQTT settings, and
   subscriptions or AMQP consumers.

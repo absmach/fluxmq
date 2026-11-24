@@ -21,6 +21,14 @@ type cancelOnCloseConnection struct {
 	cancel context.CancelFunc
 }
 
+// Transport preserves the listener identity through the lifetime wrapper.
+func (c *cancelOnCloseConnection) Transport() string {
+	if transport, ok := c.Connection.(interface{ Transport() string }); ok {
+		return transport.Transport()
+	}
+	return "tcp"
+}
+
 func (c *cancelOnCloseConnection) Close() error {
 	c.cancel()
 	return c.Connection.Close()

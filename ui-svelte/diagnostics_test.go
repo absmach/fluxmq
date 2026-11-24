@@ -55,3 +55,34 @@ func TestDiagnosticHistoryScopeAndMissingFields(t *testing.T) {
 		t.Fatal("absent protocol fabricated")
 	}
 }
+
+func TestIngressHistoryPreservesSourceAndHandlesResets(t *testing.T) {
+	var raw overview
+	if err := json.Unmarshal([]byte(`{"stats":{"ingress":{"http":{"publishes":10,"payload_bytes":200},"coap":{"publishes":20,"payload_bytes":400},"websocket":{"publishes":30,"payload_bytes":600}}}}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.RawIngressMetrics) == 0 {
+		t.Fatal("missing ingress adapter data")
+	}
+	makeSnapshot := func(at int64, counters json.RawMessage) snapshot {
+		return snapshot{Timestamp: at, Nodes: []node{{ID: "n", Healthy: true, IngressMetrics: counters}}, Points: map[string]point{"n": {Time: at}, "all": {Time: at}}}
+	}
+	first := makeSnapshot(1000, raw.RawIngressMetrics)
+	next := makeSnapshot(3000, json.RawMessage(`{"http":{"publishes":16,"payload_bytes":320},"coap":{"publishes":30,"payload_bytes":600},"websocket":{"publishes":44,"payload_bytes":880}}`))
+	addDiagnosticPoints(&next, first)
+	for _, scope := range []string{"n", "all"} {
+		for key, want := range map[string]float64{"ingress.http.publishes": 3, "ingress.coap.publishes": 5, "ingress.websocket.publishes": 7} {
+			if next.Points[scope].Metrics[key] != want {
+				t.Fatalf("%s %s: %v", scope, key, next.Points[scope].Metrics)
+			}
+		}
+	}
+	reset := makeSnapshot(5000, json.RawMessage(`{"http":{"publishes":1,"payload_bytes":20}}`))
+	addDiagnosticPoints(&reset, next)
+	if _, ok := reset.Points["all"].Metrics["ingress.http.publishes"]; ok {
+		t.Fatal("counter reset must produce a gap")
+	}
+	if _, ok := reset.Points["all"].Metrics["ingress.coap.publishes"]; ok {
+		t.Fatal("absent source must not become zero")
+	}
+}

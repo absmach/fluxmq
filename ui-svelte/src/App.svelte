@@ -7,6 +7,7 @@
   import QueueDiagnostics from './lib/QueueDiagnostics.svelte';
   import QueueHealthSummary from './lib/QueueHealthSummary.svelte';
   import ProtocolDiagnostics from './lib/ProtocolDiagnostics.svelte';
+  import ProtocolIngress from './lib/ProtocolIngress.svelte';
   import { clientURL, subscriptionURL, followLink } from './lib/routes';
   import Pagination from './lib/Pagination.svelte';
   import CumulativeCounters from './lib/CumulativeCounters.svelte';
@@ -1009,6 +1010,7 @@
             </section>{/if}
         </div>
         <CumulativeCounters {nodes} loaded={!!snapshot} />
+        <ProtocolIngress {nodes} points={histories[scope] ?? []} />
         <section class="panel node-panel">
           <div class="panel-heading">
             <div class="heading-inline">

@@ -32,6 +32,7 @@ func (b *Broker) Publish(ctx context.Context, msg *message.Envelope) error {
 		b.logOp("publish", slog.String("topic", msg.Topic), slog.Int("qos", int(msg.BrokerMeta.Delivery.QoS)), slog.Bool("retain", msg.BrokerMeta.Delivery.Retain))
 	}
 	b.telemetry.stats.IncrementPublishReceived()
+	b.recordIngress(msg)
 
 	payloadLen := len(msg.PayloadBytes())
 	b.telemetry.stats.AddBytesReceived(uint64(payloadLen))

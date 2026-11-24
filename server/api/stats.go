@@ -3,7 +3,11 @@
 
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
+)
 
 type connectionStats struct {
 	Current        uint64 `json:"current"`
@@ -152,20 +156,23 @@ type queuePendingStats struct {
 }
 
 type statsResponse struct {
-	UptimeSeconds float64         `json:"uptime_seconds"`
-	Connections   connectionStats `json:"connections"`
-	Messages      messageStats    `json:"messages"`
-	Bytes         byteStats       `json:"bytes"`
-	Errors        errorStats      `json:"errors"`
-	ByProtocol    byProtocolStats `json:"by_protocol"`
-	Queues        *queueStats     `json:"queues,omitempty"`
+	Ingress       map[string]mqttbroker.IngressCounters `json:"ingress,omitempty"`
+	UptimeSeconds float64                               `json:"uptime_seconds"`
+	Connections   connectionStats                       `json:"connections"`
+	Messages      messageStats                          `json:"messages"`
+	Bytes         byteStats                             `json:"bytes"`
+	Errors        errorStats                            `json:"errors"`
+	ByProtocol    byProtocolStats                       `json:"by_protocol"`
+	Queues        *queueStats                           `json:"queues,omitempty"`
 }
 
 func (s *Server) buildStatsResponse() statsResponse {
 	var resp statsResponse
+	resp.Ingress = make(map[string]mqttbroker.IngressCounters)
 
 	if s.broker != nil {
 		st := s.broker.Stats()
+		resp.Ingress = st.IngressStats()
 		resp.UptimeSeconds = st.GetUptime().Seconds()
 
 		mqttConns := connectionStats{
@@ -208,6 +215,7 @@ func (s *Server) buildStatsResponse() statsResponse {
 
 	if s.amqpBroker != nil {
 		ast := s.amqpBroker.GetStats()
+		resp.Ingress["amqp"] = mqttbroker.IngressCounters{Publishes: ast.GetMessagesReceived(), PayloadBytes: ast.GetBytesReceived()}
 
 		// Use AMQP uptime if MQTT broker is absent
 		if s.broker == nil {
@@ -264,6 +272,11 @@ func (s *Server) buildStatsResponse() statsResponse {
 				},
 			},
 		}
+	}
+
+	if s.amqp1Broker != nil {
+		st := s.amqp1Broker.GetStats()
+		resp.Ingress["amqp1"] = mqttbroker.IngressCounters{Publishes: st.GetMessagesReceived(), PayloadBytes: st.GetBytesReceived()}
 	}
 
 	if s.queueManager != nil {

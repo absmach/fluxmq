@@ -40,6 +40,7 @@ type point struct {
 type node struct {
 	QueueMetrics     json.RawMessage `json:"queue_metrics,omitempty"`
 	ProtocolMetrics  json.RawMessage `json:"protocol_metrics,omitempty"`
+	IngressMetrics   json.RawMessage `json:"ingress_metrics,omitempty"`
 	Unmonitored      bool            `json:"unmonitored,omitempty"`
 	ReportedHealthy  *bool           `json:"reported_healthy,omitempty"`
 	RetainedMessages int             `json:"retained_messages"`
@@ -241,6 +242,7 @@ type clusterPeer struct {
 }
 type overview struct {
 	RawProtocolMetrics json.RawMessage `json:"-"`
+	RawIngressMetrics  json.RawMessage `json:"-"`
 	RawQueueMetrics    json.RawMessage `json:"-"`
 	ClusterMode        *bool           `json:"cluster_mode"`
 	Cluster            struct {
@@ -293,6 +295,7 @@ func (o *overview) UnmarshalJSON(data []byte) error {
 	var diagnostic struct {
 		Stats struct {
 			Protocol json.RawMessage `json:"by_protocol"`
+			Ingress  json.RawMessage `json:"ingress"`
 			Queues   json.RawMessage `json:"queues"`
 		} `json:"stats"`
 	}
@@ -300,6 +303,7 @@ func (o *overview) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	o.RawProtocolMetrics, o.RawQueueMetrics = diagnostic.Stats.Protocol, diagnostic.Stats.Queues
+	o.RawIngressMetrics = diagnostic.Stats.Ingress
 	return nil
 }
 
@@ -353,6 +357,7 @@ func (c *collector) collect(ctx context.Context, inventory bool) snapshot {
 			n.ClusterMode = raw.ClusterMode
 			n.QueueMetrics = raw.RawQueueMetrics
 			n.ProtocolMetrics = raw.RawProtocolMetrics
+			n.IngressMetrics = raw.RawIngressMetrics
 			n.ProtocolErrors = raw.Stats.Errors.Protocol
 			n.AuthErrors = raw.Stats.ByProtocol.MQTT.Errors.Auth
 			n.AuthzErrors = raw.Stats.ByProtocol.MQTT.Errors.Authz

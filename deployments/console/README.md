@@ -63,10 +63,14 @@ remote console access belongs behind an authenticated management gateway.
 Live charts accumulate observations after startup (two-second collection
 interval, up to fifteen minutes in memory). Empty charts and inventories are
 normal until real clients publish or subscribe. Reloading the browser preserves
-collector history; restarting the console resets it. The current Admin API reports
-MQTT and AMQP 0.9.1 session/traffic statistics. It does not expose AMQP 1.0 session
-inventory or traffic statistics; recorded queue message origins can still identify
-AMQP 1.0, HTTP, and CoAP when those protocols are enabled.
+collector history; restarting the console resets it. The Overview page shows
+**Publish traffic by protocol**, using broker ingress counters for MQTT TCP, MQTT WebSocket, HTTP, CoAP, AMQP 0.9.1 and AMQP 1.0.
+Rates count incoming application publishes (including attempts that may fail),
+and byte totals count payloads. MQTT control packets and forwarded deliveries
+are excluded. MQTT and WebSocket each combine MQTT 3.1.1 and MQTT 5 traffic.
+Session inventory still covers MQTT and AMQP 0.9.1; HTTP and CoAP do not create
+MQTT sessions, and AMQP 1.0 session inventory is not exposed. Older brokers
+without ingress counters do not show the new panel.
 
 ## Real integration regression
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	"github.com/absmach/fluxmq/cluster"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/pkg/proto/queue/v1/queuev1connect"
@@ -36,6 +37,7 @@ type Server struct {
 	config        Config
 	broker        *mqttbroker.Broker
 	amqpBroker    *amqpbroker.Broker
+	amqp1Broker   *amqp1broker.Broker
 	cluster       cluster.Cluster
 	queueManager  *queue.Manager
 	reloadManager *reload.Manager
@@ -91,6 +93,9 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 	s.httpServer = httpServer
 	return s
 }
+
+// SetAMQP1Broker enables AMQP 1.0 ingress telemetry. Call before Listen.
+func (s *Server) SetAMQP1Broker(b *amqp1broker.Broker) { s.amqp1Broker = b }
 
 // SetReloadManager sets the reload manager for the /api/v1/reload endpoint.
 func (s *Server) SetReloadManager(rm *reload.Manager) {

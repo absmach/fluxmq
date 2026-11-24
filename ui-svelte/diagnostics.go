@@ -18,7 +18,7 @@ func diagnosticValues(n node) map[string]float64 {
 			out[prefix] = v
 		}
 	}
-	for prefix, raw := range map[string]json.RawMessage{"queue": n.QueueMetrics, "protocol": n.ProtocolMetrics} {
+	for prefix, raw := range map[string]json.RawMessage{"queue": n.QueueMetrics, "protocol": n.ProtocolMetrics, "ingress": n.IngressMetrics} {
 		var data any
 		if json.Unmarshal(raw, &data) == nil {
 			walk(prefix, data)
