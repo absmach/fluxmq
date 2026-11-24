@@ -7,10 +7,14 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNodeBatcherFlushBySize(t *testing.T) {
@@ -229,4 +233,145 @@ func TestNodeBatcherDetachedResultWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error with detached result-wait, got %v", err)
 	}
+}
+
+// releaseCounter records how often the batcher ended its ownership of each item.
+type releaseCounter struct {
+	mu     sync.Mutex
+	counts map[int]int
+}
+
+func (r *releaseCounter) release(item int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.counts == nil {
+		r.counts = make(map[int]int)
+	}
+	r.counts[item]++
+}
+
+func (r *releaseCounter) snapshot() map[int]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.counts)
+}
+
+func onceEach(items ...int) map[int]int {
+	want := make(map[int]int, len(items))
+	for _, item := range items {
+		want[item] = 1
+	}
+	return want
+}
+
+func newOwningBatcher(t *testing.T, maxSize int, stopCh <-chan struct{}, released *releaseCounter,
+	send func(context.Context, string, []int) error,
+) *nodeBatcher[int] {
+	t.Helper()
+	return newNodeBatcher(maxSize, time.Millisecond, 1, stopCh,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), "test", send,
+		withItemRelease(released.release))
+}
+
+func TestNodeBatcherOwnership(t *testing.T) {
+	t.Run("flush/releases each item once", func(t *testing.T) {
+		stopCh := make(chan struct{})
+		t.Cleanup(func() { close(stopCh) })
+		var released releaseCounter
+		b := newOwningBatcher(t, 10, stopCh, &released, func(context.Context, string, []int) error { return nil })
+
+		require.NoError(t, b.Enqueue(context.Background(), "node-a", []int{1, 2, 3}))
+		assert.Equal(t, onceEach(1, 2, 3), released.snapshot())
+	})
+
+	t.Run("timeout/items stay owned until the flush ends", func(t *testing.T) {
+		stopCh := make(chan struct{})
+		t.Cleanup(func() { close(stopCh) })
+		unblock := make(chan struct{})
+		var released releaseCounter
+		b := newOwningBatcher(t, 10, stopCh, &released, func(context.Context, string, []int) error {
+			<-unblock
+			return nil
+		})
+		b.resultTimeout = 20 * time.Millisecond
+
+		err := b.Enqueue(context.Background(), "node-a", []int{1, 2})
+		require.ErrorIs(t, err, ErrBatchOutcomeUnknown)
+		assert.Empty(t, released.snapshot(), "a flush still reading the items must keep them")
+
+		close(unblock)
+		require.Eventually(t, func() bool { return maps.Equal(onceEach(1, 2), released.snapshot()) },
+			time.Second, time.Millisecond)
+	})
+
+	t.Run("stop/queued requests are released", func(t *testing.T) {
+		stopCh := make(chan struct{})
+		unblock := make(chan struct{})
+		started := make(chan struct{}, 1)
+		var released releaseCounter
+		b := newOwningBatcher(t, 1, stopCh, &released, func(context.Context, string, []int) error {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-unblock
+			return nil
+		})
+
+		for item := range 5 {
+			require.NoError(t, b.EnqueueAsync(context.Background(), "node-a", []int{item}))
+		}
+		<-started
+		close(stopCh)
+		close(unblock)
+		require.Eventually(t, func() bool { return maps.Equal(onceEach(0, 1, 2, 3, 4), released.snapshot()) },
+			time.Second, time.Millisecond)
+	})
+
+	t.Run("stopped/unadmitted items are released", func(t *testing.T) {
+		stopCh := make(chan struct{})
+		close(stopCh)
+		var released releaseCounter
+		b := newOwningBatcher(t, 10, stopCh, &released, func(context.Context, string, []int) error { return nil })
+
+		require.Error(t, b.Enqueue(context.Background(), "node-a", []int{7}))
+		require.Eventually(t, func() bool { return maps.Equal(onceEach(7), released.snapshot()) },
+			time.Second, time.Millisecond)
+	})
+}
+
+func TestNodeBatcherRetiresIdleWorkers(t *testing.T) {
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	var sent atomic.Int64
+	var released releaseCounter
+	b := newOwningBatcher(t, 4, stopCh, &released, func(_ context.Context, _ string, items []int) error {
+		sent.Add(int64(len(items)))
+		return nil
+	})
+	b.idleTimeout = time.Millisecond
+	b.resultTimeout = 5 * time.Second
+
+	workerCount := func() int {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.workers)
+	}
+
+	require.NoError(t, b.Enqueue(context.Background(), "departed", []int{0}))
+	require.Eventually(t, func() bool { return workerCount() == 0 }, time.Second, time.Millisecond)
+
+	// Workers retire and respawn underneath concurrent senders; a request
+	// stranded in a retired worker's channel would surface as a timeout.
+	const senders, perSender = 8, 50
+	var wg sync.WaitGroup
+	for s := range senders {
+		wg.Go(func() {
+			for i := range perSender {
+				assert.NoError(t, b.Enqueue(context.Background(), "node-a", []int{s*perSender + i + 1}))
+			}
+		})
+	}
+	wg.Wait()
+	assert.Equal(t, int64(senders*perSender+1), sent.Load())
 }

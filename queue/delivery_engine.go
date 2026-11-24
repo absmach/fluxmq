@@ -558,6 +558,11 @@ func (e *DeliveryEngine) routeRemoteBatch(ctx context.Context, nodeID string, de
 		if err == nil {
 			return nil
 		}
+		// The batch may still arrive. Resending each message would deliver it
+		// twice; it stays pending and is redelivered if it really was lost.
+		if errors.Is(err, cluster.ErrBatchOutcomeUnknown) {
+			return err
+		}
 		// Batch router errors may be shared across coalesced requests. Fall back
 		// so any stale-client error is tied to this exact delivery.
 	}
