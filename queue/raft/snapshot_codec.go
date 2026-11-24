@@ -33,6 +33,13 @@ const snapshotReadBuffer = 64 << 10
 // the broker would have accepted in the first place.
 const snapshotMaxFrame = 128 << 20
 
+// MaxReplicatedMessageSize is the largest max_message_size a replicated queue
+// may configure. Each record travels in one snapshot frame together with its
+// envelope metadata, so a payload is held to half the frame and the rest is
+// left for metadata. A queue accepting more could store a record that every
+// later snapshot fails on, which stops log compaction for good.
+const MaxReplicatedMessageSize = snapshotMaxFrame / 2
+
 var errMalformedSnapshot = errors.New("malformed queue raft snapshot")
 
 // snapshotWriter writes a snapshot as length-delimited frames.
