@@ -5,6 +5,7 @@ package logstorage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -26,6 +27,23 @@ func newDedupeAdapter(t *testing.T, dir string) *Adapter {
 	t.Helper()
 
 	adapter, err := NewAdapter(dir, DefaultAdapterConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := adapter.Close(); err != nil {
+			t.Errorf("close adapter: %v", err)
+		}
+	})
+	return adapter
+}
+
+// newOneRecordSegmentAdapter rolls a segment after every record, so truncation
+// removes exactly the records below the requested offset.
+func newOneRecordSegmentAdapter(t *testing.T, dir string) *Adapter {
+	t.Helper()
+
+	cfg := DefaultAdapterConfig()
+	cfg.MaxSegmentSize = 1
+	adapter, err := NewAdapter(dir, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if err := adapter.Close(); err != nil {
@@ -280,7 +298,7 @@ func TestAppendOnceRequiresKey(t *testing.T) {
 // that does not exist — losing the message this mechanism exists to protect.
 func TestTruncateDropsKeysForRemovedRecords(t *testing.T) {
 	ctx := context.Background()
-	adapter := newDedupeAdapter(t, t.TempDir())
+	adapter := newOneRecordSegmentAdapter(t, t.TempDir())
 	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
 
 	first, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("one"))
@@ -379,12 +397,21 @@ func TestTruncateDoesNotRaceDeduplicatedAppend(t *testing.T) {
 				continue
 			}
 
-			// The transfer was reported already present. The caller would now
-			// settle its source, so the record it names has to exist.
-			if _, err := adapter.Read(ctx, testDedupeQueue, retried); err != nil {
-				failures <- "deduplicated against offset " + strconv.FormatUint(retried, 10) +
-					" (first landed at " + strconv.FormatUint(offset, 10) + "): " + err.Error()
+			// The transfer was reported already present, so the record it names
+			// existed when AppendOnce checked it under the queue lock. The
+			// truncator may remove it once the lock is released; a record that
+			// is missing while still inside the retained range was never there.
+			stored, err := adapter.Read(ctx, testDedupeQueue, retried)
+			if err == nil {
+				message.Release(stored)
+				continue
 			}
+			head, headErr := adapter.Head(ctx, testDedupeQueue)
+			if errors.Is(err, ErrOffsetOutOfRange) && headErr == nil && retried < head {
+				continue
+			}
+			failures <- "deduplicated against offset " + strconv.FormatUint(retried, 10) +
+				" (first landed at " + strconv.FormatUint(offset, 10) + "): " + err.Error()
 		}
 	}()
 
@@ -406,6 +433,60 @@ func TestTruncateDoesNotRaceDeduplicatedAppend(t *testing.T) {
 	for failure := range failures {
 		t.Errorf("settled against a record that does not exist: %s", failure)
 	}
+}
+
+// Truncation removes whole segments. A record below the requested offset that
+// shares a segment with records above it is still retained and readable, so
+// its key must still deduplicate.
+func TestTruncateKeepsKeysOfRecordsItRetains(t *testing.T) {
+	ctx := context.Background()
+	adapter := newDedupeAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	first, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("transfer"))
+	require.NoError(t, err)
+	_, err = adapter.Append(ctx, testDedupeQueue, dedupeEnvelope("later"))
+	require.NoError(t, err)
+
+	require.NoError(t, adapter.Truncate(ctx, testDedupeQueue, first+1))
+	head, err := adapter.Head(ctx, testDedupeQueue)
+	require.NoError(t, err)
+	require.LessOrEqual(t, head, first, "precondition: the record's segment is retained")
+
+	retried, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.True(t, duplicated, "a retained record's retry must not be appended again")
+	assert.Equal(t, first, retried)
+}
+
+// A key can outlive its record: retention removes segments without the index
+// prune, and Truncate removes the record before it prunes. Whatever the index
+// says, a retry must not be told its transfer is present at an offset that no
+// longer holds it, or the caller settles its source against nothing.
+func TestAppendOnceIgnoresKeyWhoseRecordIsGone(t *testing.T) {
+	ctx := context.Background()
+	adapter := newOneRecordSegmentAdapter(t, t.TempDir())
+	require.NoError(t, adapter.CreateQueue(ctx, types.DefaultQueueConfig(testDedupeQueue, testDedupeQueue+"/#")))
+
+	first, _, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("transfer"))
+	require.NoError(t, err)
+	_, err = adapter.Append(ctx, testDedupeQueue, dedupeEnvelope("later"))
+	require.NoError(t, err)
+
+	// Remove the record without pruning its key.
+	require.NoError(t, adapter.store.Truncate(testDedupeQueue, first+1))
+	_, found, err := adapter.dedupe.state.lookup(testDedupeQueue, testDedupeKey)
+	require.NoError(t, err)
+	require.True(t, found, "precondition: the key outlives its record")
+
+	retried, duplicated, err := adapter.AppendOnce(ctx, testDedupeQueue, testDedupeKey, dedupeEnvelope("retry"))
+	require.NoError(t, err)
+	assert.False(t, duplicated, "a key whose record is gone must not report a duplicate")
+
+	stored, err := adapter.Read(ctx, testDedupeQueue, retried)
+	require.NoError(t, err)
+	t.Cleanup(func() { message.Release(stored) })
+	assert.Equal(t, "retry", string(stored.PayloadBytes()))
 }
 
 // A durability barrier that fails after the record is written must not let the

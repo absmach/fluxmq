@@ -469,7 +469,15 @@ func (a *Adapter) Truncate(ctx context.Context, queueName string, minOffset uint
 	if err := a.store.Truncate(queueName, minOffset); err != nil {
 		return err
 	}
-	return a.dedupe.state.pruneBelow(queueName, minOffset)
+	// Truncation removes whole segments, so records below minOffset survive in
+	// the segment that holds minOffset. Their keys must survive with them, or a
+	// retried transfer of a retained record is appended a second time; prune
+	// only below the head the log actually kept.
+	head, err := a.store.Head(queueName)
+	if err != nil {
+		return err
+	}
+	return a.dedupe.state.pruneBelow(queueName, head)
 }
 
 // Count returns the number of messages in a queue.
