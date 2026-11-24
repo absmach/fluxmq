@@ -5,6 +5,10 @@
   let { nodes, points = [] }: { nodes: BrokerNode[]; points?: Point[] } = $props();
   import { ingressProtocols as definitions } from './ingressProtocols';
   let range = $state(5);
+  let hidden = $state<string[]>([]);
+  function toggle(key: string) {
+    hidden = hidden.includes(key) ? hidden.filter((item) => item !== key) : [...hidden, key];
+  }
   let protocols = $derived(
     definitions.filter((p) => nodes.some((n) => n.ingress_metrics?.[p.key])),
   );
@@ -53,29 +57,43 @@
     </div>
     <div class="protocol-rates">
       {#each protocols as protocol}
-        {@const rate = latest?.[`ingress.${protocol.key}.publishes`]}
+        {@const key = `ingress.${protocol.key}.publishes`}
+        {@const shown = !hidden.includes(key)}
+        {@const rate = latest?.[key]}
         {@const total = totals(protocol.key)}
         {@const reporting = nodes.filter(
           (n) => !n.unmonitored && n.ingress_metrics?.[protocol.key],
         )}
         <article data-protocol={protocol.key}>
-          <h3><i style:background={protocol.color}></i>{protocol.label}</h3>
-          <strong
-            title={rate === undefined
-              ? 'Waiting for consecutive healthy samples'
-              : `${number(rate)} publishes per second`}
+          <button
+            class="protocol-filter"
+            class:series-hidden={!shown}
+            aria-label={`Toggle ${protocol.label}`}
+            aria-pressed={shown}
+            title={`${shown ? 'Hide' : 'Show'} ${protocol.label} in chart`}
+            onclick={() => toggle(key)}
           >
-            {rate === undefined ? '—' : compact(rate)}<small>msg/s</small>
-          </strong>
-          <span title={`${number(total.publishes)} received publishes`}>
-            {compact(total.publishes)} received · {bytes(total.bytes)} payload
-          </span>
-          {#if reporting.length < nodes.length}<span>
-              {reporting.length}/{nodes.length} nodes reporting
-            </span>{/if}
-          {#if reporting.some((n) => !n.healthy)}<span class="stale">
-              Includes last-known totals
-            </span>{/if}
+            <span class="protocol-name">
+              <i style:background={protocol.color}></i>{protocol.label}
+            </span>
+            <strong
+              title={rate === undefined
+                ? 'Waiting for consecutive healthy samples'
+                : `${number(rate)} publishes per second`}
+            >
+              {rate === undefined ? '—' : compact(rate)}<small>msg/s</small>
+            </strong>
+            <span title={`${number(total.publishes)} received publishes`}>
+              {compact(total.publishes)} received · {bytes(total.bytes)} payload
+            </span>
+            {#if reporting.length < nodes.length}<span>
+                {reporting.length}/{nodes.length} nodes reporting
+              </span>{/if}
+            {#if reporting.some((n) => !n.healthy)}<span class="stale">
+                Includes last-known totals
+              </span>{/if}
+            <span class="filter-state">{shown ? 'Shown in chart' : 'Hidden from chart'}</span>
+          </button>
         </article>
       {/each}
     </div>
@@ -83,6 +101,7 @@
       points={visible}
       {series}
       showReadout={false}
+      bind:hidden
       label="Incoming publishes by protocol"
       unit="msg / s"
     />
@@ -113,10 +132,44 @@
     gap: 4px;
   }
   article {
-    padding: 12px 10px;
     min-width: 0;
   }
-  h3 {
+  .protocol-filter {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 12px 10px;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  .protocol-filter:hover,
+  .protocol-filter:focus-visible {
+    border-color: var(--accent);
+  }
+  .protocol-filter:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .protocol-filter.series-hidden {
+    background: var(--panel-raised);
+  }
+  .series-hidden .protocol-name {
+    text-decoration: line-through;
+    color: var(--muted);
+  }
+  .series-hidden strong {
+    color: var(--muted);
+  }
+  .protocol-filter > .filter-state {
+    margin-top: 8px;
+    color: var(--accent);
+  }
+  .series-hidden > .filter-state {
+    color: var(--muted);
+  }
+  .protocol-name {
     display: flex;
     align-items: center;
     gap: 7px;
@@ -124,7 +177,7 @@
     font-weight: 500;
     white-space: nowrap;
   }
-  h3 i {
+  .protocol-name i {
     width: 7px;
     height: 7px;
     border-radius: 50%;
@@ -143,13 +196,13 @@
       sans-serif;
     color: var(--muted);
   }
-  article > span {
+  .protocol-filter > span:not(.protocol-name) {
     display: block;
     font-size: 11px;
     color: var(--muted);
     line-height: 1.6;
   }
-  article > .stale {
+  .protocol-filter > .stale {
     color: var(--warning);
   }
   .ingress-note {

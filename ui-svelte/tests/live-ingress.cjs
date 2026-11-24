@@ -29,6 +29,39 @@ if (!base) throw new Error('Set FLUXMQ_TEST_URL to the live console');
         .evaluateAll((cards) => cards.every((card) => card.scrollWidth <= card.clientWidth + 1)),
       'protocol card overflow',
     );
+    // Summary cards are the direct series filters; menu and cards share state.
+    assert.equal(await panel.locator('.series-readout').count(), 0);
+    const menu = panel.locator('.series-menu');
+    for (const key of keys) {
+      const card = panel.locator(`[data-protocol="${key}"] button`);
+      assert.equal(await card.getAttribute('aria-pressed'), 'true');
+      await card.click();
+      assert.equal(await card.getAttribute('aria-pressed'), 'false');
+      assert.equal(await panel.locator(`path[data-series="ingress.${key}.publishes"]`).count(), 0);
+      await card.focus();
+      await card.press('Space');
+      assert.equal(await card.getAttribute('aria-pressed'), 'true');
+      assert.ok((await panel.locator(`path[data-series="ingress.${key}.publishes"]`).count()) > 0);
+    }
+    await menu.locator('summary').click();
+    await menu.getByRole('button', { name: 'Show only HTTP', exact: true }).click();
+    for (const key of keys)
+      assert.equal(
+        await panel.locator(`[data-protocol="${key}"] button`).getAttribute('aria-pressed'),
+        String(key === 'http'),
+      );
+    await menu.locator('summary').click();
+    await menu.getByRole('button', { name: 'Hide all', exact: true }).click();
+    assert.equal(await panel.locator('.protocol-filter[aria-pressed="true"]').count(), 0);
+    await menu.getByRole('button', { name: 'Show all', exact: true }).click();
+    await menu.locator('summary').click();
+    assert.equal(await panel.locator('.protocol-filter[aria-pressed="true"]').count(), 6);
+    const inspect = panel.getByRole('slider', { name: 'Inspect Incoming publishes by protocol' });
+    await inspect.focus();
+    await inspect.press('End');
+    await panel.locator('.plot-tooltip').waitFor();
+    await inspect.press('Escape');
+    await inspect.blur();
     await panel.getByRole('button', { name: '1m', exact: true }).click();
     assert.equal(
       await panel.getByRole('button', { name: '1m', exact: true }).getAttribute('aria-pressed'),
@@ -63,7 +96,7 @@ if (!base) throw new Error('Set FLUXMQ_TEST_URL to the live console');
     );
     assert.deepEqual(errors, []);
     console.log(
-      'PASS: live HTTP, CoAP, WebSocket, MQTT and AMQP rates on Overview, absent from Health, node scope, ranges and mobile layout',
+      'PASS: live HTTP, CoAP, WebSocket, MQTT and AMQP rates on Overview, absent from Health, card and menu filters, keyboard controls, tooltip, node scope, ranges and mobile layout',
     );
     if (process.env.FLUXMQ_SCREENSHOT_DIR) {
       await page.setViewportSize({ width: 1440, height: 1100 });

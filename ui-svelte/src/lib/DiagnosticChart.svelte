@@ -12,6 +12,7 @@
     byteScale = false,
     logRates = false,
     showReadout = true,
+    hidden = $bindable<string[]>([]),
   }: {
     points: Point[];
     series: {
@@ -27,6 +28,7 @@
     byteScale?: boolean;
     logRates?: boolean;
     showReadout?: boolean;
+    hidden?: string[];
   } = $props();
   const uid = $props.id();
   const width = 960,
@@ -36,7 +38,6 @@
     hovered === null ? null : Math.min(hovered, Math.max(0, points.length - 1)),
   );
   let active = $derived(inspectedIndex === null ? points.at(-1) : points[inspectedIndex]);
-  let hidden = $state<string[]>([]);
   let menu = $state<HTMLDetailsElement>();
   let visibleSeries = $derived(series.filter((s) => !hidden.includes(s.key)));
   // Visibility controls never change domains, axes, or detail layout.
