@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -148,6 +149,10 @@ func (b *nodeBatcher[T]) EnqueueAsync(ctx context.Context, nodeID string, items 
 // admitted are released here, since no worker will ever see them.
 func (b *nodeBatcher[T]) admit(ctx context.Context, nodeID string, req batchRequest[T]) error {
 	worker := b.acquireWorker(nodeID)
+	if worker == nil {
+		b.releaseItems(req.items)
+		return errBatcherStopped
+	}
 	defer b.releaseWorker(worker)
 
 	select {
@@ -162,9 +167,18 @@ func (b *nodeBatcher[T]) admit(ctx context.Context, nodeID string, req batchRequ
 	}
 }
 
+// acquireWorker returns the node's worker, registered as held by one more
+// sender, or nil once the batcher has stopped. Refusing under the lock is what
+// lets a stopping worker know when no request can still arrive.
 func (b *nodeBatcher[T]) acquireWorker(nodeID string) *nodeWorker[T] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	select {
+	case <-b.stopCh:
+		return nil
+	default:
+	}
 
 	worker, ok := b.workers[nodeID]
 	if !ok {
@@ -202,7 +216,7 @@ func (b *nodeBatcher[T]) runWorker(nodeID string, worker *nodeWorker[T]) {
 	for {
 		select {
 		case <-b.stopCh:
-			b.drain(worker.ch)
+			b.drainUntilIdle(nodeID, worker)
 			return
 		case <-idle.C:
 			if b.retire(nodeID, worker) {
@@ -214,7 +228,7 @@ func (b *nodeBatcher[T]) runWorker(nodeID string, worker *nodeWorker[T]) {
 			pending, items, stopped := b.collect(worker.ch, first)
 			if stopped {
 				b.finish(pending, errBatcherStopped)
-				b.drain(worker.ch)
+				b.drainUntilIdle(nodeID, worker)
 				return
 			}
 
@@ -223,7 +237,7 @@ func (b *nodeBatcher[T]) runWorker(nodeID string, worker *nodeWorker[T]) {
 			case sem <- struct{}{}:
 			case <-b.stopCh:
 				b.finish(pending, errBatcherStopped)
-				b.drain(worker.ch)
+				b.drainUntilIdle(nodeID, worker)
 				return
 			}
 
@@ -258,7 +272,28 @@ func (b *nodeBatcher[T]) collect(ch <-chan batchRequest[T], first batchRequest[T
 	return pending, items, false
 }
 
-// drain fails every request still queued when the batcher stops.
+// drainUntilIdle fails every request queued after the batcher stopped,
+// including those from senders still between acquiring the worker and sending.
+// No sender can acquire it once stopCh is closed, so the wait is bounded by
+// the senders already in flight.
+func (b *nodeBatcher[T]) drainUntilIdle(nodeID string, worker *nodeWorker[T]) {
+	for {
+		b.drain(worker.ch)
+
+		b.mu.Lock()
+		idle := worker.senders.Load() == 0 && len(worker.ch) == 0
+		if idle && b.workers[nodeID] == worker {
+			delete(b.workers, nodeID)
+		}
+		b.mu.Unlock()
+		if idle {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
+// drain fails every request currently queued.
 func (b *nodeBatcher[T]) drain(ch <-chan batchRequest[T]) {
 	for {
 		select {

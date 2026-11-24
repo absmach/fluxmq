@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -338,6 +339,36 @@ func TestNodeBatcherOwnership(t *testing.T) {
 		require.Eventually(t, func() bool { return maps.Equal(onceEach(7), released.snapshot()) },
 			time.Second, time.Millisecond)
 	})
+}
+
+// Stopping while senders are between acquiring a worker and sending must not
+// strand a request in a channel no worker will read again.
+func TestNodeBatcherStopReleasesEveryItem(t *testing.T) {
+	stopCh := make(chan struct{})
+	var released releaseCounter
+	b := newOwningBatcher(t, 4, stopCh, &released, func(context.Context, string, []int) error { return nil })
+
+	const senders, perSender = 8, 50
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for s := range senders {
+		wg.Go(func() {
+			<-start
+			for i := range perSender {
+				_ = b.EnqueueAsync(context.Background(), "node-"+strconv.Itoa(i%3), []int{s*perSender + i})
+			}
+		})
+	}
+	close(start)
+	close(stopCh)
+	wg.Wait()
+
+	want := make([]int, 0, senders*perSender)
+	for i := range senders * perSender {
+		want = append(want, i)
+	}
+	require.Eventually(t, func() bool { return maps.Equal(onceEach(want...), released.snapshot()) },
+		5*time.Second, time.Millisecond, "every item is released exactly once")
 }
 
 func TestNodeBatcherRetiresIdleWorkers(t *testing.T) {
