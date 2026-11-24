@@ -1,5 +1,5 @@
 // Run against three real nodes, each with 8 MQTT 3/5 TCP clients,
-// 8 MQTT 3/5 WebSocket clients, and 8 AMQP 0.9.1 clients.
+// 8 MQTT 3/5 WebSocket clients, and at least 8 AMQP 0.9.1 clients.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const base = process.env.FLUXMQ_TEST_URL;
@@ -25,7 +25,55 @@ if (!base) throw new Error('Set FLUXMQ_TEST_URL');
     await page.goto(base + '/dashboard');
     await page.getByRole('region', { name: 'Publish traffic by protocol' }).waitFor();
     await page.goto(base + '/dashboard/sessions');
-    await page.getByLabel('Transport', { exact: true }).selectOption('websocket');
+    await page.waitForFunction(() => document.querySelectorAll('.protocol-lane').length === 5);
+    const counts = await page.locator('.protocol-count').allTextContents();
+    const total = counts.reduce((n, value) => n + parseInt(value), 0);
+    assert.ok(total >= 144);
+    const wsCard = page.getByRole('button', { name: 'Filter sessions by WebSocket', exact: true });
+    assert.match(await wsCard.innerText(), /48\s+clients/);
+    const amqp1Card = page.getByRole('button', {
+      name: 'Filter sessions by AMQP 1.0 · TCP',
+      exact: true,
+    });
+    assert.match(await amqp1Card.innerText(), /24\s+clients/);
+    await amqp1Card.click();
+    await page.waitForFunction(() =>
+      document.querySelector('.filter-row')?.textContent.includes('24 results'),
+    );
+    await page.locator('.client-link').first().click();
+    await page.getByRole('heading', { name: 'Connection', exact: true }).waitFor();
+    assert.match(await page.locator('.inspector-fields').innerText(), /AMQP 1.0/);
+    await page.goBack();
+    await amqp1Card.click();
+    await page.waitForFunction(
+      (n) => document.querySelector('.filter-row')?.textContent.includes(`${n} results`),
+      total,
+    );
+    await wsCard.click();
+    await page.waitForFunction(() =>
+      document.querySelector('.filter-row')?.textContent.includes('48 results'),
+    );
+    assert.equal(await page.getByLabel('Transport', { exact: true }).inputValue(), 'websocket');
+    await wsCard.click();
+    await page.waitForFunction(
+      (n) => document.querySelector('.filter-row')?.textContent.includes(`${n} results`),
+      total,
+    );
+    await page
+      .getByRole('button', { name: 'Filter sessions by MQTT 3.1.1 · TCP', exact: true })
+      .click();
+    await page.waitForFunction(() =>
+      document.querySelector('.filter-row')?.textContent.includes('24 results'),
+    );
+    assert.equal(await page.getByLabel('Transport', { exact: true }).inputValue(), 'tcp');
+    await page
+      .getByRole('button', { name: 'Filter sessions by MQTT 3.1.1 · TCP', exact: true })
+      .click();
+    await page.waitForFunction(
+      (n) => document.querySelector('.filter-row')?.textContent.includes(`${n} results`),
+      total,
+    );
+    await wsCard.click();
     await page.waitForFunction(() =>
       document.querySelector('.filter-row')?.textContent.includes('48 results'),
     );
@@ -43,8 +91,9 @@ if (!base) throw new Error('Set FLUXMQ_TEST_URL');
     await page.getByLabel('Transport', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('Transport', { exact: true }).inputValue(), 'websocket');
     await page.getByLabel('Transport', { exact: true }).selectOption('tcp');
-    await page.waitForFunction(() =>
-      document.querySelector('.filter-row')?.textContent.includes('72 results'),
+    await page.waitForFunction(
+      (n) => document.querySelector('.filter-row')?.textContent.includes(`${n} results`),
+      total - 48,
     );
     for (const row of await page.locator('table tbody tr').all())
       assert.equal((await row.locator('td').nth(3).innerText()).trim(), 'TCP');
@@ -64,9 +113,24 @@ if (!base) throw new Error('Set FLUXMQ_TEST_URL');
     await page.goto(base + '/dashboard/health');
     await page.locator('.health-activity-row').waitFor();
     assert.equal(await page.locator('.protocol-ingress').count(), 0);
+    const chart = page.getByRole('region', { name: 'Protocol diagnostics' });
+    for (const label of [
+      'MQTT · TCP',
+      'WebSocket · MQTT',
+      'HTTP',
+      'CoAP',
+      'AMQP 0.9.1',
+      'AMQP 1.0',
+    ]) {
+      await chart.getByRole('button', { name: `Toggle ${label} incoming`, exact: true }).waitFor();
+    }
+    for (const metric of ['bandwidth', 'connections', 'errors', 'messages']) {
+      await page.getByLabel('Protocol chart metric').selectOption(metric);
+      await chart.getByRole('img', { name: `Protocol ${metric} history`, exact: true }).waitFor();
+    }
     assert.deepEqual(errors, []);
     console.log(
-      'PASS: three healthy nodes, one leader, all protocol rates, TCP/WS filtering, session details, Back navigation, node scope and Health placement',
+      'PASS: three healthy nodes, one leader, all protocol rates, WebSocket and AMQP 1.0 cards, TCP/WS filtering, session details, Back navigation, node scope and Health placement',
     );
   } finally {
     await browser.close();

@@ -41,7 +41,7 @@ func (s *Server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil && s.amqpBroker == nil {
+	if s.broker == nil && s.amqpBroker == nil && s.amqp1Broker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -146,8 +146,8 @@ func (s *Server) listSubscriptions(
 		}
 	}
 
-	if s.amqpBroker != nil && stateAllowsConnected(state) {
-		mergeAMQPSubscriptionResponses(aggregated, s.amqpBroker.ListSubscriptionSnapshots(), prefix)
+	if stateAllowsConnected(state) {
+		mergeAMQPSubscriptionResponses(aggregated, s.amqpSubscriptionSnapshots(), prefix)
 	}
 
 	filters := make([]string, 0, len(aggregated))
@@ -238,8 +238,8 @@ func (s *Server) listSubscriptionClients(
 		}
 	}
 
-	if s.amqpBroker != nil && stateAllowsConnected(state) {
-		mergeAMQPSubscriptionClients(clients, s.amqpBroker.ListSubscriptionSnapshots(), filter, prefix)
+	if stateAllowsConnected(state) {
+		mergeAMQPSubscriptionClients(clients, s.amqpSubscriptionSnapshots(), filter, prefix)
 	}
 
 	clientIDs := make([]string, 0, len(clients))
@@ -355,4 +355,25 @@ func subscriptionFilterFromPath(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return filter, true
+}
+
+// Merge active consumers of both AMQP versions before pagination.
+func (s *Server) amqpSubscriptionSnapshots() []amqpbroker.SubscriptionSnapshot {
+	var result []amqpbroker.SubscriptionSnapshot
+	if s.amqpBroker != nil {
+		result = append(result, s.amqpBroker.ListSubscriptionSnapshots()...)
+	}
+	if s.amqp1Broker != nil {
+		for _, connection := range s.amqp1Broker.ConnectionSnapshots() {
+			seen := make(map[string]bool)
+			for _, sub := range connection.Subscriptions {
+				if seen[sub.Filter] {
+					continue
+				}
+				seen[sub.Filter] = true
+				result = append(result, amqpbroker.SubscriptionSnapshot{ClientID: connection.ClientID, Filter: sub.Filter, QoS: 1})
+			}
+		}
+	}
+	return result
 }

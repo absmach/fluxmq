@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/absmach/fluxmq/amqp1/message"
 	"github.com/absmach/fluxmq/amqp1/performatives"
@@ -22,11 +23,12 @@ import (
 
 // Link represents an AMQP link (sender or receiver from the broker's perspective).
 type Link struct {
-	session  *Session
-	name     string
-	handle   uint32
-	isSender bool // true = broker sends TO client (client role = receiver)
-	address  string
+	adminSubscription atomic.Pointer[SubscriptionSnapshot]
+	session           *Session
+	name              string
+	handle            uint32
+	isSender          bool // true = broker sends TO client (client role = receiver)
+	address           string
 	// normalizedAddress is the broker routing address after auth callout
 	// normalization. Empty means address is used as-is.
 	normalizedAddress string
@@ -196,10 +198,12 @@ func (l *Link) subscribe() {
 		if l.cursor != nil {
 			if err := qm.SubscribeWithCursor(ctx, l.queueName, pattern, clientID, l.consumerGroup, "", l.cursor); err != nil {
 				l.logger.Error("queue subscribe with cursor failed", "address", l.address, "error", err)
+				return
 			}
 		} else {
 			if err := qm.Subscribe(ctx, l.queueName, pattern, clientID, l.consumerGroup, ""); err != nil {
 				l.logger.Error("queue subscribe failed", "address", l.address, "error", err)
+				return
 			}
 		}
 	} else {
@@ -207,12 +211,14 @@ func (l *Link) subscribe() {
 		// Translate AMQP address (dot-separated, * wildcard) to MQTT filter (slash-separated, + wildcard).
 		mqttFilter := topics.AMQPFilterToMQTT(address)
 		clientID := PrefixedClientID(l.session.conn.containerID)
-		l.session.conn.broker.router.Subscribe( //nolint:errcheck // subscribe errors are non-fatal; link will simply not receive messages
+		if err := l.session.conn.broker.router.Subscribe(
 			clientID,
 			mqttFilter,
 			1, // default QoS
 			storage.SubscribeOptions{},
-		)
+		); err != nil {
+			return
+		}
 
 		if cl := l.session.conn.broker.cluster; cl != nil {
 			if err := cl.AddSubscription(context.Background(), clientID, mqttFilter, 1, storage.SubscribeOptions{}); err != nil {
@@ -220,10 +226,16 @@ func (l *Link) subscribe() {
 			}
 		}
 	}
+	filter := address
+	if !l.isQueue {
+		filter = topics.AMQPFilterToMQTT(address)
+	}
+	l.adminSubscription.Store(&SubscriptionSnapshot{Filter: filter, ConsumerGroup: l.consumerGroup})
 }
 
 // detach cleans up the link's subscriptions.
 func (l *Link) detach() {
+	l.adminSubscription.Store(nil)
 	if l.isQueue {
 		clientID := PrefixedClientID(l.session.conn.containerID)
 		ctx := context.Background()

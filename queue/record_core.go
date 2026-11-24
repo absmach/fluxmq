@@ -405,7 +405,6 @@ func (c *recordCore) rejectStream(ctx context.Context, queueName string, group *
 		slog.String("group", group.ID),
 		slog.Uint64("offset", offset),
 		slog.String("reason", reason))
-	c.metrics.RecordReject()
 	c.delivery.Schedule(queueName)
 	return nil
 }

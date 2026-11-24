@@ -15,6 +15,7 @@ import (
 	"time"
 
 	amqpbroker "github.com/absmach/fluxmq/amqp/broker"
+	amqp1broker "github.com/absmach/fluxmq/amqp1/broker"
 	corebroker "github.com/absmach/fluxmq/broker"
 	mqttbroker "github.com/absmach/fluxmq/mqtt/broker"
 	"github.com/absmach/fluxmq/storage"
@@ -75,7 +76,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil && s.amqpBroker == nil {
+	if s.broker == nil && s.amqpBroker == nil && s.amqp1Broker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -121,7 +122,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil && s.amqpBroker == nil {
+	if s.broker == nil && s.amqpBroker == nil && s.amqp1Broker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -153,6 +154,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 				s.amqpBroker.ConnectionSubscriptions(connID),
 				true,
 			))
+			return
+		}
+	}
+
+	if s.amqp1Broker != nil && corebroker.IsAMQP1Client(clientID) {
+		if snap, ok := s.amqp1Broker.ConnectionSnapshot(strings.TrimPrefix(clientID, corebroker.AMQP1ClientPrefix)); ok {
+			writeJSON(w, http.StatusOK, amqp1SessionResponse(snap, true))
 			return
 		}
 	}
@@ -193,6 +201,15 @@ func (s *Server) listSessions(ctx context.Context, prefix, state string, limit i
 				s.amqpBroker.ConnectionSubscriptions(connID),
 				false,
 			)
+		}
+	}
+
+	if s.amqp1Broker != nil && stateAllowsConnected(state) {
+		for _, snap := range s.amqp1Broker.ConnectionSnapshots() {
+			if prefix != "" && !strings.HasPrefix(snap.ClientID, prefix) {
+				continue
+			}
+			byClientID[snap.ClientID] = amqp1SessionResponse(snap, false)
 		}
 	}
 
@@ -266,6 +283,16 @@ func amqpSessionResponse(
 		}
 	}
 
+	return resp
+}
+
+func amqp1SessionResponse(snap amqp1broker.ConnectionSnapshot, includeSubscriptions bool) sessionResponse {
+	resp := sessionResponse{ClientID: snap.ClientID, ConnectionName: snap.ContainerID, State: sessionStateConnected, Connected: true, Protocol: "amqp1.0", Transport: "tcp", ConnectedAt: timePtr(snap.ConnectedAt), SubscriptionCount: len(snap.Subscriptions)}
+	if includeSubscriptions {
+		for _, sub := range snap.Subscriptions {
+			resp.Subscriptions = append(resp.Subscriptions, sessionSubscriptionResponse{Filter: sub.Filter, ConsumerGroup: sub.ConsumerGroup, QoS: 1})
+		}
+	}
 	return resp
 }
 

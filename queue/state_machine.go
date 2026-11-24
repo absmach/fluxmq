@@ -459,9 +459,10 @@ func (s *stateMachine) Reject(ctx context.Context, command RejectCommand) (Settl
 		if err != nil {
 			return s.partialSettlement(ctx, command.QueueName, command.GroupID, outcome, fmt.Errorf("reject offset %d: %w", offset, err))
 		}
-		if group.Mode != types.GroupModeStream {
-			s.records.metrics.RecordReject()
-		}
+		// Both classic and stream rejection settle only after the dead-letter
+		// append succeeds. Count that outcome for every successful rejection.
+		s.records.metrics.RecordReject()
+		s.records.metrics.RecordDLQ()
 		outcome.Offsets = append(outcome.Offsets, offset)
 	}
 	return s.finishSettlement(ctx, command.QueueName, command.GroupID, outcome)

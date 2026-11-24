@@ -86,3 +86,16 @@ func TestIngressHistoryPreservesSourceAndHandlesResets(t *testing.T) {
 		t.Fatal("absent source must not become zero")
 	}
 }
+
+func TestAMQP1InventoryMetricsAreGauges(t *testing.T) {
+	previous := diagnosticSnapshot(10000, true, 0, 0, 0)
+	next := diagnosticSnapshot(12000, true, 0, 0, 0)
+	previous.Nodes[0].ProtocolMetrics = json.RawMessage(`{"amqp1":{"connections":{"current":8},"sessions":8,"links":16,"subscriptions":2,"messages":{"received":100}}}`)
+	next.Nodes[0].ProtocolMetrics = json.RawMessage(`{"amqp1":{"connections":{"current":8},"sessions":8,"links":16,"subscriptions":2,"messages":{"received":120}}}`)
+	addDiagnosticPoints(&next, previous)
+	for key, want := range map[string]float64{"connections.current": 8, "sessions": 8, "links": 16, "subscriptions": 2, "messages.received": 10} {
+		if got := next.Points["all"].Metrics["protocol.amqp1."+key]; got != want {
+			t.Fatalf("%s: got %v, want %v", key, got, want)
+		}
+	}
+}

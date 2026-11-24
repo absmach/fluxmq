@@ -29,7 +29,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil && s.amqpBroker == nil {
+	if s.broker == nil && s.amqpBroker == nil && s.amqp1Broker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}
@@ -48,6 +48,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		// AMQP 0.9.1 connections are only tracked while active, so they contribute
 		// to the total session count only while connected.
 		sessions.Total += amqpConnected
+	}
+
+	if s.amqp1Broker != nil {
+		connected := int(s.amqp1Broker.GetStats().GetCurrentConnections())
+		sessions.Connected += connected
+		sessions.Total += connected
 	}
 
 	resp := overviewResponse{

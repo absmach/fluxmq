@@ -24,6 +24,7 @@ type Connection struct {
 	broker       *Broker
 	conn         *amqpconn.Connection
 	containerID  string
+	openedAt     time.Time
 	maxFrameSize uint32
 	channelMax   uint16
 	idleTimeout  time.Duration

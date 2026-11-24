@@ -48,7 +48,7 @@ local or behind your existing authenticated management gateway.
   publish rates, payload totals and history for MQTT TCP, MQTT WebSocket, HTTP,
   CoAP and both AMQP versions. This is independent of session inventory.
 - Sessions: per-node distribution/filtering, search by ID/name/node, protocol/state filters, sorting, configurable
-  pagination, TCP/WebSocket transport counts and filtering, and a client detail
+  pagination, a dedicated WebSocket card, separate MQTT TCP and AMQP 0.9.1/1.0 cards, transport filtering, and a client detail
   page with connection details, transport, MQTT settings, and
   subscriptions or AMQP consumers.
 - Subscriptions: aggregated topic filters, QoS, subscriber counts, per-node distribution/filtering,
@@ -180,7 +180,7 @@ The console follows implemented handlers, not just protobuf declarations:
 | What is stored in durable queues?                 | `server/queue/handler.go`: GetQueue, GetQueueInfo, ReadBatch; message payload/key/header browser                                                    | Reader omits originating protocol and original topic; neither is inferred              |
 | Which groups are behind or awaiting ACK?          | ListConsumerGroups/GetPending; offset tracks, pending ownership, delivery attempts, heartbeats                                                      | Group mode/protocol absent; no invented active/stalled classification                  |
 | Are messages being dropped or repeatedly failing? | `server/api/stats.go`: capture failures/drops, ACK/NACK/reject/DLQ, DLQ transfer failures, poison-without-DLQ counters and poison gauges            | Counters are cumulative observations, not an event log                                 |
-| How do protocols differ?                          | MQTT connection/PUBLISH/error counters; AMQP 0.9.1 channel/consumer/local-principal counters; sessions distinguish MQTT versions and AMQP 1.0/0.9.1 | Stats handler has no separate AMQP 1.0, HTTP or CoAP section                           |
+| How do protocols differ?                          | MQTT connection/PUBLISH/error counters; AMQP 0.9.1 and 1.0 connection and traffic counters; sessions distinguish MQTT versions and AMQP 1.0/0.9.1 | HTTP and CoAP expose publish counters, not connection or delivery inventories                           |
 | Can operators compare nodes?                      | Activity/Counters view, node dashboards, queue diagnostic comparison and protocol breakdown                                                         | Node-local counters may overlap across replicated copies; not a unique logical backlog |
 
 `queue/types/log.go` defines committed as the oldest unacknowledged offset (safe

@@ -1081,9 +1081,12 @@
         <ProtocolDelivery
           {sessions}
           selected={protocol}
+          selectedTransport={transport}
           partial={inventory.hasMore || inventory.loading}
-          onselect={(p) => {
-            protocol = protocol === p ? 'all' : p;
+          onselect={(p, t) => {
+            const clear = protocol === p && transport === t;
+            protocol = clear ? 'all' : p;
+            transport = clear ? 'all' : t;
             tablePage = 1;
           }}
           onqueues={() => navigate('queues', scope)}

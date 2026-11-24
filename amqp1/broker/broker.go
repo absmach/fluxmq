@@ -84,6 +84,7 @@ func (b *Broker) HandleConnection(ctx context.Context, conn net.Conn) {
 
 // registerConnection stores a connection by container ID.
 func (b *Broker) registerConnection(containerID string, c *Connection) {
+	c.openedAt = time.Now()
 	b.connections.Store(containerID, c)
 }
 

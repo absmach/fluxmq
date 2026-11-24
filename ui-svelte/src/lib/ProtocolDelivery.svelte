@@ -7,46 +7,55 @@
     onqueues,
     partial = false,
     selected = 'all',
+    selectedTransport = 'all',
   }: {
     sessions: Session[];
-    onselect: (protocol: string) => void;
+    onselect: (protocol: string, transport: string) => void;
     onqueues: () => void;
     partial?: boolean;
     selected?: string;
+    selectedTransport?: string;
   } = $props();
   let rows = $derived.by(() => {
     const groups = new Map<
       string,
       {
+        key: string;
         protocol: string;
+        transport: string;
+        label: string;
+        mqtt: boolean;
+        versions: Record<string, number>;
         connected: number;
         disconnected: number;
         inflight: number;
         queued: number;
-        tcp: number;
-        websocket: number;
-        unknown: number;
       }
     >();
     for (const s of sessions) {
       const p = sessionProtocol(s);
-      const row = groups.get(p) ?? {
-        protocol: p,
+      const transport = s.transport || 'unknown';
+      const ws = transport === 'websocket';
+      const key = ws ? 'websocket' : `${p}:${transport}`;
+      const row = groups.get(key) ?? {
+        key,
+        protocol: ws ? 'all' : p,
+        transport,
+        label: ws ? 'WebSocket' : `${protocolLabel(p)}${transport === 'tcp' ? ' · TCP' : ''}`,
+        mqtt: p.startsWith('mqtt'),
+        versions: {} as Record<string, number>,
         connected: 0,
         disconnected: 0,
         inflight: 0,
         queued: 0,
-        tcp: 0,
-        websocket: 0,
-        unknown: 0,
       };
       row[s.connected ? 'connected' : 'disconnected']++;
-      row[s.transport === 'websocket' ? 'websocket' : s.transport === 'tcp' ? 'tcp' : 'unknown']++;
+      row.versions[p] = (row.versions[p] ?? 0) + 1;
       if (p.startsWith('mqtt')) {
         row.inflight += s.inflight_count;
         row.queued += s.offline_queue_depth;
       }
-      groups.set(p, row);
+      groups.set(key, row);
     }
     return [...groups.values()].sort(
       (a, b) => b.connected + b.disconnected - (a.connected + a.disconnected),
@@ -57,26 +66,24 @@
 <section class="protocol-delivery" aria-labelledby="protocol-delivery-title">
   <h2 id="protocol-delivery-title" class="sr-only">Protocols & delivery</h2>
   <div class="protocol-lanes">
-    {#each rows as row (row.protocol)}
+    {#each rows as row (row.key)}
       {@const total = row.connected + row.disconnected}
       <button
         class="panel protocol-lane"
-        class:selected={selected === row.protocol}
-        aria-label={`Filter sessions by ${protocolLabel(row.protocol)}`}
-        aria-pressed={selected === row.protocol}
-        aria-describedby={!row.protocol.startsWith('mqtt')
-          ? `delivery-note-${row.protocol}`
-          : undefined}
-        onclick={() => onselect(row.protocol)}
+        class:selected={selected === row.protocol && selectedTransport === row.transport}
+        aria-label={`Filter sessions by ${row.label}`}
+        aria-pressed={selected === row.protocol && selectedTransport === row.transport}
+        aria-describedby={!row.mqtt ? `delivery-note-${row.key}` : undefined}
+        onclick={() => onselect(row.protocol, row.transport)}
       >
         <span class="protocol-heading">
-          <span class="protocol-name">{protocolLabel(row.protocol)}</span>
+          <span class="protocol-name">{row.label}</span>
           <span class="protocol-count">{number(total)} <small>clients</small></span>
         </span>
         <span
           class="protocol-bar"
           role="img"
-          aria-label={`${protocolLabel(row.protocol)}: ${row.connected} connected, ${row.disconnected} disconnected`}
+          aria-label={`${row.label}: ${row.connected} connected, ${row.disconnected} disconnected`}
         >
           <i class="connected" style:width={`${(100 * row.connected) / total}%`}></i>
           <i
@@ -92,12 +99,15 @@
           </span>
         </span>
         <span class="state-counts transport-counts">
-          {#if row.tcp}<span>{number(row.tcp)} TCP</span>{/if}
-          {#if row.websocket}<span>{number(row.websocket)} WebSocket</span>{/if}
-          {#if row.unknown}<span>{number(row.unknown)} transport not reported</span>{/if}
+          {#if row.transport === 'websocket'}
+            {#each Object.entries(row.versions) as [version, count]}<span>
+                {number(count)}
+                {protocolLabel(version)}
+              </span>{/each}
+          {:else if row.transport === 'unknown'}<span>Transport not reported</span>{/if}
         </span>
         <span class="protocol-delivery-counts">
-          {#if row.protocol.startsWith('mqtt')}
+          {#if row.mqtt}
             <span title="MQTT inflight messages"><b>{number(row.inflight)}</b> inflight</span>
             <span title="MQTT offline session buffer">
               <b>{number(row.queued)}</b> offline queued
@@ -105,7 +115,7 @@
           {:else}
             <span class="delivery-unavailable">
               Delivery <span aria-hidden="true">—</span><Icon name="info" size={12} />
-              <span class="delivery-tooltip" role="tooltip" id={`delivery-note-${row.protocol}`}>
+              <span class="delivery-tooltip" role="tooltip" id={`delivery-note-${row.key}`}>
                 Delivery counts are not exposed for {protocolLabel(row.protocol)}.
               </span>
             </span>
@@ -115,8 +125,8 @@
     {:else}<p class="empty-protocols muted">No clients in the current inventory.</p>{/each}
   </div>
   <p class="muted" style="font-size: 12px; margin: 10px 0">
-    Session inventory includes MQTT over TCP/WebSocket and AMQP 0.9.1. AMQP 1.0 traffic is shown on
-    Overview; its session inventory is not reported.
+    Session inventory includes MQTT over TCP/WebSocket and both AMQP versions. HTTP and CoAP publish
+    traffic is shown on Overview and Broker health.
   </p>
   <div class="protocol-footer">
     {#if partial}<span>Loaded sessions · inventory incomplete</span>{/if}
@@ -211,6 +221,7 @@
     display: flex;
     justify-content: space-between;
     gap: 12px;
+    flex-wrap: wrap;
     width: 100%;
     margin-top: 7px;
     font-size: 11px;

@@ -9,6 +9,7 @@
   } from './types';
   import Icon from './Icon.svelte';
   import DiagnosticChart from './DiagnosticChart.svelte';
+  import { ingressProtocols } from './ingressProtocols';
   let {
     nodes,
     points = [],
@@ -28,7 +29,7 @@
   let visible = $derived(
     points.filter((p) => p.time >= (points.at(-1)?.time ?? 0) - range * 60000),
   );
-  let series = $derived(
+  let legacySeries = $derived(
     available.flatMap((protocol, index) => {
       const name = label(protocol);
       const colors = index === 0 ? ['var(--accent)', 'var(--mint)'] : ['var(--violet)', '#b66e9b'];
@@ -44,7 +45,9 @@
         return (
           protocol === 'mqtt'
             ? (['protocol', 'auth', 'authz', 'packet'] as const)
-            : (['protocol'] as const)
+            : protocol === 'amqp1'
+              ? (['protocol', 'auth'] as const)
+              : (['protocol'] as const)
         ).map((error, i) => ({
           key: `protocol.${protocol}.errors.${error}`,
           label: `${name} ${{ protocol: 'protocol', auth: 'authentication', authz: 'authorization', packet: 'packet' }[error]}`,
@@ -58,6 +61,26 @@
       }));
     }),
   );
+  let ingress = $derived(
+    ingressProtocols.filter((p) => nodes.some((n) => n.ingress_metrics?.[p.key])),
+  );
+  let series = $derived(
+    ingress.length && (metric === 'messages' || metric === 'bandwidth')
+      ? [
+          ...ingress.map((p) => ({
+            key: `ingress.${p.key}.${metric === 'messages' ? 'publishes' : 'payload_bytes'}`,
+            label: `${p.label} incoming`,
+            color: p.color,
+          })),
+          ...available.map((p) => ({
+            key: `protocol.${p}.${metric === 'bandwidth' ? 'bytes.sent' : p === 'mqtt' ? 'messages.publish_sent' : 'messages.sent'}`,
+            label: `${label(p)} outgoing`,
+            color: p === 'mqtt' ? '#8b85c6' : p === 'amqp' ? '#9a7986' : '#768f53',
+            dash: '6 3',
+          })),
+        ]
+      : legacySeries,
+  );
   let rows = $derived(
     nodes.flatMap((n) =>
       Object.entries(n.protocol_metrics ?? {})
@@ -65,7 +88,8 @@
         .map(([protocol, metrics]) => ({ node: n.id, healthy: n.healthy, protocol, metrics })),
     ),
   );
-  const label = (p: string) => (p === 'mqtt' ? 'MQTT' : p === 'amqp' ? 'AMQP 0.9.1' : p);
+  const label = (p: string) =>
+    p === 'mqtt' ? 'MQTT' : p === 'amqp' ? 'AMQP 0.9.1' : p === 'amqp1' ? 'AMQP 1.0' : p;
   const num = (n?: number) => (n === undefined ? '—' : number(n));
   const errors = (m: ProtocolMetrics) => Object.values(m.errors ?? {}).reduce((a, b) => a + b, 0);
 </script>
@@ -97,6 +121,18 @@
         </select>
       </label>
     </div>
+    <p class="traffic-note">
+      {#if ingress.length && metric === 'messages'}
+        Incoming publishes by protocol. MQTT outgoing includes TCP and WebSocket deliveries and
+        fan-out. HTTP and CoAP publish into the broker without outbound subscriptions.
+      {:else if ingress.length && metric === 'bandwidth'}
+        Incoming payload bytes by protocol; outgoing bytes as reported by each broker. MQTT outgoing
+        combines TCP and WebSocket.
+      {:else}
+        MQTT counters combine TCP and WebSocket. Other protocols are shown where the broker reports
+        this metric.
+      {/if}
+    </p>
     <DiagnosticChart
       points={visible}
       {series}
@@ -225,6 +261,11 @@
   </section>{/if}
 
 <style>
+  .traffic-note {
+    padding: 0 22px 14px;
+    font-size: 12px;
+    color: var(--muted);
+  }
   .protocol-diagnostics {
     overflow: visible;
   }

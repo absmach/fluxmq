@@ -96,9 +96,23 @@ type amqpLocalReloadStats struct {
 	ForcedDisconnects uint64 `json:"forced_disconnects"`
 }
 
+type amqp1Stats struct {
+	Connections   connectionStats `json:"connections"`
+	Messages      messageStats    `json:"messages"`
+	Bytes         byteStats       `json:"bytes"`
+	Sessions      uint64          `json:"sessions"`
+	Links         uint64          `json:"links"`
+	Subscriptions uint64          `json:"subscriptions"`
+	Errors        amqp1ErrorStats `json:"errors"`
+}
+type amqp1ErrorStats struct {
+	Protocol uint64 `json:"protocol"`
+	Auth     uint64 `json:"auth"`
+}
 type byProtocolStats struct {
-	MQTT *mqttStats `json:"mqtt,omitempty"`
-	AMQP *amqpStats `json:"amqp,omitempty"`
+	AMQP1 *amqp1Stats `json:"amqp1,omitempty"`
+	MQTT  *mqttStats  `json:"mqtt,omitempty"`
+	AMQP  *amqpStats  `json:"amqp,omitempty"`
 }
 
 // queueStats reports the queue manager's counters. Queues are shared by every
@@ -277,6 +291,24 @@ func (s *Server) buildStatsResponse() statsResponse {
 	if s.amqp1Broker != nil {
 		st := s.amqp1Broker.GetStats()
 		resp.Ingress["amqp1"] = mqttbroker.IngressCounters{Publishes: st.GetMessagesReceived(), PayloadBytes: st.GetBytesReceived()}
+		if s.broker == nil && s.amqpBroker == nil {
+			resp.UptimeSeconds = st.GetUptime().Seconds()
+		}
+		resp.ByProtocol.AMQP1 = &amqp1Stats{
+			Connections: connectionStats{Current: st.GetCurrentConnections(), Total: st.GetTotalConnections(), Disconnections: st.GetDisconnections()},
+			Messages:    messageStats{Received: st.GetMessagesReceived(), Sent: st.GetMessagesSent()},
+			Bytes:       byteStats{Received: st.GetBytesReceived(), Sent: st.GetBytesSent()},
+			Sessions:    st.GetCurrentSessions(), Links: st.GetCurrentLinks(), Subscriptions: st.GetSubscriptions(),
+			Errors: amqp1ErrorStats{Protocol: st.GetProtocolErrors(), Auth: st.GetAuthErrors()},
+		}
+		resp.Connections.Current += st.GetCurrentConnections()
+		resp.Connections.Total += st.GetTotalConnections()
+		resp.Connections.Disconnections += st.GetDisconnections()
+		resp.Messages.Received += st.GetMessagesReceived()
+		resp.Messages.Sent += st.GetMessagesSent()
+		resp.Bytes.Received += st.GetBytesReceived()
+		resp.Bytes.Sent += st.GetBytesSent()
+		resp.Errors.Protocol += st.GetProtocolErrors()
 	}
 
 	if s.queueManager != nil {
@@ -320,7 +352,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.broker == nil && s.amqpBroker == nil {
+	if s.broker == nil && s.amqpBroker == nil && s.amqp1Broker == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "broker not available")
 		return
 	}

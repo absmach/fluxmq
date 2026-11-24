@@ -3,14 +3,7 @@
   import { compact, number, bytes, type BrokerNode, type Point } from './types';
 
   let { nodes, points = [] }: { nodes: BrokerNode[]; points?: Point[] } = $props();
-  const definitions = [
-    { key: 'mqtt', label: 'MQTT · TCP', color: 'var(--accent)' },
-    { key: 'websocket', label: 'WebSocket · MQTT', color: 'var(--mint)' },
-    { key: 'http', label: 'HTTP', color: '#d18b34' },
-    { key: 'coap', label: 'CoAP', color: '#4c9cb5' },
-    { key: 'amqp', label: 'AMQP 0.9.1', color: 'var(--violet)' },
-    { key: 'amqp1', label: 'AMQP 1.0', color: '#b66e9b' },
-  ];
+  import { ingressProtocols as definitions } from './ingressProtocols';
   let range = $state(5);
   let protocols = $derived(
     definitions.filter((p) => nodes.some((n) => n.ingress_metrics?.[p.key])),
@@ -144,7 +137,9 @@
     font: 400 30px var(--mono);
   }
   strong small {
-    font: 400 11px 'IBM Plex Sans', sans-serif;
+    font:
+      400 11px 'IBM Plex Sans',
+      sans-serif;
     color: var(--muted);
   }
   article > span {

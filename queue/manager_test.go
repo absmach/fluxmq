@@ -1406,6 +1406,8 @@ func TestStreamRejectAdvancesCursor(t *testing.T) {
 		t.Fatalf("Reject failed: %v", err)
 	}
 
+	require.Equal(t, uint64(1), mgr.GetMetrics().RejectCount)
+	require.Equal(t, uint64(1), mgr.GetMetrics().DLQCount)
 	group, err := groupStore.GetConsumerGroup(context.Background(), testQueueEvents, "streamer")
 	if err != nil {
 		t.Fatalf("GetConsumerGroup failed: %v", err)
@@ -1433,6 +1435,8 @@ func TestClassicRejectMovesToDLQBeforeRemovingPendingEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Reject(ctx, "tasks", testGroupWorkers, 0, "invalid payload"))
+	require.Equal(t, uint64(1), mgr.GetMetrics().RejectCount)
+	require.Equal(t, uint64(1), mgr.GetMetrics().DLQCount)
 	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, testConsumer)
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -1459,6 +1463,8 @@ func TestClassicRejectKeepsPendingWhenDLQDisabled(t *testing.T) {
 	require.NoError(t, err)
 
 	require.ErrorIs(t, mgr.Reject(ctx, "tasks", testGroupWorkers, 0, "invalid payload"), ErrDLQDisabled)
+	require.Zero(t, mgr.GetMetrics().RejectCount)
+	require.Zero(t, mgr.GetMetrics().DLQCount)
 	entries, err := groupStore.GetPendingEntries(ctx, "tasks", testGroupWorkers, testConsumer)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)

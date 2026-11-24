@@ -94,7 +94,7 @@ func New(config Config, broker *mqttbroker.Broker, amqp *amqpbroker.Broker, cl c
 	return s
 }
 
-// SetAMQP1Broker enables AMQP 1.0 ingress telemetry. Call before Listen.
+// SetAMQP1Broker enables AMQP 1.0 telemetry and client inventory. Call before Listen.
 func (s *Server) SetAMQP1Broker(b *amqp1broker.Broker) { s.amqp1Broker = b }
 
 // SetReloadManager sets the reload manager for the /api/v1/reload endpoint.

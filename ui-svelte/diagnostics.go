@@ -31,8 +31,8 @@ func diagnosticGauge(key string) bool {
 	case "queue.pending.current", "queue.pending.high_water", "queue.acknowledgments.poison_pending", "queue.acknowledgments.poison_pending_no_destination":
 		return true
 	}
-	for _, protocol := range []string{"mqtt", "amqp"} {
-		for _, suffix := range []string{"connections.current", "channels", "consumers", "local_principals.active_connections"} {
+	for _, protocol := range []string{"mqtt", "amqp", "amqp1"} {
+		for _, suffix := range []string{"connections.current", "channels", "consumers", "sessions", "links", "subscriptions", "local_principals.active_connections"} {
 			if key == "protocol."+protocol+"."+suffix {
 				return true
 			}
