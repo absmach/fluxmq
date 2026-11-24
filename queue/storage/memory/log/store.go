@@ -83,7 +83,7 @@ func (s *Store) CreateQueue(ctx context.Context, config types.QueueConfig) error
 	}
 
 	sl := &log{
-		config:   config,
+		config:   config.Clone(),
 		messages: make([]*message.Envelope, 0, s.config.InitialCapacity),
 		head:     0,
 		tail:     0,
@@ -126,7 +126,7 @@ func (s *Store) UpdateQueue(ctx context.Context, config types.QueueConfig) error
 		sl.mu.Unlock()
 		return storage.ErrQueueNotFound
 	}
-	sl.config = config
+	sl.config = config.Clone()
 	sl.mu.Unlock()
 	return nil
 }
@@ -144,7 +144,7 @@ func (s *Store) GetQueue(ctx context.Context, queueName string) (*types.QueueCon
 		sl.mu.RUnlock()
 		return nil, storage.ErrQueueNotFound
 	}
-	configCopy := sl.config
+	configCopy := sl.config.Clone()
 	sl.mu.RUnlock()
 	return &configCopy, nil
 }
@@ -191,7 +191,7 @@ func (s *Store) ListQueues(ctx context.Context) ([]types.QueueConfig, error) {
 		sl := value.(*log)
 		sl.mu.RLock()
 		if !sl.deleted {
-			configs = append(configs, sl.config)
+			configs = append(configs, sl.config.Clone())
 		}
 		sl.mu.RUnlock()
 		return true
@@ -938,7 +938,7 @@ func (s *Store) RestoreQueue(ctx context.Context, config types.QueueConfig, head
 	}
 
 	s.logs.Store(config.Name, &log{
-		config:   config,
+		config:   config.Clone(),
 		messages: make([]*message.Envelope, 0, s.config.InitialCapacity),
 		head:     head,
 		tail:     head,
