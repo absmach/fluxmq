@@ -8,7 +8,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.9.6
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.3
+	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/raft v1.8.0
 	github.com/klauspost/compress v1.20.4
