@@ -4,6 +4,9 @@
 package logstorage
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/absmach/fluxmq/queue/types"
@@ -158,4 +161,126 @@ func TestQueueConfigStore_Update(t *testing.T) {
 	configs, err := store.List()
 	require.NoError(t, err)
 	assert.Len(t, configs, 1)
+}
+
+func writeLegacyCatalog(t *testing.T, baseDir string, configs ...types.QueueConfig) {
+	t.Helper()
+	data, err := json.Marshal(QueueConfigState{Version: queueConfigVersion, Configs: configs})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(baseDir, "config"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "config", legacyCatalogFile), data, 0o600))
+}
+
+func TestQueueConfigStoreMigratesLegacyCatalog(t *testing.T) {
+	configs := []types.QueueConfig{
+		types.DefaultQueueConfig("billing", "billing/#"),
+		types.DefaultQueueConfig("$dlq/billing", "$dlq/billing/#"),
+		types.DefaultQueueConfig("50%", "pct/#"),
+	}
+	names := []string{"billing", "$dlq/billing", "50%"}
+
+	assertMigrated := func(t *testing.T, dir string) {
+		t.Helper()
+		for range 2 { // and again after reopening the migrated store
+			store, err := NewQueueConfigStore(dir)
+			require.NoError(t, err)
+			listed, err := store.List()
+			require.NoError(t, err)
+			got := make([]string, 0, len(listed))
+			for _, cfg := range listed {
+				got = append(got, cfg.Name)
+			}
+			assert.ElementsMatch(t, names, got)
+			require.NoError(t, store.Close())
+		}
+		assert.NoFileExists(t, filepath.Join(dir, "config", legacyCatalogFile))
+	}
+
+	t.Run("full", func(t *testing.T) {
+		dir := t.TempDir()
+		writeLegacyCatalog(t, dir, configs...)
+		assertMigrated(t, dir)
+	})
+
+	t.Run("resumes after an interrupted split", func(t *testing.T) {
+		dir := t.TempDir()
+		// Some records were written, the catalog was not yet removed.
+		store, err := NewQueueConfigStore(dir)
+		require.NoError(t, err)
+		require.NoError(t, store.Save(configs[0]))
+		writeLegacyCatalog(t, dir, configs...)
+		assertMigrated(t, dir)
+	})
+}
+
+func TestQueueConfigStoreWritesOneFilePerChange(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewQueueConfigStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	for _, name := range []string{"a", "b", "a/b"} {
+		require.NoError(t, store.Save(types.DefaultQueueConfig(name, "t/#")))
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "config", queueConfigsDir))
+	require.NoError(t, err)
+	assert.Len(t, entries, 3, "one file per queue, slashes included")
+
+	untouched := filepath.Join(dir, "config", queueConfigsDir, "b"+queueConfigExt)
+	before, err := os.ReadFile(untouched)
+	require.NoError(t, err)
+	statBefore, err := os.Stat(untouched)
+	require.NoError(t, err)
+
+	updated := types.DefaultQueueConfig("a", "t/#")
+	updated.MaxDepth = 7
+	require.NoError(t, store.Save(updated))
+	require.NoError(t, store.Delete("a/b"))
+
+	after, err := os.ReadFile(untouched)
+	require.NoError(t, err)
+	statAfter, err := os.Stat(untouched)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	assert.Equal(t, statBefore.ModTime(), statAfter.ModTime(), "changing one queue must not rewrite another")
+	assert.NoFileExists(t, filepath.Join(dir, "config", queueConfigsDir, encodePathComponent("a/b")+queueConfigExt))
+}
+
+func TestQueueConfigStoreFailedWriteKeepsPreviousConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not stop root")
+	}
+	dir := t.TempDir()
+	store, err := NewQueueConfigStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	original := types.DefaultQueueConfig("q", "t/#")
+	require.NoError(t, store.Save(original))
+
+	recordsDir := filepath.Join(dir, "config", queueConfigsDir)
+	require.NoError(t, os.Chmod(recordsDir, 0o500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(recordsDir, 0o755)) })
+
+	changed := original.Clone()
+	changed.MaxDepth = 7
+	require.Error(t, store.Save(changed))
+
+	stored, err := store.Get("q")
+	require.NoError(t, err)
+	assert.Equal(t, original.MaxDepth, stored.MaxDepth, "an unwritten change must not be served")
+}
+
+func TestQueueConfigStoreRejectsMisnamedRecord(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewQueueConfigStore(dir)
+	require.NoError(t, err)
+	require.NoError(t, store.Save(types.DefaultQueueConfig("real", "t/#")))
+	require.NoError(t, store.Close())
+
+	recordsDir := filepath.Join(dir, "config", queueConfigsDir)
+	require.NoError(t, os.Rename(filepath.Join(recordsDir, "real"+queueConfigExt), filepath.Join(recordsDir, "other"+queueConfigExt)))
+
+	_, err = NewQueueConfigStore(dir)
+	assert.Error(t, err, "a file must hold the queue it is named for")
 }
