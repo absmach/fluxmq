@@ -4,6 +4,7 @@
 package router
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -189,4 +190,112 @@ func TestMatch_DollarTopics(t *testing.T) {
 				"the trie must agree with topics.TopicMatch")
 		})
 	}
+}
+
+func TestUnsubscribe_ReleasesRetainedState(t *testing.T) {
+	sub := func(t *testing.T, r *TrieRouter, client, filter string) {
+		t.Helper()
+		require.NoError(t, r.Subscribe(client, filter, 0, storage.SubscribeOptions{}))
+	}
+	unsub := func(t *testing.T, r *TrieRouter, client, filter string) {
+		t.Helper()
+		require.NoError(t, r.Unsubscribe(client, filter))
+	}
+
+	t.Run("prune/last subscription removes its path", func(t *testing.T) {
+		r := NewRouter()
+		sub(t, r, "c1", "a/b/c")
+		unsub(t, r, "c1", "a/b/c")
+		assert.Empty(t, r.root.children)
+	})
+
+	t.Run("prune/wildcard filters", func(t *testing.T) {
+		r := NewRouter()
+		sub(t, r, "c1", "+/x/#")
+		unsub(t, r, "c1", "+/x/#")
+		assert.Empty(t, r.root.children)
+	})
+
+	t.Run("prune/stops at a node still subscribed", func(t *testing.T) {
+		r := NewRouter()
+		sub(t, r, "c1", "a/b")
+		sub(t, r, "c2", "a/b/c")
+		unsub(t, r, "c2", "a/b/c")
+
+		ab := r.root.children["a"].children["b"]
+		require.NotNil(t, ab)
+		assert.Empty(t, ab.children)
+		matched, err := r.Match("a/b")
+		require.NoError(t, err)
+		assert.Len(t, matched, 1)
+	})
+
+	t.Run("prune/stops at a node with other children", func(t *testing.T) {
+		r := NewRouter()
+		sub(t, r, "c1", "a/b/c")
+		sub(t, r, "c1", "a/d")
+		unsub(t, r, "c1", "a/b/c")
+
+		assert.NotContains(t, r.root.children["a"].children, "b")
+		matched, err := r.Match("a/d")
+		require.NoError(t, err)
+		assert.Len(t, matched, 1)
+	})
+
+	t.Run("prune/unknown client leaves path", func(t *testing.T) {
+		r := NewRouter()
+		sub(t, r, "c1", "a/b")
+		unsub(t, r, "other", "a/b")
+		matched, err := r.Match("a/b")
+		require.NoError(t, err)
+		assert.Len(t, matched, 1)
+	})
+
+	t.Run("churn/distinct topics do not accumulate", func(t *testing.T) {
+		r := NewRouter()
+		for i := range 10_000 {
+			filter := "devices/" + strconv.Itoa(i) + "/telemetry"
+			sub(t, r, "c1", filter)
+			unsub(t, r, "c1", filter)
+		}
+		assert.Empty(t, r.root.children)
+	})
+
+	t.Run("slots/removed subscription is not retained", func(t *testing.T) {
+		r := NewRouter()
+		sub(t, r, "c1", "a")
+		sub(t, r, "c2", "a")
+		unsub(t, r, "c1", "a")
+
+		subs := r.root.children["a"].subs
+		require.Len(t, subs, 1)
+		for _, slot := range subs[len(subs):cap(subs)] {
+			assert.Nil(t, slot)
+		}
+	})
+}
+
+func TestReleasedPoolSlicesHoldNoReferences(t *testing.T) {
+	t.Run("subscriptions", func(t *testing.T) {
+		subs := make([]*storage.Subscription, 0, 8)
+		for range 5 {
+			subs = append(subs, &storage.Subscription{ClientID: "c"})
+		}
+		ReleaseSubscriptionSlice(&subs)
+		assert.Empty(t, subs)
+		for _, slot := range subs[:cap(subs)] {
+			assert.Nil(t, slot)
+		}
+	})
+
+	t.Run("oversized slices are not pooled", func(t *testing.T) {
+		huge := make([]*storage.Subscription, 1, maxPooledSubscriptions+1)
+		huge[0] = &storage.Subscription{ClientID: "c"}
+		ReleaseSubscriptionSlice(&huge)
+		for range 8 {
+			got := AcquireSubscriptionSlice()
+			assert.LessOrEqual(t, cap(*got), maxPooledSubscriptions)
+			ReleaseSubscriptionSlice(got)
+		}
+	})
 }

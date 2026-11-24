@@ -67,27 +67,47 @@ func (r *TrieRouter) Subscribe(clientID string, filter string, qos byte, opts st
 }
 
 // Unsubscribe removes a subscription from the topic filter for a specific session.
+//
+// Nodes left with neither subscriptions nor children are removed on the way
+// back up, so the trie holds only paths that something is subscribed to and
+// churn over distinct topics cannot grow it without bound.
 func (r *TrieRouter) Unsubscribe(clientID string, filter string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	levels := strings.Split(filter, separator)
+	path := make([]*node, 0, len(levels)+1)
 	n := r.root
+	path = append(path, n)
 	for _, level := range levels {
 		child, ok := n.children[level]
 		if !ok {
 			return nil
 		}
 		n = child
+		path = append(path, n)
 	}
 
-	filtered := n.subs[:0]
+	kept := n.subs[:0]
 	for _, sub := range n.subs {
 		if sub.ClientID != clientID {
-			filtered = append(filtered, sub)
+			kept = append(kept, sub)
 		}
 	}
-	n.subs = filtered
+	// The vacated tail still points at removed subscriptions.
+	clear(n.subs[len(kept):])
+	n.subs = kept
+	if len(n.subs) == 0 {
+		n.subs = nil
+	}
+
+	for depth := len(levels); depth > 0; depth-- {
+		child := path[depth]
+		if len(child.subs) > 0 || len(child.children) > 0 {
+			break
+		}
+		delete(path[depth-1].children, levels[depth-1])
+	}
 	return nil
 }
 
