@@ -52,6 +52,18 @@ const RetryTimeout = 20 * time.Second
 // later cycle. This stops a reconnect from retransmitting more unacknowledged
 // PUBLISH packets at once than the new connection advertised.
 func (h *msgHandler) ProcessRetries(writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
+	h.resendOlderThan(RetryTimeout, writer, version, acquire, markRetry)
+}
+
+// ResendUnacknowledged resends every outbound message the client has not
+// acknowledged, however recently it was sent. A resumed session owes these
+// to the client at once [MQTT-4.4.0-1]: the connection they went out on is
+// gone, and so is any chance that they arrived on it.
+func (h *msgHandler) ResendUnacknowledged(writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
+	h.resendOlderThan(0, writer, version, acquire, markRetry)
+}
+
+func (h *msgHandler) resendOlderThan(age time.Duration, writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
 	if version == 0 {
 		version = h.version
 	}
@@ -63,7 +75,7 @@ func (h *msgHandler) ProcessRetries(writer core.PacketWriter, version byte, acqu
 		}
 	}
 
-	expired := h.inflight.GetExpired(RetryTimeout)
+	expired := h.inflight.GetExpired(age)
 	for _, inflight := range expired {
 		if inflight.Direction != messages.Outbound {
 			continue

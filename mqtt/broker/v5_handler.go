@@ -227,6 +227,11 @@ func (h *v5Handler) HandleConnect(ctx context.Context, conn core.Connection, pkt
 
 	h.broker.NotifyConnect(ctx, clientID, p.Username, "mqtt5")
 
+	if sessionPresent {
+		// Unacknowledged messages first: they were sent before anything that
+		// queued while the client was away.
+		s.ResendUnacknowledgedTo(conn, epoch)
+	}
 	h.deliverOfflineMessages(ctx, s)
 
 	return h.broker.runSession(ctx, h, s, conn, epoch, time.Duration(p.KeepAlive)*time.Second)

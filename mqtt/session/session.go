@@ -867,18 +867,30 @@ func (s *Session) NextPacketID() uint16 {
 // neither redeliver onto the replacement connection nor consume or update the
 // replacement generation's retry state.
 func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
+	if version, ok := s.versionIfEpoch(w, gen); ok {
+		s.msgHandler.ProcessRetries(w, version, s.sendQuotaAcquirer(gen), s.markRetryIfEpoch(gen))
+	}
+}
+
+// ResendUnacknowledgedTo resends every unacknowledged outbound message on w,
+// under the same generation and send-quota gates as ProcessRetriesTo. It is
+// for a resumed session, which must not leave the client waiting a retry
+// interval for messages its previous connection lost [MQTT-4.4.0-1].
+func (s *Session) ResendUnacknowledgedTo(w core.PacketWriter, gen uint64) {
+	if version, ok := s.versionIfEpoch(w, gen); ok {
+		s.msgHandler.ResendUnacknowledged(w, version, s.sendQuotaAcquirer(gen), s.markRetryIfEpoch(gen))
+	}
+}
+
+// versionIfEpoch returns the session's protocol version while gen is still
+// its current connection generation and w is a connection to write to.
+func (s *Session) versionIfEpoch(w core.PacketWriter, gen uint64) (byte, bool) {
 	if w == nil {
-		return
+		return 0, false
 	}
 	s.mu.RLock()
-	if s.epoch != gen {
-		s.mu.RUnlock()
-		return
-	}
-	version := s.Version
-	s.mu.RUnlock()
-
-	s.msgHandler.ProcessRetries(w, version, s.sendQuotaAcquirer(gen), s.markRetryIfEpoch(gen))
+	defer s.mu.RUnlock()
+	return s.Version, s.epoch == gen
 }
 
 // sendQuotaAcquirer returns a retry-gate bound to generation gen.
