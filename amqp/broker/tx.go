@@ -5,10 +5,16 @@ package broker
 
 import "github.com/absmach/fluxmq/amqp/codec"
 
-// maxTxBufferedBytes caps the message bodies one channel may hold in an open
-// transaction. Nothing reaches a queue before tx.commit, so without a cap a
-// client that never commits could make the broker hold an unbounded backlog.
-const maxTxBufferedBytes = 64 << 20
+// An open transaction holds everything it will apply at tx.commit. Nothing
+// reaches a queue before then, so without bounds a client that never commits
+// could make the broker hold an unbounded backlog: maxTxBufferedBytes caps the
+// bytes held, counting txOpOverhead for every action so that empty publishes
+// and settlements count too, and maxTxOps caps the number of actions.
+const (
+	maxTxBufferedBytes = 64 << 20
+	maxTxOps           = 1 << 16
+	txOpOverhead       = 256
+)
 
 // txOp is one deferred action of an open transaction: a completed publish, or
 // a basic.ack, basic.nack or basic.reject.
@@ -43,18 +49,32 @@ type txState struct {
 }
 
 // bufferPublish holds a completed publish for commit. It reports false when
-// the transaction would exceed maxTxBufferedBytes.
+// the transaction would exceed its bounds.
 func (t *txState) bufferPublish(method *codec.BasicPublish, header *codec.ContentHeader, body []byte) bool {
-	if t.bytes+len(body) > maxTxBufferedBytes {
+	if !t.admit(len(body)) {
 		return false
 	}
-	t.bytes += len(body)
 	t.ops = append(t.ops, txOp{publish: &txPublish{method: method, header: header, body: body}})
 	return true
 }
 
-func (t *txState) bufferSettlement(method any) {
+// bufferSettlement holds a basic.ack, basic.nack or basic.reject for commit.
+// It reports false when the transaction would exceed its bounds.
+func (t *txState) bufferSettlement(method any) bool {
+	if !t.admit(0) {
+		return false
+	}
 	t.ops = append(t.ops, txOp{settle: method})
+	return true
+}
+
+func (t *txState) admit(bodyLen int) bool {
+	size := bodyLen + txOpOverhead
+	if len(t.ops) >= maxTxOps || t.bytes+size > maxTxBufferedBytes {
+		return false
+	}
+	t.bytes += size
+	return true
 }
 
 // take ends the open transaction, returning its actions; the channel stays
@@ -63,6 +83,14 @@ func (t *txState) take() []txOp {
 	ops := t.ops
 	t.ops, t.bytes = nil, 0
 	return ops
+}
+
+// abortTransaction closes the channel because an open transaction outgrew
+// its bounds, and releases what it held.
+func (ch *Channel) abortTransaction(classID, methodID uint16) error {
+	ch.tx.take()
+	return ch.sendChannelClose(codec.PreconditionFailed,
+		"transaction exceeds the uncommitted size limit", classID, methodID)
 }
 
 func (ch *Channel) handleTxSelect() error {
@@ -81,6 +109,12 @@ func (ch *Channel) handleTxCommit() error {
 	}
 	for _, op := range ch.tx.take() {
 		if op.publish != nil {
+			// The exchange was checked when the publish arrived; it may have
+			// been deleted since.
+			if name := normalizeExchange(op.publish.method.Exchange); name != "" && !ch.exchangeExists(name) {
+				return ch.sendChannelClose(codec.NotFound,
+					"exchange not found", codec.ClassTx, codec.MethodTxCommit)
+			}
 			ch.publish(op.publish.method, op.publish.header, op.publish.body)
 		} else {
 			ch.applySettlement(op.settle)

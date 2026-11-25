@@ -549,8 +549,7 @@ func (ch *Channel) completePublish() {
 
 	if ch.tx.selected {
 		if !ch.tx.bufferPublish(method, header, body) {
-			_ = ch.sendChannelClose(codec.PreconditionFailed,
-				"transaction exceeds the uncommitted size limit", codec.ClassBasic, codec.MethodBasicPublish)
+			_ = ch.abortTransaction(codec.ClassBasic, codec.MethodBasicPublish)
 		}
 		return
 	}
@@ -745,7 +744,7 @@ func (ch *Channel) publish(method *codec.BasicPublish, header *codec.ContentHead
 
 	// Check if this targets a queue via exchange bindings
 	isQueuePublish := false
-	var publishFailed bool
+	var publishErr error
 	ch.exchangeMu.RLock()
 	bindings := make([]binding, 0, len(ch.bindings))
 	for _, b := range ch.bindings {
@@ -776,7 +775,7 @@ func (ch *Channel) publish(method *codec.BasicPublish, header *codec.ContentHead
 				message.Release(queued)
 				if err != nil {
 					ch.conn.logger.Error("queue publish failed", "queue", b.queue, "error", err)
-					publishFailed = true
+					publishErr = err
 				}
 			}
 			isQueuePublish = true
@@ -792,13 +791,17 @@ func (ch *Channel) publish(method *codec.BasicPublish, header *codec.ContentHead
 		return
 	}
 
-	// Publisher confirms
-	if ch.confirmMode {
-		if publishFailed {
-			ch.sendPublisherNack()
-		} else {
-			ch.sendPublisherAck()
-		}
+	// Publisher confirms. Without them a failed queue publish closes the
+	// channel, as it does on the direct queue path, rather than vanishing; in
+	// a transaction that also stops tx.commit from reporting success.
+	switch {
+	case ch.confirmMode && publishErr != nil:
+		ch.sendPublisherNack()
+	case ch.confirmMode:
+		ch.sendPublisherAck()
+	case publishErr != nil:
+		code, text := amqp091QueueError(publishErr)
+		_ = ch.sendChannelClose(code, text, codec.ClassBasic, codec.MethodBasicPublish)
 	}
 }
 
@@ -1679,7 +1682,9 @@ func (ch *Channel) handleBasicGet(m *codec.BasicGet) error {
 
 func (ch *Channel) handleBasicAck(m *codec.BasicAck) error {
 	if ch.tx.selected {
-		ch.tx.bufferSettlement(m)
+		if !ch.tx.bufferSettlement(m) {
+			return ch.abortTransaction(codec.ClassBasic, codec.MethodBasicAck)
+		}
 		return nil
 	}
 	ch.applyBasicAck(m)
@@ -1711,7 +1716,9 @@ func (ch *Channel) applyBasicAck(m *codec.BasicAck) {
 
 func (ch *Channel) handleBasicReject(m *codec.BasicReject) error {
 	if ch.tx.selected {
-		ch.tx.bufferSettlement(m)
+		if !ch.tx.bufferSettlement(m) {
+			return ch.abortTransaction(codec.ClassBasic, codec.MethodBasicReject)
+		}
 		return nil
 	}
 	ch.applyBasicReject(m)
@@ -1740,7 +1747,9 @@ func (ch *Channel) applyBasicReject(m *codec.BasicReject) {
 
 func (ch *Channel) handleBasicNack(m *codec.BasicNack) error {
 	if ch.tx.selected {
-		ch.tx.bufferSettlement(m)
+		if !ch.tx.bufferSettlement(m) {
+			return ch.abortTransaction(codec.ClassBasic, codec.MethodBasicNack)
+		}
 		return nil
 	}
 	ch.applyBasicNack(m)

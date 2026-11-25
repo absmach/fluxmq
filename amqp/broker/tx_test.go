@@ -6,6 +6,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/absmach/fluxmq/amqp/codec"
@@ -182,4 +183,78 @@ func TestTransactionSizeIsBounded(t *testing.T) {
 	require.True(t, ok, "expected the channel to close")
 	assert.Equal(t, uint16(codec.PreconditionFailed), closeMethod.ReplyCode)
 	assert.Zero(t, qm.publishCalls)
+}
+
+// Empty publishes and settlements count toward a transaction's bounds, and an
+// aborted transaction lets go of what it held.
+func TestTransactionBoundsCountEveryAction(t *testing.T) {
+	tests := []struct {
+		name string
+		add  func(ch *Channel)
+	}{
+		{"empty_publishes", func(ch *Channel) { publishBody(ch, nil) }},
+		{"settlements", func(ch *Channel) { _ = ch.handleMethod(&codec.BasicAck{DeliveryTag: 1}) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch, buf, qm := newTxChannel(t)
+			require.NoError(t, ch.handleMethod(&codec.TxSelect{}))
+			for range maxTxOps + 1 {
+				tt.add(ch)
+				if ch.serverClosing.Load() {
+					break
+				}
+			}
+
+			closeMethod, ok := lastMethod(t, buf).(*codec.ChannelClose)
+			require.True(t, ok, "an unbounded transaction was accepted")
+			assert.Equal(t, uint16(codec.PreconditionFailed), closeMethod.ReplyCode)
+			assert.Empty(t, ch.tx.ops, "the aborted transaction kept what it held")
+			assert.Zero(t, qm.publishCalls)
+		})
+	}
+}
+
+// tx.commit must not report success for a publish that did not happen.
+func TestTransactionCommitFailsWithItsPublish(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(ch *Channel, qm *settlementRecorder)
+		code    uint16
+	}{
+		{"exchange_deleted_before_commit", func(ch *Channel, _ *settlementRecorder) {
+			ch.exchangeMu.Lock()
+			delete(ch.exchanges, txExchange)
+			ch.exchangeMu.Unlock()
+		}, codec.NotFound},
+		{"bound_queue_publish_fails", func(_ *Channel, qm *settlementRecorder) {
+			qm.publishErr = errors.New("queue unavailable")
+		}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch, buf, qm := newTxChannel(t)
+			require.NoError(t, ch.handleMethod(&codec.TxSelect{}))
+			publishBody(ch, []byte("held"))
+			tt.prepare(ch, qm)
+
+			require.NoError(t, ch.handleMethod(&codec.TxCommit{}))
+			closeMethod, ok := lastMethod(t, buf).(*codec.ChannelClose)
+			require.True(t, ok, "tx.commit reported success")
+			if tt.code != 0 {
+				assert.Equal(t, tt.code, closeMethod.ReplyCode)
+			}
+		})
+	}
+}
+
+// Outside a transaction too, a publish routed through an exchange binding
+// whose queue publish fails closes the channel instead of vanishing.
+func TestBoundQueuePublishFailureClosesChannel(t *testing.T) {
+	ch, buf, qm := newTxChannel(t)
+	qm.publishErr = errors.New("queue unavailable")
+	publishBody(ch, []byte("lost"))
+
+	_, ok := lastMethod(t, buf).(*codec.ChannelClose)
+	assert.True(t, ok, "a failed queue publish was dropped silently")
 }
