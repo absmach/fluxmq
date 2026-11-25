@@ -319,7 +319,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	switch qos {
 	case 0:
 		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
-		err := h.broker.Publish(context.Background(), msg)
+		err := h.broker.Publish(readLoopContext, msg)
 		h.broker.telemetry.logger.Debug(
 			"v3_publish_complete",
 			slog.String("client_id", s.ID),
@@ -330,7 +330,7 @@ func (h *v3Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 
 	case 1:
 		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, props)
-		if err := h.broker.Publish(context.Background(), msg); err != nil {
+		if err := h.broker.Publish(readLoopContext, msg); err != nil {
 			return err
 		}
 		h.broker.telemetry.logger.Debug(
@@ -509,7 +509,7 @@ func (h *v3Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 				}
 				msg.BrokerMeta.Delivery.QoS = deliverQoS
 				msg.BrokerMeta.Delivery.Retain = true
-				h.broker.DeliverToSession(context.Background(), s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
+				h.broker.DeliverToSession(readLoopContext, s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
 			}
 		}
 	}

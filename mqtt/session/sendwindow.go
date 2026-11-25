@@ -94,6 +94,13 @@ func (w *sendWindow) tryAcquireLocked(packetID uint16, gen uint64) bool {
 	return true
 }
 
+// hasRoom reports whether generation gen could take another token now.
+func (w *sendWindow) hasRoom(gen uint64) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return gen == w.gen && len(w.held) < w.capacity
+}
+
 // acquire blocks until a token is available for packetID in generation gen, the
 // generation is superseded, or stop is closed. Returns false if gen is no longer
 // current or stop fired first.
