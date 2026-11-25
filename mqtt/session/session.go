@@ -103,10 +103,16 @@ type Session struct {
 	// negotiated Receive Maximum is clamped to it on every (re)connect.
 	serverMaxInflight int
 
-	// pending buffers messages that exceeded the send quota.
-	// Non-nil only when InflightOverflow == InflightOverflowQueue.
-	// Drained into inflight as ACKs arrive; spilled to offline on disconnect.
+	// pending buffers messages that exceeded the send quota: in queue mode,
+	// and in backpressure mode for deliveries that must not wait. Drained into
+	// inflight as ACKs arrive; spilled to offline on disconnect.
 	pending *pendingQueue
+
+	// resumeResend names the outbound messages already in flight when the
+	// current connection was attached, oldest first: everything a previous
+	// connection, a restore, or a takeover left unacknowledged, and nothing
+	// the current connection has sent. ResendUnacknowledgedTo takes it.
+	resumeResend []uint16
 
 	// deliverStop is closed when the session disconnects to unblock goroutines
 	// waiting on the send window.
@@ -470,6 +476,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 
 	s.epoch++
 	epoch := s.epoch
+	s.resumeResend = s.msgHandler.Inflight().OutboundIDs()
 
 	// Bind the send quota to this connection generation. Receive Maximum is
 	// connection-scoped, so on a reconnect (applyOpts) the capacity is the newly
@@ -643,6 +650,13 @@ func (s *Session) TryEnqueuePending(msg *message.Envelope, onSent func()) bool {
 	return s.pending.push(pendingItem{msg: msg, onSent: onSent})
 }
 
+// RequeuePending puts a message taken from the pending queue back at its head,
+// for a drained delivery that lost the send quota to another. Its place is
+// kept, so messages still go out in the order they were queued.
+func (s *Session) RequeuePending(msg *message.Envelope) {
+	s.pending.pushFront(pendingItem{msg: msg})
+}
+
 // DrainOnePending hands the oldest pending message to deliver, which takes
 // ownership of it on every path, its errors included: a delivery that fails
 // may still hold the message, in the inflight tracker for a retry, so
@@ -698,7 +712,7 @@ func (s *Session) Disconnect(graceful bool, reasonCode byte) error {
 func (s *Session) DisconnectWithCause(cause DisconnectCause, reasonCode byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.disconnectLocked(cause, reasonCode)
+	return s.disconnectLocked(cause, reasonCode, noticeClient)
 }
 
 // DisconnectIf disconnects the session only if epoch still matches the current
@@ -716,8 +730,31 @@ func (s *Session) DisconnectWithCauseIf(cause DisconnectCause, epoch uint64, rea
 	if s.epoch != epoch {
 		return nil
 	}
-	return s.disconnectLocked(cause, reasonCode)
+	return s.disconnectLocked(cause, reasonCode, noticeClient)
 }
+
+// AbandonIf ends generation epoch's connection without sending DISCONNECT: it
+// closes the socket and moves on. It is for a client that has stopped
+// reading. Its socket buffer may be full, so a DISCONNECT written to it could
+// block for the connection's whole write timeout, holding the session lock and
+// whichever read loop is delivering to it.
+func (s *Session) AbandonIf(epoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch {
+		return nil
+	}
+	return s.disconnectLocked(causeFor(false), 0, closeWithoutNotice)
+}
+
+// disconnectNotice says whether ending a connection sends the client a
+// DISCONNECT first.
+type disconnectNotice uint8
+
+const (
+	noticeClient disconnectNotice = iota
+	closeWithoutNotice
+)
 
 func (s *Session) sendDisconnect(reasonCode byte) {
 	if s.conn == nil || s.Version != 5 {
@@ -731,7 +768,7 @@ func (s *Session) sendDisconnect(reasonCode byte) {
 }
 
 // disconnectLocked performs the disconnect. Caller must hold s.mu.
-func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte) error {
+func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte, notice disconnectNotice) error {
 	if s.state != StateConnected {
 		return nil
 	}
@@ -749,7 +786,9 @@ func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte) error
 		// If connection tracks its own timestamps, we might want to sync,
 		// but since we are closing it here, "now" is correct.
 
-		s.sendDisconnect(reasonCode)
+		if notice == noticeClient {
+			s.sendDisconnect(reasonCode)
+		}
 		s.conn.Close()
 		s.conn = nil
 	}
@@ -854,10 +893,12 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 	}
 }
 
-// ResendUnacknowledgedTo resends every unacknowledged outbound message on w
-// for generation gen. It is for a resumed session, which must not leave the
-// client waiting a retry interval for messages its previous connection lost
-// [MQTT-4.4.0-1].
+// ResendUnacknowledgedTo resends, in their original order, the outbound
+// messages that were in flight when generation gen was attached. It is for a
+// resumed session, which must not leave the client waiting a retry interval
+// for messages its previous connection lost [MQTT-4.4.0-1]; messages restored
+// from storage or taken over from another node are among them, though they
+// were never sent on this node.
 //
 // Each resend waits for send quota, so a backlog larger than the client's
 // Receive Maximum goes out as acknowledgements free it. Those arrive on the
@@ -865,13 +906,21 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 // before it. It returns early once gen is superseded or the session
 // disconnects.
 func (s *Session) ResendUnacknowledgedTo(w core.PacketWriter, gen uint64) {
-	if version, ok := s.versionIfEpoch(w, gen); ok {
-		quota := sendQuota{
-			acquire: func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) },
-			release: func(packetID uint16) { s.ReleaseSendQuota(packetID, gen) },
-		}
-		s.msgHandler.ResendUnacknowledged(w, version, quota, s.markRetryIfEpoch(gen))
+	s.mu.Lock()
+	if w == nil || s.epoch != gen {
+		s.mu.Unlock()
+		return
 	}
+	version := s.Version
+	packetIDs := s.resumeResend
+	s.resumeResend = nil
+	s.mu.Unlock()
+
+	quota := sendQuota{
+		acquire: func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) },
+		release: func(packetID uint16) { s.ReleaseSendQuota(packetID, gen) },
+	}
+	s.msgHandler.ResendUnacknowledged(packetIDs, w, version, quota, s.markRetryIfEpoch(gen))
 }
 
 // versionIfEpoch returns the session's protocol version while gen is still

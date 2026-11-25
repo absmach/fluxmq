@@ -14,7 +14,6 @@ import (
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
-	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage/messages"
 )
@@ -176,6 +175,12 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *messag
 		if pid, retried, err := b.retrySupersededLease(ctx, s, msg, gen, attempt); retried {
 			return pid, err
 		}
+		// A message drained from the pending queue that lost the quota to
+		// another delivery goes back where it was.
+		if fromPending(ctx) {
+			s.RequeuePending(msg)
+			return 0, nil
+		}
 		// Genuine quota exhaustion: defer into the pending queue.
 		if s.TryEnqueuePending(msg, nil) {
 			// An acknowledgement may have freed the quota and found the queue
@@ -268,6 +273,14 @@ func withoutQuotaWait(ctx context.Context) context.Context {
 	return context.WithValue(ctx, readLoopKey{}, true)
 }
 
+// pendingDrainKey marks a delivery of a message taken from the pending queue.
+type pendingDrainKey struct{}
+
+func fromPending(ctx context.Context) bool {
+	drained, _ := ctx.Value(pendingDrainKey{}).(bool)
+	return drained
+}
+
 func onReadLoop(ctx context.Context) bool {
 	marked, _ := ctx.Value(readLoopKey{}).(bool)
 	return marked
@@ -281,7 +294,9 @@ func onReadLoop(ctx context.Context) bool {
 func (b *Broker) shedSlowSubscriber(s *session.Session, msg *message.Envelope, gen uint64) (uint16, error) {
 	b.telemetry.logger.Warn("disconnecting subscriber that is not keeping up",
 		slog.String("client_id", s.ID))
-	_ = s.DisconnectIf(false, gen, v5.DisconnectQuotaExceeded)
+	// No DISCONNECT: a client this far behind is not reading, and a write to
+	// its full socket could block this read loop for the write timeout.
+	_ = s.AbandonIf(gen)
 	return b.deliverOffline(s, msg)
 }
 
@@ -358,7 +373,7 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 func (b *Broker) drainOnePending(ctx context.Context, s *session.Session) {
 	s.DrainOnePending(func(pending *message.Envelope, _ func()) {
 		// DeliverToSession owns pending on every path, its errors included.
-		if _, err := b.DeliverToSession(ctx, s, pending); err != nil {
+		if _, err := b.DeliverToSession(context.WithValue(ctx, pendingDrainKey{}, true), s, pending); err != nil {
 			b.logOp("pending_delivery_failed", slog.String("client_id", s.ID), slog.String("error", err.Error()))
 		}
 	})

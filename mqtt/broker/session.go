@@ -5,10 +5,12 @@ package broker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/absmach/fluxmq/broker/events"
@@ -1043,6 +1045,12 @@ func (b *Broker) restoreInflightFromStorage(clientID string, tracker messages.In
 		return fmt.Errorf("failed to list inflight messages: %w", err)
 	}
 
+	// Storage keys carry the packet ID in decimal, so they list in byte
+	// order: 10 before 2. Packet ID order is the closest to the send order a
+	// stored entry still has, and resends must follow it [MQTT-4.6.0-1].
+	slices.SortFunc(inflightMsgs, func(a, b *message.Envelope) int {
+		return cmp.Compare(a.BrokerMeta.Delivery.PacketID, b.BrokerMeta.Delivery.PacketID)
+	})
 	for _, msg := range inflightMsgs {
 		if msg.BrokerMeta.Delivery.PacketID == 0 {
 			message.Release(msg)

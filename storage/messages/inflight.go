@@ -4,7 +4,9 @@
 package messages
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -33,6 +35,10 @@ type InflightMessage struct {
 	Retries   int
 	Direction Direction
 	PacketID  uint16
+	// Seq orders entries by when the tracker took them. A retransmission
+	// must follow the order of the original sends [MQTT-4.6.0-1], and packet
+	// IDs wrap, so they cannot give it.
+	Seq uint64
 }
 
 // Direction indicates message direction.
@@ -65,6 +71,9 @@ type Inflight interface {
 	// remain tracker-owned.
 	GetExpired(expiry time.Duration) []*InflightMessage
 	Snapshot(packetID uint16) (*InflightMessage, bool)
+	// OutboundIDs returns the packet IDs of every outbound entry, oldest
+	// first.
+	OutboundIDs() []uint16
 	MarkSent(packetID uint16)
 	MarkDeliveryAttempted(packetID uint16)
 	MarkRetry(packetID uint16) error
@@ -113,6 +122,7 @@ type inflight struct {
 	// Receive Maximum the broker advertises, and vice versa.
 	counts  [2]int
 	maxSize int
+	nextSeq uint64
 }
 
 // NewInflightTracker creates a new inflight tracker.
@@ -141,13 +151,20 @@ func (t *inflight) Add(packetID uint16, msg *message.Envelope, direction Directi
 	// Capacity only gates new keys. An existing key (e.g. a retransmitted QoS 2
 	// PUBLISH with a known packet ID) must be accepted even when the direction
 	// is at capacity, so duplicates are not rejected with ErrInflightFull.
+	var seq uint64
 	if !exists {
 		if t.counts[direction] >= t.maxSize {
 			return ErrInflightFull
 		}
 		t.counts[direction]++
-	} else if existing.Message != msg {
-		message.Release(existing.Message)
+		t.nextSeq++
+		seq = t.nextSeq
+	} else {
+		// A replacement keeps its place in the send order.
+		seq = existing.Seq
+		if existing.Message != msg {
+			message.Release(existing.Message)
+		}
 	}
 	t.messages[key] = &InflightMessage{
 		PacketID: packetID,
@@ -157,6 +174,7 @@ func (t *inflight) Add(packetID uint16, msg *message.Envelope, direction Directi
 		SentAt:    time.Time{},
 		Retries:   0,
 		Direction: direction,
+		Seq:       seq,
 	}
 	return nil
 }
@@ -226,7 +244,6 @@ func (t *inflight) GetInbound(packetID uint16) (*InflightMessage, bool) {
 	return &cp, true
 }
 
-// Has returns true if the outbound packet ID is in the tracker. Used to avoid
 // Snapshot returns a copy of an outbound message holding its own reference to
 // the envelope, taken under the tracker's lock. Acknowledging the message
 // releases the tracker's envelope, and a retransmission running beside the
@@ -245,6 +262,7 @@ func (t *inflight) Snapshot(packetID uint16) (*InflightMessage, bool) {
 	return &cp, true
 }
 
+// Has returns true if the outbound packet ID is in the tracker. Used to avoid
 // reusing an outbound packet identifier.
 func (t *inflight) Has(packetID uint16) bool {
 	t.mu.RLock()
@@ -338,7 +356,32 @@ func (t *inflight) GetExpired(timeout time.Duration) []*InflightMessage {
 			expired = append(expired, &cp)
 		}
 	}
+	sortBySeq(expired)
 	return expired
+}
+
+// OutboundIDs returns the packet IDs of every outbound entry, oldest first.
+func (t *inflight) OutboundIDs() []uint16 {
+	t.mu.RLock()
+	outbound := make([]*InflightMessage, 0, t.counts[Outbound])
+	for key, msg := range t.messages {
+		if key.direction == Outbound {
+			outbound = append(outbound, msg)
+		}
+	}
+	t.mu.RUnlock()
+
+	sortBySeq(outbound)
+	ids := make([]uint16, len(outbound))
+	for i, msg := range outbound {
+		ids[i] = msg.PacketID
+	}
+	return ids
+}
+
+// sortBySeq puts entries in the order the tracker took them.
+func sortBySeq(entries []*InflightMessage) {
+	slices.SortFunc(entries, func(a, b *InflightMessage) int { return cmp.Compare(a.Seq, b.Seq) })
 }
 
 // MarkSent marks an outbound message as successfully written to the connection.
@@ -403,6 +446,9 @@ func (t *inflight) GetAll() []*InflightMessage {
 		cp := *msg
 		result = append(result, &cp)
 	}
+	// Oldest first, so a session captured for takeover or persisted keeps the
+	// order its messages must be resent in.
+	sortBySeq(result)
 	return result
 }
 

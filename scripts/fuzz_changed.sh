@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Runs the fuzz targets whose package, or any package of this module it depends
-# on, changed since BASE. A change to go.mod or go.sum runs every target.
+# on, changed since BASE. A change to go.mod, go.sum, this script or its
+# workflow runs every target.
 #
 #   BASE      git ref to diff against; empty runs every target (default: empty)
 #   FUZZTIME  time per target, as for go test -fuzztime (default: 30s)
@@ -24,7 +25,9 @@ changed_dirs() {
 }
 
 run_all=false
-if [[ -z "${BASE}" ]] || git diff --name-only "${BASE}...HEAD" -- go.mod go.sum | grep -q .; then
+# Everything runs without a base, and when what decides the selection changed:
+# dependencies, this script, or the workflow that calls it.
+if [[ -z "${BASE}" ]] || git diff --name-only "${BASE}...HEAD" -- go.mod go.sum scripts/fuzz_changed.sh .github/workflows/fuzz.yml | grep -q .; then
 	run_all=true
 fi
 changed="$(${run_all} || changed_dirs)"
