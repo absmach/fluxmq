@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
@@ -61,16 +62,23 @@ func (s *MessageStore) Delete(key string) error {
 	return nil
 }
 
-// List returns all messages matching a key prefix.
+// List returns all messages matching a key prefix, in key order as the Badger
+// store does: callers restoring a queue rely on it.
 func (s *MessageStore) List(prefix string) ([]*message.Envelope, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*message.Envelope
-	for key, msg := range s.data {
+	var keys []string
+	for key := range s.data {
 		if strings.HasPrefix(key, prefix) {
-			result = append(result, msg.Clone())
+			keys = append(keys, key)
 		}
+	}
+	slices.Sort(keys)
+
+	result := make([]*message.Envelope, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, s.data[key].Clone())
 	}
 	return result, nil
 }
