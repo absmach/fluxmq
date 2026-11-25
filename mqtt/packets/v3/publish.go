@@ -85,8 +85,7 @@ func (p *Publish) Unpack(r io.Reader) error {
 }
 
 func (p *Publish) Pack(w io.Writer) error {
-	_, err := w.Write(p.Encode())
-	return err
+	return packets.WriteEncoded(w, p)
 }
 
 func (p *Publish) Details() packets.Details {

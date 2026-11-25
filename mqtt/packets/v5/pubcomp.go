@@ -42,41 +42,16 @@ func (pkt *PubComp) Type() byte {
 }
 
 func (pkt *PubComp) Encode() []byte {
-	ret := codec.EncodeUint16(pkt.ID)
-	// MQTT 5.0 spec allows minimal formats:
-	// - Remaining Length 2: Packet ID only (reason code defaults to 0x00)
-	// - Remaining Length 3: Packet ID + Reason Code (no properties)
-	// - Remaining Length >= 4: Packet ID + Reason Code + Property Length + Properties
-	// If properties are present, reason code MUST be included
-	// Properties that encode to nothing are written as no properties, so the
-	// same packet always has one encoding.
-	var props []byte
-	if pkt.Properties != nil {
-		props = pkt.Properties.Encode()
-	}
-	if len(props) > 0 {
-		// Include reason code (use 0x00 if nil)
-		if pkt.ReasonCode != nil {
-			ret = append(ret, *pkt.ReasonCode)
-		} else {
-			ret = append(ret, 0x00)
-		}
-		ret = append(ret, codec.EncodeVBI(len(props))...)
-		ret = append(ret, props...)
-	} else if pkt.ReasonCode != nil && *pkt.ReasonCode != 0x00 {
-		// Only include reason code if non-zero (minimal format optimization)
-		ret = append(ret, *pkt.ReasonCode)
-	}
-	// Take care size is calculated properly if someone tempered with the packet.
-	pkt.FixedHeader.RemainingLength = len(ret)
-	ret = append(pkt.FixedHeader.Encode(), ret...)
+	return pkt.EncodeTo(nil)
+}
 
-	return ret
+// EncodeTo appends the encoded packet to dst and returns the extended buffer.
+func (pkt *PubComp) EncodeTo(dst []byte) []byte {
+	return appendAck(dst, &pkt.FixedHeader, pkt.ID, pkt.ReasonCode, pkt.Properties, ackShortest)
 }
 
 func (pkt *PubComp) Pack(w io.Writer) error {
-	_, err := w.Write(pkt.Encode())
-	return err
+	return packets.WriteEncoded(w, pkt)
 }
 
 // Unpack decodes the details of a ControlPacket after the fixed

@@ -45,35 +45,16 @@ func (pkt *PubAck) Type() byte {
 }
 
 func (pkt *PubAck) Encode() []byte {
-	var ret []byte
-	// Variable Header
-	ret = append(ret, codec.EncodeUint16(pkt.ID)...)
-	if pkt.ReasonCode != nil {
-		ret = append(ret, *pkt.ReasonCode)
-	} else {
-		ret = append(ret, 0) // Success
-	}
-	// Properties (MQTT 5.0)
-	if pkt.Properties != nil {
-		props := pkt.Properties.Encode()
-		l := len(props)
-		proplen := codec.EncodeVBI(l)
-		ret = append(ret, proplen...)
-		if l > 0 {
-			ret = append(ret, props...)
-		}
-	} else {
-		ret = append(ret, 0) // Zero-length properties
-	}
+	return pkt.EncodeTo(nil)
+}
 
-	pkt.FixedHeader.RemainingLength = len(ret)
-	ret = append(pkt.FixedHeader.Encode(), ret...)
-	return ret
+// EncodeTo appends the encoded packet to dst and returns the extended buffer.
+func (pkt *PubAck) EncodeTo(dst []byte) []byte {
+	return appendAck(dst, &pkt.FixedHeader, pkt.ID, pkt.ReasonCode, pkt.Properties, ackFull)
 }
 
 func (pkt *PubAck) Pack(w io.Writer) error {
-	_, err := w.Write(pkt.Encode())
-	return err
+	return packets.WriteEncoded(w, pkt)
 }
 
 func (pkt *PubAck) Unpack(r io.Reader) error {
