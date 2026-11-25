@@ -270,6 +270,17 @@ func (f *fakeInflight) GetExpired(expiry time.Duration) []*messages.InflightMess
 	return f.expired
 }
 
+func (f *fakeInflight) Snapshot(packetID uint16) (*messages.InflightMessage, bool) {
+	for _, msg := range f.expired {
+		if msg.PacketID == packetID {
+			cp := *msg
+			cp.Message = msg.Message.Clone()
+			return &cp, true
+		}
+	}
+	return nil, false
+}
+
 func (f *fakeInflight) MarkSent(packetID uint16) {}
 
 func (f *fakeInflight) MarkDeliveryAttempted(packetID uint16) {

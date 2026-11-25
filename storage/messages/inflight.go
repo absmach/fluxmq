@@ -64,6 +64,7 @@ type Inflight interface {
 	// GetExpired and GetAll return borrowed snapshots. Their Message fields
 	// remain tracker-owned.
 	GetExpired(expiry time.Duration) []*InflightMessage
+	Snapshot(packetID uint16) (*InflightMessage, bool)
 	MarkSent(packetID uint16)
 	MarkDeliveryAttempted(packetID uint16)
 	MarkRetry(packetID uint16) error
@@ -226,6 +227,24 @@ func (t *inflight) GetInbound(packetID uint16) (*InflightMessage, bool) {
 }
 
 // Has returns true if the outbound packet ID is in the tracker. Used to avoid
+// Snapshot returns a copy of an outbound message holding its own reference to
+// the envelope, taken under the tracker's lock. Acknowledging the message
+// releases the tracker's envelope, and a retransmission running beside the
+// connection's read loop can still be encoding it; the snapshot stays valid
+// either way. The caller must release the snapshot's Message.
+func (t *inflight) Snapshot(packetID uint16) (*InflightMessage, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	msg, ok := t.messages[inflightKey{direction: Outbound, packetID: packetID}]
+	if !ok {
+		return nil, false
+	}
+	cp := *msg
+	cp.Message = msg.Message.Clone()
+	return &cp, true
+}
+
 // reusing an outbound packet identifier.
 func (t *inflight) Has(packetID uint16) bool {
 	t.mu.RLock()
