@@ -99,6 +99,9 @@ type Channel struct {
 	confirmMode bool
 	publishSeq  atomic.Uint64
 
+	// Transactional mode (tx.select); see txState.
+	tx txState
+
 	// Prefetch
 	prefetchCount uint16
 	prefetchSize  uint32
@@ -245,14 +248,18 @@ func (ch *Channel) handleMethod(decoded any) error {
 
 	// Tx
 	case *codec.TxSelect:
-		return ch.conn.writeMethod(ch.id, &codec.TxSelectOk{})
+		return ch.handleTxSelect()
 	case *codec.TxCommit:
-		return ch.conn.writeMethod(ch.id, &codec.TxCommitOk{})
+		return ch.handleTxCommit()
 	case *codec.TxRollback:
-		return ch.conn.writeMethod(ch.id, &codec.TxRollbackOk{})
+		return ch.handleTxRollback()
 
 	// Confirm
 	case *codec.ConfirmSelect:
+		if ch.tx.selected {
+			return ch.sendChannelClose(codec.PreconditionFailed,
+				"cannot switch from tx to confirm mode", codec.ClassConfirm, codec.MethodConfirmSelect)
+		}
 		ch.confirmMode = true
 		if !m.NoWait {
 			return ch.conn.writeMethod(ch.id, &codec.ConfirmSelectOk{})
@@ -540,6 +547,19 @@ func (ch *Channel) completePublish() {
 	ch.conn.broker.stats.IncrementMessagesReceived()
 	ch.conn.broker.stats.AddBytesReceived(uint64(len(body)))
 
+	if ch.tx.selected {
+		if !ch.tx.bufferPublish(method, header, body) {
+			_ = ch.sendChannelClose(codec.PreconditionFailed,
+				"transaction exceeds the uncommitted size limit", codec.ClassBasic, codec.MethodBasicPublish)
+		}
+		return
+	}
+	ch.publish(method, header, body)
+}
+
+// publish authorizes, routes and delivers a completed publish. Outside a
+// transaction it runs as the publish completes; inside one, at tx.commit.
+func (ch *Channel) publish(method *codec.BasicPublish, header *codec.ContentHeader, body []byte) {
 	// Build properties map for queue integration
 	props := make(map[string]string)
 	if header.Properties.ContentType != "" {
@@ -1658,6 +1678,15 @@ func (ch *Channel) handleBasicGet(m *codec.BasicGet) error {
 }
 
 func (ch *Channel) handleBasicAck(m *codec.BasicAck) error {
+	if ch.tx.selected {
+		ch.tx.bufferSettlement(m)
+		return nil
+	}
+	ch.applyBasicAck(m)
+	return nil
+}
+
+func (ch *Channel) applyBasicAck(m *codec.BasicAck) {
 	var deliveries []*unackedDelivery
 	ch.unackedMu.Lock()
 	if m.Multiple {
@@ -1678,10 +1707,18 @@ func (ch *Channel) handleBasicAck(m *codec.BasicAck) error {
 		ch.ackDelivery(ud)
 	}
 	ch.drainPending()
-	return nil
 }
 
 func (ch *Channel) handleBasicReject(m *codec.BasicReject) error {
+	if ch.tx.selected {
+		ch.tx.bufferSettlement(m)
+		return nil
+	}
+	ch.applyBasicReject(m)
+	return nil
+}
+
+func (ch *Channel) applyBasicReject(m *codec.BasicReject) {
 	var deliveries []*unackedDelivery
 	var requeue bool
 	ch.unackedMu.Lock()
@@ -1699,10 +1736,18 @@ func (ch *Channel) handleBasicReject(m *codec.BasicReject) error {
 		}
 	}
 	ch.drainPending()
-	return nil
 }
 
 func (ch *Channel) handleBasicNack(m *codec.BasicNack) error {
+	if ch.tx.selected {
+		ch.tx.bufferSettlement(m)
+		return nil
+	}
+	ch.applyBasicNack(m)
+	return nil
+}
+
+func (ch *Channel) applyBasicNack(m *codec.BasicNack) {
 	var deliveries []*unackedDelivery
 	var requeue bool
 	ch.unackedMu.Lock()
@@ -1729,7 +1774,6 @@ func (ch *Channel) handleBasicNack(m *codec.BasicNack) error {
 		}
 	}
 	ch.drainPending()
-	return nil
 }
 
 func (ch *Channel) handleBasicRecover(_ *codec.BasicRecover) error {
