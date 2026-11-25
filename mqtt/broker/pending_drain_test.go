@@ -11,6 +11,7 @@ import (
 	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/message"
 	"github.com/absmach/fluxmq/mqtt/packets"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
@@ -101,4 +102,46 @@ func TestShedSlowSubscriberDoesNotWriteToIt(t *testing.T) {
 		stored, err := b.stores.messages.List(s.ID + queuePrefix)
 		return err == nil && s.OfflineQueue().Len()+len(stored) == 2
 	}, 2*time.Second, 5*time.Millisecond, "the shed subscriber's messages were not kept")
+}
+
+// publishOrder records the payloads of the PUBLISH packets written to it.
+type publishOrder struct {
+	captureConnection
+	payloads []string
+}
+
+func (c *publishOrder) TryWriteDataPacket(p packets.ControlPacket, onSent func()) error {
+	if pub, ok := p.(*v5.Publish); ok {
+		c.payloads = append(c.payloads, string(pub.Payload))
+	}
+	p.Release()
+	if onSent != nil {
+		onSent()
+	}
+	return nil
+}
+
+// A message drained from the pending queue that finds the quota taken by
+// another delivery keeps its place at the head, so pending messages still go
+// out in the order they were queued.
+func TestDrainedMessageThatLosesQuotaKeepsItsPlace(t *testing.T) {
+	cfg := config.Default()
+	b := NewBroker(memory.New(), nil, WithSessionConfig(cfg.Session))
+	t.Cleanup(func() { _ = b.Close() })
+
+	s, _, err := b.CreateSession("order", 5, session.Options{ExpiryInterval: 3600, ReceiveMaximum: 1})
+	require.NoError(t, err)
+	conn := &publishOrder{}
+	gen, err := s.Connect(conn)
+	require.NoError(t, err)
+
+	require.True(t, s.TryAcquireSendQuota(999, gen), "another delivery holds the quota")
+	for _, payload := range []string{"first", "second"} {
+		require.True(t, s.TryEnqueuePending(message.NewDelivery("t", []byte(payload), 1, false), nil))
+	}
+	b.drainOnePending(readLoopContext, s) // takes "first", which cannot be sent yet
+
+	s.ReleaseSendQuota(999, gen)
+	b.drainOnePending(readLoopContext, s)
+	assert.Equal(t, []string{"first"}, conn.payloads, "the drained message lost its place")
 }

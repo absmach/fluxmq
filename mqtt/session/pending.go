@@ -3,7 +3,10 @@
 
 package session
 
-import "sync"
+import (
+	"slices"
+	"sync"
+)
 
 // pendingQueue holds messages that overflowed a subscriber's send quota until
 // acknowledgements free it. Its storage grows as messages arrive and is
@@ -33,6 +36,21 @@ func (q *pendingQueue) push(item pendingItem) bool {
 	}
 	q.items = append(q.items, item)
 	return true
+}
+
+// pushFront puts item back at the head, ahead of everything queued. It is for
+// an item just popped whose delivery could not proceed, so it ignores the
+// capacity that item held a moment ago.
+func (q *pendingQueue) pushFront(item pendingItem) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.head > 0 {
+		q.head--
+		q.items[q.head] = item
+		return
+	}
+	q.items = slices.Insert(q.items, 0, item)
 }
 
 // pop removes and returns the oldest item.

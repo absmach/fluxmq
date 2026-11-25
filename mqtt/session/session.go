@@ -650,6 +650,13 @@ func (s *Session) TryEnqueuePending(msg *message.Envelope, onSent func()) bool {
 	return s.pending.push(pendingItem{msg: msg, onSent: onSent})
 }
 
+// RequeuePending puts a message taken from the pending queue back at its head,
+// for a drained delivery that lost the send quota to another. Its place is
+// kept, so messages still go out in the order they were queued.
+func (s *Session) RequeuePending(msg *message.Envelope) {
+	s.pending.pushFront(pendingItem{msg: msg})
+}
+
 // DrainOnePending hands the oldest pending message to deliver, which takes
 // ownership of it on every path, its errors included: a delivery that fails
 // may still hold the message, in the inflight tracker for a retry, so
