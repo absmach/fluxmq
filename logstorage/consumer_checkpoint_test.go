@@ -161,3 +161,82 @@ func TestCompactionIsScheduledOnce(t *testing.T) {
 
 	assert.LessOrEqual(t, waiting, 1, "compactions queued behind the lock")
 }
+
+// A log that follows a checkpoint but has lost its header, emptied or gone,
+// must not take later operations without one: they would read as older than
+// the checkpoint and be skipped at the next recovery.
+func TestOpLogWithoutHeaderAfterCheckpointKeepsLaterOperations(t *testing.T) {
+	tests := []struct {
+		name   string
+		damage func(path string) error
+	}{
+		{"emptied", func(path string) error { return os.Truncate(path, 0) }},
+		{"removed", os.Remove},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cs := openConsumerState(t, dir)
+			require.NoError(t, cs.Deliver(1, "c"))
+			require.NoError(t, cs.Compact())
+			crash(t, cs)
+			require.NoError(t, tt.damage(filepath.Join(dir, checkpointGroup, consumerOpLogName)))
+
+			recovered := openConsumerState(t, dir)
+			require.NoError(t, recovered.Deliver(2, "c"))
+			crash(t, recovered)
+
+			again := openConsumerState(t, dir)
+			defer again.Close()
+			assert.Equal(t, map[uint64]uint16{1: 1, 2: 1}, pendingOffsets(again))
+		})
+	}
+}
+
+// A header that cannot be read fails the open rather than reading as a log
+// older than the checkpoint, which would skip everything in it.
+func TestUnreadableOpLogHeaderFailsOpen(t *testing.T) {
+	for name, content := range map[string]string{
+		"torn":      `{"generation":1`,
+		"malformed": "{\"generation\":x}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			cs := openConsumerState(t, dir)
+			require.NoError(t, cs.Deliver(1, "c"))
+			require.NoError(t, cs.Compact())
+			crash(t, cs)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, checkpointGroup, consumerOpLogName), []byte(content), 0o644))
+
+			_, err := NewConsumerState(dir, checkpointGroup, DefaultConsumerStateConfig())
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestCheckpointWithoutVersionFailsOpen(t *testing.T) {
+	dir := t.TempDir()
+	cs := openConsumerState(t, dir)
+	require.NoError(t, cs.Close())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, checkpointGroup, consumerCheckpointName),
+		[]byte(`{"generation":1,"pending":[]}`), 0o644))
+
+	_, err := NewConsumerState(dir, checkpointGroup, DefaultConsumerStateConfig())
+	require.Error(t, err)
+}
+
+// A compaction that was waiting for the lock when the state closed does
+// nothing: the log it would reset is already closed.
+func TestCompactAfterCloseDoesNothing(t *testing.T) {
+	dir := t.TempDir()
+	cs := openConsumerState(t, dir)
+	require.NoError(t, cs.Deliver(1, "c"))
+	require.NoError(t, cs.Close())
+
+	before, err := os.ReadFile(filepath.Join(dir, checkpointGroup, consumerCheckpointName))
+	require.NoError(t, err)
+	require.NoError(t, cs.Compact())
+	after, err := os.ReadFile(filepath.Join(dir, checkpointGroup, consumerCheckpointName))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
