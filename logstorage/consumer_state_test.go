@@ -391,9 +391,9 @@ func TestConsumerState_CompactAndRecovery(t *testing.T) {
 	err = cs.Compact()
 	require.NoError(t, err)
 
-	// Verify state file exists
-	statePath := filepath.Join(dir, "test-group", "state.json")
-	_, err = os.Stat(statePath)
+	// Verify the checkpoint exists
+	checkpointPath := filepath.Join(dir, "test-group", consumerCheckpointName)
+	_, err = os.Stat(checkpointPath)
 	assert.NoError(t, err)
 
 	cs.Close()
