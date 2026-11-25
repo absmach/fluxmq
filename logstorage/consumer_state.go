@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,12 +32,25 @@ type ConsumerState struct {
 	pelShards []*PELShard
 
 	// Persistence
-	dirty       bool
-	lastSync    time.Time
-	opLog       *os.File
-	opLogPath   string
-	opCount     int
-	snapVersion uint64
+	dirty     bool
+	lastSync  time.Time
+	opLog     *os.File
+	opLogPath string
+	opCount   int
+
+	// generation numbers checkpoints; the operation log replays only over the
+	// checkpoint of the generation its header names. See consumer_checkpoint.go.
+	generation uint64
+	// opLogStale is set when a checkpoint was published but the log could not
+	// be reset to follow it; operations logged before it is reset would be
+	// skipped by recovery, so writeOp resets it first.
+	opLogStale bool
+	// legacySnapshots is set until a checkpoint replaces pre-checkpoint
+	// snapshot files.
+	legacySnapshots bool
+	// compactScheduled keeps operations past the threshold from scheduling a
+	// compaction each while one is already pending.
+	compactScheduled atomic.Bool
 }
 
 // ConsumerStateConfig holds consumer state configuration.
@@ -166,6 +180,13 @@ func NewConsumerState(baseDir, groupID string, config ConsumerStateConfig) (*Con
 		cs.opLog.Close()
 		return nil, fmt.Errorf("failed to replay operation log: %w", err)
 	}
+	if cs.opLogStale {
+		if err := cs.resetOpLogLocked(); err != nil {
+			cs.opLog.Close()
+			return nil, fmt.Errorf("failed to reset operation log: %w", err)
+		}
+		cs.opLogStale = false
+	}
 
 	return cs, nil
 }
@@ -195,8 +216,15 @@ type PELSnapshot struct {
 	SavedAt int64                    `json:"saved_at"`
 }
 
-// load loads state from snapshots.
+// load loads the checkpoint, or the snapshot files of a group written before
+// checkpoints existed.
 func (cs *ConsumerState) load() error {
+	loaded, err := cs.loadCheckpoint()
+	if err != nil || loaded {
+		return err
+	}
+	cs.legacySnapshots = true
+
 	// Load group state
 	data, err := os.ReadFile(cs.statePath())
 	if err == nil {
@@ -205,7 +233,6 @@ func (cs *ConsumerState) load() error {
 			if snap.State != nil {
 				cs.state = snap.State
 			}
-			cs.snapVersion = snap.Version
 		}
 	}
 
@@ -296,8 +323,19 @@ func (cs *ConsumerState) replayOpLog() error {
 		return err
 	}
 
+	generation, ops := splitOpLogHeader(data)
+	switch {
+	case generation < cs.generation:
+		// The checkpoint was published but the log not yet reset: the
+		// checkpoint already holds these operations.
+		cs.opLogStale = true
+		return nil
+	case generation > cs.generation:
+		return fmt.Errorf("operation log follows checkpoint generation %d, but the checkpoint is generation %d", generation, cs.generation)
+	}
+
 	// Parse newline-delimited JSON operations
-	decoder := json.NewDecoder(newByteReader(data))
+	decoder := json.NewDecoder(newByteReader(ops))
 	for decoder.More() {
 		var op Operation
 		if err := decoder.Decode(&op); err != nil {
@@ -510,6 +548,13 @@ func (cs *ConsumerState) tryAdvanceAckFloor() {
 
 // writeOp writes an operation to the log.
 func (cs *ConsumerState) writeOp(op *Operation) error {
+	if cs.opLogStale {
+		if err := cs.resetOpLogLocked(); err != nil {
+			return err
+		}
+		cs.opLogStale = false
+	}
+
 	data, err := json.Marshal(op)
 	if err != nil {
 		return err
@@ -523,9 +568,13 @@ func (cs *ConsumerState) writeOp(op *Operation) error {
 	cs.opCount++
 	cs.dirty = true
 
-	// Check if compaction needed
-	if cs.opCount >= cs.config.CompactThreshold {
-		go cs.Compact() //nolint:errcheck // background compaction; errors are non-fatal
+	// One compaction at a time: it runs under cs.mu, so every operation past
+	// the threshold would otherwise queue another behind it.
+	if cs.opCount >= cs.config.CompactThreshold && cs.compactScheduled.CompareAndSwap(false, true) {
+		go func() {
+			defer cs.compactScheduled.Store(false)
+			cs.Compact() //nolint:errcheck // background compaction; the next operation past the threshold retries
+		}()
 	}
 
 	return nil
@@ -945,46 +994,27 @@ func (cs *ConsumerState) Compact() error {
 }
 
 func (cs *ConsumerState) compactLocked() error {
-	cs.snapVersion++
-	now := time.Now().UnixMilli()
-
-	// Save group state
-	stateSnap := StateSnapshot{
-		Version: cs.snapVersion,
-		GroupID: cs.groupID,
-		State:   cs.state,
-		SavedAt: now,
+	if err := cs.writeCheckpointLocked(time.Now().UnixMilli()); err != nil {
+		return err
+	}
+	if err := cs.resetOpLogLocked(); err != nil {
+		// The checkpoint is published; until the log follows it, recovery
+		// would skip whatever is logged here.
+		cs.opLogStale = true
+		return err
+	}
+	if cs.legacySnapshots {
+		if err := cs.removeLegacySnapshots(); err != nil {
+			return fmt.Errorf("remove pre-checkpoint snapshots: %w", err)
+		}
+		cs.legacySnapshots = false
 	}
 
-	if err := writeJSONAtomic(cs.statePath(), stateSnap); err != nil {
-		return fmt.Errorf("failed to save state snapshot: %w", err)
-	}
-
-	// Save PEL shards
-	for i, shard := range cs.pelShards {
+	for _, shard := range cs.pelShards {
 		shard.mu.Lock()
-		pelSnap := PELSnapshot{
-			Version: cs.snapVersion,
-			ShardID: i,
-			Entries: shard.entries,
-			SavedAt: now,
-		}
-		if err := writeJSONAtomic(cs.pelPath(i), pelSnap); err != nil {
-			shard.mu.Unlock()
-			return fmt.Errorf("failed to save PEL shard %d: %w", i, err)
-		}
 		shard.dirty = false
 		shard.mu.Unlock()
 	}
-
-	// Truncate operation log
-	if err := cs.opLog.Truncate(0); err != nil {
-		return fmt.Errorf("failed to truncate operation log: %w", err)
-	}
-	if _, err := cs.opLog.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to seek operation log: %w", err)
-	}
-
 	cs.opCount = 0
 	cs.dirty = false
 	cs.lastSync = time.Now()
@@ -1024,7 +1054,7 @@ func (cs *ConsumerState) Stats() ConsumerStateStats {
 		Delivered:       cs.state.Delivered,
 		NumShards:       len(cs.pelShards),
 		OpCount:         cs.opCount,
-		SnapshotVersion: cs.snapVersion,
+		SnapshotVersion: cs.generation,
 		ShardStats:      make([]ShardStats, len(cs.pelShards)),
 	}
 
@@ -1063,25 +1093,6 @@ type ShardStats struct {
 }
 
 // Helper functions
-
-func writeJSONAtomic(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	tempPath := path + TempExtension
-	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
-		return err
-	}
-
-	if err := os.Rename(tempPath, path); err != nil {
-		os.Remove(tempPath)
-		return err
-	}
-
-	return nil
-}
 
 // byteReader wraps a byte slice for json.Decoder.
 type byteReader struct {
