@@ -334,18 +334,22 @@ func (c *connection) writeSync(pkt packets.ControlPacket, onSent func()) error {
 	}
 
 	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-
 	if c.closed.Load() {
+		c.sendMu.Unlock()
 		pkt.Release()
 		return net.ErrClosed
 	}
-
-	if err := pkt.Pack(c.sock); err != nil {
-		pkt.Release()
+	err := pkt.Pack(c.sock)
+	c.sendMu.Unlock()
+	pkt.Release()
+	if err != nil {
 		return err
 	}
-	pkt.Release()
+
+	// onSent runs after the connection is released, as the send loop runs it
+	// after a flush. It takes session locks, and a disconnect writes its
+	// DISCONNECT while holding the session lock: running it under sendMu would
+	// let the two wait for each other.
 	if onSent != nil {
 		onSent()
 	}
