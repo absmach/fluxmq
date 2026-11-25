@@ -408,6 +408,7 @@ func TestCrossNodeExchangeNeverStalls(t *testing.T) {
 		publishes:      []int{6, 6},
 		publishQoS:     []byte{1, 1},
 		subscribeQoS:   []byte{1, 1},
+		leaves:         []bool{false, false},
 	}
 	require.NoError(t, sc.runAcross(t, []string{tc.Nodes[0].TCPAddr, tc.Nodes[1].TCPAddr}))
 }
