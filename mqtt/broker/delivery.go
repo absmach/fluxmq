@@ -14,7 +14,6 @@ import (
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
-	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage/messages"
 )
@@ -281,7 +280,9 @@ func onReadLoop(ctx context.Context) bool {
 func (b *Broker) shedSlowSubscriber(s *session.Session, msg *message.Envelope, gen uint64) (uint16, error) {
 	b.telemetry.logger.Warn("disconnecting subscriber that is not keeping up",
 		slog.String("client_id", s.ID))
-	_ = s.DisconnectIf(false, gen, v5.DisconnectQuotaExceeded)
+	// No DISCONNECT: a client this far behind is not reading, and a write to
+	// its full socket could block this read loop for the write timeout.
+	_ = s.AbandonIf(gen)
 	return b.deliverOffline(s, msg)
 }
 

@@ -705,7 +705,7 @@ func (s *Session) Disconnect(graceful bool, reasonCode byte) error {
 func (s *Session) DisconnectWithCause(cause DisconnectCause, reasonCode byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.disconnectLocked(cause, reasonCode)
+	return s.disconnectLocked(cause, reasonCode, noticeClient)
 }
 
 // DisconnectIf disconnects the session only if epoch still matches the current
@@ -723,8 +723,31 @@ func (s *Session) DisconnectWithCauseIf(cause DisconnectCause, epoch uint64, rea
 	if s.epoch != epoch {
 		return nil
 	}
-	return s.disconnectLocked(cause, reasonCode)
+	return s.disconnectLocked(cause, reasonCode, noticeClient)
 }
+
+// AbandonIf ends generation epoch's connection without sending DISCONNECT: it
+// closes the socket and moves on. It is for a client that has stopped
+// reading. Its socket buffer may be full, so a DISCONNECT written to it could
+// block for the connection's whole write timeout, holding the session lock and
+// whichever read loop is delivering to it.
+func (s *Session) AbandonIf(epoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch != epoch {
+		return nil
+	}
+	return s.disconnectLocked(causeFor(false), 0, closeWithoutNotice)
+}
+
+// disconnectNotice says whether ending a connection sends the client a
+// DISCONNECT first.
+type disconnectNotice uint8
+
+const (
+	noticeClient disconnectNotice = iota
+	closeWithoutNotice
+)
 
 func (s *Session) sendDisconnect(reasonCode byte) {
 	if s.conn == nil || s.Version != 5 {
@@ -738,7 +761,7 @@ func (s *Session) sendDisconnect(reasonCode byte) {
 }
 
 // disconnectLocked performs the disconnect. Caller must hold s.mu.
-func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte) error {
+func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte, notice disconnectNotice) error {
 	if s.state != StateConnected {
 		return nil
 	}
@@ -756,7 +779,9 @@ func (s *Session) disconnectLocked(cause DisconnectCause, reasonCode byte) error
 		// If connection tracks its own timestamps, we might want to sync,
 		// but since we are closing it here, "now" is correct.
 
-		s.sendDisconnect(reasonCode)
+		if notice == noticeClient {
+			s.sendDisconnect(reasonCode)
+		}
 		s.conn.Close()
 		s.conn = nil
 	}
