@@ -101,7 +101,10 @@ func applyPublishProperties(props *v5.PublishProperties, msg *message.Envelope) 
 	props.ContentType = msg.PublisherMeta.ContentType
 	props.ResponseTopic = msg.PublisherMeta.ResponseTopic
 	props.CorrelationData = msg.PublisherMeta.CorrelationData.Bytes()
-	if payloadFormat, ok := msg.PublisherMeta.PayloadFormat.Value(); ok {
+	if value, ok := msg.PublisherMeta.PayloadFormat.Value(); ok {
+		// Declared here so it reaches the heap only when it is set: the
+		// properties keep its address, so it escapes wherever it is declared.
+		payloadFormat := value
 		props.PayloadFormat = &payloadFormat
 	}
 

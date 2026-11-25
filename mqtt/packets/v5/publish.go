@@ -292,8 +292,7 @@ func vbiLen(num int) int {
 }
 
 func (pkt *Publish) Pack(w io.Writer) error {
-	_, err := w.Write(pkt.Encode())
-	return err
+	return packets.WriteEncoded(w, pkt)
 }
 
 func (pkt *Publish) Unpack(r io.Reader) error {

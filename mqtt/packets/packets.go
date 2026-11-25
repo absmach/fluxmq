@@ -146,6 +146,12 @@ func (fh FixedHeader) String() string {
 
 // Encode serializes the fixed header to bytes.
 func (fh FixedHeader) Encode() []byte {
+	return fh.AppendTo(nil)
+}
+
+// AppendTo appends the encoded fixed header to dst and returns the extended
+// buffer.
+func (fh FixedHeader) AppendTo(dst []byte) []byte {
 	var dup, retain byte
 	if fh.Dup {
 		dup = 1
@@ -153,8 +159,15 @@ func (fh FixedHeader) Encode() []byte {
 	if fh.Retain {
 		retain = 1
 	}
-	ret := []byte{fh.PacketType<<4 | dup<<3 | fh.QoS<<1 | retain}
-	return append(ret, codec.EncodeVBI(fh.RemainingLength)...)
+	dst = append(dst, fh.PacketType<<4|dup<<3|fh.QoS<<1|retain)
+	for v := uint32(fh.RemainingLength); ; {
+		b := byte(v & 0x7F)
+		v >>= 7
+		if v == 0 {
+			return append(dst, b)
+		}
+		dst = append(dst, b|0x80)
+	}
 }
 
 // Decode parses the fixed header from the type/flags byte and reader.

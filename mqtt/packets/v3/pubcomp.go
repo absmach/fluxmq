@@ -26,10 +26,14 @@ func (p *PubComp) Type() byte {
 }
 
 func (p *PubComp) Encode() []byte {
-	var body []byte
-	body = append(body, codec.EncodeUint16(p.ID)...)
-	p.FixedHeader.RemainingLength = len(body)
-	return append(p.FixedHeader.Encode(), body...)
+	return p.EncodeTo(nil)
+}
+
+// EncodeTo appends the encoded packet to dst and returns the extended buffer.
+func (p *PubComp) EncodeTo(dst []byte) []byte {
+	p.FixedHeader.RemainingLength = 2
+	dst = p.FixedHeader.AppendTo(dst)
+	return append(dst, byte(p.ID>>8), byte(p.ID))
 }
 
 func (p *PubComp) Unpack(r io.Reader) error {
@@ -39,8 +43,7 @@ func (p *PubComp) Unpack(r io.Reader) error {
 }
 
 func (p *PubComp) Pack(w io.Writer) error {
-	_, err := w.Write(p.Encode())
-	return err
+	return packets.WriteEncoded(w, p)
 }
 
 func (p *PubComp) Details() packets.Details {
