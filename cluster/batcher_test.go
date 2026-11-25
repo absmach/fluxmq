@@ -5,6 +5,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -405,4 +406,59 @@ func TestNodeBatcherRetiresIdleWorkers(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Equal(t, int64(senders*perSender+1), sent.Load())
+}
+
+// Enqueue's answer decides whether the delivery engine resends each item on
+// its own. It may do so only when no item of the batch can have arrived.
+func TestNodeBatcherMarksAmbiguousFlushOutcomes(t *testing.T) {
+	errPeer := errors.New("peer rejected the batch")
+	tests := []struct {
+		name      string
+		maxSize   int
+		send      func(ctx context.Context, items []int) error
+		ambiguous bool
+	}{
+		{
+			name:    "send_deadline/peer may have the batch",
+			maxSize: 10,
+			send: func(ctx context.Context, _ []int) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			ambiguous: true,
+		},
+		{
+			name:    "later_chunk_fails/earlier chunk was delivered",
+			maxSize: 1,
+			send: func(_ context.Context, items []int) error {
+				if items[0] == 2 {
+					return errPeer
+				}
+				return nil
+			},
+			ambiguous: true,
+		},
+		{
+			name:      "first_chunk_fails/nothing was delivered",
+			maxSize:   10,
+			send:      func(context.Context, []int) error { return errPeer },
+			ambiguous: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stopCh := make(chan struct{})
+			t.Cleanup(func() { close(stopCh) })
+			var released releaseCounter
+			b := newOwningBatcher(t, tt.maxSize, stopCh, &released, func(ctx context.Context, _ string, items []int) error {
+				return tt.send(ctx, items)
+			})
+			b.sendTimeout = 20 * time.Millisecond
+			b.resultTimeout = 5 * time.Second
+
+			err := b.Enqueue(context.Background(), "node-a", []int{1, 2})
+			require.Error(t, err)
+			assert.Equal(t, tt.ambiguous, errors.Is(err, ErrBatchOutcomeUnknown), "error: %v", err)
+		})
+	}
 }

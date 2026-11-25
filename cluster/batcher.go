@@ -16,12 +16,15 @@ import (
 var errBatcherStopped = errors.New("batcher stopped")
 
 // ErrBatchOutcomeUnknown reports that a batch was handed to its node worker but
-// its result was not observed: the wait timed out or the batcher stopped. The
-// items may still be delivered, so a caller must not resend them as if they
-// had definitely failed.
+// whether its items arrived is not known: the wait timed out, the batcher
+// stopped, a send ran out of time after the peer may already have taken it, or
+// part of the batch went through before the rest failed. The items may have
+// been delivered, so a caller must not resend them as if they had definitely
+// failed.
 var ErrBatchOutcomeUnknown = errors.New("batch outcome unknown")
 
 const (
+	flushSendTimeout   = 30 * time.Second
 	flushResultTimeout = 35 * time.Second
 	workerIdleTimeout  = 2 * time.Minute
 )
@@ -57,6 +60,7 @@ type nodeBatcher[T any] struct {
 	sendFn        func(ctx context.Context, nodeID string, items []T) error
 	releaseFn     func(T)
 	idleTimeout   time.Duration
+	sendTimeout   time.Duration
 	resultTimeout time.Duration
 
 	mu      sync.Mutex
@@ -95,6 +99,7 @@ func newNodeBatcher[T any](
 		logger:        logger,
 		sendFn:        sendFn,
 		idleTimeout:   workerIdleTimeout,
+		sendTimeout:   flushSendTimeout,
 		resultTimeout: flushResultTimeout,
 		workers:       make(map[string]*nodeWorker[T]),
 	}
@@ -310,11 +315,13 @@ func (b *nodeBatcher[T]) flush(nodeID string, items []T) error {
 		return nil
 	}
 
+	sent := false
 	for start := 0; start < len(items); start += b.maxSize {
 		end := min(start+b.maxSize, len(items))
 
-		sendCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		sendCtx, cancel := context.WithTimeout(context.Background(), b.sendTimeout)
 		err := b.sendFn(sendCtx, nodeID, items[start:end])
+		timedOut := sendCtx.Err() != nil
 		cancel()
 		if err != nil {
 			b.logger.Warn("batch flush failed",
@@ -322,8 +329,16 @@ func (b *nodeBatcher[T]) flush(nodeID string, items []T) error {
 				slog.String("batch", b.name),
 				slog.Int("size", end-start),
 				slog.String("error", err.Error()))
+			// The result goes to every request in the batch. A send cut off
+			// by its deadline may have reached the peer with only the answer
+			// lost, and after an earlier chunk went through some of the items
+			// certainly did: resending any of them would deliver them twice.
+			if timedOut || sent {
+				return errors.Join(ErrBatchOutcomeUnknown, err)
+			}
 			return err
 		}
+		sent = true
 	}
 
 	return nil
