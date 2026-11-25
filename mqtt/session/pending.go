@@ -7,7 +7,9 @@ import "sync"
 
 // pendingQueue holds messages that overflowed a subscriber's send quota until
 // acknowledgements free it. Its storage grows as messages arrive and is
-// dropped once it empties, so an idle session pays nothing for it.
+// dropped once it empties, so an idle session pays nothing for it; while it
+// is in use, consumed slots are reclaimed once they make up half of it, so it
+// never holds more than about twice what is queued.
 //
 // It is safe for concurrent use.
 type pendingQueue struct {
@@ -44,8 +46,16 @@ func (q *pendingQueue) pop() (pendingItem, bool) {
 	item := q.items[q.head]
 	q.items[q.head] = pendingItem{}
 	q.head++
-	if q.head == len(q.items) {
+	switch {
+	case q.head == len(q.items):
 		q.items, q.head = nil, 0
+	case q.head*2 >= len(q.items):
+		// A queue that never quite empties would otherwise keep every
+		// consumed slot. Moving the live half down costs no more than the
+		// pops that consumed the other half.
+		live := copy(q.items, q.items[q.head:])
+		clear(q.items[live:])
+		q.items, q.head = q.items[:live], 0
 	}
 	return item, true
 }
