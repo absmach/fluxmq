@@ -872,13 +872,20 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 	}
 }
 
-// ResendUnacknowledgedTo resends every unacknowledged outbound message on w,
-// under the same generation and send-quota gates as ProcessRetriesTo. It is
-// for a resumed session, which must not leave the client waiting a retry
-// interval for messages its previous connection lost [MQTT-4.4.0-1].
+// ResendUnacknowledgedTo resends every unacknowledged outbound message on w
+// for generation gen. It is for a resumed session, which must not leave the
+// client waiting a retry interval for messages its previous connection lost
+// [MQTT-4.4.0-1].
+//
+// Each resend waits for send quota, so a backlog larger than the client's
+// Receive Maximum goes out as acknowledgements free it. Those arrive on the
+// same connection: the caller must run this alongside its read loop, never
+// before it. It returns early once gen is superseded or the session
+// disconnects.
 func (s *Session) ResendUnacknowledgedTo(w core.PacketWriter, gen uint64) {
 	if version, ok := s.versionIfEpoch(w, gen); ok {
-		s.msgHandler.ResendUnacknowledged(w, version, s.sendQuotaAcquirer(gen), s.markRetryIfEpoch(gen))
+		acquire := func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) }
+		s.msgHandler.ResendUnacknowledged(w, version, acquire, s.markRetryIfEpoch(gen))
 	}
 }
 
