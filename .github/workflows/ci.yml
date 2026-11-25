@@ -69,6 +69,9 @@ jobs:
       - name: Run tests
         run: make test
 
+      - name: Run allocation guards
+        run: make test-allocs
+
       - name: Build
         run: make build
 

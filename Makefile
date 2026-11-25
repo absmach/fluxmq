@@ -155,6 +155,13 @@ FUZZTIME ?= 30s
 fuzz:
 	BASE="$(BASE)" FUZZTIME="$(FUZZTIME)" ./scripts/fuzz_changed.sh
 
+# Allocation guards (internal/allocguard) skip under the race detector, which
+# changes allocation counts, so `make test` never runs them. Run them without it.
+ALLOC_GUARD_PKGS = $(sort $(dir $(shell grep -rl --include='*_test.go' 'fluxmq/internal/allocguard' .)))
+.PHONY: test-allocs
+test-allocs:
+	$(GO) test -count=1 -run 'Allocs' $(ALLOC_GUARD_PKGS)
+
 # Run client package unit tests (MQTT + AMQP 0.9.1 client packages).
 .PHONY: test-client
 test-client:
