@@ -4,6 +4,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -50,14 +51,14 @@ func (r *publishRecorder) published() []string {
 func TestResendSkipsMessagesAcknowledgedWhileWaitingForQuota(t *testing.T) {
 	s := New("resend", packets.V5, Options{ReceiveMaximum: 1},
 		messages.NewInflightTracker(16), messages.NewMessageQueue(16, true), config.SessionConfig{})
-	conn := &publishRecorder{}
-	gen, err := s.Connect(conn)
-	require.NoError(t, err)
-
+	// Left unacknowledged by an earlier connection.
 	for id, payload := range map[uint16]string{1: "first", 2: "second"} {
 		require.NoError(t, s.Inflight().Add(id, message.NewDelivery("t/"+payload, []byte(payload), 1, false), messages.Outbound))
 		s.Inflight().MarkSent(id)
 	}
+	conn := &publishRecorder{}
+	gen, err := s.Connect(conn)
+	require.NoError(t, err)
 
 	done := make(chan struct{})
 	go func() {
@@ -88,4 +89,32 @@ func TestResendSkipsMessagesAcknowledgedWhileWaitingForQuota(t *testing.T) {
 	}
 	assert.Equal(t, []string{first}, conn.published(), "an acknowledged message was resent")
 	assert.True(t, s.HasSendQuota(gen), "the token taken for the acknowledged message was kept")
+}
+
+// A resumed session resends everything in flight when the connection was
+// attached, in the order it was first sent, including messages restored from
+// storage or taken over from another node, which carry no send time on this
+// node. A delivery the new connection starts is not among them.
+func TestResumeResendsRestoredMessagesInSendOrder(t *testing.T) {
+	s := New("restored", packets.V5, Options{ReceiveMaximum: 100},
+		messages.NewInflightTracker(100), messages.NewMessageQueue(16, true), config.SessionConfig{})
+
+	// Packet IDs out of numeric order: the send order is the order of Add.
+	order := []uint16{9, 3, 7, 1, 5}
+	for _, id := range order {
+		payload := fmt.Sprintf("m%d", id)
+		require.NoError(t, s.Inflight().Add(id, message.NewDelivery("t/"+payload, []byte(payload), 1, false), messages.Outbound))
+	}
+	conn := &publishRecorder{}
+	gen, err := s.Connect(conn)
+	require.NoError(t, err)
+	require.NoError(t, s.Inflight().Add(11, message.NewDelivery("t/new", []byte("new"), 1, false), messages.Outbound))
+
+	s.ResendUnacknowledgedTo(conn, gen)
+
+	var want []string
+	for _, id := range order {
+		want = append(want, fmt.Sprintf("t/m%d|m%d", id, id))
+	}
+	assert.Equal(t, want, conn.published())
 }

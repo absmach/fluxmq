@@ -64,15 +64,29 @@ type sendQuota struct {
 	release func(packetID uint16)
 }
 
-// ResendUnacknowledged resends every outbound message the client has not
-// acknowledged, however recently it was sent. A resumed session owes these
-// to the client at once [MQTT-4.4.0-1]: the connection they went out on is
-// gone, and so is any chance that they arrived on it.
-func (h *msgHandler) ResendUnacknowledged(writer core.PacketWriter, version byte, quota sendQuota, markRetry func(packetID uint16)) {
-	h.resendOlderThan(0, writer, version, quota, markRetry)
+// ResendUnacknowledged resends the outbound messages named by packetIDs, in
+// that order, however recently they were sent. A resumed session owes the
+// client every message its previous connection left unacknowledged, at once
+// and in their original order [MQTT-4.4.0-1, MQTT-4.6.0-1]: the connection
+// they went out on is gone, and so is any chance that they arrived on it.
+func (h *msgHandler) ResendUnacknowledged(packetIDs []uint16, writer core.PacketWriter, version byte, quota sendQuota, markRetry func(packetID uint16)) {
+	h.resend(packetIDs, writer, version, quota, markRetry)
 }
 
 func (h *msgHandler) resendOlderThan(age time.Duration, writer core.PacketWriter, version byte, quota sendQuota, markRetry func(packetID uint16)) {
+	// GetExpired names what is due, oldest first; its entries borrow the
+	// tracker's envelopes, so only their packet IDs are used.
+	due := h.inflight.GetExpired(age)
+	packetIDs := make([]uint16, 0, len(due))
+	for _, entry := range due {
+		if entry.Direction == messages.Outbound {
+			packetIDs = append(packetIDs, entry.PacketID)
+		}
+	}
+	h.resend(packetIDs, writer, version, quota, markRetry)
+}
+
+func (h *msgHandler) resend(packetIDs []uint16, writer core.PacketWriter, version byte, quota sendQuota, markRetry func(packetID uint16)) {
 	if version == 0 {
 		version = h.version
 	}
@@ -84,13 +98,7 @@ func (h *msgHandler) resendOlderThan(age time.Duration, writer core.PacketWriter
 		}
 	}
 
-	// GetExpired names what is due; its entries borrow the tracker's
-	// envelopes, so only their packet IDs are used.
-	for _, due := range h.inflight.GetExpired(age) {
-		if due.Direction != messages.Outbound {
-			continue
-		}
-		packetID := due.PacketID
+	for _, packetID := range packetIDs {
 		if quota.acquire != nil && !quota.acquire(packetID) {
 			continue // no send quota available this cycle; retry later
 		}

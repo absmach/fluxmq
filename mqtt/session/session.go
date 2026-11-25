@@ -103,10 +103,16 @@ type Session struct {
 	// negotiated Receive Maximum is clamped to it on every (re)connect.
 	serverMaxInflight int
 
-	// pending buffers messages that exceeded the send quota.
-	// Non-nil only when InflightOverflow == InflightOverflowQueue.
-	// Drained into inflight as ACKs arrive; spilled to offline on disconnect.
+	// pending buffers messages that exceeded the send quota: in queue mode,
+	// and in backpressure mode for deliveries that must not wait. Drained into
+	// inflight as ACKs arrive; spilled to offline on disconnect.
 	pending *pendingQueue
+
+	// resumeResend names the outbound messages already in flight when the
+	// current connection was attached, oldest first: everything a previous
+	// connection, a restore, or a takeover left unacknowledged, and nothing
+	// the current connection has sent. ResendUnacknowledgedTo takes it.
+	resumeResend []uint16
 
 	// deliverStop is closed when the session disconnects to unblock goroutines
 	// waiting on the send window.
@@ -470,6 +476,7 @@ func (s *Session) attach(c core.Connection, opts ConnectOptions, applyOpts bool)
 
 	s.epoch++
 	epoch := s.epoch
+	s.resumeResend = s.msgHandler.Inflight().OutboundIDs()
 
 	// Bind the send quota to this connection generation. Receive Maximum is
 	// connection-scoped, so on a reconnect (applyOpts) the capacity is the newly
@@ -854,10 +861,12 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 	}
 }
 
-// ResendUnacknowledgedTo resends every unacknowledged outbound message on w
-// for generation gen. It is for a resumed session, which must not leave the
-// client waiting a retry interval for messages its previous connection lost
-// [MQTT-4.4.0-1].
+// ResendUnacknowledgedTo resends, in their original order, the outbound
+// messages that were in flight when generation gen was attached. It is for a
+// resumed session, which must not leave the client waiting a retry interval
+// for messages its previous connection lost [MQTT-4.4.0-1]; messages restored
+// from storage or taken over from another node are among them, though they
+// were never sent on this node.
 //
 // Each resend waits for send quota, so a backlog larger than the client's
 // Receive Maximum goes out as acknowledgements free it. Those arrive on the
@@ -865,13 +874,21 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 // before it. It returns early once gen is superseded or the session
 // disconnects.
 func (s *Session) ResendUnacknowledgedTo(w core.PacketWriter, gen uint64) {
-	if version, ok := s.versionIfEpoch(w, gen); ok {
-		quota := sendQuota{
-			acquire: func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) },
-			release: func(packetID uint16) { s.ReleaseSendQuota(packetID, gen) },
-		}
-		s.msgHandler.ResendUnacknowledged(w, version, quota, s.markRetryIfEpoch(gen))
+	s.mu.Lock()
+	if w == nil || s.epoch != gen {
+		s.mu.Unlock()
+		return
 	}
+	version := s.Version
+	packetIDs := s.resumeResend
+	s.resumeResend = nil
+	s.mu.Unlock()
+
+	quota := sendQuota{
+		acquire: func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) },
+		release: func(packetID uint16) { s.ReleaseSendQuota(packetID, gen) },
+	}
+	s.msgHandler.ResendUnacknowledged(packetIDs, w, version, quota, s.markRetryIfEpoch(gen))
 }
 
 // versionIfEpoch returns the session's protocol version while gen is still
