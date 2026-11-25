@@ -211,6 +211,9 @@ func (b *Broker) createSession(clientID string, version byte, opts session.Optio
 			// A live session is being reused, so this CONNECT continues it.
 			*claim = sessionClaim{epoch: existing.Epoch(), continuesSession: true}
 		}
+		if err := b.reclaimPersistedQueue(existing); err != nil {
+			b.logError("reclaim_offline_queue", err, slog.String("client_id", clientID))
+		}
 
 		return existing, false, nil
 	}
@@ -929,6 +932,27 @@ func (b *Broker) emitClientDisconnected(ctx context.Context, clientID, reason st
 	}
 }
 
+// reclaimPersistedQueue returns to a reused session the offline messages its
+// last disconnect wrote to storage. Disconnecting empties the in-memory queue
+// into storage, and only a session restored from storage reads it back, so
+// without this a client that reconnects to the session still in memory never
+// receives what was queued at the moment it left — such as the messages
+// waiting for send quota. They go ahead of what queued since, as they are
+// older.
+func (b *Broker) reclaimPersistedQueue(s *session.Session) error {
+	if b.stores.messages == nil {
+		return nil
+	}
+	queue := s.OfflineQueue()
+	later := queue.Drain()
+	err := b.restoreQueueFromStorage(s.ID, queue)
+	for _, msg := range later {
+		_ = queue.Enqueue(msg) // the queue keeps its own reference
+		message.Release(msg)
+	}
+	return err
+}
+
 // persistSessionMessages writes a session's offline queue and inflight entries
 // back to storage and empties the queue. Restoring a session moves these
 // messages out of storage and into memory, so anything that gives up a session
@@ -940,7 +964,7 @@ func (b *Broker) persistSessionMessages(s *session.Session) {
 
 	msgs := s.OfflineQueue().Drain()
 	for i, msg := range msgs {
-		key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
+		key := offlineQueueKey(s.ID, i)
 		b.stores.messages.Store(key, msg) //nolint:errcheck // best-effort offline message persistence
 		message.Release(msg)
 	}
@@ -954,6 +978,13 @@ func (b *Broker) persistSessionMessages(s *session.Session) {
 		inf.Message.BrokerMeta.Delivery.InflightState = byte(inf.State)
 		b.stores.messages.Store(key, inf.Message) //nolint:errcheck // best-effort inflight message persistence
 	}
+}
+
+// offlineQueueKey names the i-th queued message of clientID in storage. The
+// index is zero-padded because storage lists keys in byte order, and a restore
+// must see the messages in the order they were queued.
+func offlineQueueKey(clientID string, i int) string {
+	return fmt.Sprintf("%s%s%08d", clientID, queuePrefix, i)
 }
 
 func (b *Broker) persistSessionInfo(s *session.Session) {
@@ -1342,7 +1373,7 @@ func (b *Broker) persistOfflineQueue(s *session.Session) {
 
 	msgs := s.OfflineQueue().Drain()
 	for i, msg := range msgs {
-		key := fmt.Sprintf("%s%s%d", s.ID, queuePrefix, i)
+		key := offlineQueueKey(s.ID, i)
 		b.stores.messages.Store(key, msg) //nolint:errcheck // best-effort offline message persistence during close
 		message.Release(msg)
 	}
