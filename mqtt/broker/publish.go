@@ -632,11 +632,18 @@ func (b *Broker) handleQueueAck(ctx context.Context, msg *message.Envelope, rout
 
 // GetRetainedMatching returns all retained messages matching a topic filter.
 // In clustered mode, queries the cluster; otherwise uses local storage.
+//
+// A single node still has a cluster — NoopCluster, whose retained store holds
+// nothing and answers ErrClusterNotEnabled — so that answer means "read the
+// local store", not "there are none".
 func (b *Broker) GetRetainedMatching(filter string) ([]*message.Envelope, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if b.cluster != nil {
-		return b.cluster.Retained().Match(ctx, filter)
+		retained, err := b.cluster.Retained().Match(ctx, filter)
+		if !errors.Is(err, cluster.ErrClusterNotEnabled) {
+			return retained, err
+		}
 	}
 	return b.stores.retained.Match(ctx, filter)
 }
