@@ -194,10 +194,12 @@ type scenario struct {
 	publishes      []int   // publishes[i] is how many messages client i sends
 	publishQoS     []byte  // the QoS client i publishes at
 	subscribeQoS   []byte  // the maximum QoS client i subscribes with
+	leaves         []bool  // client i disconnects once its own messages are acknowledged
 }
 
 // decodeScenario turns fuzz input into 2–4 clients with Receive Maximum 1–3,
-// any subscription graph, 1–6 messages each, and QoS 1 or 2 on each side.
+// any subscription graph, 1–6 messages each, QoS 1 or 2 on each side, and
+// clients that leave while messages to them are still in flight.
 func decodeScenario(data []byte) scenario {
 	at := func(i int) byte {
 		if i < len(data) {
@@ -212,6 +214,7 @@ func decodeScenario(data []byte) scenario {
 		publishes:      make([]int, n),
 		publishQoS:     make([]byte, n),
 		subscribeQoS:   make([]byte, n),
+		leaves:         make([]bool, n),
 	}
 	for i := range n {
 		sc.receiveMaximum[i] = 1 + uint16(at(1+i))%3
@@ -219,6 +222,7 @@ func decodeScenario(data []byte) scenario {
 		qos := at(13 + i)
 		sc.publishQoS[i] = 1 + qos&1
 		sc.subscribeQoS[i] = 1 + (qos>>1)&1
+		sc.leaves[i] = (qos>>2)&1 == 1
 		mask := at(9 + i)
 		for j := range n {
 			if mask&(1<<j) != 0 {
@@ -266,7 +270,7 @@ func (sc scenario) runAcross(tb testing.TB, addrs []string) error {
 	}
 
 	// Everyone publishes at once, as fast as the broker takes it.
-	var acks []<-chan struct{}
+	acks := make([][]<-chan struct{}, len(peers))
 	for round := range 6 {
 		for i, p := range peers {
 			if round >= sc.publishes[i] {
@@ -276,17 +280,28 @@ func (sc scenario) runAcross(tb testing.TB, addrs []string) error {
 			if err != nil {
 				return fmt.Errorf("client %d publish: %w", i, err)
 			}
-			acks = append(acks, done)
+			acks[i] = append(acks[i], done)
 		}
 	}
-	for _, done := range acks {
-		if err := wait(done, "PUBACK"); err != nil {
-			return err
+	for i, p := range peers {
+		for _, done := range acks[i] {
+			if err := wait(done, "PUBACK"); err != nil {
+				return fmt.Errorf("client %d: %w", i, err)
+			}
+		}
+		// A client that leaves does so while messages to it are still
+		// arriving, racing its DISCONNECT against their delivery.
+		if sc.leaves[i] {
+			_ = p.send(&v5.Disconnect{FixedHeader: packets.FixedHeader{PacketType: packets.DisconnectType}})
+			_ = p.conn.Close()
 		}
 	}
 
 	deadline := time.Now().Add(deadlockWait)
 	for i, p := range peers {
+		if sc.leaves[i] {
+			continue
+		}
 		for _, j := range sc.subscribesTo[i] {
 			for round := range sc.publishes[j] {
 				payload := fmt.Sprintf("%d-%d", j, round)
@@ -313,11 +328,12 @@ func (sc scenario) runAcross(tb testing.TB, addrs []string) error {
 // acknowledgements that free the quota.
 func FuzzQoSExchangeNeverStalls(f *testing.F) {
 	for _, seed := range [][]byte{
-		{0, 0, 0, 0, 0, 5, 5, 0, 0, 0b01, 0b10},                     // two clients, each following itself
-		{0, 0, 0, 0, 0, 5, 5, 0, 0, 0b10, 0b01},                     // two clients following each other
-		{1, 0, 1, 2, 0, 5, 3, 2, 0, 0b111, 0b111},                   // three clients, everyone follows everyone
-		{2, 0, 0, 0, 0, 1, 1, 1, 1, 0b0010, 0b0100, 0b1000, 0b0001}, // a ring of four
-		{0, 0, 0, 0, 0, 5, 5, 0, 0, 0b11, 0b11, 0, 0, 0b11, 0b11},   // two clients, QoS 2 both ways
+		{0, 0, 0, 0, 0, 5, 5, 0, 0, 0b01, 0b10},                              // two clients, each following itself
+		{0, 0, 0, 0, 0, 5, 5, 0, 0, 0b10, 0b01},                              // two clients following each other
+		{1, 0, 1, 2, 0, 5, 3, 2, 0, 0b111, 0b111},                            // three clients, everyone follows everyone
+		{2, 0, 0, 0, 0, 1, 1, 1, 1, 0b0010, 0b0100, 0b1000, 0b0001},          // a ring of four
+		{0, 0, 0, 0, 0, 5, 5, 0, 0, 0b11, 0b11, 0, 0, 0b11, 0b11},            // two clients, QoS 2 both ways
+		{1, 0, 0, 0, 0, 5, 5, 5, 0, 0b111, 0b111, 0b111, 0, 0b100, 0b100, 0}, // two leave mid-delivery
 	} {
 		f.Add(seed)
 	}

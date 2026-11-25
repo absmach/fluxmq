@@ -643,14 +643,15 @@ func (s *Session) TryEnqueuePending(msg *message.Envelope, onSent func()) bool {
 	return s.pending.push(pendingItem{msg: msg, onSent: onSent})
 }
 
-// DrainOnePending moves one pending item into the inflight tracker and sends it.
-// Called from ACK handlers to refill the pipeline after a slot opens.
-// Returns without action if there is nothing pending or the session is disconnected.
-func (s *Session) DrainOnePending(deliver func(msg *message.Envelope, onSent func()) error) {
+// DrainOnePending hands the oldest pending message to deliver, which takes
+// ownership of it on every path, its errors included: a delivery that fails
+// may still hold the message, in the inflight tracker for a retry, so
+// releasing it here as well would return it to the pool twice. Called from
+// ACK handlers to refill the pipeline after a slot opens. Returns without
+// action if there is nothing pending.
+func (s *Session) DrainOnePending(deliver func(msg *message.Envelope, onSent func())) {
 	if item, ok := s.pending.pop(); ok {
-		if err := deliver(item.msg, item.onSent); err != nil {
-			message.Release(item.msg)
-		}
+		deliver(item.msg, item.onSent)
 	}
 }
 
