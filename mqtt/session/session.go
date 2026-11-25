@@ -846,7 +846,11 @@ func (s *Session) NextPacketID() uint16 {
 // replacement generation's retry state.
 func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 	if version, ok := s.versionIfEpoch(w, gen); ok {
-		s.msgHandler.ProcessRetries(w, version, s.sendQuotaAcquirer(gen), s.markRetryIfEpoch(gen))
+		quota := sendQuota{
+			acquire: s.sendQuotaAcquirer(gen),
+			release: func(packetID uint16) { s.ReleaseSendQuota(packetID, gen) },
+		}
+		s.msgHandler.resendOlderThan(RetryTimeout, w, version, quota, s.markRetryIfEpoch(gen))
 	}
 }
 
@@ -862,8 +866,11 @@ func (s *Session) ProcessRetriesTo(w core.PacketWriter, gen uint64) {
 // disconnects.
 func (s *Session) ResendUnacknowledgedTo(w core.PacketWriter, gen uint64) {
 	if version, ok := s.versionIfEpoch(w, gen); ok {
-		acquire := func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) }
-		s.msgHandler.ResendUnacknowledged(w, version, acquire, s.markRetryIfEpoch(gen))
+		quota := sendQuota{
+			acquire: func(packetID uint16) bool { return s.AcquireSendQuota(packetID, gen) },
+			release: func(packetID uint16) { s.ReleaseSendQuota(packetID, gen) },
+		}
+		s.msgHandler.ResendUnacknowledged(w, version, quota, s.markRetryIfEpoch(gen))
 	}
 }
 

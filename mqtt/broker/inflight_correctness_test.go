@@ -49,6 +49,10 @@ func (f *duplicateRejectingInflight) UpdateState(uint16, messages.InflightState)
 	return nil
 }
 
+func (f *duplicateRejectingInflight) Snapshot(uint16) (*messages.InflightMessage, bool) {
+	return nil, false
+}
+
 func (f *duplicateRejectingInflight) GetExpired(time.Duration) []*messages.InflightMessage {
 	return nil
 }

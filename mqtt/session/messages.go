@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v3 "github.com/absmach/fluxmq/mqtt/packets/v3"
@@ -52,18 +53,26 @@ const RetryTimeout = 20 * time.Second
 // later cycle. This stops a reconnect from retransmitting more unacknowledged
 // PUBLISH packets at once than the new connection advertised.
 func (h *msgHandler) ProcessRetries(writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
-	h.resendOlderThan(RetryTimeout, writer, version, acquire, markRetry)
+	h.resendOlderThan(RetryTimeout, writer, version, sendQuota{acquire: acquire}, markRetry)
+}
+
+// sendQuota gates retransmissions on the connection's send quota. release
+// returns a token taken for a message that turned out to be acknowledged
+// already; it may be nil where acknowledgements cannot interleave.
+type sendQuota struct {
+	acquire func(packetID uint16) bool
+	release func(packetID uint16)
 }
 
 // ResendUnacknowledged resends every outbound message the client has not
 // acknowledged, however recently it was sent. A resumed session owes these
 // to the client at once [MQTT-4.4.0-1]: the connection they went out on is
 // gone, and so is any chance that they arrived on it.
-func (h *msgHandler) ResendUnacknowledged(writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
-	h.resendOlderThan(0, writer, version, acquire, markRetry)
+func (h *msgHandler) ResendUnacknowledged(writer core.PacketWriter, version byte, quota sendQuota, markRetry func(packetID uint16)) {
+	h.resendOlderThan(0, writer, version, quota, markRetry)
 }
 
-func (h *msgHandler) resendOlderThan(age time.Duration, writer core.PacketWriter, version byte, acquire func(packetID uint16) bool, markRetry func(packetID uint16)) {
+func (h *msgHandler) resendOlderThan(age time.Duration, writer core.PacketWriter, version byte, quota sendQuota, markRetry func(packetID uint16)) {
 	if version == 0 {
 		version = h.version
 	}
@@ -75,17 +84,30 @@ func (h *msgHandler) resendOlderThan(age time.Duration, writer core.PacketWriter
 		}
 	}
 
-	expired := h.inflight.GetExpired(age)
-	for _, inflight := range expired {
-		if inflight.Direction != messages.Outbound {
+	// GetExpired names what is due; its entries borrow the tracker's
+	// envelopes, so only their packet IDs are used.
+	for _, due := range h.inflight.GetExpired(age) {
+		if due.Direction != messages.Outbound {
 			continue
 		}
-		if acquire != nil && !acquire(inflight.PacketID) {
+		packetID := due.PacketID
+		if quota.acquire != nil && !quota.acquire(packetID) {
 			continue // no send quota available this cycle; retry later
 		}
-		if err := h.resendMessage(writer, inflight, version, markRetry); err != nil {
-			slog.Debug("Failed to resend message", "packet_id", inflight.PacketID, "error", err)
+		// Waiting for quota can outlast the transaction: an acknowledgement
+		// meanwhile has released its envelope, and a PUBREC has moved it on
+		// to PUBREL. Read it again, with a reference of its own.
+		current, ok := h.inflight.Snapshot(packetID)
+		if !ok {
+			if quota.release != nil {
+				quota.release(packetID)
+			}
+			continue
 		}
+		if err := h.resendMessage(writer, current, version, markRetry); err != nil {
+			slog.Debug("Failed to resend message", "packet_id", packetID, "error", err)
+		}
+		message.Release(current.Message)
 	}
 }
 
