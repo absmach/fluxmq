@@ -19,8 +19,9 @@ var (
 	// maximum packet size the connection accepts. It is reported from the fixed
 	// header, before any memory is reserved for the body.
 	ErrPacketTooLarge = errors.New("packet exceeds maximum allowed size")
-	// ErrFailRemaining is for a body that does not match its length; this is
-	// for a length the packet type forbids.
+	// ErrInvalidRemainingLength reports a remaining length the packet type
+	// forbids, such as a nonzero one on PINGREQ. ErrFailRemaining is for a body
+	// that does not match the length it declared.
 	ErrInvalidRemainingLength = errors.New("invalid remaining length for packet type")
 )
 

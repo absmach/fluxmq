@@ -128,7 +128,7 @@ func WriteShortStr(w io.Writer, s string) error {
 // as bytes actually arrive.
 func readSized(r io.Reader, length uint32) ([]byte, error) {
 	if sized, ok := r.(interface{ Len() int }); ok {
-		if uint64(length) > uint64(sized.Len()) {
+		if held := sized.Len(); held < 0 || uint64(length) > uint64(held) {
 			return nil, io.ErrUnexpectedEOF
 		}
 		buf := make([]byte, length)
