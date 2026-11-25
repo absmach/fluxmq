@@ -169,7 +169,8 @@ func dispatchPacket(handler protocolHandler, s *connCtx, pkt packets.ControlPack
 }
 
 // Shutdown performs a graceful shutdown of the broker.
-// It waits for active sessions to disconnect or transfers them to other nodes.
+// It waits for connected clients to disconnect or transfers them to other
+// nodes; sessions whose clients are already gone do not delay it.
 func (b *Broker) Shutdown(ctx context.Context, drainTimeout time.Duration) error {
 	b.shuttingDown.Store(true)
 
@@ -186,7 +187,7 @@ func (b *Broker) Shutdown(ctx context.Context, drainTimeout time.Duration) error
 			b.telemetry.logger.Warn("Shutdown cancelled by context")
 			return b.Close()
 		case <-ticker.C:
-			count := b.sessionsMap.Count()
+			count := b.connectedSessionCount()
 			if count == 0 {
 				b.telemetry.logger.Info("All sessions disconnected")
 				return b.Close()
@@ -202,6 +203,19 @@ func (b *Broker) Shutdown(ctx context.Context, drainTimeout time.Duration) error
 			b.telemetry.logger.Info("Waiting for sessions to drain", "remaining", count)
 		}
 	}
+}
+
+// connectedSessionCount is how many sessions still have a client attached.
+// The session map also holds persistent sessions whose clients have gone, and
+// those stay until they expire, so draining must not wait for them.
+func (b *Broker) connectedSessionCount() int {
+	count := 0
+	b.sessionsMap.ForEach(func(s *session.Session) {
+		if s.IsConnected() {
+			count++
+		}
+	})
+	return count
 }
 
 // transferActiveSessions transfers active sessions to other cluster nodes.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/absmach/fluxmq/cluster"
+	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,4 +110,43 @@ func TestBroker_Shutdown_SetsFlag(t *testing.T) {
 	shuttingDown := broker.shuttingDown.Load()
 
 	assert.True(t, shuttingDown)
+}
+
+func TestBroker_Shutdown_DoesNotWaitForSessionsWithoutClients(t *testing.T) {
+	broker := NewBroker(memory.New(), cluster.NewNoopCluster("node-1"), WithLogger(slog.Default()))
+
+	// A persistent session whose client has gone stays in the session map
+	// until it expires, long after any drain timeout.
+	_, _, err := broker.CreateSession("offline", 4, session.Options{ExpiryInterval: 3600})
+	require.NoError(t, err)
+	require.Equal(t, 1, broker.sessionsMap.Count())
+
+	start := time.Now()
+	require.NoError(t, broker.Shutdown(context.Background(), 30*time.Second))
+	assert.Less(t, time.Since(start), 3*time.Second)
+}
+
+func TestBroker_Shutdown_WaitsForConnectedClients(t *testing.T) {
+	broker := NewBroker(memory.New(), cluster.NewNoopCluster("node-1"), WithLogger(slog.Default()))
+
+	s, _, err := broker.CreateSession("online", 4, session.Options{ExpiryInterval: 3600})
+	require.NoError(t, err)
+	_, err = s.Connect(&captureConnection{})
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- broker.Shutdown(context.Background(), 30*time.Second) }()
+
+	// Shutdown polls once a second; it must still be waiting after two polls.
+	require.Never(t, func() bool { return len(done) > 0 }, 2500*time.Millisecond, 50*time.Millisecond)
+
+	require.NoError(t, s.Disconnect(true, 0))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		assert.Less(t, time.Since(start), 10*time.Second)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown kept waiting after the last client disconnected")
+	}
 }
