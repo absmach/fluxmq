@@ -168,6 +168,30 @@ func dispatchPacket(handler protocolHandler, s *connCtx, pkt packets.ControlPack
 	}
 }
 
+// deliverBacklog sends a newly connected client what it is owed: when its
+// session resumed, the messages its previous connection left unacknowledged,
+// then whatever queued while it was away.
+//
+// It runs on its own goroutine, alongside the connection's read loop. Each QoS
+// 1 and 2 delivery may wait for send quota, which only the client's
+// acknowledgements free, and only the read loop reads those: delivering first
+// and reading afterwards would stop for good once the backlog exceeded the
+// client's Receive Maximum. A wait ends when the client acknowledges, the
+// session disconnects, or a newer connection supersedes this one.
+func (b *Broker) deliverBacklog(ctx context.Context, s *session.Session, conn core.Connection, epoch uint64, resumed bool,
+	deliverOffline func(context.Context, *session.Session),
+) {
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		if resumed {
+			// Unacknowledged messages first: they were sent before anything
+			// that queued while the client was away.
+			s.ResendUnacknowledgedTo(conn, epoch)
+		}
+		deliverOffline(ctx, s)
+	}()
+}
+
 // Shutdown performs a graceful shutdown of the broker.
 // It waits for connected clients to disconnect or transfers them to other
 // nodes; sessions whose clients are already gone do not delay it.
