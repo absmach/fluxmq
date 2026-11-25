@@ -356,9 +356,11 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 // one whose deliveries do not wait for quota: a pending message only ever
 // waits in the queue.
 func (b *Broker) drainOnePending(ctx context.Context, s *session.Session) {
-	s.DrainOnePending(func(pending *message.Envelope, _ func()) error {
-		_, err := b.DeliverToSession(ctx, s, pending)
-		return err
+	s.DrainOnePending(func(pending *message.Envelope, _ func()) {
+		// DeliverToSession owns pending on every path, its errors included.
+		if _, err := b.DeliverToSession(ctx, s, pending); err != nil {
+			b.logOp("pending_delivery_failed", slog.String("client_id", s.ID), slog.String("error", err.Error()))
+		}
 	})
 }
 
