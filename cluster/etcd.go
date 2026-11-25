@@ -556,13 +556,32 @@ func (c *EtcdCluster) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the cluster.
+// clusterTeardownTimeout bounds each step of Stop that needs etcd to answer.
+// Without quorum nothing answers, and every such step is best effort: the
+// leases behind them expire on their own.
+const clusterTeardownTimeout = 2 * time.Second
+
+// Stop gracefully shuts down the cluster. It returns within a few
+// clusterTeardownTimeout periods even when the etcd cluster has lost quorum.
 func (c *EtcdCluster) Stop() error {
 	close(c.stopCh)
 	if c.cancelLifecycle != nil {
 		c.cancelLifecycle()
 	}
-	c.wg.Wait()
+
+	// Background work normally ends as soon as the lifecycle context is
+	// cancelled, but some of it cannot: a cancelled Election.Campaign resigns
+	// with the client's own context, which without quorum retries until the
+	// client is closed. Waiting for it before closing the client would never
+	// end, so wait a bounded time and let closing the client release it.
+	loopsDone := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(loopsDone)
+	}()
+	if !waitClosed(loopsDone, clusterTeardownTimeout) {
+		c.logger.Warn("cluster background work still running at shutdown; closing the etcd client to end it")
+	}
 
 	// Withdraw this node's metadata while the client is still up, so peers
 	// stop reporting its build immediately instead of at lease expiry.
@@ -589,14 +608,25 @@ func (c *EtcdCluster) Stop() error {
 		c.transport.Stop() //nolint:errcheck // best-effort shutdown; transport is being discarded
 	}
 
-	// Revoke session (releases leadership)
+	// Revoke the election session so leadership passes on at once. Its lease
+	// expires by itself otherwise, so the revocation is best effort and must
+	// not wait the lease's full TTL when there is no quorum to answer it.
 	if c.session != nil {
-		c.session.Close()
+		c.session.Orphan()
+		ctx, cancel := context.WithTimeout(context.Background(), clusterTeardownTimeout)
+		if _, err := c.client.Revoke(ctx, c.session.Lease()); err != nil {
+			c.logger.Warn("failed to revoke election session", slog.String("error", err.Error()))
+		}
+		cancel()
 	}
 
 	// Close client
 	if c.client != nil {
 		c.client.Close()
+	}
+
+	if !waitClosed(loopsDone, clusterTeardownTimeout) {
+		c.logger.Warn("cluster background work did not stop after the etcd client closed")
 	}
 
 	// Stop etcd server
@@ -605,6 +635,19 @@ func (c *EtcdCluster) Stop() error {
 	}
 
 	return nil
+}
+
+// waitClosed reports whether done closes within timeout.
+func waitClosed(done <-chan struct{}, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // peerRetryLoop periodically attempts to reconnect to peers that are not connected.
@@ -703,7 +746,7 @@ func (c *EtcdCluster) deregisterNodeMetadata() {
 	// key after the delete.
 	c.untrackLeasedKey(key)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), clusterTeardownTimeout)
 	defer cancel()
 
 	if _, err := c.client.Delete(ctx, key); err != nil {
