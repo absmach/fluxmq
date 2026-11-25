@@ -51,6 +51,9 @@ type ConsumerState struct {
 	// compactScheduled keeps operations past the threshold from scheduling a
 	// compaction each while one is already pending.
 	compactScheduled atomic.Bool
+	// closed is set by Close; a compaction still waiting for the lock then
+	// does nothing.
+	closed bool
 }
 
 // ConsumerStateConfig holds consumer state configuration.
@@ -315,6 +318,12 @@ func (cs *ConsumerState) replayOpLog() error {
 	}
 
 	if info.Size() == 0 {
+		// A log that follows a checkpoint always starts with its header. An
+		// empty one has lost it, and operations appended to it would read as
+		// older than the checkpoint and be skipped; reset it first.
+		if cs.generation > 0 {
+			cs.opLogStale = true
+		}
 		return nil
 	}
 
@@ -323,7 +332,10 @@ func (cs *ConsumerState) replayOpLog() error {
 		return err
 	}
 
-	generation, ops := splitOpLogHeader(data)
+	generation, ops, err := splitOpLogHeader(data)
+	if err != nil {
+		return err
+	}
 	switch {
 	case generation < cs.generation:
 		// The checkpoint was published but the log not yet reset: the
@@ -990,6 +1002,9 @@ func (cs *ConsumerState) Compact() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	if cs.closed {
+		return nil
+	}
 	return cs.compactLocked()
 }
 
@@ -1035,9 +1050,13 @@ func (cs *ConsumerState) Close() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	if cs.closed {
+		return nil
+	}
 	if cs.dirty {
 		cs.compactLocked() //nolint:errcheck // best-effort flush on close; file is being closed anyway
 	}
+	cs.closed = true
 
 	return cs.opLog.Close()
 }

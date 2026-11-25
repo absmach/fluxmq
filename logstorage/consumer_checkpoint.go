@@ -72,7 +72,7 @@ func (cs *ConsumerState) loadCheckpoint() (bool, error) {
 	if err := json.Unmarshal(data, &cp); err != nil {
 		return false, fmt.Errorf("decode consumer checkpoint %s: %w", cs.checkpointPath(), err)
 	}
-	if cp.Version > consumerCheckpointVersion {
+	if cp.Version == 0 || cp.Version > consumerCheckpointVersion {
 		return false, fmt.Errorf("consumer checkpoint %s: unsupported version %d", cs.checkpointPath(), cp.Version)
 	}
 
@@ -126,23 +126,34 @@ func (cs *ConsumerState) writeCheckpointLocked(savedAt int64) error {
 	return nil
 }
 
-// resetOpLogLocked empties the operation log and starts it with a header for
-// the current generation. Caller must hold cs.mu.
+// resetOpLogLocked replaces the operation log with one that holds only a
+// header for the current generation. The replacement is written beside the
+// log, synced, and renamed over it, so a crash leaves either the old log or
+// the new one, never an empty or half-written header that later operations
+// would be appended to. Caller must hold cs.mu.
 func (cs *ConsumerState) resetOpLogLocked() error {
-	if err := cs.opLog.Truncate(0); err != nil {
-		return fmt.Errorf("truncate operation log: %w", err)
-	}
-	if _, err := cs.opLog.Seek(0, 0); err != nil {
-		return fmt.Errorf("seek operation log: %w", err)
-	}
 	header, err := json.Marshal(opLogHeader{Generation: cs.generation})
 	if err != nil {
 		return err
 	}
-	if _, err := cs.opLog.Write(append(header, '\n')); err != nil {
+	tempPath := cs.opLogPath + TempExtension
+	if err := WriteFileSynced(tempPath, append(header, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write operation log header: %w", err)
 	}
-	return cs.opLog.Sync()
+	if err := os.Rename(tempPath, cs.opLogPath); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("replace operation log: %w", err)
+	}
+	if err := SyncDir(cs.dir); err != nil {
+		return fmt.Errorf("sync operation log directory: %w", err)
+	}
+	reopened, err := os.OpenFile(cs.opLogPath, os.O_RDWR|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("reopen operation log: %w", err)
+	}
+	_ = cs.opLog.Close()
+	cs.opLog = reopened
+	return nil
 }
 
 // removeLegacySnapshots deletes the pre-checkpoint snapshot files once a
@@ -162,17 +173,19 @@ func (cs *ConsumerState) removeLegacySnapshots() error {
 
 // splitOpLogHeader returns the generation an operation log's operations
 // follow, and the operations. A log without a header predates checkpoints
-// and follows generation zero.
-func splitOpLogHeader(data []byte) (uint64, []byte) {
+// and follows generation zero. A header that cannot be read is an error: read
+// as no header, it would make the log look older than any checkpoint and
+// every operation in it would be skipped.
+func splitOpLogHeader(data []byte) (uint64, []byte, error) {
 	if !bytes.HasPrefix(data, opLogHeaderPrefix) {
-		return 0, data
+		return 0, data, nil
 	}
-	line, rest, _ := bytes.Cut(data, []byte{'\n'})
+	line, rest, complete := bytes.Cut(data, []byte{'\n'})
 	var header opLogHeader
-	if err := json.Unmarshal(line, &header); err != nil {
-		return 0, data
+	if !complete || json.Unmarshal(line, &header) != nil {
+		return 0, nil, fmt.Errorf("operation log header %q is unreadable", line)
 	}
-	return header.Generation, rest
+	return header.Generation, rest, nil
 }
 
 // add puts a pending entry into the shard and its consumer index.
