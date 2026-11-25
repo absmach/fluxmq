@@ -14,6 +14,7 @@ import (
 	"github.com/absmach/fluxmq/broker/events"
 	"github.com/absmach/fluxmq/message"
 	core "github.com/absmach/fluxmq/mqtt"
+	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/mqtt/session"
 	"github.com/absmach/fluxmq/storage/messages"
 )
@@ -160,8 +161,11 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *messag
 
 	// Acquire a send-quota (Receive Maximum) token for this outbound PUBLISH.
 	// Backpressure mode blocks until a token frees; queue mode falls back to the
-	// pending queue when the quota is exhausted.
-	if s.SendBackpressure() {
+	// pending queue when the quota is exhausted. A delivery on a connection's
+	// read loop never blocks: it may be the loop that must read the
+	// acknowledgement freeing the quota, its own or, through other clients,
+	// one it is waiting on.
+	if s.SendBackpressure() && !onReadLoop(ctx) {
 		if !s.AcquireSendQuota(packetID, gen) {
 			return b.releaseLease(ctx, s, msg, gen, attempt)
 		}
@@ -174,7 +178,16 @@ func (b *Broker) deliverQoS(ctx context.Context, s *session.Session, msg *messag
 		}
 		// Genuine quota exhaustion: defer into the pending queue.
 		if s.TryEnqueuePending(msg, nil) {
+			// An acknowledgement may have freed the quota and found the queue
+			// empty between the failed acquire and the enqueue; nothing would
+			// then pull this message through.
+			if s.HasSendQuota(gen) {
+				b.drainOnePending(ctx, s)
+			}
 			return 0, nil
+		}
+		if s.SendBackpressure() {
+			return b.shedSlowSubscriber(s, msg, gen)
 		}
 		message.Release(msg)
 		return 0, nil
@@ -235,6 +248,40 @@ func (b *Broker) releaseLease(ctx context.Context, s *session.Session, msg *mess
 	if pid, retried, err := b.retrySupersededLease(ctx, s, msg, gen, attempt); retried {
 		return pid, err
 	}
+	return b.deliverOffline(s, msg)
+}
+
+// readLoopKey marks a delivery made on a connection's read loop.
+type readLoopKey struct{}
+
+// readLoopContext is the context for deliveries made while handling a packet a
+// client sent: a PUBLISH fanned out, a QoS 2 release, retained messages for a
+// SUBSCRIBE, a will, or the pending message an acknowledgement pulls through.
+// Such a delivery must not wait for send quota. It is built once so that
+// marking a delivery costs nothing.
+var readLoopContext = context.WithValue(context.Background(), readLoopKey{}, true)
+
+// withoutQuotaWait marks ctx for a delivery that must not wait for send quota
+// but needs to keep ctx's deadline and values: one served for a remote node,
+// whose own read loop is waiting on the answer.
+func withoutQuotaWait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, readLoopKey{}, true)
+}
+
+func onReadLoop(ctx context.Context) bool {
+	marked, _ := ctx.Value(readLoopKey{}).(bool)
+	return marked
+}
+
+// shedSlowSubscriber ends a backpressure-mode session's connection when a
+// delivery that cannot wait finds both its send quota and its pending queue
+// full. The client has stopped keeping up; disconnecting it moves its pending
+// messages to the offline queue, and this one follows them, so a persistent
+// session loses nothing.
+func (b *Broker) shedSlowSubscriber(s *session.Session, msg *message.Envelope, gen uint64) (uint16, error) {
+	b.telemetry.logger.Warn("disconnecting subscriber that is not keeping up",
+		slog.String("client_id", s.ID))
+	_ = s.DisconnectIf(false, gen, v5.DisconnectQuotaExceeded)
 	return b.deliverOffline(s, msg)
 }
 
@@ -300,12 +347,19 @@ func (b *Broker) AckMessage(s *session.Session, packetID uint16) error {
 	// re-acquires under the new generation) — and pull through one pending
 	// message (queue mode) to keep the pipeline full.
 	s.ReleaseSendQuota(packetID, s.Epoch())
-	s.DrainOnePending(func(pending *message.Envelope, _ func()) error {
-		_, err := b.DeliverToSession(context.Background(), s, pending)
-		return err
-	})
+	b.drainOnePending(readLoopContext, s)
 
 	return nil
+}
+
+// drainOnePending sends the oldest message waiting for send quota. ctx must be
+// one whose deliveries do not wait for quota: a pending message only ever
+// waits in the queue.
+func (b *Broker) drainOnePending(ctx context.Context, s *session.Session) {
+	s.DrainOnePending(func(pending *message.Envelope, _ func()) error {
+		_, err := b.DeliverToSession(ctx, s, pending)
+		return err
+	})
 }
 
 // DeliverMessage encodes a message for the given protocol version and writes it
@@ -337,7 +391,9 @@ func (b *Broker) DeliverToClient(ctx context.Context, clientID string, msg *mess
 
 	storeMsg := msg.Clone()
 
-	_, err := b.DeliverToSession(ctx, s, storeMsg)
+	// The sending node is waiting on this from the read loop of the client
+	// that published, so it must not wait for quota either.
+	_, err := b.DeliverToSession(withoutQuotaWait(ctx), s, storeMsg)
 	// Note: DeliverToSession will release the message for QoS 0
 	// For QoS 1/2, Inflight storage takes ownership
 	return err

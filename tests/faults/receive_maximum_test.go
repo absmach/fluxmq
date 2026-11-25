@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/absmach/fluxmq/config"
 	"github.com/absmach/fluxmq/mqtt/packets"
 	v5 "github.com/absmach/fluxmq/mqtt/packets/v5"
 	"github.com/absmach/fluxmq/testutil"
@@ -137,4 +138,32 @@ func TestResumedSessionBacklogBeyondReceiveMaximum(t *testing.T) {
 			resumed.ping()
 		})
 	}
+}
+
+// A subscriber that stops reading while its send quota and pending queue are
+// full is disconnected rather than allowed to hold up the publisher, and its
+// persistent session keeps every message for when it returns.
+func TestStalledSubscriberIsShedWithoutLoss(t *testing.T) {
+	lb := testutil.StartLocalBroker(t, func(cfg *config.Config) { cfg.Session.PendingQueueSize = 4 })
+	proxy := testutil.NewFaultProxy(t, lb.TCPAddr)
+	const clientID, topic, count = "shed-sub", "shed/t", 20
+
+	stalled := dialV5(t, proxy.Addr(), clientID, 1)
+	stalled.subscribe(topic)
+	proxy.StallClient()
+
+	publisher := connect(t, lb.TCPAddr, "shed-pub", testutil.ConnectOptions{CleanSession: true, KeepAlive: 60})
+	start := time.Now()
+	sent := publishNumbered(t, publisher, topic, count, 1)
+	assert.Less(t, time.Since(start), 5*time.Second, "the stalled subscriber held up the publisher")
+
+	require.Eventually(t, func() bool {
+		s := lb.Broker.Get(clientID)
+		return s != nil && !s.IsConnected()
+	}, 5*time.Second, 10*time.Millisecond, "the stalled subscriber was not disconnected")
+	proxy.Restore()
+
+	resumed := dialV5(t, lb.TCPAddr, clientID, 10)
+	assert.ElementsMatch(t, sent, resumed.receive(count))
+	resumed.ping()
 }

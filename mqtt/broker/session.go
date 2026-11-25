@@ -857,7 +857,9 @@ func (b *Broker) handleDisconnect(s *session.Session, cause session.DisconnectCa
 	defer func() {
 		sessionLock.Unlock()
 		if publishWill != nil {
-			if err := b.publishWillMessage(context.Background(), publishWill); err != nil {
+			// A disconnect can run on any client's read loop: its own, or
+			// that of a client whose delivery shed this subscriber.
+			if err := b.publishWillMessage(readLoopContext, publishWill); err != nil {
 				b.logError("publish_disconnected_will", err, slog.String("client_id", publishWill.ClientID))
 			}
 		}

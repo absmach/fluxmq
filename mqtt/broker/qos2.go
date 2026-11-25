@@ -4,7 +4,6 @@
 package broker
 
 import (
-	"context"
 	"log/slog"
 
 	corebroker "github.com/absmach/fluxmq/broker"
@@ -62,7 +61,7 @@ func (b *Broker) completeInboundQoS2(s *connCtx, packetID uint16, op string) (fo
 	}
 
 	publish := msg.Clone()
-	if err := b.Publish(context.Background(), publish); err != nil {
+	if err := b.Publish(readLoopContext, publish); err != nil {
 		b.logError(op+"_publish", err,
 			slog.String("client_id", s.ID),
 			slog.String("topic", msg.Topic))
@@ -83,7 +82,7 @@ func (b *Broker) completeInboundQoS2(s *connCtx, packetID uint16, op string) (fo
 func (b *Broker) publishOwnedInbound(clientID, op string, owned *message.Envelope) {
 	// The topic is read first: Publish consumes the envelope.
 	topic := owned.Topic
-	if err := b.Publish(context.Background(), owned); err != nil {
+	if err := b.Publish(readLoopContext, owned); err != nil {
 		b.logError(op+"_publish", err,
 			slog.String("client_id", clientID),
 			slog.String("topic", topic))

@@ -393,7 +393,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	case 0:
 		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
 		setMQTT5Metadata(msg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
-		err := h.broker.Publish(context.Background(), msg)
+		err := h.broker.Publish(readLoopContext, msg)
 		h.broker.telemetry.logger.Debug(
 			"v5_publish_complete",
 			slog.String("client_id", s.ID),
@@ -405,7 +405,7 @@ func (h *v5Handler) HandlePublish(s *connCtx, pkt packets.ControlPacket) error {
 	case 1:
 		msg := newMQTTEnvelope(topic, payload, s.ID, sourceExternalID, qos, retain, properties)
 		setMQTT5Metadata(msg, messageExpiry, expiryTime, publishTime, payloadFormat, contentType, responseTopic, correlationData)
-		if err := h.broker.Publish(context.Background(), msg); err != nil {
+		if err := h.broker.Publish(readLoopContext, msg); err != nil {
 			reasonCode, reason := mqtt5QueuePublishError(err)
 			return sendV5PubAck(s, packetID, reasonCode, reason)
 		}
@@ -623,7 +623,7 @@ func (h *v5Handler) HandleSubscribe(s *connCtx, pkt packets.ControlPacket) error
 					}
 					msg.BrokerMeta.Delivery.QoS = deliverQoS
 					msg.BrokerMeta.Delivery.Retain = true
-					h.broker.DeliverToSession(context.Background(), s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
+					h.broker.DeliverToSession(readLoopContext, s.Session, msg) //nolint:errcheck // retained message delivery; errors are non-fatal
 				}
 			}
 		}

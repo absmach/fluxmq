@@ -566,7 +566,8 @@ func (b *Broker) deliverShareRemote(ctx context.Context, member cluster.ShareMem
 func (b *Broker) ForwardPublish(ctx context.Context, msg *message.Envelope) error {
 	storeMsg := msg.Clone()
 
-	matched, err := b.distributeLocal(ctx, storeMsg, forwardedScope)
+	// The sending node waits on this from the publishing client's read loop.
+	matched, err := b.distributeLocal(withoutQuotaWait(ctx), storeMsg, forwardedScope)
 	message.Release(storeMsg)
 	if err == nil && matched == 0 {
 		// The sending node believed a subscriber lives here (stale owner
