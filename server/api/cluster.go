@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"net/http"
+
+	"github.com/absmach/fluxmq/cluster"
 )
 
 type nodeResponse struct {
@@ -37,9 +39,10 @@ func (s *Server) buildClusterResponse(ctx context.Context) clusterResponse {
 	}
 
 	nodes := s.cluster.Nodes()
+	_, standalone := s.cluster.(*cluster.NoopCluster)
 	resp := clusterResponse{
 		NodeID:      s.cluster.NodeID(),
-		ClusterMode: true,
+		ClusterMode: !standalone,
 		IsLeader:    s.cluster.IsLeader(ctx),
 		Nodes:       make([]nodeResponse, 0, len(nodes)),
 	}

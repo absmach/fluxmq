@@ -28,6 +28,31 @@ func (c *clusterStub) NodeID() string                  { return c.nodeID }
 func (c *clusterStub) IsLeader(_ context.Context) bool { return c.leader }
 func (c *clusterStub) Nodes() []cluster.NodeInfo       { return c.nodes }
 
+func TestStandaloneClusterPreservesMetadata(t *testing.T) {
+	b := mqttbroker.NewBroker(memory.New(), nil, mqttbroker.WithLogger(slog.Default()))
+	srv := New(Config{}, b, nil, cluster.NewNoopCluster("standalone-test"), nil, nil, nil, slog.Default())
+	for _, path := range []string{"/api/v1/cluster", "/api/v1/overview"} {
+		rec := httptest.NewRecorder()
+		srv.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		var response struct {
+			NodeID      string `json:"node_id"`
+			ClusterMode bool   `json:"cluster_mode"`
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: HTTP %d", path, rec.Code)
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.ClusterMode || response.NodeID != "standalone-test" {
+			t.Fatalf("%s: wrong standalone identity: %+v", path, response)
+		}
+	}
+	if got := srv.buildClusterResponse(context.Background()); len(got.Nodes) != 1 || got.Nodes[0].ID != "standalone-test" {
+		t.Fatalf("standalone metadata lost: %+v", got)
+	}
+}
+
 func TestClusterNilClusterReturnsSingleNode(t *testing.T) {
 	store := memory.New()
 	b := mqttbroker.NewBroker(store, nil, mqttbroker.WithLogger(slog.Default()))
